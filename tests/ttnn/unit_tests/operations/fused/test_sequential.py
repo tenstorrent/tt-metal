@@ -832,16 +832,16 @@ class TestFusedKernelSource:
 
         fused = build_op_graph([ln1, ln2], [], device)
 
-        # Check reader has barrier code (multi-barrier uses __barrier_seg0)
+        # Check reader has barrier code (namespace-based barrier infrastructure)
         for kernel in fused.descriptor.kernels:
             source = kernel.kernel_source
-            if "__barrier_seg0" in source:
-                assert "__cb_reset_to_empty" in source, "Reader should have CB reset"
-                assert "__compute_done" in source, "Reader should wait for compute_done"
-                assert "__writer_done" in source, "Reader should wait for writer_done"
+            if "namespace barrier" in source:
+                assert "reset_cbs" in source, "Reader should have CB reset"
+                assert "compute_done" in source, "Reader should wait for compute_done"
+                assert "writer_done" in source, "Reader should wait for writer_done"
                 break
         else:
-            pytest.fail("No kernel has __barrier_seg0")
+            pytest.fail("No kernel has barrier namespace")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -1124,9 +1124,9 @@ class TestParallelChains:
             named_args = dict(kernel.named_compile_time_args)
             # Should have barrier_rt_offset
             assert "barrier_rt_offset" in named_args, f"Missing barrier_rt_offset in {list(named_args.keys())}"
-            # Phase 1 args should have phase1_ prefix
-            phase1_args = [k for k in named_args if k.startswith("phase1_")]
-            assert len(phase1_args) > 0, f"Should have phase1_ prefixed args, got: {list(named_args.keys())}"
+            # Phase 1 args should have phase_1_ prefix
+            phase1_args = [k for k in named_args if k.startswith("phase_1_")]
+            assert len(phase1_args) > 0, f"Should have phase_1_ prefixed args, got: {list(named_args.keys())}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -3833,7 +3833,11 @@ class TestCrossOpCompilation:
 
     @staticmethod
     def _read_and_process(kernel_path, defines=None):
-        """Read a kernel source file and process through the pipeline."""
+        """Read a kernel source file and process through the pipeline.
+
+        Returns (headers, source) where headers is a list of
+        (resolved_path, content) tuples from inlined local includes.
+        """
         import os
         from models.experimental.ops.descriptors.cpp_parser import (
             inline_local_includes,
@@ -3843,24 +3847,56 @@ class TestCrossOpCompilation:
             source = f.read()
 
         kernel_dir = os.path.dirname(os.path.abspath(kernel_path))
-        source = inline_local_includes(source, kernel_dir)
-        return source
+        headers, source = inline_local_includes(source, kernel_dir)
+        return headers, source
 
     @staticmethod
-    def _build_fused_source(sources_with_indices):
-        """Build a complete compilable fused source from processed phase sources."""
+    def _build_fused_source(sources_with_headers):
+        """Build a compilable fused source to test pre-main compatibility.
+
+        Tests that header content, aliases, and helper functions from
+        different ops can coexist in a single translation unit.  Uses
+        file-scope header content + per-phase namespaces for isolation,
+        but skips RT arg redirection and compile-time arg offsets (not
+        needed for compilation-only verification).
+
+        Args:
+            sources_with_headers: List of (phase_idx, headers, source) tuples.
+        """
+        import re
         from models.experimental.ops.descriptors.cpp_parser import (
             collect_includes,
             collect_defines,
         )
-        from models.experimental.ops.descriptors.sequential import (
-            _collect_all_pre_main_code,
-        )
 
-        all_sources = [s for _, s in sources_with_indices]
-        includes = collect_includes(all_sources)
-        defines = collect_defines(all_sources)
-        shared_pre_main, per_phase_pre_main, _ = _collect_all_pre_main_code(sources_with_indices)
+        # Reconstruct combined text for include/define collection
+        all_combined = []
+        for _, hdrs, s in sources_with_headers:
+            hdr_text = "\n".join(c for _, c in hdrs)
+            all_combined.append(hdr_text + "\n" + s)
+        includes = collect_includes(all_combined)
+        defines = collect_defines(all_combined)
+
+        # Deduplicate headers by resolved path for file scope
+        header_path_seen = set()
+        file_scope_blocks = []
+        for _, hdrs, _ in sources_with_headers:
+            for path, content in hdrs:
+                if path not in header_path_seen:
+                    header_path_seen.add(path)
+                    content_stripped = content.strip()
+                    if content_stripped:
+                        file_scope_blocks.append(content_stripped)
+
+        # Extract pre-main from original source (minus preprocessor lines)
+        _km_re = re.compile(r"\bvoid\s+kernel_main\s*\(")
+        _skip = ("#include", "#define", "#pragma", "#undef")
+        phase_pre_mains = {}
+        for phase_idx, _, source in sources_with_headers:
+            m = _km_re.search(source)
+            pre_text = source[: m.start()] if m else source
+            pre_lines = [line for line in pre_text.split("\n") if not line.strip().startswith(_skip)]
+            phase_pre_mains[phase_idx] = "\n".join(pre_lines).strip()
 
         lines = [
             "// Auto-generated fused compute kernel - compilation test",
@@ -3870,14 +3906,27 @@ class TestCrossOpCompilation:
         lines.append("")
         lines.extend(includes)
         lines.append("")
-        if shared_pre_main.strip():
-            lines.append(shared_pre_main)
+
+        # Header content at file scope
+        for block in file_scope_blocks:
+            lines.append(block)
             lines.append("")
-        for idx in sorted(per_phase_pre_main.keys()):
-            code = per_phase_pre_main[idx]
-            if code.strip():
-                lines.append(code)
+
+        # Phase namespaces with empty run() — test is pre-main only
+        for phase_idx, _, _ in sources_with_headers:
+            ns_name = f"phase_{phase_idx}"
+            pre_main = phase_pre_mains.get(phase_idx, "")
+            lines.append(f"// ---- Phase {phase_idx} ----")
+            lines.append(f"namespace {ns_name} {{")
+            lines.append("")
+            if pre_main.strip():
+                lines.append(pre_main)
                 lines.append("")
+            lines.append("void run() {}")
+            lines.append("")
+            lines.append(f"}} // namespace {ns_name}")
+            lines.append("")
+
         lines.append("void kernel_main() {}")
         lines.append("")
         return "\n".join(lines)
@@ -3942,23 +3991,23 @@ class TestCrossOpCompilation:
 
     def test_compile_layernorm_plus_matmul(self, device):
         """LN compute (namespace aliases + ALWI) + matmul (using declaration)."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["matmul"])
-        source = self._build_fused_source([(0, s0), (1, s1)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1)])
         self._compile_source(device, source)
 
     def test_compile_layernorm_plus_batchnorm(self, device):
         """LN compute (short ALWI) + batchnorm (13-param ALWI helper)."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
-        source = self._build_fused_source([(0, s0), (1, s1)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1)])
         self._compile_source(device, source)
 
     def test_compile_layernorm_plus_untilize(self, device):
         """LN compute (complex pre-main) + untilize (constexpr helper)."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["untilize"])
-        source = self._build_fused_source([(0, s0), (1, s1)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["untilize"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1)])
         self._compile_source(device, source)
 
     def test_compile_rmsnorm_post_plus_layernorm(self, device):
@@ -3966,55 +4015,55 @@ class TestCrossOpCompilation:
 
         Tests signature-based dedup: both define ACQ() and REL() differently.
         """
-        s0 = self._read_and_process(self.KERNEL_PATHS["rmsnorm_post"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        source = self._build_fused_source([(0, s0), (1, s1)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["rmsnorm_post"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1)])
         self._compile_source(device, source)
 
     def test_compile_matmul_plus_batchnorm(self, device):
         """matmul (minimal pre-main) + batchnorm (long ALWI)."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
-        source = self._build_fused_source([(0, s0), (1, s1)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1)])
         self._compile_source(device, source)
 
     def test_compile_layernorm_plus_eltwise_sfpu(self, device):
         """LN compute + eltwise unary SFPU (many API includes)."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["eltwise_sfpu"])
-        source = self._build_fused_source([(0, s0), (1, s1)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["eltwise_sfpu"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1)])
         self._compile_source(device, source)
 
     def test_compile_layernorm_plus_typecast(self, device):
         """LN compute + typecast (eltwise unary typecast)."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["typecast"])
-        source = self._build_fused_source([(0, s0), (1, s1)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["typecast"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1)])
         self._compile_source(device, source)
 
     def test_compile_three_phase_matmul_ln_batchnorm(self, device):
         """3-phase: matmul + LN + batchnorm."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s2 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
-        source = self._build_fused_source([(0, s0), (1, s1), (2, s2)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h2, s2 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1), (2, h2, s2)])
         self._compile_source(device, source)
 
     def test_compile_three_phase_ln_untilize_sfpu(self, device):
         """3-phase: LN + untilize + eltwise SFPU."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["untilize"])
-        s2 = self._read_and_process(self.KERNEL_PATHS["eltwise_sfpu"])
-        source = self._build_fused_source([(0, s0), (1, s1), (2, s2)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["untilize"])
+        h2, s2 = self._read_and_process(self.KERNEL_PATHS["eltwise_sfpu"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1), (2, h2, s2)])
         self._compile_source(device, source)
 
     def test_compile_four_phase_max_diversity(self, device):
         """4-phase: matmul + LN + batchnorm + untilize (max diversity)."""
-        s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
-        s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
-        s2 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
-        s3 = self._read_and_process(self.KERNEL_PATHS["untilize"])
-        source = self._build_fused_source([(0, s0), (1, s1), (2, s2), (3, s3)])
+        h0, s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        h1, s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        h2, s2 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        h3, s3 = self._read_and_process(self.KERNEL_PATHS["untilize"])
+        source = self._build_fused_source([(0, h0, s0), (1, h1, s1), (2, h2, s2), (3, h3, s3)])
         self._compile_source(device, source)
 
 

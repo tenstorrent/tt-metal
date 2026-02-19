@@ -240,7 +240,7 @@ class TestSourceTransformations:
 
         source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
         result = _prefix_named_args_in_source(source, 1)
-        assert 'get_named_compile_time_arg_val("phase1_cb_in")' in result
+        assert 'get_named_compile_time_arg_val("phase_1_cb_in")' in result
 
     def test_prefix_named_args_phase2(self):
         """Test phase 2 prefix."""
@@ -248,7 +248,7 @@ class TestSourceTransformations:
 
         source = 'constexpr uint32_t blk = get_named_compile_time_arg_val("blk");'
         result = _prefix_named_args_in_source(source, 2)
-        assert 'get_named_compile_time_arg_val("phase2_blk")' in result
+        assert 'get_named_compile_time_arg_val("phase_2_blk")' in result
 
     def test_emit_rt_arg_wrapper_bakes_offset(self):
         """Test that wrapper function bakes the literal offset value."""
@@ -256,7 +256,7 @@ class TestSourceTransformations:
         result = _emit_rt_arg_wrapper(1, 12)
         joined = "\n".join(result)
         assert "arg_idx + 12" in joined
-        assert "__phase1_get_arg_val" in joined
+        assert "phase_1_get_arg_val" in joined
         # Wrapper should NOT contain a #define (that's separate)
         assert "#define" not in joined
         assert "get_named_compile_time_arg_val" not in joined
@@ -265,8 +265,8 @@ class TestSourceTransformations:
         """Test that define/undef emit the correct preprocessor directives."""
         _emit_rt_arg_define = _mock_sequential._emit_rt_arg_define
         _emit_rt_arg_undef = _mock_sequential._emit_rt_arg_undef
-        assert _emit_rt_arg_define(1) == "#define get_arg_val __phase1_get_arg_val"
-        assert _emit_rt_arg_define(2) == "#define get_arg_val __phase2_get_arg_val"
+        assert _emit_rt_arg_define(1) == "#define get_arg_val phase_1_get_arg_val"
+        assert _emit_rt_arg_define(2) == "#define get_arg_val phase_2_get_arg_val"
         assert _emit_rt_arg_undef() == "#undef get_arg_val"
 
     def test_offset_compile_time_args_phase0_unchanged(self):
@@ -310,7 +310,7 @@ class TestSourceTransformations:
             "uint32_t val = get_arg_val<uint32_t>(3);\n"
         )
         result = _transform_phase_source(source, 1, ct_arg_offset=5)
-        assert "phase1_cb_in" in result
+        assert "phase_1_cb_in" in result
         assert "get_compile_time_arg_val(5)" in result  # offset from 0
         assert "TensorAccessorArgs<7>" in result  # offset from 2
         # get_arg_val is NOT rewritten in source — redirect is done via #define
@@ -430,30 +430,33 @@ class TestInlineLocalIncludes:
         header.write_text("#pragma once\nint helper() { return 42; }\n")
 
         source = '#include "utils.h"\nvoid kernel_main() {}\n'
-        result = inline_local_includes(source, str(tmp_path))
+        headers, remaining = inline_local_includes(source, str(tmp_path))
 
-        assert "int helper()" in result
-        assert '#include "utils.h"' not in result
+        assert len(headers) == 1
+        assert "int helper()" in headers[0][1]
+        assert '#include "utils.h"' not in remaining
         # pragma once should be stripped
-        assert "#pragma once" not in result
+        assert "#pragma once" not in headers[0][1]
 
     def test_leaves_path_includes(self):
         """Test that includes with paths are left unchanged."""
         inline_local_includes = _mock_cpp_parser.inline_local_includes
 
         source = '#include "api/dataflow/dataflow_api.h"\nvoid kernel_main() {}\n'
-        result = inline_local_includes(source, "/some/dir")
+        headers, remaining = inline_local_includes(source, "/some/dir")
 
-        # Path includes should remain
-        assert '#include "api/dataflow/dataflow_api.h"' in result
+        # Path includes should remain (no local file found)
+        assert headers == []
+        assert '#include "api/dataflow/dataflow_api.h"' in remaining
 
     def test_no_kernel_dir_returns_unchanged(self):
         """Test that None kernel_dir returns source unchanged."""
         inline_local_includes = _mock_cpp_parser.inline_local_includes
 
         source = '#include "utils.h"\nvoid kernel_main() {}\n'
-        result = inline_local_includes(source, None)
-        assert result == source
+        headers, remaining = inline_local_includes(source, None)
+        assert headers == []
+        assert remaining == source
 
 
 class TestMergeNamedCompileTimeArgs:
@@ -486,7 +489,7 @@ class TestMergeNamedCompileTimeArgs:
         result = _merge_named_compile_time_args(phase_kernels, "reader")
         names = dict(result)
         assert "cb_in" in names  # Phase 0
-        assert "phase1_cb_in" in names  # Phase 1
+        assert "phase_1_cb_in" in names  # Phase 1
 
     def test_rt_arg_offsets_not_in_named_args(self):
         """RT arg offsets are baked into source, not passed as named compile-time args."""
@@ -656,83 +659,6 @@ class TestMergeCompileTimeArgs:
         assert offsets == {0: 0, 1: 2, 2: 2}
 
 
-class TestCategorizePhaseDefines:
-    """Tests for _categorize_phase_defines."""
-
-    def test_uniform_defines_kept(self):
-        """Test that defines with same value in all phases are uniform."""
-        _categorize = _mock_sequential._categorize_phase_defines
-
-        phase_kernels = [
-            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
-            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
-        ]
-
-        uniform, per_phase = _categorize(phase_kernels, "compute")
-        uniform_names = [name for name, _ in uniform]
-
-        assert "REDUCE_OP" in uniform_names
-        assert "CUSTOM" in uniform_names
-        assert not per_phase  # nothing varies
-
-    def test_varying_value_defines_per_phase(self):
-        """Test that defines with different values go to per_phase."""
-        _categorize = _mock_sequential._categorize_phase_defines
-
-        phase_kernels = [
-            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
-            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "2")])},
-        ]
-
-        uniform, per_phase = _categorize(phase_kernels, "compute")
-        uniform_names = [name for name, _ in uniform]
-
-        # REDUCE_OP is uniform (same value)
-        assert "REDUCE_OP" in uniform_names
-        # CUSTOM varies in value
-        assert "CUSTOM" not in uniform_names
-        assert 0 in per_phase
-        assert 1 in per_phase
-        assert ("CUSTOM", "1") in per_phase[0]
-        assert ("CUSTOM", "2") in per_phase[1]
-
-    def test_varying_presence_defines_per_phase(self):
-        """Test that defines present in only some phases go to per_phase."""
-        _categorize = _mock_sequential._categorize_phase_defines
-
-        phase_kernels = [
-            {"compute": MagicMock(defines=[("PHASE_SPECIFIC", "1"), ("SHARED", "val")])},
-            {"compute": MagicMock(defines=[("SHARED", "val")])},
-        ]
-
-        uniform, per_phase = _categorize(phase_kernels, "compute")
-        uniform_names = [name for name, _ in uniform]
-
-        # SHARED same across all phases — uniform
-        assert "SHARED" in uniform_names
-        # PHASE_SPECIFIC only in phase 0 — varying
-        assert "PHASE_SPECIFIC" not in uniform_names
-        assert 0 in per_phase
-        assert ("PHASE_SPECIFIC", "1") in per_phase[0]
-        # Phase 1 has no varying defines
-        assert 1 not in per_phase
-
-    def test_single_phase_all_uniform(self):
-        """Test that single-phase fusion makes all defines uniform."""
-        _categorize = _mock_sequential._categorize_phase_defines
-
-        phase_kernels = [
-            {"compute": MagicMock(defines=[("MY_DEFINE", "1"), ("ANOTHER", "val")])},
-        ]
-
-        uniform, per_phase = _categorize(phase_kernels, "compute")
-        uniform_names = [name for name, _ in uniform]
-
-        assert "MY_DEFINE" in uniform_names
-        assert "ANOTHER" in uniform_names
-        assert not per_phase
-
-
 class TestValidateFp32Consistency:
     """Tests for fp32_dest_acc_en validation."""
 
@@ -773,917 +699,8 @@ class TestValidateFp32Consistency:
             _validate_fp32_consistency([desc1, desc2])
 
 
-class TestCategorizePreMain:
-    """Tests for tree-sitter-based pre-main code categorization."""
-
-    def test_categorizes_namespace_and_functions(self):
-        """Test that namespace code, functions, and variables are categorized."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """#include "api.h"
-#define FOO 1
-
-namespace my_ns {
-    constexpr int val = 42;
-}
-
-ALWI void ACQ() { acquire_dst(); }
-
-constexpr uint32_t MAX_TILES = 64;
-
-void kernel_main() {
-    // body
-}
-"""
-        blocks = categorize_pre_main(source)
-        kinds = [b.kind for b in blocks]
-        assert "namespace" in kinds
-        assert "function" in kinds
-        assert "variable" in kinds
-        # Find the function block
-        func_blocks = [b for b in blocks if b.kind == "function"]
-        assert len(func_blocks) == 1
-        assert func_blocks[0].name == "ACQ"
-        # Find the variable block
-        var_blocks = [b for b in blocks if b.kind == "variable"]
-        assert len(var_blocks) == 1
-        assert var_blocks[0].name == "MAX_TILES"
-
-    def test_skips_includes_defines_comments(self):
-        """Pre-main should not include #include, #define, or comments."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """#include <cstdint>
-#define FOO 1
-// a comment
-/* block comment */
-namespace g = norm;
-void kernel_main() {}
-"""
-        blocks = categorize_pre_main(source)
-        for b in blocks:
-            assert not b.text.startswith("#include")
-            assert not b.text.startswith("#define")
-            assert not b.text.startswith("//")
-
-    def test_function_with_alwi(self):
-        """ALWI-prefixed functions are correctly detected."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-void kernel_main() {}
-"""
-        blocks = categorize_pre_main(source)
-        func_blocks = [b for b in blocks if b.kind == "function"]
-        assert len(func_blocks) == 2
-        names = {b.name for b in func_blocks}
-        assert "ACQ" in names
-        assert "REL" in names
-
-    def test_namespace_alias(self):
-        """Namespace aliases are categorized correctly."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """namespace generic = norm::kernel_util::generic;
-namespace kutil = norm::kernel_util;
-void kernel_main() {}
-"""
-        blocks = categorize_pre_main(source)
-        assert len(blocks) == 2
-        for b in blocks:
-            assert b.kind == "namespace_alias"
-
-    def test_using_declaration(self):
-        """Using declarations are categorized correctly."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """using std::uint32_t;
-void kernel_main() {}
-"""
-        blocks = categorize_pre_main(source)
-        assert len(blocks) == 1
-        assert blocks[0].kind == "using"
-
-    def test_template_function(self):
-        """Template functions are categorized as functions."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """template <typename T>
-inline void process(T x) {
-    return;
-}
-void kernel_main() {}
-"""
-        blocks = categorize_pre_main(source)
-        func_blocks = [b for b in blocks if b.kind == "function"]
-        assert len(func_blocks) == 1
-        assert func_blocks[0].name == "process"
-
-    def test_struct_definition(self):
-        """Struct definitions are categorized as struct."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """struct Config {
-    int x;
-    int y;
-};
-void kernel_main() {}
-"""
-        blocks = categorize_pre_main(source)
-        struct_blocks = [b for b in blocks if b.kind == "struct"]
-        assert len(struct_blocks) == 1
-
-    def test_variable_types(self):
-        """Various variable declaration types are detected."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """constexpr uint32_t MAX_TILES = 64;
-static uint32_t counter = 0;
-volatile float* data_ptr;
-void kernel_main() {}
-"""
-        blocks = categorize_pre_main(source)
-        var_blocks = [b for b in blocks if b.kind == "variable"]
-        assert len(var_blocks) == 3
-        var_names = {b.name for b in var_blocks}
-        assert "MAX_TILES" in var_names
-        assert "counter" in var_names
-        assert "data_ptr" in var_names
-
-    def test_empty_source(self):
-        """Empty source returns no blocks."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        blocks = categorize_pre_main("void kernel_main() {}")
-        assert len(blocks) == 0
-
-    def test_stops_at_kernel_main(self):
-        """Should not include code from inside or after kernel_main."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """int before = 1;
-void kernel_main() {
-    int inside = 2;
-}
-int after = 3;
-"""
-        blocks = categorize_pre_main(source)
-        all_text = " ".join(b.text for b in blocks)
-        assert "before" in all_text
-        assert "inside" not in all_text
-        assert "after" not in all_text
-
-
-class TestCollectAllPreMainCode:
-    """Tests for robust pre-main merging across phases.
-
-    Functions and global variables are prefixed with phaseN_ for ALL phases
-    (including phase 0) to avoid redefinition errors.  Shared items like
-    namespace blocks and using declarations are deduped.
-    """
-
-    def _make_source(self, pre_main_body: str) -> str:
-        """Wrap pre-main code in a minimal kernel source."""
-        return f"{pre_main_body}\n\nvoid kernel_main() {{\n    // body\n}}\n"
-
-    @staticmethod
-    def _call(sources_with_indices):
-        """Call _collect_all_pre_main_code and merge the 3-tuple output into (combined_str, phase_names)."""
-        _fn = _mock_sequential._collect_all_pre_main_code
-        shared, per_phase, names = _fn(sources_with_indices)
-        parts = [shared] if shared.strip() else []
-        for idx in sorted(per_phase.keys()):
-            if per_phase[idx].strip():
-                parts.append(per_phase[idx])
-        return "\n\n".join(parts), names
-
-    def test_single_phase_functions_prefixed(self):
-        """Single phase: functions get phase0_ prefix."""
-        source = self._make_source("ALWI void ACQ() { acquire_dst(); }")
-        result, names = self._call([(0, source)])
-        assert "phase0_ACQ" in result
-        assert names == {0: ["ACQ"]}
-
-    def test_single_phase_shared_items_no_prefix(self):
-        """Single phase: namespace aliases and using declarations NOT prefixed."""
-        source = self._make_source("namespace g = norm;")
-        result, names = self._call([(0, source)])
-        assert "namespace g = norm;" in result
-        assert 0 not in names  # no phase-specific items
-
-    def test_identical_functions_both_prefixed(self):
-        """Identical function from two phases: both emitted with distinct prefixes."""
-        source = self._make_source("namespace g = norm;\n\nALWI void ACQ() { acquire_dst(); }")
-        result, names = self._call([(0, source), (1, source)])
-        # Namespace alias: deduped (shared)
-        assert result.count("namespace g = norm") == 1
-        # Function: each phase gets its own prefixed copy
-        assert "phase0_ACQ" in result
-        assert "phase1_ACQ" in result
-        assert names[0] == ["ACQ"]
-        assert names[1] == ["ACQ"]
-
-    def test_different_helpers_both_prefixed(self):
-        """Different helper functions from different ops are both prefixed."""
-        source0 = self._make_source("ALWI void helper_a() { return; }")
-        source1 = self._make_source("ALWI void helper_b() { return; }")
-        result, names = self._call([(0, source0), (1, source1)])
-        assert "phase0_helper_a" in result
-        assert "phase1_helper_b" in result
-
-    def test_same_signature_different_body_both_emitted(self):
-        """Same function signature but different body: both emitted with prefixes."""
-        source0 = self._make_source("inline void process() {\n    int x = 1;\n}")
-        source1 = self._make_source("inline void process() {\n    int x = 2;\n}")
-        result, names = self._call([(0, source0), (1, source1)])
-        # Both versions kept with phase prefixes
-        assert "phase0_process" in result
-        assert "phase1_process" in result
-        assert "int x = 1" in result
-        assert "int x = 2" in result
-
-    def test_global_vars_all_phases_prefixed(self):
-        """Global variables from ALL phases get phase-prefixed."""
-        source0 = self._make_source("uint32_t counter = 0;")
-        source1 = self._make_source("uint32_t counter = 0;")
-        result, names = self._call([(0, source0), (1, source1)])
-        assert "uint32_t phase0_counter = 0;" in result
-        assert "uint32_t phase1_counter = 0;" in result
-        assert "counter" in names[0]
-        assert "counter" in names[1]
-
-    def test_namespace_blocks_deduped_by_signature(self):
-        """Namespace blocks with same name are deduped (shared)."""
-        ns_block = "namespace my_ns {\n" "using T = uint32_t;\n" "inline void f() { return; }\n" "}  // namespace my_ns"
-        source0 = self._make_source(ns_block)
-        source1 = self._make_source(ns_block)
-        result, _ = self._call([(0, source0), (1, source1)])
-        # The opening "namespace my_ns {" should appear exactly once
-        assert result.count("namespace my_ns {") == 1
-
-    def test_different_namespaces_both_kept(self):
-        """Different namespace blocks are both kept (shared, not prefixed)."""
-        source0 = self._make_source("namespace ns_a {\ninline void fa() { return; }\n}")
-        source1 = self._make_source("namespace ns_b {\ninline void fb() { return; }\n}")
-        result, _ = self._call([(0, source0), (1, source1)])
-        assert "ns_a" in result
-        assert "ns_b" in result
-
-    def test_mixed_content(self):
-        """Mix of aliases, functions, and globals from multiple phases."""
-        source0 = self._make_source(
-            "namespace g = norm;\n\n" "ALWI void ACQ() { acquire_dst(); }\n\n" "uint32_t state = 0;"
-        )
-        source1 = self._make_source(
-            "namespace g = norm;\n\n"
-            "ALWI void ACQ() { acquire_dst(); }\n\n"
-            "uint32_t state = 0;\n\n"
-            "ALWI void extra() { return; }"
-        )
-        result, names = self._call([(0, source0), (1, source1)])
-        # Alias: deduped (shared)
-        assert result.count("namespace g = norm") == 1
-        # Function ACQ: both phases prefixed
-        assert "phase0_ACQ" in result
-        assert "phase1_ACQ" in result
-        # Global var: both phases prefixed
-        assert "uint32_t phase0_state = 0;" in result
-        assert "uint32_t phase1_state = 0;" in result
-        # Extra function from phase 1: prefixed
-        assert "phase1_extra" in result
-        # Phase names include both functions and globals
-        assert set(names[0]) == {"ACQ", "state"}
-        assert set(names[1]) == {"ACQ", "state", "extra"}
-
-    def test_phase_names_returned(self):
-        """phase_names dict correctly tracks all prefixed names per phase."""
-        source0 = self._make_source("ALWI void ACQ() { acquire_dst(); }\n\nuint32_t x = 1;")
-        source1 = self._make_source("ALWI void REL() { release_dst(); }\n\nfloat y = 2.0;")
-        _, names = self._call([(0, source0), (1, source1)])
-        assert set(names[0]) == {"ACQ", "x"}
-        assert set(names[1]) == {"REL", "y"}
-
-    def test_empty(self):
-        """Empty input returns empty string and empty dicts."""
-        shared, per_phase, names = _mock_sequential._collect_all_pre_main_code([])
-        assert shared == ""
-        assert per_phase == {}
-        assert names == {}
-
-    def test_block_comments_stripped(self):
-        """Block comments in pre-main are stripped before processing."""
-        source = self._make_source("/**\n * @brief Helper\n */\n" "ALWI void helper() { return; }")
-        result, _ = self._call([(0, source)])
-        assert "@brief" not in result
-        assert "phase0_helper" in result
-
-    def test_pragma_stripped(self):
-        """#pragma directives are stripped from pre-main."""
-        source = self._make_source("#pragma once\n\nnamespace g = norm;")
-        result, _ = self._call([(0, source)])
-        assert "#pragma" not in result
-        assert "namespace g = norm" in result
-
-
-class TestCrossOpPreMainStress:
-    """Stress tests for pre-main merging with diverse real-world kernel patterns.
-
-    Each test simulates fusing compute kernels from different ops by running
-    realistic kernel source through the pre-main merging pipeline and verifying
-    structural validity of the output.
-    """
-
-    # ---------------------------------------------------------------
-    # Realistic kernel source templates (mimicking actual op kernels)
-    # ---------------------------------------------------------------
-
-    # layernorm compute: namespace aliases + short ALWI helpers + inlined numeric.h
-    LAYERNORM_COMPUTE = """\
-#include <cstdint>
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include <tt-metalium/constants.hpp>
-
-namespace generic = norm::kernel_util::generic;
-namespace kutil = norm::kernel_util;
-namespace numeric = kutil::compute::numeric;
-namespace policies = kutil::compute::policies;
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
-void kernel_main() {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    ACQ();
-    REL();
-}
-"""
-
-    # rmsnorm_post_allgather compute: same REDUCE defines, multi-line ACQ/REL
-    RMSNORM_POST_COMPUTE = """\
-#include <cstdint>
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
-
-void kernel_main() {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    ACQ();
-    REL();
-}
-"""
-
-    # matmul compute: minimal pre-main, just a using declaration
-    MATMUL_COMPUTE = """\
-#include <cstdint>
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tile_move_copy.h"
-
-using std::uint32_t;
-
-// matmul C=A*B using dims MK*KN = MN (row major order)
-void kernel_main() {
-    constexpr int onetile = 1;
-    int dst_tile_index = 0;
-}
-"""
-
-    # batchnorm compute: ALWI helper with many params, moreh_common include
-    BATCHNORM_COMPUTE = """\
-#include "compute_kernel_api/eltwise_binary.h"
-#include <cstdint>
-
-ALWI void batchnorm_bcast_tiles(
-    uint32_t cb_bcast,
-    uint32_t cb_other,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t cb_batch_var,
-    uint32_t cb_eps,
-    uint32_t cb_den,
-    uint32_t cb_weight,
-    uint32_t cb_bias,
-    uint32_t cb_tmp_1,
-    uint32_t cb_output_0,
-    uint32_t weight_has,
-    uint32_t bias_has) {
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
-    uint32_t weight_has_value = weight_has;
-    uint32_t bias_has_value = bias_has;
-    auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
-    cb_reserve_back(cb_den, onetile);
-    cb_wait_front(cb_batch_var, onetile);
-    tile_regs_acquire();
-    tile_regs_commit();
-    tile_regs_wait();
-    tile_regs_release();
-    cb_pop_front(cb_batch_var, onetile);
-    cb_push_back(cb_den, onetile);
-}
-
-void kernel_main() {
-    batchnorm_bcast_tiles(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 1);
-}
-"""
-
-    # eltwise binary_ng compute: ALWI process_tile with macros + inlined utils
-    ELTWISE_BINARY_COMPUTE = """\
-#include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-
-#define IS_EMPTY(...) 0
-#define PROCESS_ACTIVATIONS(op, i) /* noop */
-#define HAS_ACTIVATIONS(op) 0
-#define BCAST_OP LHS
-#define OTHER_OP RHS
-#define BCAST_OP_0 LHS
-#define BCAST_OP_1 RHS
-
-ALWI void process_tile(
-    tt::CBIndex cb_pre_lhs,
-    tt::CBIndex cb_post_lhs,
-    tt::CBIndex cb_pre_rhs,
-    tt::CBIndex cb_post_rhs,
-    tt::CBIndex cb_out,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
-    using namespace ckernel;
-    cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
-    cb_reserve_back(cb_out, num_tiles_per_cycle);
-    tile_regs_acquire();
-    tile_regs_commit();
-    tile_regs_wait();
-    tile_regs_release();
-    cb_push_back(cb_out, num_tiles_per_cycle);
-}
-
-void kernel_main() {
-    process_tile(0, 1, 2, 3, 4, 8, 0, 1);
-}
-"""
-
-    # untilize compute: constexpr helper function
-    UNTILIZE_COMPUTE = """\
-#include <cstdint>
-
-constexpr uint32_t compute_num_blocks_per_column(uint32_t per_core_block_tile_cnt, uint32_t max_bct) {
-    for (uint32_t bct = max_bct; bct >= 1; --bct) {
-        if (per_core_block_tile_cnt % bct == 0) {
-            return per_core_block_tile_cnt / bct;
-        }
-    }
-    return 1;
-}
-
-void kernel_main() {
-    constexpr uint32_t n = compute_num_blocks_per_column(8, 4);
-}
-"""
-
-    # groupnorm compute: no pre-main (everything inside kernel_main)
-    GROUPNORM_COMPUTE = """\
-#include <cstdint>
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-
-void kernel_main() {
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-}
-"""
-
-    # eltwise unary sfpu: no pre-main, many includes
-    ELTWISE_SFPU_COMPUTE = """\
-#include <cstdint>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/trigonometry.h"
-
-void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-}
-"""
-
-    # numeric.h inlined (simplified): nested namespace with template functions
-    NUMERIC_INLINED_COMPUTE = """\
-#include <cstdint>
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include <type_traits>
-#include <array>
-
-namespace policies = norm::kernel_util::compute::policies;
-namespace generic = norm::kernel_util::generic;
-
-namespace norm::kernel_util::compute::numeric {
-
-namespace detail {
-
-constexpr uint32_t dst0 = 0;
-
-inline void scale_dest(uint32_t dst, uint32_t scalar) {
-    binop_with_scalar_tile_init();
-    mul_unary_tile(dst, scalar);
-}
-
-template <typename Block>
-inline void reduce_block(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, const Block& block) {
-    constexpr uint32_t onetile = 1;
-    reduce_init_delta<false>(cb_in, cb_scaler);
-    cb_wait_front(cb_scaler, onetile);
-    cb_reserve_back(cb_out, onetile);
-    tile_regs_acquire();
-    tile_regs_commit();
-    tile_regs_wait();
-    tile_regs_release();
-    cb_push_back(cb_out, onetile);
-    reduce_revert_delta(cb_in);
-}
-
-}  // namespace detail
-}  // namespace norm::kernel_util::compute::numeric
-
-namespace generic = norm::kernel_util::generic;
-namespace kutil = norm::kernel_util;
-namespace numeric = kutil::compute::numeric;
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
-void kernel_main() {
-    ACQ();
-    REL();
-}
-"""
-
-    # Kernel with global/static variables in pre-main
-    GLOBALS_COMPUTE = """\
-#include <cstdint>
-
-static uint32_t phase_counter = 0;
-volatile uint32_t sync_flag = 0;
-constexpr uint32_t MAX_TILES = 64;
-
-ALWI void reset_state() {
-    phase_counter = 0;
-    sync_flag = 0;
-}
-
-void kernel_main() {
-    reset_state();
-    phase_counter++;
-}
-"""
-
-    # Kernel with Doxygen block comments (should be stripped)
-    DOXYGEN_COMPUTE = """\
-#include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-
-/**
- * @brief Compute two-stage NOC addresses for distributed reduce.
- * @tparam row_major Whether cores are indexed row-major
- * @tparam N Number of remote workers
- * @param addrs Array to populate
- * @param x Starting X coordinate
- */
-template <bool row_major, uint32_t N>
-inline void compute_noc_addrs(uint32_t* addrs, uint32_t x, uint32_t y) {
-    for (uint32_t i = 0; i < N; ++i) {
-        addrs[i] = x + i;
-    }
-}
-
-/**
- * @file Short helper
- */
-ALWI void sync() { /* noop */ }
-
-void kernel_main() {
-    uint32_t addrs[4];
-    compute_noc_addrs<true, 4>(addrs, 0, 0);
-    sync();
-}
-"""
-
-    # ---------------------------------------------------------------
-    # Structural validation helpers
-    # ---------------------------------------------------------------
-
-    @staticmethod
-    def _assert_balanced_braces(code: str, label: str = ""):
-        """Verify all braces are balanced in the merged code."""
-        depth = 0
-        for i, ch in enumerate(code):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-            assert depth >= 0, f"Unbalanced '}}' at position {i} in {label}"
-        assert depth == 0, f"Unclosed '{{' (depth={depth}) in {label}"
-
-    @staticmethod
-    def _assert_no_orphaned_doxygen(code: str, label: str = ""):
-        """Verify no orphaned Doxygen artifacts (from broken block comment stripping)."""
-        for lineno, line in enumerate(code.split("\n"), 1):
-            stripped = line.strip()
-            # Orphaned Doxygen line starts with * but is not inside a block comment
-            assert not (
-                stripped.startswith("* @") or stripped == "*/"
-            ), f"Orphaned Doxygen artifact at line {lineno} in {label}: {stripped!r}"
-
-    @staticmethod
-    def _assert_no_duplicate_functions(code: str, label: str = ""):
-        """Check that no function signature appears more than once."""
-        import re
-
-        # Match function-like declarations: type name(...)
-        sigs = re.findall(
-            r"(?:ALWI|inline|FORCE_INLINE|constexpr)\s+\w+\s+(\w+)\s*\(",
-            code,
-        )
-        seen = {}
-        for sig in sigs:
-            seen[sig] = seen.get(sig, 0) + 1
-        dupes = {k: v for k, v in seen.items() if v > 1}
-        assert not dupes, f"Duplicate function signatures in {label}: {dupes}"
-
-    def _merge_sources(self, *sources):
-        """Run sources through the pre-main merging pipeline."""
-        indexed = list(enumerate(sources))
-        shared, per_phase, _ = _mock_sequential._collect_all_pre_main_code(indexed)
-        result = shared + "\n\n" + "\n\n".join(per_phase.get(i, "") for i in sorted(per_phase.keys()))
-        return result
-
-    def _validate(self, result: str, label: str):
-        """Run all structural validations."""
-        self._assert_balanced_braces(result, label)
-        self._assert_no_orphaned_doxygen(result, label)
-        self._assert_no_duplicate_functions(result, label)
-
-    # ---------------------------------------------------------------
-    # Test 1: layernorm + matmul (namespace aliases vs using decl)
-    # ---------------------------------------------------------------
-    def test_layernorm_plus_matmul(self):
-        """Fuse layernorm (aliases + ALWI) with matmul (using decl, minimal)."""
-        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.MATMUL_COMPUTE)
-        self._validate(result, "LN+matmul")
-        # LN pre-main content (shared items)
-        assert "namespace generic = norm::kernel_util::generic;" in result
-        assert "namespace kutil = norm::kernel_util;" in result
-        # LN functions get phase0_ prefix
-        assert "phase0_ACQ" in result
-        assert "phase0_REL" in result
-        # Matmul pre-main content (shared item)
-        assert "using std::uint32_t;" in result
-
-    # ---------------------------------------------------------------
-    # Test 2: layernorm + batchnorm (short helpers vs long helper)
-    # ---------------------------------------------------------------
-    def test_layernorm_plus_batchnorm(self):
-        """Fuse layernorm (short ACQ/REL) with batchnorm (13-param ALWI)."""
-        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.BATCHNORM_COMPUTE)
-        self._validate(result, "LN+batchnorm")
-        assert "phase0_ACQ" in result
-        assert "phase1_batchnorm_bcast_tiles" in result
-        # Shared items
-        assert "namespace generic" in result
-
-    # ---------------------------------------------------------------
-    # Test 3: layernorm + eltwise binary_ng (aliases vs macro-heavy)
-    # ---------------------------------------------------------------
-    def test_layernorm_plus_eltwise_binary(self):
-        """Fuse layernorm (namespace aliases) with eltwise binary (macros + process_tile)."""
-        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.ELTWISE_BINARY_COMPUTE)
-        self._validate(result, "LN+eltwise_binary")
-        assert "phase0_ACQ" in result
-        assert "phase1_process_tile" in result
-        assert "namespace generic" in result
-
-    # ---------------------------------------------------------------
-    # Test 4: rmsnorm_post + groupnorm (same REDUCE defines, different ACQ/REL)
-    # ---------------------------------------------------------------
-    def test_rmsnorm_post_plus_groupnorm(self):
-        """Fuse rmsnorm_post (multi-line ACQ/REL) with groupnorm (no pre-main)."""
-        result = self._merge_sources(self.RMSNORM_POST_COMPUTE, self.GROUPNORM_COMPUTE)
-        self._validate(result, "rmsnorm+groupnorm")
-        # rmsnorm pre-main has multi-line ACQ/REL, prefixed with phase0_
-        assert "phase0_ACQ" in result
-        assert "tile_regs_acquire" in result
-        assert "tile_regs_release" in result
-        # groupnorm has no pre-main, so nothing new added
-
-    # ---------------------------------------------------------------
-    # Test 5: layernorm + untilize (aliases + helpers vs constexpr function)
-    # ---------------------------------------------------------------
-    def test_layernorm_plus_untilize(self):
-        """Fuse layernorm (complex) with untilize (constexpr helper function)."""
-        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.UNTILIZE_COMPUTE)
-        self._validate(result, "LN+untilize")
-        assert "phase0_ACQ" in result
-        assert "phase1_compute_num_blocks_per_column" in result
-
-    # ---------------------------------------------------------------
-    # Test 6: rmsnorm_post + layernorm (conflicting ACQ/REL signatures)
-    # ---------------------------------------------------------------
-    def test_rmsnorm_post_plus_layernorm(self):
-        """Fuse rmsnorm_post (multi-line ACQ/REL) with layernorm (single-line ACQ/REL).
-
-        Both define ACQ() and REL() with different bodies. Per-phase prefixing
-        gives each its own version, avoiding silent drops or redefinition errors.
-        """
-        result = self._merge_sources(self.RMSNORM_POST_COMPUTE, self.LAYERNORM_COMPUTE)
-        self._validate(result, "rmsnorm+LN")
-        # rmsnorm's multi-line version (phase 0)
-        assert "phase0_ACQ" in result
-        assert "tile_regs_acquire" in result
-        # layernorm's single-line version (phase 1) — now kept with its own prefix
-        assert "phase1_ACQ" in result
-        assert "acquire_dst" in result
-        # Namespace aliases from LN should still be present (shared)
-        assert "namespace generic" in result
-
-    # ---------------------------------------------------------------
-    # Test 7: 3-phase: layernorm + batchnorm + eltwise binary
-    # ---------------------------------------------------------------
-    def test_three_phase_ln_batchnorm_eltwise(self):
-        """Three-phase fusion: LN + batchnorm + eltwise binary."""
-        result = self._merge_sources(
-            self.LAYERNORM_COMPUTE,
-            self.BATCHNORM_COMPUTE,
-            self.ELTWISE_BINARY_COMPUTE,
-        )
-        self._validate(result, "LN+batchnorm+eltwise")
-        assert "phase0_ACQ" in result
-        assert "phase1_batchnorm_bcast_tiles" in result
-        assert "phase2_process_tile" in result
-        assert "namespace generic" in result
-
-    # ---------------------------------------------------------------
-    # Test 8: 4-phase: matmul + layernorm + batchnorm + untilize
-    # ---------------------------------------------------------------
-    def test_four_phase_diverse_ops(self):
-        """Four-phase fusion with maximally diverse ops."""
-        result = self._merge_sources(
-            self.MATMUL_COMPUTE,
-            self.LAYERNORM_COMPUTE,
-            self.BATCHNORM_COMPUTE,
-            self.UNTILIZE_COMPUTE,
-        )
-        self._validate(result, "matmul+LN+batchnorm+untilize")
-        # matmul (shared item)
-        assert "using std::uint32_t;" in result
-        # LN (shared + prefixed)
-        assert "namespace generic" in result
-        assert "phase1_ACQ" in result
-        # batchnorm
-        assert "phase2_batchnorm_bcast_tiles" in result
-        # untilize
-        assert "phase3_compute_num_blocks_per_column" in result
-
-    # ---------------------------------------------------------------
-    # Test 9: Inlined numeric.h namespace + Doxygen + globals
-    # ---------------------------------------------------------------
-    def test_complex_inlined_header_plus_doxygen_plus_globals(self):
-        """Complex inlined namespace (numeric.h) + Doxygen comments + globals.
-
-        Exercises: nested namespaces, block comment stripping, global
-        variable prefixing for all phases, template function dedup.
-        """
-        result = self._merge_sources(
-            self.NUMERIC_INLINED_COMPUTE,
-            self.DOXYGEN_COMPUTE,
-            self.GLOBALS_COMPUTE,
-        )
-        self._validate(result, "numeric+doxygen+globals")
-        # numeric.h namespace block (shared)
-        assert "norm::kernel_util::compute::numeric" in result
-        assert "scale_dest" in result
-        assert "reduce_block" in result
-        # Doxygen comments should be stripped
-        assert "@brief" not in result
-        assert "@tparam" not in result
-        assert "@param" not in result
-        # Doxygen kernel's template function should be present (in namespace, shared)
-        assert "compute_noc_addrs" in result
-        # Globals: ALL phases prefixed
-        assert "phase2_phase_counter" in result
-        assert "phase2_sync_flag" in result
-
-    # ---------------------------------------------------------------
-    # Test 10: 5-phase stress: all different ops
-    # ---------------------------------------------------------------
-    def test_five_phase_maximum_diversity(self):
-        """Five-phase fusion with maximum op diversity.
-
-        Exercises every pre-main pattern simultaneously: namespace aliases,
-        using declarations, ALWI short/long helpers, constexpr functions,
-        template functions, nested namespaces, global variables, Doxygen.
-        """
-        result = self._merge_sources(
-            self.LAYERNORM_COMPUTE,  # aliases + short ACQ/REL
-            self.BATCHNORM_COMPUTE,  # long ALWI helper
-            self.ELTWISE_BINARY_COMPUTE,  # ALWI process_tile
-            self.UNTILIZE_COMPUTE,  # constexpr helper
-            self.GLOBALS_COMPUTE,  # globals + ALWI reset_state
-        )
-        self._validate(result, "5-phase-stress")
-
-        # Phase 0 (LN): namespace aliases (shared) and helpers (prefixed)
-        assert "namespace generic = norm::kernel_util::generic;" in result
-        assert "phase0_ACQ" in result
-        assert "phase0_REL" in result
-
-        # Phase 1 (batchnorm): long helper function (prefixed)
-        assert "phase1_batchnorm_bcast_tiles" in result
-
-        # Phase 2 (eltwise binary): process_tile (prefixed)
-        assert "phase2_process_tile" in result
-
-        # Phase 3 (untilize): constexpr function (prefixed)
-        assert "phase3_compute_num_blocks_per_column" in result
-
-        # Phase 4 (globals): prefixed global variables + helper
-        assert "phase4_phase_counter" in result
-        assert "phase4_sync_flag" in result
-        assert "phase4_reset_state" in result
-
-
-class TestReplaceInCodeOnly:
-    """Tests for tree-sitter-based code-aware replacement."""
-
-    def test_replaces_in_code(self):
-        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
-
-        source = "int ACQ = 1;\nACQ();"
-        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
-        assert "phase0_ACQ = 1" in result
-        assert "phase0_ACQ()" in result
-
-    def test_skips_string_literals(self):
-        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
-
-        source = 'const char* s = "ACQ is here";\nint ACQ = 1;'
-        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
-        assert '"ACQ is here"' in result  # String unchanged
-        assert "phase0_ACQ = 1" in result  # Code changed
-
-    def test_skips_comments(self):
-        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
-
-        source = "// ACQ comment\nint ACQ = 1;"
-        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
-        assert "// ACQ comment" in result  # Comment unchanged
-        assert "phase0_ACQ = 1" in result  # Code changed
-
-    def test_skips_block_comments(self):
-        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
-
-        source = "/* ACQ in block */\nint ACQ = 1;"
-        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
-        assert "/* ACQ in block */" in result  # Block comment unchanged
-        assert "phase0_ACQ = 1" in result  # Code changed
-
-    def test_word_boundary(self):
-        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
-
-        source = "int ACQ = 1;\nint ACQUIRE = 2;"
-        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
-        assert "phase0_ACQ = 1" in result
-        assert "ACQUIRE" in result  # Not replaced (different word)
-
-
 class TestExtractKernelBody:
-    """Tests for tree-sitter-based kernel body extraction."""
+    """Tests for kernel body extraction via brace matching."""
 
     def test_extract_body_with_alwi_kernel_main(self):
         extract_kernel_body = _mock_cpp_parser.extract_kernel_body
@@ -1726,44 +743,156 @@ void kernel_main() {
         body = extract_kernel_body(source)
         assert body == ""
 
+    def test_raw_string_with_braces(self):
+        """Raw string literal with braces should not confuse brace matching."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
-class TestCategorizePreMainVariables:
-    """Tests for variable detection in categorize_pre_main."""
+        source = """
+void kernel_main() {
+    const char* s = R"({ "key": "value" })";
+    int x = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int x = 1" in body
+        assert 'R"(' in body
 
-    def test_pointer_types(self):
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
+    def test_raw_string_with_delimiter(self):
+        """Raw string with custom delimiter containing braces and quotes."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
-        source = "uint32_t* ptr = nullptr;\nvoid kernel_main() {}"
-        blocks = categorize_pre_main(source)
-        var_blocks = [b for b in blocks if b.kind == "variable"]
-        assert len(var_blocks) == 1
-        assert var_blocks[0].name == "ptr"
+        source = '''
+void kernel_main() {
+    const char* s = R"foo(
+        }}} """ {{{
+    )foo";
+    int done = 1;
+}
+'''
+        body = extract_kernel_body(source)
+        assert "int done = 1" in body
 
-    def test_constexpr_types(self):
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
+    def test_prefixed_raw_string(self):
+        """LR, uR, UR, u8R raw string prefixes."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
-        source = "constexpr uint32_t MAX_TILES = 64;\nvoid kernel_main() {}"
-        blocks = categorize_pre_main(source)
-        var_blocks = [b for b in blocks if b.kind == "variable"]
-        assert len(var_blocks) == 1
-        assert var_blocks[0].name == "MAX_TILES"
+        source = """
+void kernel_main() {
+    auto a = LR"({ braces })";
+    auto b = uR"({ braces })";
+    auto c = UR"({ braces })";
+    auto d = u8R"({ braces })";
+    int ok = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int ok = 1" in body
 
-    def test_static_variables(self):
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
+    def test_identifier_ending_in_R_not_raw_string(self):
+        """Variable named fooR followed by string is not a raw string."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
-        source = "static uint32_t counter = 0;\nvoid kernel_main() {}"
-        blocks = categorize_pre_main(source)
-        var_blocks = [b for b in blocks if b.kind == "variable"]
-        assert len(var_blocks) == 1
-        assert var_blocks[0].name == "counter"
+        source = """
+void kernel_main() {
+    int fooR = 1;
+    const char* s = "normal { string }";
+    int ok = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int ok = 1" in body
 
-    def test_functions_not_variables(self):
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
+    def test_line_comment_with_braces(self):
+        """Braces in line comments should be ignored."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
-        source = "ALWI void ACQ() { acquire_dst(); }\nvoid kernel_main() {}"
-        blocks = categorize_pre_main(source)
-        var_blocks = [b for b in blocks if b.kind == "variable"]
-        assert len(var_blocks) == 0
+        source = """
+void kernel_main() {
+    // this has a } that should not close the function
+    int x = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int x = 1" in body
+
+    def test_block_comment_with_braces(self):
+        """Braces in block comments should be ignored."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+
+        source = """
+void kernel_main() {
+    /* } } } */
+    int x = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int x = 1" in body
+
+    def test_char_literal_with_brace(self):
+        """Char literal containing a brace character."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+
+        source = """
+void kernel_main() {
+    char c = '}';
+    int x = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int x = 1" in body
+
+    def test_escaped_quote_in_string(self):
+        """Escaped quote followed by brace in string."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+
+        source = r"""
+void kernel_main() {
+    const char* s = "escaped \" } quote";
+    int x = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int x = 1" in body
+
+    def test_deeply_nested_braces(self):
+        """Multiple levels of nested braces."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+
+        source = """
+void kernel_main() {
+    for (int i = 0; i < 10; i++) {
+        if (i > 5) {
+            while (true) {
+                break;
+            }
+        }
+    }
+    int done = 1;
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int done = 1" in body
+        assert "while" in body
+
+    def test_mixed_comments_and_strings(self):
+        """Body with interspersed comments, strings, and braces."""
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+
+        source = """
+void kernel_main() {
+    // comment with }
+    const char* a = "string with { and }";
+    /* block
+       comment } with } braces */
+    char c = '{';
+    if (true) {
+        int x = 1;
+    }
+}
+"""
+        body = extract_kernel_body(source)
+        assert "int x = 1" in body
+        assert "char c" in body
 
 
 class TestRuntimeArgRedirect:
@@ -1775,69 +904,15 @@ class TestRuntimeArgRedirect:
         result = _emit_rt_arg_wrapper(2, 18)
         joined = "\n".join(result)
         assert "arg_idx + 18" in joined
-        assert "__phase2_get_arg_val" in joined
+        assert "phase_2_get_arg_val" in joined
         assert "get_named_compile_time_arg_val" not in joined
 
     def test_define_and_undef(self):
         """Define/undef should emit correct preprocessor directives."""
         _emit_rt_arg_define = _mock_sequential._emit_rt_arg_define
         _emit_rt_arg_undef = _mock_sequential._emit_rt_arg_undef
-        assert _emit_rt_arg_define(2) == "#define get_arg_val __phase2_get_arg_val"
+        assert _emit_rt_arg_define(2) == "#define get_arg_val phase_2_get_arg_val"
         assert _emit_rt_arg_undef() == "#undef get_arg_val"
-
-
-class TestPrefixPhaseNamesSkipsStrings:
-    """Tests for _prefix_phase_names_in_source respecting strings/comments."""
-
-    def test_does_not_replace_in_string(self):
-        _prefix_phase_names_in_source = _mock_sequential._prefix_phase_names_in_source
-
-        source = 'const char* msg = "ACQ called";\nACQ();'
-        result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
-        # ACQ in string should stay unchanged
-        assert '"ACQ called"' in result
-        # ACQ in code should be prefixed
-        assert "phase0_ACQ();" in result
-
-    def test_does_not_replace_in_comment(self):
-        _prefix_phase_names_in_source = _mock_sequential._prefix_phase_names_in_source
-
-        source = "// Call ACQ to acquire\nACQ();"
-        result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
-        assert "// Call ACQ to acquire" in result
-        assert "phase0_ACQ();" in result
-
-    def test_does_not_replace_in_block_comment(self):
-        _prefix_phase_names_in_source = _mock_sequential._prefix_phase_names_in_source
-
-        source = "/* ACQ description */\nACQ();"
-        result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
-        assert "/* ACQ description */" in result
-        assert "phase0_ACQ();" in result
-
-
-class TestFunctionDetectionRobust:
-    """Tests for function detection via categorize_pre_main."""
-
-    def test_function_with_braces_in_string(self):
-        """Function with braces in string is still detected as function."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = 'void foo() {\n    const char* s = "no { braces }";\n}\nvoid kernel_main() {}'
-        blocks = categorize_pre_main(source)
-        func_blocks = [b for b in blocks if b.kind == "function"]
-        assert len(func_blocks) == 1
-        assert func_blocks[0].name == "foo"
-
-    def test_scope_qualified_function(self):
-        """Scope-qualified function names are extracted correctly."""
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = "void MyClass::process() {\n    return;\n}\nvoid kernel_main() {}"
-        blocks = categorize_pre_main(source)
-        func_blocks = [b for b in blocks if b.kind == "function"]
-        assert len(func_blocks) == 1
-        assert func_blocks[0].name == "process"
 
 
 class TestInlineLocalIncludesRelative:
@@ -1854,9 +929,10 @@ class TestInlineLocalIncludesRelative:
         header.write_text("#pragma once\nint helper_val = 42;")
 
         source = '#include "subdir/helper.h"\nvoid kernel_main() {}'
-        result = inline_local_includes(source, str(tmp_path))
-        assert "int helper_val = 42" in result
-        assert "#pragma once" not in result
+        headers, remaining = inline_local_includes(source, str(tmp_path))
+        assert len(headers) == 1
+        assert "int helper_val = 42" in headers[0][1]
+        assert "#pragma once" not in headers[0][1]
 
     def test_local_include_still_works(self, tmp_path):
         """Local includes (no path separator) still work."""
@@ -1866,26 +942,9 @@ class TestInlineLocalIncludesRelative:
         header.write_text("int local_val = 1;")
 
         source = '#include "local.h"\nvoid kernel_main() {}'
-        result = inline_local_includes(source, str(tmp_path))
-        assert "int local_val = 1" in result
-
-
-class TestCategorizePreMainStopsAtKernelMain:
-    """Test that categorize_pre_main stops at kernel_main with attributes."""
-
-    def test_stops_at_alwi_kernel_main(self):
-        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
-
-        source = """namespace g = norm;
-
-ALWI void kernel_main() {
-    int x = 1;
-}
-"""
-        blocks = categorize_pre_main(source)
-        all_text = " ".join(b.text for b in blocks)
-        assert "namespace g = norm" in all_text or any("norm" in b.text for b in blocks)
-        assert "int x = 1" not in all_text
+        headers, remaining = inline_local_includes(source, str(tmp_path))
+        assert len(headers) == 1
+        assert "int local_val = 1" in headers[0][1]
 
 
 class TestCBPoolAllocator:
@@ -2136,7 +1195,7 @@ class TestCBPoolAllocator:
 
         result_dict = dict(result)
         assert result_dict["cb_in0"] == 0  # Phase 0: identity
-        assert result_dict["phase1_cb_in0"] == 5  # Phase 1: remapped + prefixed
+        assert result_dict["phase_1_cb_in0"] == 5  # Phase 1: remapped + prefixed
 
 
 def _make_mock_core_range_set(coord_ranges):
@@ -2915,25 +1974,25 @@ class TestSemaphoreInitialValue:
 
 
 class TestMustMatchDefines:
-    """Tests for MUST_MATCH_DEFINES validation in _categorize_phase_defines."""
+    """Tests for MUST_MATCH_DEFINES validation in _collect_phase_defines."""
 
     def test_matching_accepted(self):
         """Same REDUCE_OP value across phases should be accepted."""
-        _categorize = _mock_sequential._categorize_phase_defines
+        _collect = _mock_sequential._collect_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("REDUCE_DIM", "1")])},
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("REDUCE_DIM", "1")])},
         ]
 
-        uniform, _ = _categorize(phase_kernels, "compute")
-        names = [name for name, _ in uniform]
+        must_match, _ = _collect(phase_kernels, "compute")
+        names = [name for name, _ in must_match]
         assert "REDUCE_OP" in names
         assert "REDUCE_DIM" in names
 
     def test_mismatched_rejected(self):
         """Different REDUCE_OP values across phases should raise ValueError."""
-        _categorize = _mock_sequential._categorize_phase_defines
+        _collect = _mock_sequential._collect_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0")])},
@@ -2941,21 +2000,21 @@ class TestMustMatchDefines:
         ]
 
         with pytest.raises(ValueError, match="REDUCE_OP.*inconsistent"):
-            _categorize(phase_kernels, "compute")
+            _collect(phase_kernels, "compute")
 
     def test_present_in_one_phase_only(self):
-        """Define present in only one phase should not raise (no conflict)."""
-        _categorize = _mock_sequential._categorize_phase_defines
+        """MUST_MATCH define present in only one phase should not raise and should be in must_match."""
+        _collect = _mock_sequential._collect_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("BCAST_LLKOP", "2")])},
             {"compute": MagicMock(defines=[])},
         ]
 
-        uniform, per_phase = _categorize(phase_kernels, "compute")
-        uniform_names = [name for name, _ in uniform]
-        assert "REDUCE_OP" in uniform_names
-        assert "BCAST_LLKOP" in uniform_names
+        must_match, _ = _collect(phase_kernels, "compute")
+        must_match_names = [name for name, _ in must_match]
+        assert "REDUCE_OP" in must_match_names
+        assert "BCAST_LLKOP" in must_match_names
 
 
 # =============================================================================
