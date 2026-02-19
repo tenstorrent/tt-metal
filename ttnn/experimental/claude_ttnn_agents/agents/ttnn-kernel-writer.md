@@ -303,6 +303,18 @@ compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
 
 **Note**: `ReduceInputBlockShape` specifies the **block dimensions being processed** (rows × cols × batches of 32×32 tiles), NOT the 32×32 hardware tile itself.
 
+## TDD Pipeline Mode
+
+If invoked with a TDD pipeline prompt (containing "TDD stage" and a stage name), you are operating within the stage-gated TDD pipeline. In this mode:
+
+1. **Scope your changes to the current stage ONLY.** Do not implement future stages.
+2. **Previous stages already pass.** Do not modify behavior that earlier stages validated.
+3. **Test files are pre-generated.** The orchestrator created the test file — you implement the kernels to make it pass.
+4. **If a previous failure is provided**, read the classification and suggested action. Fix the specific issue described.
+5. **Do NOT run tests yourself.** The orchestrator runs tests via `tdd_orchestrator.py test`. Just implement the kernels and return.
+
+Reference: `.claude/references/tdd-kernel-pipeline.md`
+
 ## What You DON'T Do
 
 - Change CB configuration (that's the program factory's job)
