@@ -332,6 +332,25 @@ Register stages in order. The JSON payload follows this schema:
 | Reductions (mean, sum, max) | 0.02 | 0.1 |
 | Multi-step compute (normalize) | 0.05 | 0.2 |
 
+#### Shape Coverage Requirements
+
+Every stage MUST include **at least 4 shapes** covering these categories:
+
+| Category | Purpose | Example |
+|----------|---------|---------|
+| **Minimal** | Single tile, simplest case | `(1, 1, 32, 32)` |
+| **Multi-tile** | Tests tile iteration loops | `(1, 1, 64, 128)` |
+| **Non-square** | Catches W!=H assumptions | `(1, 1, 32, 256)` |
+| **Multi-batch** | Tests batch/outer dim handling | `(4, 2, 64, 64)` |
+
+Optional but recommended for compute-heavy stages:
+- **Large width**: Stresses reduction accumulation — `(1, 1, 32, 1024)`
+- **Remainder**: Non-power-of-2 tile counts — `(1, 1, 96, 160)`
+
+Reuse the spec's test shapes. All stages SHOULD use the same shape set unless a stage has shape constraints (e.g., shape-changing ops where passthrough stages use input shape).
+
+The orchestrator enforces a minimum of 3 shapes per stage and will reject registrations with fewer.
+
 ## Key Principles
 
 1. **Helpers first**: When a helper exists, use it (tested, handles edge cases)

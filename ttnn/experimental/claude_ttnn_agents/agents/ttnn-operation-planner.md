@@ -269,7 +269,16 @@ output[i,j,k,...] = f(input[...], params...)
 ### Test Criteria
 - Output shape matches formula
 - Numerical accuracy vs PyTorch reference (specify rtol/atol)
-- Test shapes: {list shapes to test}
+- Test shapes (minimum 4, must cover all categories below):
+
+| Category | Purpose | Example |
+|----------|---------|---------|
+| Minimal | Single tile, simplest case | `(1, 1, 32, 32)` |
+| Multi-tile | Tests tile iteration | `(1, 1, 64, 128)` |
+| Non-square | Catches W!=H assumptions | `(1, 1, 32, 256)` |
+| Multi-batch | Tests batch/outer dims | `(4, 2, 64, 64)` |
+| Large width (optional) | Stresses reduction accumulation | `(1, 1, 32, 1024)` |
+| Remainder (optional) | Non-power-of-2 tile counts | `(1, 1, 96, 160)` |
 ```
 
 ### Spec Rules
@@ -301,7 +310,7 @@ Before finishing, verify:
 - [ ] CB requirements specified with page counts
 - [ ] Work distribution strategy defined
 - [ ] Hardware constraints checklist filled in
-- [ ] Test criteria include shapes and tolerances
+- [ ] Test shapes cover: minimal, multi-tile, non-square, multi-batch (4+ shapes)
 - [ ] **Hybrid**: Component sources table complete, CB ID conflicts resolved
 - [ ] **Spec is ~250 lines or less**
 

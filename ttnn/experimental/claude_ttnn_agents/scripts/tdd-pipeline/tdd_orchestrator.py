@@ -329,6 +329,16 @@ def cmd_add_stage(args):
         print(f"ERROR: Stage '{stage_def['name']}' already exists.", file=sys.stderr)
         sys.exit(1)
 
+    # Validate shapes — minimum 3 for meaningful coverage
+    shapes = stage_def["shapes"]
+    if not isinstance(shapes, list) or len(shapes) < 3:
+        print(
+            f"ERROR: shapes must be a list with at least 3 entries (got {len(shapes) if isinstance(shapes, list) else type(shapes).__name__}). "
+            "Include at minimum: single-tile, multi-tile, and multi-batch shapes.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # Validate tolerance
     tolerance = stage_def["tolerance"]
     if not isinstance(tolerance, dict) or "rtol" not in tolerance or "atol" not in tolerance:
