@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 bool can_deallocate(const Tensor& input_tensor) {
-    if (!is_device_tensor(input_tensor)) {
+    if (is_cpu_tensor(input_tensor)) {
         return false;
     }
     return input_tensor.device_storage().mesh_buffer.use_count() == 1;
