@@ -21,6 +21,10 @@ on:
         required: false
         type: boolean
         default: true
+      slack-channel-id:
+        description: 'Slack channel ID to post notifications to'
+        required: false
+        type: string
 
 jobs:
   fetch-data:
@@ -273,7 +277,7 @@ jobs:
         id: slack-report
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
         env:
@@ -300,6 +304,6 @@ jobs:
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
-          slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          slack_channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
