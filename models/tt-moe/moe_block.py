@@ -9,6 +9,7 @@ different MoE architectures including DeepSeek-V3 and GPT-OSS through simplified
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -177,15 +178,21 @@ class MoEBlock:
                 "dispatch_cluster_axis": self.ep_axis,
                 "activation": experts_config.get("activation", "swiglu"),
                 "use_quantized_weights": experts_config.get("quantized", False),
+                "matmul_type": experts_config.get("matmul_type", "dense"),  # Configurable matmul type
+                "sparsity_block_size": self.config["model_params"].get("sparsity_block_size", 32),
                 "memory_config": "L1_MEMORY_CONFIG",  # Default for decode
                 "output_memory_config": "L1_MEMORY_CONFIG",
             }
 
             # Add activation parameters if present (for GPT-OSS clamped SwiGLU)
-            if "swiglu_alpha" in experts_config:
-                base_config["swiglu_alpha"] = experts_config["swiglu_alpha"]
-            if "swiglu_limit" in experts_config:
-                base_config["swiglu_limit"] = experts_config["swiglu_limit"]
+            activation_config = experts_config.get("activation", {})
+            if isinstance(activation_config, dict):
+                if "alpha" in activation_config:
+                    base_config["swiglu_alpha"] = activation_config["alpha"]
+                if "gate_limit" in activation_config:
+                    base_config["swiglu_limit"] = activation_config["gate_limit"]
+                if "type" in activation_config and activation_config["type"] == "clamped_swiglu":
+                    base_config["activation"] = "clamped_swiglu"
 
             # Add quantization parameters if needed
             if experts_config.get("quantized", False):
@@ -389,6 +396,12 @@ class MoEBlock:
         self.distributed_expert_decode_config["num_experts"] = self.num_experts
         self.distributed_expert_decode_config["num_experts_per_tok"] = self.num_experts_per_tok
         self.distributed_expert_decode_config["hidden_size"] = self.hidden_size
+        self.distributed_expert_decode_config["matmul_type"] = self.distributed_expert_config.get(
+            "matmul_type", "dense"
+        )
+        self.distributed_expert_decode_config["sparsity_block_size"] = self.distributed_expert_config.get(
+            "sparsity_block_size", 32
+        )
 
         # DistributedExpert returns a dict, merge the weights
         for key, value in weight_configs.items():
@@ -447,7 +460,21 @@ class MoEBlock:
             x_was_gathered = True
 
         # Router forward
-        weights, indices = self.router.forward(x, mode)
+        # Note: TopKRouter returns (indices, weights), MoeGateRouter returns (weights, indices)
+        if isinstance(self.router, TopKRouter):
+            indices, weights = self.router.forward(x, mode)
+        else:
+            weights, indices = self.router.forward(x, mode)
+
+        # Debug capture for router outputs
+        if os.environ.get("GPT_OSS_DEBUG", "") == "1":
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.info(f"[DEBUG] Router outputs - weights shape: {weights.shape}, indices shape: {indices.shape}")
+            if hasattr(self, "debug_state"):
+                self.debug_state["router_weights_tt"] = weights
+                self.debug_state["router_indices_tt"] = indices
 
         # Prepare weights for experts
         weights_prepared = self._prepare_expert_weights(weights)
@@ -485,15 +512,37 @@ class MoEBlock:
 
     def _prepare_expert_weights(self, weights: ttnn.Tensor) -> ttnn.Tensor:
         """Simplified weight preparation."""
+        # Debug: Check input type and shape
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"[DEBUG] _prepare_expert_weights input - shape: {weights.shape}, dtype: {weights.dtype}")
+
         # Convert to ROW_MAJOR for operations
         weights_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Repeat weights to match hidden dimension
-        repeat_dims = (self.hidden_size, 1, 1, 1)
-        weights_rm = ttnn.repeat(weights_rm, ttnn.Shape(repeat_dims), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # For GPT-OSS, weights are scalar values for each (token, expert) pair
+        # Shape should be [1, 1, tokens, K] where K is num_experts_per_tok
+        # We need to reshape to [K, 1, tokens, 1] for broadcasting during multiplication
 
-        # Permute dimensions (3, 1, 2, 0) - standard pattern
-        weights_rm = ttnn.permute(weights_rm, (3, 1, 2, 0), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Get current shape
+        batch, _, seq_len, k = weights_rm.shape
+
+        # Ensure correct data type (must be bfloat16 for reshape)
+        if weights_rm.dtype != ttnn.bfloat16:
+            logger.info(f"[DEBUG] Converting weights from {weights_rm.dtype} to bfloat16")
+            weights_rm = ttnn.typecast(weights_rm, dtype=ttnn.bfloat16)
+
+        # Transpose to [1, 1, K, tokens]
+        weights_rm = ttnn.permute(weights_rm, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Reshape to [K, 1, tokens, 1]
+        weights_rm = ttnn.reshape(weights_rm, shape=(k, 1, seq_len, 1))
+
+        # Repeat across hidden dimension for broadcasting
+        weights_rm = ttnn.repeat(
+            weights_rm, ttnn.Shape((1, 1, 1, self.hidden_size)), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # Convert back to TILE_LAYOUT
         weights = ttnn.to_layout(weights_rm, ttnn.TILE_LAYOUT)

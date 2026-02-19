@@ -16,6 +16,7 @@
       "distributed": true,
       "shared": false,
       "quantized": false,
+      "matmul_type": "dense",
       "activation": {
         "type": "clamped_swiglu",
         "alpha": 1.702,
@@ -45,6 +46,7 @@
     "replicated_batch_mode": false,
 
     "weight_path": "/path/to/gpt-oss/weights",
+    "synthetic_weight_generator": "synthetic_weights.gpt_oss_no_ties_weights.generate_gpt_oss_no_ties_weights",
     "layer_index": 0,
     "module_prefix": "model.layers.0"
   }

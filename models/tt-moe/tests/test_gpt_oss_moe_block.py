@@ -442,9 +442,10 @@ def test_gpt_oss_moe_with_real_weights(mesh_device_fixture):
     logger.info("✅ GPT-OSS MoE block with real weights successful")
 
 
-def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
+@pytest.mark.parametrize("matmul_type", ["dense", "sparse"])
+def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture, matmul_type):
     """
-    Test GPT-OSS MoE block end-to-end with synthetic weights.
+    Test GPT-OSS MoE block end-to-end with synthetic weights using configurable matmul type.
     This test runs the full forward pass with properly formatted mock weights.
     """
     import sys
@@ -454,13 +455,19 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
     from moe_block import MoEBlock
 
     logger.info("=" * 80)
-    logger.info("GPT-OSS MoE Block E2E Test with Synthetic Weights")
+    logger.info(f"GPT-OSS MoE Block E2E Test with Synthetic Weights ({matmul_type.upper()} matmul)")
     logger.info("=" * 80)
 
-    # Load configuration
-    config_path = Path(__file__).parent.parent / "configs" / "gpt_oss.json"
+    # Load configuration based on matmul type
+    config_file = "gpt_oss_sparse.json" if matmul_type == "sparse" else "gpt_oss.json"
+    config_path = Path(__file__).parent.parent / "configs" / config_file
+    logger.info(f"Loading configuration: {config_file}")
     with open(config_path, "r") as f:
         config_dict = json.load(f)
+
+    # Verify matmul type in config
+    configured_matmul = config_dict["moe_block"]["experts"].get("matmul_type", "dense")
+    logger.info(f"Configuration matmul_type: {configured_matmul}")
 
     # Test parameters
     layer_idx = 0
@@ -480,52 +487,68 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
     # ========================================
     # Step 1: Create synthetic weights
     # ========================================
-    logger.info("Creating synthetic weights with proper keys...")
-    state_dict = {}
+    logger.info("Creating synthetic weights using GPT-OSS weight generator...")
 
-    # Router weights (TopK) - Use "router" key to match what TopKRouter expects
-    state_dict[f"model.layers.{layer_idx}.mlp.router.weight"] = (
-        torch.randn(num_experts, hidden_size, dtype=torch.bfloat16) * 0.01
-    )
-    state_dict[f"model.layers.{layer_idx}.mlp.router.bias"] = torch.zeros(num_experts, dtype=torch.bfloat16)
+    # Check if config specifies a synthetic weight generator
+    synthetic_generator = config_dict["moe_block"].get("synthetic_weight_generator")
+    if synthetic_generator:
+        # Import the weight generator function dynamically
+        module_name, func_name = synthetic_generator.rsplit(".", 1)
+        import importlib
+        import sys
 
-    # Expert weights - Create separate gate, up, down weights
-    # DistributedExpert.convert_weights expects these keys after prefix stripping:
-    # - "experts.{expert_id}.gate_proj.weight"
-    # - "experts.{expert_id}.up_proj.weight"
-    # - "experts.{expert_id}.down_proj.weight"
+        # Add parent directory to path for imports
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        weight_module = importlib.import_module(module_name)
+        generate_weights = getattr(weight_module, func_name)
 
-    for expert_idx in range(num_experts):
-        # Use Xavier/He initialization for stability
-        fan_in = hidden_size
-        fan_out = intermediate_size
-
-        # Xavier uniform initialization
-        limit = (6.0 / (fan_in + fan_out)) ** 0.5
-        gate_weight = torch.FloatTensor(fan_out, fan_in).uniform_(-limit, limit)
-        up_weight = torch.FloatTensor(fan_out, fan_in).uniform_(-limit, limit)
-
-        # Down projection with appropriate scaling
-        down_limit = (6.0 / (intermediate_size + hidden_size)) ** 0.5
-        down_weight = torch.FloatTensor(hidden_size, intermediate_size).uniform_(-down_limit, down_limit)
-
-        # Store with correct keys for DistributedExpert
-        # After module_prefix stripping, these become "mlp.experts.{id}.{proj}.weight"
-        state_dict[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.weight"] = gate_weight.to(
-            torch.bfloat16
+        # Generate weights using the configured generator
+        state_dict = generate_weights(
+            layer_idx=layer_idx,
+            num_experts=num_experts,
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+            dtype=torch.bfloat16,
+            seed=42,  # For reproducibility
         )
-        state_dict[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.weight"] = up_weight.to(torch.bfloat16)
-        state_dict[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight"] = down_weight.to(
-            torch.bfloat16
+        logger.info(f"Generated weights using {synthetic_generator}")
+    else:
+        # Fallback to simple random weights with GPT-OSS typical values
+        logger.info("No synthetic weight generator specified, using default GPT-OSS statistics")
+        state_dict = {}
+
+        # Router weights - use GPT-OSS typical std
+        state_dict[f"model.layers.{layer_idx}.mlp.router.weight"] = (
+            torch.randn(num_experts, hidden_size, dtype=torch.bfloat16) * 0.00722
         )
+        state_dict[f"model.layers.{layer_idx}.mlp.router.bias"] = torch.zeros(num_experts, dtype=torch.bfloat16)
+
+        # Expert weights with GPT-OSS typical std of 0.02
+        for expert_idx in range(num_experts):
+            gate_weight = torch.randn(intermediate_size, hidden_size, dtype=torch.bfloat16) * 0.020
+            up_weight = torch.randn(intermediate_size, hidden_size, dtype=torch.bfloat16) * 0.020
+            down_weight = torch.randn(hidden_size, intermediate_size, dtype=torch.bfloat16) * 0.020
+
+            state_dict[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.weight"] = gate_weight
+            state_dict[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.weight"] = up_weight
+            state_dict[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight"] = down_weight
 
     logger.info(f"Created synthetic weights for {num_experts} experts")
+
+    # Log sample weight statistics
+    sample_key = f"model.layers.{layer_idx}.mlp.experts.0.gate_proj.weight"
+    if sample_key in state_dict:
+        sample = state_dict[sample_key]
+        logger.info(f"Sample weight stats (expert 0 gate_proj):")
+        logger.info(f"  Shape: {sample.shape}, Mean: {sample.mean():.6f}, Std: {sample.std():.6f}")
 
     # ========================================
     # Step 2: Create PyTorch Reference Implementation
     # ========================================
-    def pytorch_gpt_oss_forward(input_tensor, state_dict, config):
+    def pytorch_gpt_oss_forward(input_tensor, state_dict, config, capture_debug=False):
         """Simple PyTorch implementation of GPT-OSS MoE for testing."""
+        debug_state = {}
+
         batch_size, seq_len, hidden_size = input_tensor.shape
         # Handle both nested and flat config structures
         if "experts" in config["moe_block"] and "num_experts_per_tok" in config["moe_block"]["experts"]:
@@ -545,8 +568,19 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
         topk_weights, topk_indices = torch.topk(router_logits, k=num_experts_per_tok, dim=-1)
         topk_weights = torch.softmax(topk_weights, dim=-1)
 
+        # Capture router debug state
+        if capture_debug:
+            debug_state["router_logits"] = router_logits.clone()
+            debug_state["router_indices"] = topk_indices.clone()
+            debug_state["router_weights"] = topk_weights.clone()
+            debug_state["router_weight"] = router_weight.clone()
+            debug_state["router_bias"] = router_bias.clone()
+
         # Expert forward with clamped SwiGLU
         output = torch.zeros_like(input_flat)
+
+        # Capture intermediate expert states for first token (for debugging)
+        first_expert_states = {}
 
         for token_idx in range(input_flat.shape[0]):
             for k in range(num_experts_per_tok):
@@ -563,16 +597,37 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
                 up = input_flat[token_idx] @ up_weight.T
 
                 # Clamped SwiGLU activation (GPT-OSS style)
-                gate = torch.clamp(gate, max=7.0)
-                up = torch.clamp(up, min=-7.0, max=7.0)
-                hidden = (up + 1) * (gate * torch.sigmoid(gate * 1.702))
+                gate_clamped = torch.clamp(gate, max=7.0)
+                up_clamped = torch.clamp(up, min=-7.0, max=7.0)
+                hidden = (up_clamped + 1) * (gate_clamped * torch.sigmoid(gate_clamped * 1.702))
 
                 # Down projection
                 expert_out = hidden @ down_weight.T
                 output[token_idx] += weight * expert_out
 
+                # Capture debug state for first token and first expert
+                if capture_debug and token_idx == 0 and k == 0:
+                    first_expert_states["gate_proj"] = gate.clone()
+                    first_expert_states["gate_proj_clamped"] = gate_clamped.clone()
+                    first_expert_states["up_proj"] = up.clone()
+                    first_expert_states["up_proj_clamped"] = up_clamped.clone()
+                    first_expert_states["activated"] = hidden.clone()
+                    first_expert_states["down_proj"] = expert_out.clone()
+                    first_expert_states["expert_idx"] = expert_idx
+                    first_expert_states["expert_weight"] = weight.clone()
+
+        if capture_debug:
+            debug_state["first_expert_states"] = first_expert_states
+            debug_state["output_flat"] = output.clone()
+
         # Reshape back to original shape
-        return output.view(batch_size, seq_len, hidden_size)
+        result = output.view(batch_size, seq_len, hidden_size)
+
+        if capture_debug:
+            debug_state["final_output"] = result.clone()
+            return result, debug_state
+
+        return result
 
     # ========================================
     # Step 3: Create test input
@@ -658,8 +713,20 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
             logger.info("✅ Full forward pass completed!")
 
             # Convert output to torch
-            # The output from MoEBlock is sharded across devices, need ConcatMeshToTensor
-            output_tensor = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device_fixture, dim=0))
+            # Try without composer first, fall back to ConcatMeshToTensor if needed
+            try:
+                output_tensor = ttnn.to_torch(tt_output)
+            except RuntimeError as e:
+                if "mesh composer" in str(e):
+                    # Tensor is distributed, need composer
+                    output_tensor = ttnn.to_torch(
+                        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device_fixture, dim=0)
+                    )
+                    # Take first device output after concat
+                    if output_tensor.shape[0] == 32:
+                        output_tensor = output_tensor[0]
+                else:
+                    raise
 
             logger.info(f"Raw output shape from ttnn.to_torch: {output_tensor.shape}")
 
@@ -699,7 +766,73 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
             # Step 5: Compare with PyTorch Reference
             # ========================================
             logger.info("Computing PyTorch reference output...")
-            reference_output = pytorch_gpt_oss_forward(input_tensor, state_dict, config_dict)
+
+            # Enable debug mode for detailed comparison
+            debug_mode = os.environ.get("GPT_OSS_DEBUG", "") == "1"
+
+            if debug_mode:
+                reference_output, pt_debug = pytorch_gpt_oss_forward(
+                    input_tensor, state_dict, config_dict, capture_debug=True
+                )
+
+                logger.info("\n" + "=" * 60)
+                logger.info("DEBUG: Comparing PyTorch and TTNN intermediate outputs")
+                logger.info("=" * 60)
+
+                # Import comparison function (try to import from the debug module)
+                try:
+                    from test_gpt_oss_pcc_debug import compare_tensors
+                except ImportError:
+                    # Define a simple comparison function inline if the module is not available
+                    def compare_tensors(name, pt_tensor, tt_tensor, mesh_device=None):
+                        import torch
+
+                        logger.info(f"Comparing {name}...")
+                        # Simple PCC calculation
+                        pt_flat = pt_tensor.flatten().float()
+                        tt_flat = (
+                            tt_tensor.flatten().float()
+                            if isinstance(tt_tensor, torch.Tensor)
+                            else torch.zeros_like(pt_flat)
+                        )
+                        pt_mean = pt_flat.mean()
+                        tt_mean = tt_flat.mean()
+                        pt_centered = pt_flat - pt_mean
+                        tt_centered = tt_flat - tt_mean
+                        correlation = (pt_centered * tt_centered).sum()
+                        pt_std = torch.sqrt((pt_centered**2).sum())
+                        tt_std = torch.sqrt((tt_centered**2).sum())
+                        pcc = (correlation / (pt_std * tt_std)).item() if pt_std > 0 and tt_std > 0 else 0.0
+                        logger.info(f"  PCC for {name}: {pcc:.6f}")
+                        return pcc
+
+                # Compare router outputs
+                if "router_indices" in pt_debug:
+                    logger.info("\n--- Router Comparison ---")
+                    logger.info(f"PT router indices shape: {pt_debug['router_indices'].shape}")
+                    logger.info(f"PT router indices (first token): {pt_debug['router_indices'][0].tolist()}")
+                    logger.info(f"PT router weights (first token): {pt_debug['router_weights'][0].tolist()}")
+
+                # Compare expert states (first token, first expert)
+                if "first_expert_states" in pt_debug:
+                    expert_states = pt_debug["first_expert_states"]
+                    logger.info("\n--- First Expert States (token 0, expert 0) ---")
+                    logger.info(f"Expert index: {expert_states['expert_idx']}")
+                    logger.info(f"Expert weight: {expert_states['expert_weight']:.6f}")
+                    logger.info(
+                        f"Gate projection range: [{expert_states['gate_proj'].min():.4f}, {expert_states['gate_proj'].max():.4f}]"
+                    )
+                    logger.info(
+                        f"Up projection range: [{expert_states['up_proj'].min():.4f}, {expert_states['up_proj'].max():.4f}]"
+                    )
+                    logger.info(
+                        f"Activation range: [{expert_states['activated'].min():.4f}, {expert_states['activated'].max():.4f}]"
+                    )
+                    logger.info(
+                        f"Down projection range: [{expert_states['down_proj'].min():.4f}, {expert_states['down_proj'].max():.4f}]"
+                    )
+            else:
+                reference_output = pytorch_gpt_oss_forward(input_tensor, state_dict, config_dict, capture_debug=False)
 
             # Compute PCC
             try:
@@ -725,7 +858,34 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
 
                 pcc = correlation / (ref_std * out_std)
                 pcc = pcc.item() if hasattr(pcc, "item") else pcc
+
+            logger.info(f"\n--- Final Output Comparison ({matmul_type.upper()} matmul) ---")
             logger.info(f"PCC against PyTorch reference: {pcc}")
+            logger.info(f"Reference output range: [{reference_output.min():.4f}, {reference_output.max():.4f}]")
+            logger.info(f"TTNN output range: [{output_tensor.min():.4f}, {output_tensor.max():.4f}]")
+            logger.info(f"Matmul type used: {matmul_type}")
+
+            # Detailed comparison if PCC is low
+            if pcc < 0.95 and debug_mode:
+                logger.warning(f"\n⚠️  LOW PCC DETECTED: {pcc:.6f}")
+
+                # Check if shapes match for comparison
+                if reference_output.shape == output_tensor.shape:
+                    # Find largest differences
+                    abs_diff = torch.abs(reference_output - output_tensor)
+                    max_diff_idx = abs_diff.argmax()
+                    max_diff_coords = torch.unravel_index(max_diff_idx, reference_output.shape)
+
+                    logger.warning(f"Maximum difference: {abs_diff.flatten()[max_diff_idx]:.6f}")
+                    logger.warning(f"  Location (flattened index): {max_diff_idx}")
+                    logger.warning(f"  PT value: {reference_output.flatten()[max_diff_idx]:.6f}")
+                    logger.warning(f"  TT value: {output_tensor.flatten()[max_diff_idx]:.6f}")
+
+                    logger.warning(f"Mean absolute difference: {abs_diff.mean():.6f}")
+                    logger.warning(f"Std of differences: {abs_diff.std():.6f}")
+                else:
+                    logger.warning(f"Shape mismatch - PT: {reference_output.shape}, TT: {output_tensor.shape}")
+                    logger.warning("Cannot compute detailed differences")
 
             # Check PCC threshold
             if pcc < 0.95:

@@ -52,10 +52,10 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
 
 # Compute kernel configuration (copied from config_helpers.py)
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_fidelity=ttnn.MathFidelity.HiFi4,  # Use highest precision
     math_approx_mode=False,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=True,
+    fp32_dest_acc_en=True,  # Enable FP32 accumulation for better precision
+    packer_l1_acc=False,  # Don't use L1 for packing to avoid memory issues
 )
 
 
@@ -102,9 +102,10 @@ class DistributedExpert:
         num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
 
         # Memory configurations based on mode
+        # Use DRAM to avoid L1 memory issues and numerical problems
         if mode == "decode":
-            input_memory_config = ttnn.L1_MEMORY_CONFIG
-            output_memory_config = ttnn.L1_MEMORY_CONFIG
+            input_memory_config = ttnn.DRAM_MEMORY_CONFIG  # Changed from L1 to DRAM
+            output_memory_config = ttnn.DRAM_MEMORY_CONFIG  # Changed from L1 to DRAM
         else:
             input_memory_config = ttnn.DRAM_MEMORY_CONFIG
             output_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -238,6 +239,10 @@ class DistributedExpert:
 
             if weight_list:
                 stacked_weights = torch.stack(weight_list)
+                logger.info(
+                    f"[DEBUG] {hf_name} weights stacked: shape {stacked_weights.shape}, "
+                    + f"range [{stacked_weights.min():.4f}, {stacked_weights.max():.4f}]"
+                )
 
                 # Apply dequantization if needed
                 if use_quantized and scale_list:
@@ -247,12 +252,23 @@ class DistributedExpert:
                         stacked_scales,
                         (1, *weight_block_size),
                     )
+                    logger.info(
+                        f"[DEBUG] {hf_name} weights after dequantization: "
+                        + f"range [{stacked_weights.min():.4f}, {stacked_weights.max():.4f}]"
+                    )
 
                 # Transpose for matmul: [num_experts, out_features, in_features] -> [1, num_experts, in_features, out_features]
                 stacked_weights = stacked_weights.unsqueeze(0).transpose(-1, -2)
+                logger.info(f"[DEBUG] {hf_name} weights after transpose: shape {stacked_weights.shape}")
 
                 # Convert to bfloat16 for TTNN
                 stacked_weights = stacked_weights.to(torch.bfloat16)
+
+                # Check for NaN/Inf before conversion
+                if torch.isnan(stacked_weights).any() or torch.isinf(stacked_weights).any():
+                    logger.error(f"[ERROR] {hf_name} weights contain NaN or Inf values before TTNN conversion!")
+                    logger.error(f"  NaN count: {torch.isnan(stacked_weights).sum().item()}")
+                    logger.error(f"  Inf count: {torch.isinf(stacked_weights).sum().item()}")
 
                 # Create TTNN tensor with sharding across devices
                 weight_tensor = ttnn.from_torch(
@@ -263,9 +279,12 @@ class DistributedExpert:
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+                logger.info(f"[DEBUG] {hf_name} weights converted to TTNN: shape {weight_tensor.shape}")
 
                 # Store the weight tensor in the config
                 weight_config[ttnn_name] = {"input_tensor_b": weight_tensor}
+            else:
+                logger.warning(f"[WARNING] No weights found for {hf_name}!")
 
         return weight_config
 
@@ -344,8 +363,29 @@ class DistributedExpert:
         # Get input shape
         _, _, num_tokens, hidden_size = x.shape
 
-        # Debug logging
-        debug_experts = os.getenv("DEEPSEEK_V3_DEBUG_EXPERTS") == "1" and num_tokens > 8192
+        # Debug logging (also enable for GPT_OSS_DEBUG)
+        debug_experts = (os.getenv("DEEPSEEK_V3_DEBUG_EXPERTS") == "1" and num_tokens > 8192) or os.getenv(
+            "GPT_OSS_DEBUG"
+        ) == "1"
+
+        # Debug input tensor
+        if debug_experts:
+            try:
+                # Check if tensor is on mesh device
+                mesh_device = cfg.get("mesh_device")
+                if mesh_device is not None:
+                    x_torch = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+                else:
+                    x_torch = ttnn.to_torch(x)
+                logger.info(
+                    f"[DEBUG] Input x to _forward: shape={x.shape}, torch_shape={x_torch.shape}, "
+                    + f"range=[{x_torch.min():.4f}, {x_torch.max():.4f}], "
+                    + f"mean={x_torch.mean():.4f}, std={x_torch.std():.4f}"
+                )
+                if torch.isnan(x_torch).any() or torch.isinf(x_torch).any():
+                    logger.error(f"[ERROR] Input x contains NaN or Inf values!")
+            except Exception as e:
+                logger.warning(f"[WARNING] Failed to convert input x to torch for debugging: {e}")
 
         def _log_expert_stats(name: str, tensor: ttnn.Tensor) -> None:
             if not debug_experts:
@@ -379,15 +419,98 @@ class DistributedExpert:
         # Debug: check if weights exist in config
         if "input_tensor_b" not in cfg.get("w1_experts", {}):
             logger.error(f"w1_experts missing input_tensor_b! Keys: {cfg.get('w1_experts', {}).keys()}")
+            logger.error(f"Full w1_experts config: {cfg.get('w1_experts', {})}")
+            logger.error(f"Available cfg keys: {list(cfg.keys())}")
             raise ValueError("w1_experts missing input_tensor_b weight tensor")
 
-        w1_out = ttnn.linear(x, **cfg["w1_experts"])
-        w3_out = ttnn.linear(x, **cfg["w3_experts"])
+        # Debug: Log weight tensor info before linear
+        w1_weight = cfg["w1_experts"].get("input_tensor_b")
+        if w1_weight is not None:
+            logger.debug(f"[DEBUG] w1_experts weight tensor shape: {w1_weight.shape}")
+        else:
+            logger.error("[ERROR] w1_experts weight tensor is None!")
+
+        # Debug: Check all config keys for w1_experts
+        if debug_experts:
+            logger.info(f"[DEBUG] w1_experts config keys: {list(cfg['w1_experts'].keys())}")
+            for key, value in cfg["w1_experts"].items():
+                if key != "input_tensor_b":
+                    logger.info(f"  - {key}: {value}")
+
+        # Check matmul type configuration
+        matmul_type = cfg.get("matmul_type", "dense")  # Default to dense for backward compatibility
+
+        if debug_experts:
+            logger.info(f"[DEBUG] Using {matmul_type} matmul operations")
+
+        # Use DRAM for linear operations to avoid L1 memory overflow and numerical issues
+        w1_config = cfg["w1_experts"].copy()
+        w1_config["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        w3_config = cfg["w3_experts"].copy()
+        w3_config["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+
+        if matmul_type == "sparse":
+            # Import sparse matmul operations
+            from .sparse_matmul_ops import SparseMatmulConfig, reshape_for_sparse_matmul, sparse_gate_up_projection
+
+            # Create sparse configuration
+            sparse_config = SparseMatmulConfig(cfg)
+            if debug_experts:
+                sparse_config.log_config()
+
+            # Reshape input for sparse matmul
+            x_sparse, num_blocks = reshape_for_sparse_matmul(x, sparse_config.block_size)
+
+            # Generate sparsity pattern (simplified for now - all blocks active)
+            # In production, this would analyze dispatch_metadata from routing
+            sparsity = ttnn.ones(
+                (num_blocks, cfg["num_experts_per_device"]),
+                dtype=ttnn.uint8,
+                device=x.device(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Get weights and biases
+            w1_weight = cfg["w1_experts"]["input_tensor_b"]
+            w3_weight = cfg["w3_experts"]["input_tensor_b"]
+            w1_bias = cfg["w1_experts"].get("bias")
+            w3_bias = cfg["w3_experts"].get("bias")
+
+            # Perform sparse gate/up projections
+            w1_out = sparse_gate_up_projection(
+                x_sparse,
+                w1_weight,
+                w1_bias,
+                sparsity,
+                sparse_config.block_size,
+                sparse_config.memory_config,
+                sparse_config.gate_up_config,
+            )
+            w3_out = sparse_gate_up_projection(
+                x_sparse,
+                w3_weight,
+                w3_bias,
+                sparsity,
+                sparse_config.block_size,
+                sparse_config.memory_config,
+                sparse_config.gate_up_config,
+            )
+
+            # Store sparsity for down projection
+            cfg["_sparse_sparsity"] = sparsity
+            cfg["_sparse_config"] = sparse_config
+            cfg["_sparse_num_blocks"] = num_blocks
+        else:
+            # Use dense linear operations (default for DeepSeek)
+            w1_out = ttnn.linear(x, **w1_config)
+            w3_out = ttnn.linear(x, **w3_config)
         _log_expert_stats("w1_out", w1_out)
         _log_expert_stats("w3_out", w3_out)
 
         # Apply activation based on configuration
         activation_type = cfg.get("activation", "swiglu")
+        if debug_experts:
+            logger.info(f"[DEBUG] Using activation type: {activation_type}")
 
         if activation_type == "clamped_swiglu":
             # Use clamped SwiGLU for GPT-OSS
@@ -406,7 +529,43 @@ class DistributedExpert:
         _log_expert_stats("activated", activated)
 
         # Down projection
-        output = ttnn.linear(activated, **cfg["w2_experts"])
+        if matmul_type == "sparse":
+            from .sparse_matmul_ops import sparse_down_projection
+
+            # Get stored sparse configuration
+            sparse_config = cfg.get("_sparse_config")
+            sparsity = cfg.get("_sparse_sparsity")
+            num_blocks = cfg.get("_sparse_num_blocks")
+
+            if sparse_config and sparsity is not None:
+                # Get weight and bias
+                w2_weight = cfg["w2_experts"]["input_tensor_b"]
+                w2_bias = cfg["w2_experts"].get("bias")
+
+                # Perform sparse down projection
+                output = sparse_down_projection(
+                    activated,
+                    w2_weight,
+                    w2_bias,
+                    sparsity,
+                    sparse_config.block_size,
+                    sparse_config.memory_config,
+                    sparse_config.down_config,
+                )
+
+                # Clean up temporary sparse data
+                ttnn.deallocate(sparsity)
+                del cfg["_sparse_sparsity"]
+                del cfg["_sparse_config"]
+                del cfg["_sparse_num_blocks"]
+            else:
+                # Fallback to dense if sparse config missing
+                logger.warning("[WARNING] Sparse config missing, falling back to dense")
+                output = ttnn.linear(activated, **cfg["w2_experts"])
+        else:
+            # Use dense linear operations (default)
+            output = ttnn.linear(activated, **cfg["w2_experts"])
+
         ttnn.deallocate(activated)
         _log_expert_stats("w2_out", output)
 
@@ -529,20 +688,107 @@ class DistributedExpert:
         num_dispatch_devices = mesh_device.shape[cluster_axis] if hasattr(mesh_device, "shape") else 1
         total_tokens = tokens_per_device * num_dispatch_devices
 
-        # Reshape for expert computation
-        dispatch_output = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, hidden_size))
-        dispatch_output = ttnn.to_layout(dispatch_output, ttnn.TILE_LAYOUT)
+        # Check if we should use sparse computation (for GPT-OSS)
+        use_sparse = cfg.get("use_sparse_matmul", False)
 
-        # Repeat for all experts on this device
-        dispatch_output = ttnn.repeat(
-            dispatch_output, ttnn.Shape((1, num_experts_per_device, 1, 1)), memory_config=memory_config
-        )
+        import logging
 
-        # ==========================================================================
-        # STEP 4: RUN EXPERT COMPUTATION
-        # ==========================================================================
-        # Call the existing _forward method for expert computation
-        experts_output = cls._forward(dispatch_output, cfg)
+        logger = logging.getLogger(__name__)
+        logger.info(f"[DEBUG] DistributedExpert forward_decode: use_sparse={use_sparse}")
+        logger.info(f"[DEBUG] Config keys: {list(cfg.keys())}")
+        logger.info(f"[DEBUG] Activation from cfg: {cfg.get('activation', 'Not found')}")
+
+        if use_sparse:
+            # ==========================================================================
+            # STEP 3A: SPARSE PATH FOR GPT-OSS
+            # ==========================================================================
+            # Import sparse functions
+            from .distributed_expert_sparse_fix import (
+                apply_sparse_expert_computation,
+                create_program_configs_for_gpt_oss,
+                generate_sparsity_pattern_for_gpt_oss,
+            )
+
+            # Create program configs if not provided
+            if "gate_up_program_config" not in cfg or "down_program_config" not in cfg:
+                intermediate_size = cfg.get("intermediate_size", 2880)
+                hidden_size = cfg.get("hidden_size", 2880)
+                gate_up_config, down_config = create_program_configs_for_gpt_oss(intermediate_size, hidden_size)
+                cfg["gate_up_program_config"] = gate_up_config
+                cfg["down_program_config"] = down_config
+
+            # Reshape dispatch output to TILE layout
+            dispatch_output = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, hidden_size))
+            dispatch_output = ttnn.to_layout(dispatch_output, ttnn.TILE_LAYOUT)
+
+            # Generate remap_topk_mask (needed for sparsity pattern)
+            num_experts = cfg.get("num_experts", 128)
+            num_dispatch_rows = mesh_device.shape[cluster_axis] if hasattr(mesh_device, "shape") else 1
+            remap_topk_mask = ttnn.zeros(
+                (1, num_dispatch_rows, 1, num_experts),
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                memory_config=memory_config,
+            )
+
+            # Generate sparsity pattern
+            sparsity_block_size = cfg.get("sparsity_block_size", 32)
+            sparsity = generate_sparsity_pattern_for_gpt_oss(
+                dispatch_metadata=dispatch_metadata,
+                expert_mapping_tensors=expert_mapping_tensors,
+                remap_topk_mask=remap_topk_mask,
+                tokens_per_device=tokens_per_device,
+                total_tokens=total_tokens,
+                num_experts=num_experts,
+                sparsity_block_size=sparsity_block_size,
+            )
+
+            # Reshape input for sparse blocks
+            num_sparse_blocks = total_tokens // sparsity_block_size
+            x_sparse = ttnn.reshape(
+                dispatch_output,
+                shape=(1, num_sparse_blocks, sparsity_block_size, hidden_size),
+            )
+
+            # Apply sparse expert computation
+            expert_output_sparse = apply_sparse_expert_computation(
+                x=x_sparse,
+                cfg=cfg,
+                sparsity=sparsity,
+                sparsity_block_size=sparsity_block_size,
+            )
+
+            ttnn.deallocate(sparsity)
+            ttnn.deallocate(remap_topk_mask)
+
+            # Permute and reshape for combine
+            # From: [num_sparse_blocks, experts_per_device, block_size, H]
+            # To: [experts_per_device, 1, total_tokens, H]
+            experts_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))
+            ttnn.deallocate(expert_output_sparse)
+            experts_output = ttnn.reshape(
+                experts_output,
+                shape=(num_experts_per_device, 1, total_tokens, hidden_size),
+            )
+
+        else:
+            # ==========================================================================
+            # STEP 3B: DENSE PATH (Original for DeepSeek)
+            # ==========================================================================
+            # Reshape for expert computation
+            dispatch_output = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, hidden_size))
+            dispatch_output = ttnn.to_layout(dispatch_output, ttnn.TILE_LAYOUT)
+
+            # Repeat for all experts on this device
+            dispatch_output = ttnn.repeat(
+                dispatch_output, ttnn.Shape((1, num_experts_per_device, 1, 1)), memory_config=memory_config
+            )
+
+            # ==========================================================================
+            # STEP 4: RUN EXPERT COMPUTATION
+            # ==========================================================================
+            # Call the existing _forward method for expert computation
+            experts_output = cls._forward(dispatch_output, cfg)
 
         # ==========================================================================
         # STEP 5: PREPARE FOR ALL_TO_ALL_COMBINE

@@ -18,7 +18,8 @@
       "shared_parallel": true,
       "quantized": true,
       "weight_block_size": [128, 128],
-      "activation": "swiglu"
+      "activation": "swiglu",
+      "matmul_type": "dense"
     },
 
     "tensor_parallel": {

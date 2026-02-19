@@ -176,8 +176,8 @@ class TopKRouter(BaseRouter):
         # else: Already in correct shape
 
         # Linear projection to get router logits
-        # Memory config based on decode mode (like GPT-OSS)
-        mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        # Use DRAM like reference implementation (avoid L1 issues)
+        mem_config = ttnn.DRAM_MEMORY_CONFIG
 
         router_logits = ttnn.linear(
             hidden_states,
@@ -226,7 +226,11 @@ class TopKRouter(BaseRouter):
             ttnn.deallocate(logits)
 
         # Convert indices to uint16 (required for all-to-all dispatch)
-        expert_indices = ttnn.typecast(expert_indices, dtype=ttnn.uint16)
+        # Follow reference: first uint32, then uint16 (important for proper conversion)
+        expert_indices_u32 = ttnn.typecast(expert_indices, dtype=ttnn.uint32)
+        ttnn.deallocate(expert_indices)
+        expert_indices = ttnn.typecast(expert_indices_u32, dtype=ttnn.uint16)
+        ttnn.deallocate(expert_indices_u32)
 
         # Softmax normalization with numerical stability
         expert_weights = ttnn.softmax(
