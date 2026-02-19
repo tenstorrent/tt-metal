@@ -486,8 +486,6 @@ jobs:
           if [ "${{ inputs.enable-lto }}" = "true" ]; then
             build_args+=("--enable-lto")
           fi
-          # Disable git hash in CI to avoid cache invalidation across builds
-          export TT_METAL_DISABLE_GIT_HASH=1
           echo "build-artifact.yaml running: ${build_args[*]}"
           "${build_args[@]}"
 
