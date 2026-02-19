@@ -385,6 +385,18 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
+ * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
+ *
+ * Builds a complete flat adjacency map including all connections
+ * (both intra-mesh and intermesh), with multiple entries per channel.
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @return PhysicalAdjacencyMap Map from AsicID to vector of neighbor AsicIDs (with multiple entries per channel)
+ */
+PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+
+/**
  * @brief Build hierarchical multi-mesh graph from a flattened adjacency graph
  *
  * Takes a flat adjacency graph (all ASICs and their neighbors) and splits it into a multi-mesh graph
