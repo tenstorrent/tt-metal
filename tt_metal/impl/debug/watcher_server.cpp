@@ -109,12 +109,6 @@ void WatcherServer::Impl::attach_devices() {
     if (!rtoptions.get_watcher_enabled()) {
         return;
     }
-    // No-poll mode: all device-side instrumentation is enabled via init_devices(),
-    // but we skip the host polling thread, log files, and device readers.
-    // On error, kernel hangs with diagnostic info in L1 mailbox; use tt-triage.
-    if (rtoptions.get_watcher_no_poll()) {
-        return;
-    }
 
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
@@ -127,8 +121,18 @@ void WatcherServer::Impl::attach_devices() {
             fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
         }
 
-        // Since dma library is not thread-safe, disable it when watcher runs.
-        rtoptions.set_disable_dma_ops(true);
+        // Since dma library is not thread-safe, disable it when watcher runs continuously.
+        // In no-poll mode, we only dump once at the end, so we don't need to disable DMA.
+        if (!rtoptions.get_watcher_no_poll()) {
+            rtoptions.set_disable_dma_ops(true);
+        }
+    }
+
+    // No-poll mode: all device-side instrumentation is enabled via init_devices(),
+    // but we skip the host polling thread. A single dump happens on detach.
+    if (rtoptions.get_watcher_no_poll()) {
+        log_info(LogLLRuntime, "Watcher no-poll mode: skipping continuous polling, will dump once on detach");
+        return;
     }
 
     // Spin off thread to run the server.
@@ -136,24 +140,63 @@ void WatcherServer::Impl::attach_devices() {
 }
 
 void WatcherServer::Impl::detach_devices() {
-    // If server isn't running, and wasn't killed due to an error, nothing to do here.
+    auto& rtoptions = MetalContext::instance().rtoptions();
     auto close_file = [](FILE*& file) {
         if (file != nullptr) {
             std::fclose(file);
             file = nullptr;
         }
     };
-    if (!server_thread_ and !server_killed_due_to_error_) {
+
+    // If watcher not enabled or no readers attached, just close any open files.
+    if (!rtoptions.get_watcher_enabled() || device_id_to_reader_.empty()) {
         close_file(logfile_);
         close_file(kernel_file_);
         close_file(kernel_elf_file_);
         return;
     }
 
+    // No-poll mode: do a single dump now before cleanup
+    if (rtoptions.get_watcher_no_poll()) {
+        const std::lock_guard<std::mutex> lock(watch_mutex_);
+        log_info(LogLLRuntime, "Watcher no-poll mode: performing final dump on detach");
+        fprintf(logfile_, "-----\n");
+        fprintf(logfile_, "Final dump at %.3lfs (no-poll mode)\n", get_elapsed_secs());
+
+        try {
+            dump();
+        } catch (std::runtime_error& e) {
+            if (rtoptions.get_test_mode_enabled()) {
+                server_killed_due_to_error_ = true;
+            } else {
+                throw e;
+            }
+        }
+
+        fprintf(logfile_, "Final dump completed at %.3lfs\n", get_elapsed_secs());
+        fflush(logfile_);
+
+        // Clean up readers
+        auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
+        for (ChipId device_id : all_devices) {
+            if (device_id_to_reader_.contains(device_id)) {
+                device_id_to_reader_.erase(device_id);
+                log_info(LogLLRuntime, "Watcher detached device {}", device_id);
+                fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
+            }
+        }
+
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
+        return;
+    }
+
+    // Normal polling mode: handle server thread shutdown
     if (server_thread_) {
         // Let one full watcher dump happen so we can catch anything between the last scheduled dump and teardown.
         // Don't do this in test mode, to keep the tests running quickly.
-        if (!MetalContext::instance().rtoptions().get_test_mode_enabled() and !server_killed_due_to_error_) {
+        if (!rtoptions.get_test_mode_enabled() and !server_killed_due_to_error_) {
             int target_count = dump_count() + 1;
             while (dump_count() < target_count) {
                 ;
@@ -184,7 +227,7 @@ void WatcherServer::Impl::detach_devices() {
         }
 
         // Watcher server closed, can use dma library again.
-        MetalContext::instance().rtoptions().set_disable_dma_ops(false);
+        rtoptions.set_disable_dma_ops(false);
         close_file(logfile_);
         close_file(kernel_file_);
         close_file(kernel_elf_file_);
