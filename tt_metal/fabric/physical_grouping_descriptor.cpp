@@ -1629,11 +1629,10 @@ void process_higher_layer_and_recurse(
 
 }  // namespace
 
-std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
-PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
+ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
-    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>> result;
+    ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
