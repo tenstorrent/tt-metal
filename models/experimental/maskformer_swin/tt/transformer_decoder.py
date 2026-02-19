@@ -313,7 +313,7 @@ class MaskFormerTransformerDecoder:
                     raise RuntimeError(f"Unsupported activation in TT decoder: {activation}")
             return y
 
-        def _project_qkv(tt_x, w, b):
+        def _project_qkv(tt_x, w, b, *, transpose_key: bool):
             linear_kwargs = {}
             if prog_cfg.core_grid is not None:
                 linear_kwargs["core_grid"] = prog_cfg.core_grid
@@ -329,10 +329,16 @@ class MaskFormerTransformerDecoder:
                     dtype=dtype,
                     **linear_kwargs,
                 )
+                if hasattr(qkv, "is_sharded") and not qkv.is_sharded():
+                    ttnn.deallocate(qkv)
+                    return None
                 if hasattr(ttnn, "transformer") and hasattr(ttnn.transformer, "split_query_key_value_and_split_heads"):
-                    return ttnn.transformer.split_query_key_value_and_split_heads(
-                        qkv, num_heads=num_heads, transpose_key=False
+                    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                        qkv, num_heads=num_heads, transpose_key=bool(transpose_key)
                     )
+                    ttnn.deallocate(qkv)
+                    return q, k, v
+                ttnn.deallocate(qkv)
             except Exception:
                 pass
             return None
@@ -359,17 +365,22 @@ class MaskFormerTransformerDecoder:
                     pass
             return _merge_heads(tt_x)
 
-        def _attention_core(q, k, v, *, tag: str):
-            k_t = ttnn.permute(k, (0, 1, 3, 2))
+        def _attention_core(q, k, v, *, tag: str, key_is_transposed: bool):
+            k_t = k if key_is_transposed else ttnn.permute(k, (0, 1, 3, 2))
             if debug:
                 print(f"[maskformer][decoder] {tag} scores", flush=True)
             scores = ttnn.matmul(q, k_t, compute_kernel_config=compute_cfg, **matmul_qkv_kwargs)
+            if not key_is_transposed:
+                ttnn.deallocate(k_t)
             if debug:
                 print(f"[maskformer][decoder] {tag} softmax", flush=True)
             attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_cfg)
+            ttnn.deallocate(scores)
             if debug:
                 print(f"[maskformer][decoder] {tag} ctx", flush=True)
-            return ttnn.matmul(attn, v, compute_kernel_config=compute_cfg, **matmul_ctx_kwargs)
+            ctx = ttnn.matmul(attn, v, compute_kernel_config=compute_cfg, **matmul_ctx_kwargs)
+            ttnn.deallocate(attn)
+            return ctx
 
         def _manual_attention(attn_layer, q_in, k_in, v_in, *, tag: str):
             if debug:
@@ -396,7 +407,7 @@ class MaskFormerTransformerDecoder:
             q = _split_heads(q)
             k = _split_heads(k)
             v = _split_heads(v)
-            ctx = _attention_core(q, k, v, tag=tag)
+            ctx = _attention_core(q, k, v, tag=tag, key_is_transposed=False)
             return _merge_heads(ctx)
 
         for layer_idx in range(self.config.num_layers):
@@ -420,7 +431,7 @@ class MaskFormerTransformerDecoder:
             )
             ctx = None
             if enable_fused_qkv and layer.get("self_qkv_w") is not None:
-                qkv = _project_qkv(qkv_in, layer["self_qkv_w"], layer.get("self_qkv_b"))
+                qkv = _project_qkv(qkv_in, layer["self_qkv_w"], layer.get("self_qkv_b"), transpose_key=not use_sdpa)
                 if qkv is not None:
                     q, k, v = qkv
                     if use_sdpa:
@@ -432,7 +443,26 @@ class MaskFormerTransformerDecoder:
                         except Exception:
                             ctx = None
                     if ctx is None:
-                        ctx = _concat_heads(_attention_core(q, k, v, tag=f"layer{layer_idx}.self_attn"))
+                        ctx = _concat_heads(
+                            _attention_core(
+                                q, k, v, tag=f"layer{layer_idx}.self_attn", key_is_transposed=not use_sdpa
+                            )
+                        )
+            if ctx is None and use_sdpa:
+                # SDPA is beneficial even without fused-QKV; fall back to separate projections.
+                try:
+                    q = _project(qkv_in, layer["self_q_w"], layer["self_q_b"], program=prog_cfg.matmul_qkv)
+                    k = _project(qkv_in, layer["self_k_w"], layer["self_k_b"], program=prog_cfg.matmul_qkv)
+                    v = _project(tt_hidden, layer["self_v_w"], layer["self_v_b"], program=prog_cfg.matmul_qkv)
+                    qh = _split_heads(q)
+                    kh = _split_heads(k)
+                    vh = _split_heads(v)
+                    attn_ctx = ttnn.transformer.scaled_dot_product_attention(
+                        qh, kh, vh, is_causal=False, program_config=prog_cfg.sdpa, compute_kernel_config=compute_cfg
+                    )
+                    ctx = _concat_heads(attn_ctx)
+                except Exception:
+                    ctx = None
             if ctx is None:
                 ctx = _manual_attention(layer, qkv_in, qkv_in, tt_hidden, tag=f"layer{layer_idx}.self_attn")
             if debug:
@@ -574,17 +604,32 @@ class MaskFormerTransformerDecoder:
             tt_sa_o_w, tt_sa_o_b = self._to_tt_linear(sa_o_w, sa_o_b)
 
             # Optional fused QKV for SDPA
-            try:
-                qkv_w = torch.cat([sa_q_w, sa_k_w.detach().contiguous(), sa_v_w.detach().contiguous()], dim=0)
-                qkv_b = None
-                if sa_q_b is not None and sa_k_b is not None and sa_v_b is not None:
-                    qkv_b = torch.cat(
-                        [sa_q_b.detach().contiguous(), sa_k_b.detach().contiguous(), sa_v_b.detach().contiguous()],
-                        dim=0,
-                    )
-                tt_qkv_w, tt_qkv_b = self._to_tt_linear(qkv_w, qkv_b)
-            except Exception:
-                tt_qkv_w, tt_qkv_b = (None, None)
+            tt_qkv_w = None
+            tt_qkv_b = None
+            if os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "0").strip() == "1":
+                try:
+                    head_dim = int(self.config.hidden_dim // self.config.num_attention_heads)
+                    qkv_w_chunks = []
+                    for h in range(int(self.config.num_attention_heads)):
+                        hs = h * head_dim
+                        he = hs + head_dim
+                        qkv_w_chunks.append(sa_q_w[hs:he].detach().contiguous())
+                        qkv_w_chunks.append(sa_k_w[hs:he].detach().contiguous())
+                        qkv_w_chunks.append(sa_v_w[hs:he].detach().contiguous())
+                    qkv_w = torch.cat(qkv_w_chunks, dim=0)
+                    qkv_b = None
+                    if sa_q_b is not None and sa_k_b is not None and sa_v_b is not None:
+                        qkv_b_chunks = []
+                        for h in range(int(self.config.num_attention_heads)):
+                            hs = h * head_dim
+                            he = hs + head_dim
+                            qkv_b_chunks.append(sa_q_b[hs:he].detach().contiguous())
+                            qkv_b_chunks.append(sa_k_b[hs:he].detach().contiguous())
+                            qkv_b_chunks.append(sa_v_b[hs:he].detach().contiguous())
+                        qkv_b = torch.cat(qkv_b_chunks, dim=0)
+                    tt_qkv_w, tt_qkv_b = self._to_tt_linear(qkv_w, qkv_b)
+                except Exception:
+                    tt_qkv_w, tt_qkv_b = (None, None)
 
             # Cross-attention
             ca_q_w = state[f"{prefix}.encoder_attn.q_proj.weight"].detach().contiguous() * scale

@@ -200,6 +200,7 @@ class MaskFormerSwinBackbone:
         self.dtype = dtype
         self._prefer_l1_activations = _env_flag("MASKFORMER_TT_BACKBONE_L1_ACT", False)
         self._attn_mask_cache: Dict[Tuple[int, int, int], Any] = {}
+        self._attn_mask_tile_cache: Dict[Tuple[int, int, int], Any] = {}
         self._core_grid = None
         self._matmul_pc = None
         self._program_cfg_initialized = False
@@ -378,22 +379,32 @@ class MaskFormerSwinBackbone:
 
                 qkv_w = None
                 qkv_b = None
-                if os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "0").strip() == "1":
+                enable_fused_qkv_global = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "0").strip() == "1"
+                enable_fused_qkv_backbone = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV_BACKBONE")
+                if enable_fused_qkv_backbone is None:
+                    enable_fused_qkv_backbone = "1" if enable_fused_qkv_global else "0"
+                if enable_fused_qkv_backbone.strip() == "1":
                     try:
-                        qkv_w_torch = torch.cat(
-                            [q_w_torch.detach().contiguous(), k_w_torch.detach().contiguous(), v_w_torch.detach().contiguous()],
-                            dim=0,
-                        )
+                        # The sharded split op expects QKV interleaved per head: (q0,k0,v0,q1,k1,v1,...).
+                        head_dim = int(dim // num_heads)
+                        qkv_w_chunks = []
+                        for h in range(int(num_heads)):
+                            hs = h * head_dim
+                            he = hs + head_dim
+                            qkv_w_chunks.append(q_w_torch[hs:he].detach().contiguous())
+                            qkv_w_chunks.append(k_w_torch[hs:he].detach().contiguous())
+                            qkv_w_chunks.append(v_w_torch[hs:he].detach().contiguous())
+                        qkv_w_torch = torch.cat(qkv_w_chunks, dim=0)
                         qkv_b_torch = None
                         if q_b_torch is not None and k_b_torch is not None and v_b_torch is not None:
-                            qkv_b_torch = torch.cat(
-                                [
-                                    q_b_torch.detach().contiguous(),
-                                    k_b_torch.detach().contiguous(),
-                                    v_b_torch.detach().contiguous(),
-                                ],
-                                dim=0,
-                            )
+                            qkv_b_chunks = []
+                            for h in range(int(num_heads)):
+                                hs = h * head_dim
+                                he = hs + head_dim
+                                qkv_b_chunks.append(q_b_torch[hs:he].detach().contiguous())
+                                qkv_b_chunks.append(k_b_torch[hs:he].detach().contiguous())
+                                qkv_b_chunks.append(v_b_torch[hs:he].detach().contiguous())
+                            qkv_b_torch = torch.cat(qkv_b_chunks, dim=0)
                         qkv_w, qkv_b = _to_tt_linear(qkv_w_torch, qkv_b_torch)
                     except Exception:
                         qkv_w, qkv_b = (None, None)
@@ -464,7 +475,7 @@ class MaskFormerSwinBackbone:
 
             self._stages.append({"blocks": blocks, "downsample": downsample})
 
-    def _get_attn_mask(self, *, stage_idx: int, height: int, width: int) -> Any:
+    def _get_attn_mask(self, *, stage_idx: int, height: int, width: int, clone: bool = True) -> Any:
         """Compute and cache the shifted-window attention mask for (stage_idx, H, W).
 
         The cached mask is stored in broadcast-ready shape: [1, nW, 1, N, N] (row-major),
@@ -472,8 +483,10 @@ class MaskFormerSwinBackbone:
 
         Notes
         -----
-        We return a cloned TT tensor on every call so the caller can safely deallocate the
-        per-use mask without risking the cached buffer.
+        By default we return a cloned TT tensor so the caller can safely deallocate the
+        per-use mask without risking the cached buffer. Callers that will not deallocate
+        the returned tensor can request `clone=False` to reuse the cached buffer and
+        reduce per-forward allocations.
         """
 
         if self.device is None or ttnn is None:
@@ -490,7 +503,9 @@ class MaskFormerSwinBackbone:
                     f"[maskformer][backbone] attn_mask cache hit stage={stage_idx} H={height} W={width}",
                     flush=True,
                 )
-            return ttnn.clone(cached, memory_config=self._activation_memory_config())
+            if clone:
+                return ttnn.clone(cached, memory_config=self._activation_memory_config())
+            return cached
         if os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_MASK", "0").strip() == "1":
             state = "miss" if cache_enabled else "disabled"
             print(
@@ -522,21 +537,68 @@ class MaskFormerSwinBackbone:
         # [num_windows, N, N] (torch)
 
         dtype = self.dtype or DEFAULT_TT_DTYPE
-        tt_mask = ttnn.from_torch(
+        act_mem_cfg = self._activation_memory_config()
+        num_windows = int(attn_mask.shape[0])
+        N = int(window * window)
+
+        tt_mask_rm = ttnn.from_torch(
             attn_mask.to(torch.float32),
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=self._activation_memory_config(),
+            memory_config=act_mem_cfg,
         )
-        num_windows = int(attn_mask.shape[0])
-        N = int(window * window)
         # Cache in broadcast-ready shape to avoid per-forward reshapes and accidental deallocation of the cached buffer.
-        tt_mask = ttnn.reshape(tt_mask, (1, num_windows, 1, N, N), memory_config=self._activation_memory_config())
+        tt_mask_rm = ttnn.reshape(tt_mask_rm, (1, num_windows, 1, N, N), memory_config=act_mem_cfg)
+
+        tt_mask_tile = None
+        try:
+            # For fused attention softmax, we need a 4D TILE mask with batch==num_windows (B==1 path).
+            tt_mask_tile = ttnn.from_torch(
+                attn_mask.to(torch.float32).unsqueeze(1),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=act_mem_cfg,
+            )
+        except Exception:
+            tt_mask_tile = None
+
         if cache_enabled:
-            self._attn_mask_cache[key] = tt_mask
-            return ttnn.clone(tt_mask, memory_config=self._activation_memory_config())
-        return tt_mask
+            self._attn_mask_cache[key] = tt_mask_rm
+            if tt_mask_tile is not None:
+                self._attn_mask_tile_cache[key] = tt_mask_tile
+            if clone:
+                return ttnn.clone(tt_mask_rm, memory_config=act_mem_cfg)
+            return tt_mask_rm
+        return tt_mask_rm
+
+    def _get_attn_mask_tile(self, *, stage_idx: int, height: int, width: int, clone: bool = True) -> Any:
+        """Return shifted-window attention mask in TILE layout for fused attention softmax paths.
+
+        The mask is cached in shape [num_windows, 1, N, N] (TILE layout) which matches the
+        attention score tensor shape for B==1 window attention: [num_windows, num_heads, N, N].
+        """
+
+        if self.device is None or ttnn is None:
+            require_ttnn("build Swin attention masks (tile)")
+
+        key = (stage_idx, height, width)
+        cache_enabled = os.environ.get("MASKFORMER_TT_DISABLE_ATTN_MASK_CACHE", "0").strip() != "1"
+        cached = self._attn_mask_tile_cache.get(key) if cache_enabled else None
+        if cached is not None:
+            if clone:
+                return ttnn.clone(cached, memory_config=self._activation_memory_config())
+            return cached
+
+        # Build caches (row-major + tile) via the canonical builder.
+        _ = self._get_attn_mask(stage_idx=stage_idx, height=height, width=width)
+        cached = self._attn_mask_tile_cache.get(key)
+        if cached is None:
+            raise RuntimeError("Tile attention mask cache miss (tile conversion unavailable).")
+        if clone:
+            return ttnn.clone(cached, memory_config=self._activation_memory_config())
+        return cached
 
     def forward(self, images: Any) -> Tuple[List[Any], List[Any]]:
         """Run the backbone on device and return feature maps (NHWC TT tensors).
@@ -866,6 +928,10 @@ class MaskFormerSwinBackbone:
         debug_attn = os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_ATTN", "0").strip() == "1"
         sync_attn = debug_attn and os.environ.get("MASKFORMER_TT_SYNC_BACKBONE_ATTN_STEPS", "0").strip() == "1"
         tt_dbg = require_ttnn("sync Swin window attention debug") if sync_attn else None
+        enable_inplace = os.environ.get("MASKFORMER_TT_BACKBONE_INPLACE_ADDS", "0").strip() == "1"
+        reuse_mask_cache = os.environ.get("MASKFORMER_TT_BACKBONE_REUSE_ATTN_MASK_CACHE", "0").strip() == "1"
+        cache_enabled = os.environ.get("MASKFORMER_TT_DISABLE_ATTN_MASK_CACHE", "0").strip() != "1"
+        reuse_mask_cache = reuse_mask_cache and cache_enabled
         attn_ts = time.perf_counter()
 
         def _attn_mark(msg: str) -> None:
@@ -920,10 +986,15 @@ class MaskFormerSwinBackbone:
         if debug_attn:
             print("[maskformer][backbone_attn] qkv begin", flush=True)
         xw = ttnn.to_layout(xw, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
-        enable_fused_qkv = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "0").strip() == "1"
+        enable_fused_qkv_global = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "0").strip() == "1"
+        enable_fused_qkv_backbone = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV_BACKBONE")
+        if enable_fused_qkv_backbone is None:
+            enable_fused_qkv_backbone = "1" if enable_fused_qkv_global else "0"
+        enable_fused_qkv = enable_fused_qkv_backbone.strip() == "1"
         q = None
         k = None
         v = None
+        key_is_transposed = False
         if (
             enable_fused_qkv
             and block.get("qkv_w") is not None
@@ -940,9 +1011,15 @@ class MaskFormerSwinBackbone:
                 **linear_kwargs,
             )
             try:
+                # The sharded implementation expects interleaved QKV-by-head input.
+                # If the output isn't sharded, fall back to the known-correct separate Q/K/V path.
+                if hasattr(qkv, "is_sharded") and not qkv.is_sharded():
+                    raise RuntimeError("Fused QKV output is not sharded; skipping sharded split op.")
+                # Avoid transpose inside the split op; explicit permute on K is typically faster for Swin window sizes.
                 q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
                     qkv, num_heads=num_heads, transpose_key=False
                 )
+                key_is_transposed = False
             except Exception:
                 q = None
                 k = None
@@ -995,10 +1072,21 @@ class MaskFormerSwinBackbone:
 
         if debug_attn:
             print("[maskformer][backbone_attn] scores begin", flush=True)
-        q = q * (head_dim**-0.5)
-        k_t = ttnn.permute(k, (0, 1, 3, 2), memory_config=act_mem_cfg)
+        scale = head_dim**-0.5
+        if enable_inplace and hasattr(ttnn, "multiply_"):
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+            try:
+                q = ttnn.multiply_(q, scale, use_legacy=False)
+            except TypeError:
+                q = ttnn.multiply_(q, scale)
+            except Exception:
+                q = q * scale
+        else:
+            # Keep scale on the pre-TILE layout (typically row-major) for the baseline path.
+            q = q * scale
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+        k_t = k if key_is_transposed else ttnn.permute(k, (0, 1, 3, 2), memory_config=act_mem_cfg)
 
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         k_t = ttnn.to_layout(k_t, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         attn = ttnn.matmul(
             q,
@@ -1009,26 +1097,82 @@ class MaskFormerSwinBackbone:
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
-        ttnn.deallocate(k)
+        if not key_is_transposed:
+            ttnn.deallocate(k)
 
         # Add relative position bias (broadcast on batch/windows)
-        attn = ttnn.add(attn, block["rel_bias"], memory_config=act_mem_cfg)
+        if enable_inplace and hasattr(ttnn, "add_"):
+            try:
+                attn = ttnn.add_(attn, block["rel_bias"], use_legacy=False)
+            except TypeError:
+                attn = ttnn.add_(attn, block["rel_bias"])
+            except Exception:
+                attn = ttnn.add(attn, block["rel_bias"], memory_config=act_mem_cfg)
+        else:
+            attn = ttnn.add(attn, block["rel_bias"], memory_config=act_mem_cfg)
         _attn_mark("scores end")
 
+        masked_softmax_done = False
         # Add attention mask for shifted blocks
         if shift:
-            mask_rm = self._get_attn_mask(stage_idx=stage_idx, height=Hp, width=Wp)  # [1, nW, 1, N, N] row-major
-            attn_rm = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
-            attn_rm = ttnn.reshape(attn_rm, (B, num_windows, num_heads, N, N), memory_config=act_mem_cfg)
-            attn_rm = ttnn.add(attn_rm, mask_rm, memory_config=act_mem_cfg, use_legacy=False)
-            attn = ttnn.reshape(attn_rm, (B * num_windows, num_heads, N, N), memory_config=act_mem_cfg)
-            attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
-            ttnn.deallocate(attn_rm)
-            ttnn.deallocate(mask_rm)
+            use_fused_mask_softmax = os.environ.get("MASKFORMER_TT_BACKBONE_FUSED_MASK_SOFTMAX", "0").strip() == "1"
+            use_tile_mask_add = os.environ.get("MASKFORMER_TT_BACKBONE_TILE_MASK_ADD", "0").strip() == "1"
+            if use_fused_mask_softmax and B == 1 and hasattr(ttnn, "scale_mask_softmax_in_place"):
+                try:
+                    mask_tile = self._get_attn_mask_tile(stage_idx=stage_idx, height=Hp, width=Wp)
+                    attn = ttnn.scale_mask_softmax_in_place(
+                        attn,
+                        scale=None,
+                        mask=mask_tile,
+                        is_causal_mask=False,
+                        compute_kernel_config=compute_cfg,
+                        numeric_stable=True,
+                    )
+                    ttnn.deallocate(mask_tile)
+                    masked_softmax_done = True
+                except Exception:
+                    masked_softmax_done = False
+
+            if not masked_softmax_done:
+                tile_mask_added = False
+                if use_tile_mask_add and B == 1:
+                    try:
+                        mask_tile = self._get_attn_mask_tile(
+                            stage_idx=stage_idx, height=Hp, width=Wp, clone=not reuse_mask_cache
+                        )
+                        if enable_inplace and hasattr(ttnn, "add_"):
+                            try:
+                                attn = ttnn.add_(attn, mask_tile, use_legacy=False)
+                            except TypeError:
+                                attn = ttnn.add_(attn, mask_tile)
+                        else:
+                            attn_added = ttnn.add(attn, mask_tile, memory_config=act_mem_cfg, use_legacy=False)
+                            ttnn.deallocate(attn)
+                            attn = attn_added
+                        if not reuse_mask_cache:
+                            ttnn.deallocate(mask_tile)
+                        tile_mask_added = True
+                    except Exception:
+                        tile_mask_added = False
+
+                if not tile_mask_added:
+                    mask_rm = self._get_attn_mask(
+                        stage_idx=stage_idx, height=Hp, width=Wp, clone=not reuse_mask_cache
+                    )  # [1, nW, 1, N, N] row-major
+                    attn_rm = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+                    attn_rm = ttnn.reshape(attn_rm, (B, num_windows, num_heads, N, N), memory_config=act_mem_cfg)
+                    # Note: TTNN inplace elementwise ops do not currently support row-major layout outputs.
+                    attn_rm = ttnn.add(attn_rm, mask_rm, memory_config=act_mem_cfg, use_legacy=False)
+                    attn = ttnn.reshape(attn_rm, (B * num_windows, num_heads, N, N), memory_config=act_mem_cfg)
+                    attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+                    ttnn.deallocate(attn_rm)
+                    if not reuse_mask_cache:
+                        ttnn.deallocate(mask_rm)
 
         if debug_attn:
             print("[maskformer][backbone_attn] softmax begin", flush=True)
-        attn = ttnn.softmax(attn, dim=-1, memory_config=act_mem_cfg)
+        if not masked_softmax_done:
+            attn = ttnn.softmax(attn, dim=-1, memory_config=act_mem_cfg)
         if safety_sync_windows1:
             tt_sync = require_ttnn("synchronize window attention (windows=1)")
             if hasattr(tt_sync, "synchronize_device"):
