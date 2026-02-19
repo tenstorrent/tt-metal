@@ -78,7 +78,7 @@ template <
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,
-    uint32_t total_input_pages) {
+    std::optional<uint32_t> total_input_pages) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -104,8 +104,8 @@ ALWI void tilize(
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
 
-    // Capture once — compiler propagates constexpr 0 and eliminates dead branches at symmetric call sites
-    const bool asymmetric_cb_pages = (total_input_pages > 0);
+    const bool asymmetric_cb_pages = total_input_pages.has_value();
+    ASSERT(!asymmetric_cb_pages || *total_input_pages > 0);  // total_input_pages must be > 0 when provided
 
     // Sanity checks: verify CB page sizes match the usage pattern
     const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
@@ -154,12 +154,12 @@ ALWI void tilize(
 
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
-        uint32_t total_wait = asymmetric_cb_pages ? total_input_pages : (block_width_tiles * num_blocks);
+        uint32_t total_wait = asymmetric_cb_pages ? *total_input_pages : (block_width_tiles * num_blocks);
         cb_wait_front(input_cb, total_wait);
     }
 
     // Main loop
-    uint32_t pages_left = total_input_pages;  // 0 when symmetric — optimized away by compiler
+    uint32_t pages_left = total_input_pages.value_or(0);
     uint32_t input_pages = block_width_tiles;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Determine input pages for this block

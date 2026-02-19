@@ -3,170 +3,111 @@
 
 #pragma once
 
+#include <optional>
+
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/compute/tilize.h"
 #include "api/compute/cb_api.h"
 #include "internal/circular_buffer_interface.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
-/**
- * @file tilize_helpers.hpp
- * @brief Header-only kernel library for tilize operations with improved type-safe API
- *
- * This library provides a unified tilize function with:
- * - Compile-time type safety via template parameters for CB IDs
- * - Descriptive enum-based configuration instead of boolean flags
- * - Automatic fast tilize detection at compile time
- * - Support for both symmetric and asymmetric CB page sizes
- *
- * Key Features:
- * - ONE function handles all tilize patterns
- * - Zero runtime overhead (all functions inlined, compile-time dispatch)
- * - Template-based compile-time optimization
- * - Self-documenting code with enums
- *
- * IMPORTANT: Tilize functions require compute kernel hardware initialization.
- * You MUST call compute_kernel_hw_startup() or equivalent before using tilize.
- *
- * Symmetric vs Asymmetric Page Sizes:
- *
- *   **Symmetric** (default, total_input_pages = 0):
- *   Both input and output CBs have tile-sized pages. Each block waits for and
- *   pops exactly block_width_tiles input pages. This is the common case.
- *
- *   **Asymmetric** (total_input_pages > 0):
- *   Input CB pages are NOT tile-sized (e.g., row-major sticks where each page
- *   is one row). The total number of input pages differs from the total number
- *   of output tiles. Pass total_input_pages to tell the function how many input
- *   pages exist in total; each block then waits/pops min(32, pages_left).
- *   Use this whenever the reader produces non-tile-aligned pages that the
- *   tilize hardware must reassemble into tiles.
- *
- * Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
- *
- *   // Initialize compute kernel hardware FIRST
- *   compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
- *
- *   // Symmetric — both CBs have tile-sized pages (most common)
- *   compute_kernel_lib::tilize<cb_in, cb_out>(block_width_tiles, num_blocks);
- *
- *   // Asymmetric — input CB has row-sized pages, output CB has tile-sized pages
- *   // total_input_pages = total rows the reader will produce
- *   compute_kernel_lib::tilize<cb_in, cb_out>(out_tiles, num_blocks, total_rows);
- */
-
 namespace compute_kernel_lib {
 
-// Nested namespace for tilize-specific types to avoid conflicts
 namespace tilize_config {
 
-// Sentinel value for invalid/unset circular buffer ID
 constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
 
-/**
- * @brief Controls register datatype reconfiguration mode for tilize operations
- *
- * NoReconfigure - no register datatype reconfiguration (default)
- * UnpackReconfigure - reconfigure only unpack registers (srcA/srcB)
- * PackReconfigure - reconfigure only pack registers (output)
- * UnpackAndPackReconfigure - reconfigure both unpack and pack registers
- */
+// Register datatype reconfiguration — use when switching data formats between operations.
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
-    NoReconfigure,            // No reconfiguration (default)
+    NoReconfigure,            // Default — no reconfiguration
     UnpackReconfigure,        // Reconfigure unpack registers (srcA/srcB)
     PackReconfigure,          // Reconfigure pack registers (output)
-    UnpackAndPackReconfigure  // Reconfigure both unpack and pack registers
+    UnpackAndPackReconfigure  // Reconfigure both unpack and pack
 };
 
-/**
- * @brief Controls init/uninit behavior for tilize operations
- *
- * Use InitAndUninit for standalone operations (default).
- * Use InitOnly/UninitOnly/Neither when chaining multiple tilize calls.
- */
+// Controls whether tilize_init/tilize_uninit are called.
+// When calling tilize() multiple times back-to-back, you can skip redundant
+// init/uninit between calls: use InitOnly on the first call, Neither on
+// middle calls, and UninitOnly on the last call.
 enum class InitUninitMode : uint8_t {
-    InitAndUninit,  // Default - standalone operation (calls both init and uninit)
-    InitOnly,       // First in a sequence (calls init only)
-    UninitOnly,     // Last in a sequence (calls uninit only)
-    Neither         // Middle of a sequence (calls neither)
+    InitAndUninit,  // Default — calls both init and uninit (use for single standalone calls)
+    InitOnly,       // Calls init only (use as the first of multiple back-to-back calls)
+    UninitOnly,     // Calls uninit only (use as the last of multiple back-to-back calls)
+    Neither         // Calls neither (use for middle calls between InitOnly and UninitOnly)
 };
 
-/**
- * @brief Controls input synchronization (wait strategy) for tilize operations
- *
- * WaitBlock (default) - wait per block/iteration (standard behavior)
- * WaitUpfront - wait for all blocks upfront before processing
- * NoWait - caller manages synchronization (data is pre-loaded)
- */
+// Input synchronization strategy.
 enum class WaitMode : uint8_t {
-    WaitBlock,    // Default - wait per block/iteration
-    WaitUpfront,  // Wait for all blocks upfront before processing
-    NoWait        // Caller manages synchronization (skip cb_wait_front)
+    WaitBlock,    // Default — wait for input per block
+    WaitUpfront,  // Wait for all input upfront before processing
+    NoWait        // Caller manages synchronization externally
 };
 
 }  // namespace tilize_config
 
 /**
- * @brief Unified tilize function handling all patterns with type-safe API
+ * Tilize: convert row-major data to tiled format.
  *
- * Handles symmetric and asymmetric CB page sizes, automatic fast tilize
- * detection, data type reconfiguration, init/uninit chaining, and flexible
- * wait strategies — all with zero runtime overhead via compile-time dispatch.
+ * Reads from input CB (row-major), writes to output CB (tiled).
+ * Automatically selects fast_tilize at compile time when hardware supports it
+ * (32x32 tiles, Float32/Float16_b format, half-sync dest mode).
  *
- * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
- * Before calling this function, you MUST initialize the compute kernel hardware by
- * calling compute_kernel_hw_startup() or equivalent at the start of your kernel.
+ * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
+ * start of your kernel before using this function. The two-argument overload
+ * sets srcA=srcB=input_cb. Use the three-argument form
+ * compute_kernel_hw_startup(icb0, icb1, ocb) when srcA and srcB differ.
  *
- * @tparam input_cb Input circular buffer ID (compile-time for type safety)
- * @tparam output_cb Output circular buffer ID (compile-time for type safety)
- * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
- * @tparam wait_mode Controls input synchronization strategy (default: WaitBlock)
- * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
+ * ── Template Parameters (compile-time) ──────────────────────────────────────
  *
- * @param block_width_tiles Output tiles per block
- * @param num_blocks Number of blocks to process
- * @param total_input_pages Total input pages across all blocks.
- *        Default 0 = symmetric: each block waits/pops block_width_tiles input pages.
- *        When > 0 = asymmetric: each block waits/pops min(32, pages_left) input pages,
- *        where pages_left counts down from total_input_pages.
+ *   input_cb         — Input circular buffer index (0–31, row-major data).
+ *   output_cb        — Output circular buffer index (0–31, tiled output, must differ from input_cb).
+ *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
+ *   wait_mode        — How to synchronize on input data (default: WaitBlock).
+ *   reconfig_mode    — Register datatype reconfiguration (default: NoReconfigure).
  *
- * @example
- *   // Symmetric — input and output CBs both have tile-sized pages.
- *   // Each block waits for block_width_tiles pages, tilizes, and pops them.
- *   tilize<cb_in, cb_out>(32, num_blocks);
+ * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
- * @example
- *   // Asymmetric — input CB has non-tile pages (e.g., one page per row).
- *   // The reader produces total_rows pages; the function distributes them
- *   // across blocks in chunks of up to 32 (one tile height).
- *   tilize<cb_in, cb_out>(out_tiles_per_block, num_blocks, total_rows);
+ *   block_width_tiles  — Number of output tiles per block.
+ *   num_blocks         — Number of blocks to process.
+ *   total_input_pages  — Total input CB pages across all blocks (default: std::nullopt).
+ *       omitted (symmetric): Input and output CBs both have tile-sized pages.
+ *                             Each block waits for and pops block_width_tiles pages.
+ *       provided (asymmetric): Input CB has non-tile pages (e.g., one page per row).
+ *                               Must be > 0. Each block waits for min(32, remaining_pages)
+ *                               input pages. Use when the reader produces row-sized pages.
  *
- * @example
- *   // Asymmetric, single block — all input rows tilized at once.
- *   tilize<cb_in, cb_out>(total_out_tiles, 1, total_rows);
+ * ── Examples ────────────────────────────────────────────────────────────────
  *
- * @example
- *   // Data type reconfiguration (unpack + pack registers)
+ *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+ *
+ *   // Hardware init — must come first, pass the input and output CBs
+ *   compute_kernel_hw_startup(cb_in, cb_out);
+ *
+ *   // 1. Basic tilize (most common — symmetric, both CBs have tile-sized pages)
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(block_width_tiles, num_blocks);
+ *
+ *   // 2. Asymmetric — input CB has row-sized pages, output CB has tile-sized pages
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(out_tiles_per_block, num_blocks, total_rows);
+ *
+ *   // 3. Asymmetric, single block — all rows tilized at once
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(total_out_tiles, 1, total_rows);
+ *
+ *   // 4. Register reconfiguration (switching data formats mid-kernel)
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<new_cb, cb_out,
+ *   compute_kernel_lib::tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
  *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(16, 5);
  *
- * @example
- *   // Caller manages synchronization (data already in CB)
- *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<cb_in, cb_out,
- *          InitUninitMode::InitAndUninit,
- *          WaitMode::NoWait>(block_w, num_blocks);
+ *   // 5. Caller-managed synchronization (data already in CB)
+ *   compute_kernel_lib::tilize<cb_in, cb_out,
+ *          tilize_config::InitUninitMode::InitAndUninit,
+ *          tilize_config::WaitMode::NoWait>(block_w, num_blocks);
  *
- * @example
- *   // Chained tilize calls — first/middle/last init control
- *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<cb_in, cb_out, InitUninitMode::InitOnly>(w, blocks);   // first
- *   tilize<cb_in, cb_out, InitUninitMode::Neither>(w, blocks);    // middle
- *   tilize<cb_in, cb_out, InitUninitMode::UninitOnly>(w, blocks); // last
+ *   // 6. Multiple back-to-back tilize calls — skip redundant init/uninit between them
+ *   compute_kernel_lib::tilize<cb_in, cb_out, tilize_config::InitUninitMode::InitOnly>(w, blocks);   // first
+ *   compute_kernel_lib::tilize<cb_in, cb_out, tilize_config::InitUninitMode::Neither>(w, blocks);    // middle
+ *   compute_kernel_lib::tilize<cb_in, cb_out, tilize_config::InitUninitMode::UninitOnly>(w, blocks); // last
  */
 template <
     uint32_t input_cb,
@@ -175,9 +116,9 @@ template <
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
-ALWI void tilize(uint32_t block_width_tiles, uint32_t num_blocks, uint32_t total_input_pages = 0);
+ALWI void tilize(
+    uint32_t block_width_tiles, uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib
 
-// Include implementation
 #include "tilize_helpers.inl"

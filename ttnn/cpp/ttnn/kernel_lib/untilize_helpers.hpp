@@ -8,216 +8,107 @@
 #include "api/compute/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
-/**
- * @file untilize_helpers.hpp
- * @brief Single unified untilize function with improved type-safe API
- *
- * This library provides a unified untilize function with:
- * - Compile-time type safety via template parameters for CB IDs
- * - Descriptive enum-based configuration instead of boolean flags
- * - Simplified runtime parameters (only num_blocks)
- * - Automatic dispatch based on width and data format
- *
- * Dispatch logic:
- * - block_width_tiles <= DEST capacity: Pack untilize (hardware-accelerated, single-pass)
- * - block_width_tiles > DEST capacity AND integer type: Block-based pack untilize (multi-pass)
- * - block_width_tiles > DEST capacity AND non-integer: Standard untilize (fallback for floats)
- * - WaitMode::WaitUpfront: Always use standard untilize (pack_untilize doesn't support this)
- *
- * IMPORTANT: Requires compute kernel hardware initialization.
- * Call compute_kernel_hw_startup() before using.
- *
- * Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
- *
- *   compute_kernel_hw_startup(cb_in, cb_out);
- *
- *   // Simple untilize
- *   compute_kernel_lib::untilize<4, cb_in, cb_out>(num_rows);
- *
- *   // With wait upfront (GroupNorm pattern)
- *   using namespace compute_kernel_lib::untilize_config;
- *   compute_kernel_lib::untilize<10, cb_in, cb_out,
- *       InitUninitMode::InitAndUninit,
- *       WaitMode::WaitUpfront>(num_rows);
- */
-
 namespace compute_kernel_lib {
 
-// get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
-
-// Nested namespace for untilize-specific types to avoid conflicts
 namespace untilize_config {
 
-// Sentinel value for invalid/unset circular buffer ID
 constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
 
-/**
- * @brief Controls register datatype reconfiguration mode for untilize operations
- *
- * NoReconfigure - no register datatype reconfiguration (default)
- * UnpackReconfigure - reconfigure only unpack registers (srcA)
- * PackReconfigure - reconfigure only pack registers (output)
- * UnpackAndPackReconfigure - reconfigure both unpack and pack registers
- */
+// Register datatype reconfiguration — use when switching data formats between operations.
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
-    NoReconfigure,            // No reconfiguration (default)
+    NoReconfigure,            // Default — no reconfiguration
     UnpackReconfigure,        // Reconfigure unpack registers (srcA)
     PackReconfigure,          // Reconfigure pack registers (output)
-    UnpackAndPackReconfigure  // Reconfigure both unpack and pack registers
+    UnpackAndPackReconfigure  // Reconfigure both unpack and pack
 };
 
-/**
- * @brief Controls init/uninit behavior for untilize operations
- *
- * Use InitAndUninit for standalone operations (default).
- * Use InitOnly/UninitOnly/Neither when chaining multiple untilize calls.
- */
+// Controls whether untilize_init/untilize_uninit are called.
+// When calling untilize() multiple times back-to-back, you can skip redundant
+// init/uninit between calls: use InitOnly on the first call, Neither on
+// middle calls, and UninitOnly on the last call.
 enum class InitUninitMode : uint8_t {
-    InitAndUninit,  // Default - standalone operation (calls both init and uninit)
-    InitOnly,       // First in a sequence (calls init only)
-    UninitOnly,     // Last in a sequence (calls uninit only)
-    Neither         // Middle of a sequence (calls neither)
+    InitAndUninit,  // Default — calls both init and uninit (use for single standalone calls)
+    InitOnly,       // Calls init only (use as the first of multiple back-to-back calls)
+    UninitOnly,     // Calls uninit only (use as the last of multiple back-to-back calls)
+    Neither         // Calls neither (use for middle calls between InitOnly and UninitOnly)
 };
 
-/**
- * @brief Controls input synchronization (wait strategy) for untilize operations
- *
- * WaitBlock (default) - wait per block/row (standard behavior)
- * WaitUpfront - wait for all tiles upfront before processing (GroupNorm pattern)
- * NoWait - caller manages synchronization (currently unused, reserved for future)
- */
+// Input synchronization strategy.
 enum class WaitMode : uint8_t {
-    WaitBlock,    // Default - wait per block/row
-    WaitUpfront,  // Wait for all tiles upfront before processing
-    NoWait        // Caller manages synchronization (reserved for future use)
+    WaitBlock,    // Default — wait for input per block
+    WaitUpfront,  // Wait for all tiles upfront before processing (forces standard untilize path)
+    NoWait        // Caller manages synchronization externally
 };
 
 }  // namespace untilize_config
 
-// =============================================================================
-// Standalone Init/Uninit Wrapper Functions
-// =============================================================================
-
-/**
- * @brief Initialize untilize operation (standalone wrapper)
- *
- * This is a convenience wrapper for manual init/uninit control.
- * Prefer using the unified untilize() function with InitUninitMode enums.
- *
- * @tparam block_width_tiles Width in tiles
- * @tparam input_cb Input circular buffer ID
- * @tparam output_cb Output circular buffer ID
- */
+// Standalone init/uninit wrappers for manual lifecycle control.
+// Prefer using the unified untilize() with InitUninitMode enums instead.
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 ALWI void untilize_init();
 
-/**
- * @brief Uninitialize untilize operation (standalone wrapper)
- *
- * This is a convenience wrapper for manual init/uninit control.
- * Prefer using the unified untilize() function with InitUninitMode enums.
- *
- * @tparam block_width_tiles Width in tiles
- * @tparam input_cb Input circular buffer ID
- * @tparam output_cb Output circular buffer ID
- */
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 ALWI void untilize_uninit();
 
-// =============================================================================
-// Main Untilize Function
-// =============================================================================
-
 /**
- * @brief Unified untilize function with type-safe API and automatic dispatch
+ * Untilize: convert tiled data back to row-major format (reverse of tilize).
  *
- * This is the ONLY untilize function you need. Provide the tile width and CB IDs,
- * and the optimal implementation is selected at compile time based on:
- * 1. Auto-detected DEST register capacity
- * 2. Auto-detected data format (integer vs non-integer)
- * 3. Width constraints
- * 4. Wait mode (per-row vs upfront)
+ * Reads from input CB (tiled), writes to output CB (row-major).
+ * Automatically selects the best implementation at compile time based on
+ * block_width_tiles vs DEST capacity, data format, and wait mode.
  *
- * Dispatch logic:
- * - block_width_tiles <= DEST capacity: Pack untilize (hardware-accelerated, single-pass)
- * - block_width_tiles > DEST capacity AND integer type: Block-based pack untilize (multi-pass)
- * - block_width_tiles > DEST capacity AND non-integer: Standard untilize (fallback for floats)
- * - WaitMode::WaitUpfront: Always use standard untilize (pack_untilize doesn't support this)
+ * NOTE: Unlike tilize, block_width_tiles is a compile-time template parameter
+ * and there is no asymmetric (total_input_pages) mode.
  *
- * Integer data types (Int8, UInt8, UInt16, Int32, UInt32) can use block-based pack_untilize
- * even for wide widths, providing hardware acceleration by splitting the row into blocks
- * that each fit within DEST register limits.
+ * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
+ * start of your kernel before using this function. The two-argument overload
+ * sets srcA=srcB=input_cb. Use the three-argument form
+ * compute_kernel_hw_startup(icb0, icb1, ocb) when srcA and srcB differ.
  *
- * @tparam block_width_tiles Width in tiles (number of tiles per row) - FIRST template param
- * @tparam input_cb Input circular buffer ID (tiled data) - must be compile-time constant
- * @tparam output_cb Output circular buffer ID (row-major data) - must be compile-time constant
- * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
- * @tparam wait_mode Controls input synchronization strategy (default: Wait)
- * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
+ * ── Template Parameters (compile-time) ──────────────────────────────────────
  *
- * @param num_blocks Number of rows/blocks to process
+ *   block_width_tiles — Number of tiles per row (FIRST template param).
+ *   input_cb          — Input circular buffer index (0–31, tiled data).
+ *   output_cb         — Output circular buffer index (0–31, row-major output, must differ from input_cb).
+ *   init_uninit_mode  — Init/uninit lifecycle control (default: InitAndUninit).
+ *   wait_mode         — How to synchronize on input data (default: WaitBlock).
+ *   reconfig_mode     — Register datatype reconfiguration (default: NoReconfigure).
  *
- * @example
- *   // Simple untilize (width 4, auto-dispatches to pack_untilize)
- *   untilize<4, cb_in, cb_out>(10);
+ * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
- * @example
- *   // Width 32 with INT32 - automatically uses block-based pack_untilize
- *   untilize<32, cb_in, cb_out>(1);
+ *   num_blocks — Number of rows/blocks to process.
  *
- * @example
- *   // Width 32 with Float16 - automatically uses standard untilize
- *   untilize<32, cb_in, cb_out>(10);
+ * ── Examples ────────────────────────────────────────────────────────────────
  *
- * @example
- *   // Wait-upfront pattern (GroupNorm) - forces standard untilize
+ *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+ *
+ *   // Hardware init — must come first, pass the input and output CBs
+ *   compute_kernel_hw_startup(cb_in, cb_out);
+ *
+ *   // 1. Basic untilize (most common)
+ *   compute_kernel_lib::untilize<4, cb_in, cb_out>(num_blocks);
+ *
+ *   // 2. Wait-upfront (e.g., GroupNorm pattern — forces standard untilize path)
  *   using namespace compute_kernel_lib::untilize_config;
- *   untilize<10, cb_in, cb_out,
+ *   compute_kernel_lib::untilize<10, cb_in, cb_out,
  *            InitUninitMode::InitAndUninit,
  *            WaitMode::WaitUpfront>(num_rows);
  *
- * @example
- *   // Unpack and pack data type reconfiguration
- *   using namespace compute_kernel_lib::untilize_config;
- *   untilize<4, cb_in, cb_out,
- *            InitUninitMode::InitAndUninit,
- *            WaitMode::WaitBlock,
- *            ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(10);
+ *   // 3. Register reconfiguration (switching data formats mid-kernel)
+ *   compute_kernel_lib::untilize<4, cb_in, cb_out,
+ *            untilize_config::InitUninitMode::InitAndUninit,
+ *            untilize_config::WaitMode::WaitBlock,
+ *            untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(num_blocks);
  *
- * @example
- *   // Only unpack reconfiguration
- *   using namespace compute_kernel_lib::untilize_config;
- *   untilize<4, cb_in, cb_out,
- *            InitUninitMode::InitAndUninit,
- *            WaitMode::WaitBlock,
- *            ReconfigureRegisterDatatypeMode::UnpackReconfigure>(10);
+ *   // 4. Caller-managed synchronization (data already in CB)
+ *   compute_kernel_lib::untilize<4, cb_in, cb_out,
+ *            untilize_config::InitUninitMode::InitAndUninit,
+ *            untilize_config::WaitMode::NoWait>(num_blocks);
  *
- * @example
- *   // Only pack reconfiguration
- *   using namespace compute_kernel_lib::untilize_config;
- *   untilize<4, cb_in, cb_out,
- *            InitUninitMode::InitAndUninit,
- *            WaitMode::WaitBlock,
- *            ReconfigureRegisterDatatypeMode::PackReconfigure>(10);
- *
- * @example
- *   // Init only (first in sequence)
- *   using namespace compute_kernel_lib::untilize_config;
- *   untilize<width, cb_in, cb_out,
- *            InitUninitMode::InitOnly>(num_blocks);
- *
- * @example
- *   // Neither init nor uninit (middle of sequence)
- *   using namespace compute_kernel_lib::untilize_config;
- *   untilize<width, cb_in, cb_out,
- *            InitUninitMode::Neither>(num_blocks);
- *
- * @example
- *   // Uninit only (last in sequence)
- *   using namespace compute_kernel_lib::untilize_config;
- *   untilize<width, cb_in, cb_out,
- *            InitUninitMode::UninitOnly>(num_blocks);
+ *   // 5. Multiple back-to-back untilize calls — skip redundant init/uninit between them
+ *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::InitOnly>(blocks);   // first
+ *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::Neither>(blocks);    // middle
+ *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::UninitOnly>(blocks); // last
  */
 template <
     uint32_t block_width_tiles,
@@ -231,5 +122,4 @@ ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib
 
-// Include implementation
 #include "untilize_helpers.inl"
