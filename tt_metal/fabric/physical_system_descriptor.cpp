@@ -145,7 +145,11 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
 }
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto_desc_path) :
-    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr), target_device_type_(TargetDevice::Silicon) {
+    cluster_(null_cluster),
+    distributed_context_(nullptr),
+    hal_(nullptr),
+    target_device_type_(TargetDevice::Silicon),
+    all_hostnames_unique_(true) {
     // Deserialize the proto descriptor and move all its members directly
     // This avoids discovery and merge operations for mock proto descriptors
     PhysicalSystemDescriptor proto_desc =
@@ -161,7 +165,7 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto
     ethernet_firmware_version_ = proto_desc.get_ethernet_firmware_version();
     pcie_devices_per_tray_ = std::move(proto_desc.get_pcie_devices_per_tray());
     pcie_id_to_asic_location_ = std::move(proto_desc.get_pcie_id_to_asic_location());
-    all_hostnames_unique_ = true;  // Default for mock descriptors
+    // all_hostnames_unique_ initialized in member initializer list
 }
 
 PhysicalSystemDescriptor::~PhysicalSystemDescriptor() = default;
