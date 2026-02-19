@@ -129,11 +129,17 @@ tt::tt_metal::Tensor from_vector(
 
     /* Workaround necessary due to the issue #38186.*/
     if constexpr (TensorType == ttnn::DataType::FLOAT32) {
-        output = ttnn::to_layout(output, ttnn::Layout::TILE);
+        if (layout == ttnn::TILE_LAYOUT) {
+            output = ttnn::to_layout(output, ttnn::Layout::TILE);
+        }
+
         output = ttnn::to_device(output, device, output_mem_config);
     } else {
         output = ttnn::to_device(output, device, output_mem_config);
-        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
+
+        if (layout == ttnn::TILE_LAYOUT) {
+            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
+        }
     }
 
     return output;
