@@ -26,6 +26,11 @@ on:
         required: false
         default: ''
         type: string
+      testing_branch:
+        description: "Branch to test the auto-triage workflow (default main)"
+        required: false
+        default: "main"
+        type: string
 
 
 jobs:
@@ -43,7 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@${{ github.event.inputs.testing_branch || 'main' }}
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
@@ -54,4 +59,4 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
-          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || 'C09EC0QNSB0' }}
