@@ -798,11 +798,12 @@ class MlpRoutedExpertOp:
             ("down_proj_out_num_tiles", ctx.down_proj_params["out_num_tiles"]),
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
-            # ReduceToOne reader args (CB indices)
+            # ReduceToOne reader args (CB indices + common RT arg base)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_received_cb_r1", ctx.reduce_received_cb_r1),
             ("reduce_received_cb_r2", ctx.reduce_received_cb_r2),
             ("reduce_received_cb_r3", ctx.reduce_received_cb_r3),
+            ("reduce_ncrisc_common_rt_arg_base", 0),
         ]
 
         brisc_named_compile_time_args = [
@@ -855,9 +856,11 @@ class MlpRoutedExpertOp:
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Eltwise add CB
             ("add_cb_in1", ctx.add_cb_in1),
-            # ReduceToOne writer args (CB indices)
+            # ReduceToOne writer args (CB indices + RT arg bases)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
+            ("reduce_brisc_rt_arg_base", 0),
+            ("reduce_brisc_fabric_rt_arg_base", 0),
         ]
 
         trisc_named_compile_time_args = [
@@ -868,6 +871,7 @@ class MlpRoutedExpertOp:
             ("rmsnorm_fp32_acc", 0),
             ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
             ("rmsnorm_rsqrt_fast_approx", 0),
+            ("rmsnorm_trisc_common_rt_arg_base", 0),
             # No gate_mm, gate compute args
             # gate_proj compute
             ("gate_proj_cb_in0", ctx.gate_mm_input_cb),

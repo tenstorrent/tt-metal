@@ -239,11 +239,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_received_cb_r3"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core")>;
 
-            // Reader runtime args
+            // Reader runtime args (common RT args at configurable base)
             deepseek_b1_ops::ReduceToOneB1::ReaderArgs reduce_rt_args{
-                get_common_arg_val<uint32_t>(0),  // recv_sem_round1
-                get_common_arg_val<uint32_t>(1),  // recv_sem_round2
-                get_common_arg_val<uint32_t>(2),  // recv_sem_round3
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 0),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 1),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
             };
 #endif
         } routed;
@@ -530,7 +530,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_output_core_noc_y"),
                 get_named_compile_time_arg_val("reduce_num_workers"),
                 get_named_compile_time_arg_val("reduce_slot_size_bytes"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base")>;
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -641,7 +642,7 @@ void kernel_main() {
 
 #ifdef ENABLE_REDUCE_TO_ONE
     // Populate BRISC reduce runtime args (must be outside struct initializer)
-    constexpr size_t reduce_brisc_arg_start = 0;
+    constexpr size_t reduce_brisc_arg_start = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
     if constexpr (Core::is_reduce_worker_core) {
         moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),  // fabric_core_noc_x
@@ -780,8 +781,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("rmsnorm_input_cb"),  // residual_mcast_src_cb
                 get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
                 get_named_compile_time_arg_val("rmsnorm_output_cb"),  // rmsnorm_output_cb
-                get_common_arg_val<uint32_t>(0),                      // epsilon
-                get_common_arg_val<float>(1),                         // scalar (1/sqrt(numel))
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 0),
+                get_common_arg_val<float>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 1),
             };
 
 #ifdef ENABLE_REDUCE_TO_ONE
