@@ -73,7 +73,7 @@ public:
      * Deallocate and release owned device memory.
      */
     void deallocate() {
-        auto& device_storage = get_device_storage();
+        auto& device_storage = get_storage();
         // This implicitly deallocates the root mesh buffer if we are the sole owner.
         device_storage.reset_root_mesh_buffer();
     }
