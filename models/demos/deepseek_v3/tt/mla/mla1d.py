@@ -1870,7 +1870,23 @@ class MLA1D(AbstractModule):
         num_heads_padded = pad_batch_to_dram_banks(num_heads)  # 128 -> 132
         if num_heads_padded != num_heads:
             pad_heads = num_heads_padded - num_heads
-            attn_out = ttnn.pad(attn_out, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
+            pad_shape = list(attn_out.shape)
+            pad_shape[1] = pad_heads
+            # pad the shape with garbage, it will get sliced anyway
+            attn_out = ttnn.concat(
+                [
+                    attn_out,
+                    ttnn.empty(
+                        pad_shape,
+                        dtype=attn_out.dtype,
+                        layout=attn_out.layout,
+                        device=cfg["mesh_device"],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    ),
+                ],
+                dim=1,
+            )  # [1, num_heads_padded, bsz, kv_lora_rank]
+            # attn_out = ttnn.pad(attn_out, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
 
         # Retile in0 to 4x32 tiny tiles BEFORE sharding for wkv_b2 matmul
         wkv_b2_in0_tile = cfg["wkv_b2_in0_tile"]
