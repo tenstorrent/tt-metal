@@ -165,8 +165,6 @@ class PreSDPA:
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
         sender_coord,
-        kv_cache_tensor,
-        sdpa_out_interm_tensor,
         semaphores=None,
         cluster_axis=0,
         secondary_cluster_axis=1,
