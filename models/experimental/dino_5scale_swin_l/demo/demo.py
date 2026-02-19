@@ -499,28 +499,29 @@ def main():
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768)
 
     try:
+        from models.experimental.swin_l.tt.model_preprocessing import load_backbone_weights, compute_attn_masks
         from models.experimental.dino_5scale_swin_l.tt.model_preprocessing import (
-            load_backbone_weights,
             load_neck_weights,
             load_encoder_weights,
             load_decoder_weights,
-            compute_attn_masks,
+            _resolve_state_dict,
         )
         from models.experimental.dino_5scale_swin_l.tt.tt_dino import TtDINO
 
         logger.info("Loading TTNN weights...")
         t0 = time.time()
+        sd = _resolve_state_dict(ckpt_path)
         backbone_params = load_backbone_weights(
-            ckpt_path,
+            sd,
             device,
             embed_dim=SWIN_L_EMBED_DIM,
             depths=tuple(SWIN_L_DEPTHS),
             num_heads=tuple(SWIN_L_NUM_HEADS),
             window_size=SWIN_L_WINDOW_SIZE,
         )
-        neck_params = load_neck_weights(ckpt_path, device)
-        encoder_params = load_encoder_weights(ckpt_path, device)
-        decoder_params = load_decoder_weights(ckpt_path, device)
+        neck_params = load_neck_weights(sd, device)
+        encoder_params = load_encoder_weights(sd, device)
+        decoder_params = load_decoder_weights(sd, device)
         attn_masks = compute_attn_masks(DINO_INPUT_H, DINO_INPUT_W, 4, SWIN_L_WINDOW_SIZE, device)
         logger.info(f"Weights loaded in {time.time() - t0:.1f}s")
 
