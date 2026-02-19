@@ -278,8 +278,6 @@ private:
     // If not set, the tensor can either be on host or allocated on a single device.
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-
-    void deallocate_impl(bool force);
 };
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
