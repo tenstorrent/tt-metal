@@ -114,8 +114,78 @@ def test_pre_sdpa(
             f"Device grid {device_grid_size.x}x{device_grid_size.y} too small for {TOTAL_COLS} columns required (P100 has 11 columns)"
         )
 
-    matmul2_grid_x = min(TOTAL_COLS, device_grid_size.x)  # Must be exactly 12 for correct sharding
+    matmul2_grid_x = 12
     matmul2_grid_y = 8
+
+    # SDPA KV Cache tensor declared here to overlap with pre-SDPA, pre-KV cache branch CBs.
+    # Matches flash_mla's double-buffered KV CB sizing: shard = (2 * k_chunk_size, kvpe_dim)
+    # = (256, 576) per core, giving 156,672 bytes/core — same as flash_mla's cb_k_in.
+    # Total height = shard_height * num_cores must be divisible by tile height (32).
+    kvpe_dim = KNOPE_DIM + KROPE_DIM  # 576
+    kv_cache_num_cores_x = device_grid_size.x
+    kv_cache_num_cores_y = device_grid_size.y
+    kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
+    kv_cache_shard_height = 256  # 2 * k_chunk_size (128), matching flash_mla double-buffer
+    kv_cache_total_height = kv_cache_shard_height * kv_cache_num_cores
+
+    kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(kv_cache_num_cores_x - 1, kv_cache_num_cores_y - 1),
+                )
+            }
+        ),
+        (kv_cache_shard_height, kvpe_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.randn((kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            kv_cache_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
+    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
+    sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
+    sdpa_out_interm_shard_height = 40  # 5 tile-rows of [8, 32]
+    sdpa_out_interm_shard_width = 544  # 17 tile-cols of [8, 32]
+    sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
+
+    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1),
+                )
+            }
+        ),
+        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_out_interm_buffer = ttnn.from_torch(
+        torch.zeros((sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_out_interm_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        tile=ttnn.Tile([8, 32]),
+    )
 
     # Matmul2 output width (interleaved Qnope/Qrope)
     matmul2_width = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM + NUM_QROPE_HEADS * QROPE_HEAD_DIM  # 8192 + 4096 = 12288
@@ -636,6 +706,8 @@ def test_pre_sdpa(
             ttnn_kv_cache,
             position_ids,
             ttnn_sdpa_input_output,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
             sender_coord,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
@@ -648,6 +720,7 @@ def test_pre_sdpa(
     ttnn.synchronize_device(submesh)
 
     kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
     # Convert back to torch for verification
     sdpa_input_output_torch = ttnn.to_torch(
         ttnn_sdpa_input_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
