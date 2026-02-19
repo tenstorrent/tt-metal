@@ -134,7 +134,7 @@ def run(args, context: Context):
 
     # Extract the collected data from wrapped results and write to single JSON file
     if results:
-        all_debug_bus_data = []
+        all_debug_bus_data = {}
         for r in results:
             if r.result is None:
                 continue
@@ -142,15 +142,12 @@ def run(args, context: Context):
             device = r.device_description.device
             location = r.location
             block_type = device.get_block_type(location)
-            all_debug_bus_data.append(
-                {
-                    "device_id": device.id,
-                    "location": location.to_user_str(),
-                    "block_type": block_type,
-                    "failed_riscs": r.result["failed_riscs"],
-                    "debug_bus_signals": r.result["debug_bus_signals"],
-                }
-            )
+            all_debug_bus_data[f"Device {device.id}"] = {
+                "location": location.to_user_str(),
+                "block_type": block_type,
+                "failed_riscs": r.result["failed_riscs"],
+                "debug_bus_signals": r.result["debug_bus_signals"],
+            }
 
         if all_debug_bus_data:
             output_path = os.getenv("TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH", "debug_bus_signals.json")
