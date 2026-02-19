@@ -126,6 +126,17 @@ class SocketInterface:
         num_fwd_links = 2
         num_bwd_links = 1
 
+        my_upstream_sender_device_coord = my_upstream_socket.get_connection_config()[0].sender_core.device_coord
+        my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
+
+        my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_core_coord.device_coord)
+        my_upstream_fabric_node_id = my_upstream_socket.get_fabric_node_id(
+            ttnn.SocketEndpoint.SENDER, my_upstream_sender_device_coord
+        )
+        my_downstream_fabric_node_id = my_downstream_socket.get_fabric_node_id(
+            ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
+        )
+
         if num_whole_fabric_packets > 0:
             num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // num_fwd_links) + int(partial_packet_size > 0)
             num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
@@ -150,6 +161,9 @@ class SocketInterface:
             ],
         )
 
+        use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
+        use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
+
         kernel_ct_args = [
             downstream_socket_config_addr,
             upstream_socket_config_addr,
@@ -160,6 +174,8 @@ class SocketInterface:
             fabric_max_payload_size,
             partial_packet_size,
             packet_header_cb_index,
+            use_fabric_on_receiver,
+            use_fabric_on_sender,
         ]
 
         exchange_kernel = ttnn.KernelDescriptor(
@@ -176,39 +192,31 @@ class SocketInterface:
             cbs=[packet_header_cb_desc],
         )
 
-        my_upstream_sender_device_coord = my_upstream_socket.get_connection_config()[0].sender_core.device_coord
-        my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
-
-        my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_core_coord.device_coord)
-        my_upstream_fabric_node_id = my_upstream_socket.get_fabric_node_id(
-            ttnn.SocketEndpoint.SENDER, my_upstream_sender_device_coord
-        )
-        my_downstream_fabric_node_id = my_downstream_socket.get_fabric_node_id(
-            ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
-        )
-
         program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
         rt_args_ref = program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
 
-        for idx in range(num_fwd_links):
-            fwd_fabric_args = ttnn.setup_fabric_connection(
-                my_fabric_node_id,
-                my_downstream_fabric_node_id,
-                idx,
-                program,
-                my_core_coord.core_coord,
-            )
-            rt_args_ref.extend(fwd_fabric_args)
+        if use_fabric_on_sender:
+            for idx in range(num_fwd_links):
+                fwd_fabric_args = ttnn.setup_fabric_connection(
+                    my_fabric_node_id,
+                    my_downstream_fabric_node_id,
+                    idx,
+                    program,
+                    my_core_coord.core_coord,
+                )
+                rt_args_ref.extend(fwd_fabric_args)
 
-        for idx in range(num_bwd_links):
-            bwd_fabric_args = ttnn.setup_fabric_connection(
-                my_fabric_node_id,
-                my_upstream_fabric_node_id,
-                idx,
-                program,
-                my_core_coord.core_coord,
-            )
-            rt_args_ref.extend(bwd_fabric_args)
+        if use_fabric_on_receiver:
+            for idx in range(num_bwd_links):
+                bwd_fabric_args = ttnn.setup_fabric_connection(
+                    my_fabric_node_id,
+                    my_upstream_fabric_node_id,
+                    idx,
+                    program,
+                    my_core_coord.core_coord,
+                )
+                rt_args_ref.extend(bwd_fabric_args)
+
         return program
 
     def run(self):
@@ -379,6 +387,12 @@ class HostInterface:
             num_whole_fabric_packets_link_0 = 0
             num_whole_fabric_packets_link_1 = 0
 
+        # H2D Receiver Core will forward data to downstream core via fabric if:
+        # 1. Not in loopback mode (i.e. real workload)
+        # 2. Downstream core is not on the same device as the H2D receiver core
+        use_fabric = (not self.loopback_mode) and (
+            self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
+        )
         h2d_socket_kernel_ct_args = [
             self.h2d_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
@@ -393,6 +407,7 @@ class HostInterface:
             num_whole_fabric_packets_link_0,
             num_whole_fabric_packets_link_1,
             partial_packet_size,
+            use_fabric,
         ]
         # Add CTAs for fused embedding op if needed
         if self.has_embedding:
@@ -419,6 +434,12 @@ class HostInterface:
         return h2d_kernel
 
     def _create_d2h_kernel(self):
+        # D2H Sender Core will forward data to upstream core via fabric if:
+        # 1. Not in loopback mode (i.e. real workload)
+        # 2. Upstream core is not on the same device as the D2H sender core
+        use_fabric = (not self.loopback_mode) and (
+            self.d2h_upstream_core.device_coord != self.d2h_mesh_core_coord.device_coord
+        )
         d2h_socket_kernel_ct_args = [
             self.d2h_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
@@ -427,6 +448,7 @@ class HostInterface:
             # Use a local CB if doing loopback, otherwise communicate with downstream over sockets
             self.intermed_cb_index if self.loopback_mode else self.upstream_socket_pair[1].get_config_buffer_address(),
             self.fabric_packet_header_cb_index,
+            use_fabric,
         ]
         d2h_kernel = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2h_sender.cpp",
@@ -515,16 +537,16 @@ class HostInterface:
         h2d_rt_args_ref = h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
             self.h2d_mesh_core_coord.core_coord.y
         ]
-
-        for idx in range(self.num_fwd_links):
-            fwd_fabric_args = ttnn.setup_fabric_connection(
-                h2d_fabric_node_id,
-                my_downstream_fabric_node_id,
-                idx,
-                h2d_program,
-                self.h2d_mesh_core_coord.core_coord,
-            )
-            h2d_rt_args_ref.extend(fwd_fabric_args)
+        if h2d_fabric_node_id != my_downstream_fabric_node_id:
+            for idx in range(self.num_fwd_links):
+                fwd_fabric_args = ttnn.setup_fabric_connection(
+                    h2d_fabric_node_id,
+                    my_downstream_fabric_node_id,
+                    idx,
+                    h2d_program,
+                    self.h2d_mesh_core_coord.core_coord,
+                )
+                h2d_rt_args_ref.extend(fwd_fabric_args)
 
         d2h_program = ttnn.ProgramDescriptor(
             kernels=[d2h_kernel],
@@ -539,15 +561,16 @@ class HostInterface:
             self.d2h_mesh_core_coord.core_coord.y
         ]
 
-        for idx in range(self.num_bwd_links):
-            bwd_fabric_args = ttnn.setup_fabric_connection(
-                d2h_fabric_node_id,
-                my_upstream_fabric_node_id,
-                idx,
-                d2h_program,
-                self.d2h_mesh_core_coord.core_coord,
-            )
-            d2h_rt_args_ref.extend(bwd_fabric_args)
+        if d2h_fabric_node_id != my_upstream_fabric_node_id:
+            for idx in range(self.num_bwd_links):
+                bwd_fabric_args = ttnn.setup_fabric_connection(
+                    d2h_fabric_node_id,
+                    my_upstream_fabric_node_id,
+                    idx,
+                    d2h_program,
+                    self.d2h_mesh_core_coord.core_coord,
+                )
+                d2h_rt_args_ref.extend(bwd_fabric_args)
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         mesh_program_descriptor[
