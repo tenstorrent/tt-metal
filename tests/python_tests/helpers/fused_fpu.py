@@ -281,6 +281,9 @@ class ReduceFpu(Fpu):
     def reduce_dim(self) -> str:
         return f"ReduceDim::{self.operation.cpp_enum_value}"
 
+    def pool_type(self) -> str:
+        return f"PoolType::{self.pool.value}"
+
     def reduce_dim_golden(self) -> ReduceDimension:
         if self.operation == MathOperation.ReduceColumn:
             return ReduceDimension.Column

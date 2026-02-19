@@ -218,6 +218,7 @@ class UnpackerAB(Unpacker):
     def get_headers(self) -> List[str]:
         return [
             "llk_unpack_AB.h",
+            "llk_unpack_AB_reduce.h",
             "llk_unpack_common.h",
             "llk_unpack_tilize.h",
         ]
@@ -344,9 +345,11 @@ class UnpackerAB(Unpacker):
                 raise ValueError("ReduceFpu does not support broadcasted inputs.")
 
             reduce_dim = compute_unit.fpu.reduce_dim()
+            pool_type = compute_unit.fpu.pool_type()
+
             return (
-                f"_llk_unpack_AB_reduce_init_<{reduce_dim}, {broadcast_type}>(\n"
-                f"{face_r_dim}, {num_faces}, false, {transpose_faces}, {transpose_within_face});\n"
+                f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}>(\n"
+                f"{face_r_dim}, {num_faces});\n"
             )
         else:
             if transpose_within_face != transpose_faces:
