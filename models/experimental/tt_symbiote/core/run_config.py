@@ -87,9 +87,14 @@ class DistributedConfig:
                 or tensor.shape[0] % self.mesh_device.shape[0] != 0
             ):
                 print(
-                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Try overriding set_output_tensors_config_impl in the module to set the correct config for this tensor."
+                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
                 )
-                return None
+                return DistributedTensorConfig(
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    mesh_composer=ttnn.create_mesh_composer(
+                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
+                    ),
+                )
         return self.tensor_config
 
 
