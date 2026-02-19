@@ -56,7 +56,8 @@ static void expect_neighbors_by_id(
     EXPECT_EQ(actual_ids, expected_set) << "Node " << node_unique_id << " has wrong neighbors";
 }
 
-// Helper to get required groupings (TRAY_1-4, hosts, meshes) - can be prepended to any test proto
+// Helper to get common groupings (TRAY_1-4, hosts) - can be prepended to any test proto
+// Note: These groupings are no longer required but are commonly used in tests
 static std::string get_required_groupings() {
     return R"proto(
         groupings {
@@ -95,7 +96,8 @@ static std::string get_required_groupings() {
     )proto";
 }
 
-// Helper to wrap a test proto with required groupings (adds meshes if not present)
+// Helper to wrap a test proto with common groupings (adds meshes if not present)
+// Note: These groupings are no longer required but are commonly used in tests
 static std::string wrap_with_required_groupings(const std::string& test_proto) {
     bool has_meshes = test_proto.find("custom_type: \"meshes\"") != std::string::npos ||
                       test_proto.find("preset_type: MESH") != std::string::npos;
@@ -350,213 +352,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenGroupingHasNoInstances)
     EXPECT_THAT(
         ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must have at least one instance")));
-}
-
-TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenTRAY1Missing) {
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "tray_2"
-          preset_type: TRAY_2
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_3"
-          preset_type: TRAY_3
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_4"
-          preset_type: TRAY_4
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "hosts_1"
-          custom_type: "hosts"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { preset_type: TRAY_1 }
-          }]
-        }
-        groupings {
-          name: "meshes_1"
-          custom_type: "meshes"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { custom_type: "hosts" }
-          }]
-        }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Exactly one grouping with preset_type 'TRAY_1' is required but none are defined")));
-}
-
-TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenHostsMissing) {
-    const std::string text_proto = R"proto(groupings {
-                                             name: "tray_1"
-                                             preset_type: TRAY_1
-                                             instances:
-                                             [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-                                           }
-                                           groupings {
-                                             name: "tray_2"
-                                             preset_type: TRAY_2
-                                             instances:
-                                             [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-                                           }
-                                           groupings {
-                                             name: "tray_3"
-                                             preset_type: TRAY_3
-                                             instances:
-                                             [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-                                           }
-                                           groupings {
-                                             name: "tray_4"
-                                             preset_type: TRAY_4
-                                             instances:
-                                             [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-                                           }
-                                           groupings {
-                                             name: "meshes_1"
-                                             custom_type: "meshes"
-                                             instances:
-                                             [ {
-                                               id: 0
-                                               grouping_ref { preset_type: TRAY_1 }
-                                             }]
-                                           }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Exactly one grouping with custom_type 'hosts' is required but none are defined")));
-}
-
-TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenDuplicateTRAY1) {
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "tray_1_a"
-          preset_type: TRAY_1
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_1_b"
-          preset_type: TRAY_1
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_2"
-          preset_type: TRAY_2
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_3"
-          preset_type: TRAY_3
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_4"
-          preset_type: TRAY_4
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "hosts_1"
-          custom_type: "hosts"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { preset_type: TRAY_1 }
-          }]
-        }
-        groupings {
-          name: "meshes_1"
-          custom_type: "meshes"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { custom_type: "hosts" }
-          }]
-        }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Exactly one grouping with preset_type 'TRAY_1' is required but 2 are defined")));
-}
-
-TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenDuplicateHosts) {
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "tray_1"
-          preset_type: TRAY_1
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_2"
-          preset_type: TRAY_2
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_3"
-          preset_type: TRAY_3
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "tray_4"
-          preset_type: TRAY_4
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "hosts_1"
-          custom_type: "hosts"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { preset_type: TRAY_1 }
-          }]
-        }
-        groupings {
-          name: "hosts_2"
-          custom_type: "hosts"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { preset_type: TRAY_1 }
-          }]
-        }
-        groupings {
-          name: "meshes_1"
-          custom_type: "meshes"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { custom_type: "hosts" }
-          }]
-        }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Exactly one grouping with custom_type 'hosts' is required but 2 are defined")));
 }
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenNonLeafGroupingUsesASICLocations) {
