@@ -27,8 +27,7 @@ from models.tt_transformers.tt.prefetcher import (
     Prefetcher,
     VERIFIED_MODEL_CONFIGS,
     is_prefetcher_supported,
-    SENDER_RECEIVER_MAPPING_64_CORE_OVERRIDE,
-    SENDER_RECEIVER_MAPPING_80_CORE_OVERRIDE,
+    generate_sender_receiver_mapping,
 )
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -163,8 +162,8 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
     num_receiver_cores = prefetcher.num_receiver_cores
     num_dram_banks = len(prefetcher.dram_banks())
     assert (
-        num_receiver_cores % num_dram_banks == 0
-    ), f"num_receiver_cores {num_receiver_cores} must be divisible by num_dram_banks {num_dram_banks}"
+        ring_size % num_dram_banks == 0
+    ), f"ring_size {ring_size} must be divisible by num_dram_banks {num_dram_banks}"
 
     def create_ring_config(M, K, N_padded, num_cores, num_global_cb_receivers, num_dram_banks, untilize_out=False):
         """Create ring matmul config
@@ -602,8 +601,8 @@ def run_prefetcher_all_matmuls(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "custom_core_mapping",
-    [None, 64, 80],
+    "ring_size",
+    [16, 64, 80],  # 16 for default, 64 for 8-receiver per sender, 80 for 10-receiver per sender
 )
 @pytest.mark.parametrize(
     "model_name",
@@ -625,7 +624,7 @@ def test_prefetcher_BH(
     function_level_defaults,
     silicon_arch_name,
     silicon_arch_blackhole,
-    custom_core_mapping,
+    ring_size,
     model_name,
     enable_trace,
 ):
@@ -643,19 +642,12 @@ def test_prefetcher_BH(
     - FF2: TP on hidden_dim dimension (K-sharded)
     """
     mesh_shape = tuple(mesh_device.shape)
-    ring_size = custom_core_mapping if custom_core_mapping else 16
     if not is_prefetcher_supported(model_name, mesh_device.get_num_devices(), ring_size):
         pytest.skip(
             f"Model {model_name} does not fit in global CB with {mesh_device.get_num_devices()} devices and ring_size={ring_size}"
         )
-    # Set up receiver mapping override if using custom mapping
-    receiver_mapping = (
-        SENDER_RECEIVER_MAPPING_64_CORE_OVERRIDE
-        if custom_core_mapping == 64
-        else SENDER_RECEIVER_MAPPING_80_CORE_OVERRIDE
-        if custom_core_mapping == 80
-        else None
-    )
+    # Set up receiver mapping override if using ring size > 16 (64 or 80)
+    receiver_mapping = generate_sender_receiver_mapping(ring_size // 8) if ring_size > 16 else None
     logger.info(
         f"Testing DRAM Prefetcher + Ring Matmul for model {model_name} with dimensions: {VERIFIED_MODEL_CONFIGS[model_name]}"
     )

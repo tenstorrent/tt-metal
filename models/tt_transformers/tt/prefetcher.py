@@ -14,30 +14,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
 
-# Custom receiver mapping override for testing with 10 receivers per sender (80 total)
-# Keys are sender cores, values are receiver cores for each sender
-SENDER_RECEIVER_MAPPING_64_CORE_OVERRIDE = {
-    (0, 9): [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9)],  # Bank 0
-    (0, 1): [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1)],  # Bank 1
-    (0, 7): [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7)],  # Bank 2
-    (0, 3): [(1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3), (8, 3)],  # Bank 3
-    (8, 0): [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (9, 0), (10, 0)],  # Bank 4
-    (8, 2): [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (9, 2), (10, 2)],  # Bank 5
-    (8, 6): [(0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (9, 6), (10, 6)],  # Bank 6
-    (8, 4): [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (9, 4), (10, 4)],  # Bank 7
-}
-
-SENDER_RECEIVER_MAPPING_80_CORE_OVERRIDE = {
-    (0, 9): [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9), (10, 9)],  # Bank 0
-    (0, 1): [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1), (10, 1)],  # Bank 1
-    (0, 7): [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7), (9, 7), (10, 7)],  # Bank 2
-    (0, 3): [(1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3), (8, 3), (9, 3), (10, 3)],  # Bank 3
-    (8, 0): [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0), (9, 0), (10, 0)],  # Bank 4
-    (8, 2): [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 2), (9, 2), (10, 2)],  # Bank 5
-    (8, 6): [(0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6), (7, 6), (9, 6), (10, 6)],  # Bank 6
-    (8, 4): [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (6, 4), (7, 4), (9, 4), (10, 4)],  # Bank 7
-}
-
 VERIFIED_MODEL_CONFIGS = {
     "Llama-3.2-1B": {"dim": 2048, "hidden_dim": 8192, "n_heads": 32, "n_kv_heads": 8},
     "Llama-3.2-3B": {"dim": 3072, "hidden_dim": 8192, "n_heads": 24, "n_kv_heads": 8},
@@ -50,6 +26,28 @@ VERIFIED_MODEL_CONFIGS = {
     "Gemma3-4B": {"dim": 2560, "hidden_dim": 14336, "n_heads": 20, "n_kv_heads": 20},
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
 }
+
+
+def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
+    """
+    Generate custom sender->receiver mapping for Blackhole prefetcher.
+    Args:
+        num_receivers_per_sender (int): Number of receiver cores per sender (8 for 64 total, 10 for 80 total)
+    Returns:
+        dict: {(sender_x, sender_y): [(rx, ry), ...]} mapping
+    """
+    # Senders in DRAM bank order: left col 0 (rows 9,1,7,3), right col 8 (rows 0,2,6,4)
+    left_senders = [(0, r) for r in [9, 1, 7, 3]]
+    right_senders = [(8, r) for r in [0, 2, 6, 4]]
+    mapping = {}
+    for sx, sy in left_senders:
+        # Left senders: receivers on same row, columns 1 to receivers_per_sender
+        mapping[(sx, sy)] = [(x, sy) for x in range(1, num_receivers_per_sender + 1)]
+    for sx, sy in right_senders:
+        # Right senders: receivers on same row, columns 0-7 (skip 8), then 9-10 if needed
+        cols = [x for x in range(8) if x != sx] + list(range(9, 11))  # 0-7 excluding sender, plus 9-10
+        mapping[(sx, sy)] = [(x, sy) for x in cols[:num_receivers_per_sender]]
+    return mapping
 
 
 def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:
