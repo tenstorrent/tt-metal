@@ -48,18 +48,18 @@ void sdpa_single_core(
 
     // Per-chunk tile counts
     const uint32_t q_chunk_tiles = Sq_chunk_t * head_dim_t;
-    const uint32_t kt_chunk_tiles = head_dim_t * Sk_chunk_t;
+    const uint32_t k_chunk_tiles = Sk_chunk_t * head_dim_t;
     const uint32_t v_chunk_tiles = Sv_chunk_t * head_dim_t;
     const uint32_t out_chunk_tiles = Sq_chunk_t * head_dim_t;
 
-    // DRAM data sizes: Q/Out sized for num_q_chunks, KT/V sized for num_k_chunks
+    // DRAM data sizes: Q/Out sized for num_q_chunks, K/V sized for num_k_chunks
     const uint32_t q_num_tiles = num_q_chunks * q_chunk_tiles;
-    const uint32_t kt_num_tiles = num_k_chunks * kt_chunk_tiles;
+    const uint32_t k_num_tiles = num_k_chunks * k_chunk_tiles;
     const uint32_t v_num_tiles = num_k_chunks * v_chunk_tiles;
     const uint32_t out_num_tiles = num_q_chunks * out_chunk_tiles;
 
     const uint32_t q_data_size = q_num_tiles * single_tile_size;
-    const uint32_t kt_data_size = kt_num_tiles * single_tile_size;
+    const uint32_t k_data_size = k_num_tiles * single_tile_size;
     const uint32_t v_data_size = v_num_tiles * single_tile_size;
     const uint32_t out_data_size = out_num_tiles * single_tile_size;
 
@@ -69,19 +69,19 @@ void sdpa_single_core(
 
     // CB sizes (double-buffered per chunk for Q, KT, V)
     const uint32_t q_cb_size = 2 * q_chunk_data_size;
-    const uint32_t kt_cb_size = 2 * kt_chunk_tiles * single_tile_size;
+    const uint32_t kt_cb_size = 2 * k_chunk_tiles * single_tile_size;
     const uint32_t v_cb_size = 2 * v_chunk_tiles * single_tile_size;
 
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
     distributed::ReplicatedBufferConfig buffer_config_Q{.size = q_data_size};
-    distributed::ReplicatedBufferConfig buffer_config_KT{.size = kt_data_size};
+    distributed::ReplicatedBufferConfig buffer_config_K{.size = k_data_size};
     distributed::ReplicatedBufferConfig buffer_config_V{.size = v_data_size};
     distributed::ReplicatedBufferConfig buffer_config_out{.size = out_data_size};
 
     auto q_dram_buffer = distributed::MeshBuffer::create(buffer_config_Q, dram_config, mesh_device.get());
-    auto kt_dram_buffer = distributed::MeshBuffer::create(buffer_config_KT, dram_config, mesh_device.get());
+    auto k_dram_buffer = distributed::MeshBuffer::create(buffer_config_K, dram_config, mesh_device.get());
     auto v_dram_buffer = distributed::MeshBuffer::create(buffer_config_V, dram_config, mesh_device.get());
     auto out_dram_buffer = distributed::MeshBuffer::create(buffer_config_out, dram_config, mesh_device.get());
 
@@ -204,7 +204,7 @@ void sdpa_single_core(
         num_k_chunks,
     };
     TensorAccessorArgs(*q_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*kt_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*k_dram_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*v_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
@@ -249,10 +249,10 @@ void sdpa_single_core(
 
     // Set kernel arguments
     uint32_t q_addr = q_dram_buffer->address();
-    uint32_t kt_addr = kt_dram_buffer->address();
+    uint32_t k_addr = k_dram_buffer->address();
     uint32_t v_addr = v_dram_buffer->address();
     uint32_t out_addr = out_dram_buffer->address();
-    tt_metal::SetRuntimeArgs(program, reader_id, core, {q_addr, kt_addr, v_addr});
+    tt_metal::SetRuntimeArgs(program, reader_id, core, {q_addr, k_addr, v_addr});
 
     tt_metal::SetRuntimeArgs(program, writer_id, core, {out_addr});
     // NOTE: Note that we never set the runtime arguments for the compute kernel. This is because everything needed has
@@ -265,10 +265,10 @@ void sdpa_single_core(
     std::vector<bfloat16> q_data(q_rows * q_cols, bfloat16(0.0f));
     q_data = tilize_nfaces(q_data, q_rows, q_cols);
 
-    const uint32_t kt_rows = head_dim_t * TILE_HEIGHT;
-    const uint32_t kt_cols = num_k_chunks * Sk_chunk_t * TILE_WIDTH;
-    std::vector<bfloat16> kt_data(kt_rows * kt_cols, bfloat16(0.0f));
-    kt_data = tilize_nfaces(kt_data, kt_rows, kt_cols);
+    const uint32_t k_rows = num_k_chunks * Sk_chunk_t * TILE_HEIGHT;
+    const uint32_t k_cols = head_dim_t * TILE_WIDTH;
+    std::vector<bfloat16> k_data(k_rows * k_cols, bfloat16(0.0f));
+    k_data = tilize_nfaces(k_data, k_rows, k_cols);
 
     const uint32_t v_rows = num_k_chunks * Sv_chunk_t * TILE_HEIGHT;
     const uint32_t v_cols = head_dim_t * TILE_WIDTH;
@@ -276,7 +276,7 @@ void sdpa_single_core(
     v_data = tilize_nfaces(v_data, v_rows, v_cols);
 
     distributed::EnqueueWriteMeshBuffer(cq, q_dram_buffer, q_data, false);
-    distributed::EnqueueWriteMeshBuffer(cq, kt_dram_buffer, kt_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, k_dram_buffer, k_data, false);
     distributed::EnqueueWriteMeshBuffer(cq, v_dram_buffer, v_data, false);
 
     workload.add_program(device_range, std::move(program));
@@ -303,8 +303,8 @@ int main() {
         constexpr uint32_t Sv_chunk_t = 16;
         constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
         constexpr uint32_t subblock_h = 1;
-        constexpr uint32_t num_q_chunks = 2;
-        constexpr uint32_t num_k_chunks = 3;
+        constexpr uint32_t num_q_chunks = 3;
+        constexpr uint32_t num_k_chunks = 5;
 
         sdpa_single_core(
             Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, subblock_h, num_q_chunks, num_k_chunks, mesh_device);
