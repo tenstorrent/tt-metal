@@ -49,6 +49,15 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     const std::vector<CoreCoord> cores =
         corerange_to_cores(all_cores, std::nullopt, nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
+    // Pick the core with biggest coordinates (lexicographic: x then y) and run only on that core
+    const auto max_core_it = std::max_element(cores.begin(), cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return a.x < b.x || (a.x == b.x && a.y < b.y);
+    });
+    TT_FATAL(max_core_it != cores.end(), "cores must be non-empty");
+    const CoreCoord max_core = *max_core_it;
+    const size_t max_core_index = static_cast<size_t>(std::distance(cores.begin(), max_core_it));
+    const CoreRangeSet single_core_set = CoreRangeSet(CoreRange(max_core));
+
     Program program = CreateProgram();
 
     // Page sizes: output and each of 16 input slots (fill absent from first input)
@@ -65,7 +74,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     constexpr uint8_t cb_scratch_id = 0;
     auto scratch_cb_config = CircularBufferConfig(scratch_page_size, {{cb_scratch_id, tt::DataFormat::RawUInt32}})
                                  .set_page_size(cb_scratch_id, scratch_page_size);
-    CreateCircularBuffer(program, all_cores, scratch_cb_config);
+    CreateCircularBuffer(program, single_core_set, scratch_cb_config);
 
     // Compile-time args: num_input_tensors, output_page_size, input_page_sizes[0..15],
     // then output TensorAccessorArgs, then 16 input TensorAccessorArgs (absent filled from first input).
@@ -87,19 +96,19 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_nd_sharded.cpp",
-        all_cores,
+        single_core_set,
         ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Runtime args per core: 17 buffer addresses (output, in0..in15), then shard_id
-    for (size_t c = 0; c < cores.size(); ++c) {
+    // Runtime args for the single core: 17 buffer addresses (output, in0..in15), then shard_id
+    {
         std::vector<uint32_t> runtime_args;
         runtime_args.push_back(output.buffer()->address());
         for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
             const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
             runtime_args.push_back(buf->address());
         }
-        runtime_args.push_back(static_cast<uint32_t>(c));
-        SetRuntimeArgs(program, reader_kernel_id, cores[c], runtime_args);
+        runtime_args.push_back(static_cast<uint32_t>(max_core_index));
+        SetRuntimeArgs(program, reader_kernel_id, max_core, runtime_args);
     }
 
     return cached_program_t{
@@ -109,8 +118,8 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
          .cb_output = 0,
          .reader_kernel_id = reader_kernel_id,
          .writer_kernel_id = 0,
-         .all_cores = all_cores,
-         .cores = cores}};
+         .all_cores = single_core_set,
+         .cores = {max_core}}};
 }
 
 // Updates buffer addresses in the cached program when the same program is reused with
@@ -127,16 +136,23 @@ void ConcatNDShardedProgramFactory::override_runtime_arguments(
     const std::vector<Tensor>& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
 
-    for (size_t c = 0; c < cores.size(); ++c) {
-        std::vector<uint32_t> runtime_args;
-        runtime_args.push_back(output.buffer()->address());
-        for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
-            const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
-            runtime_args.push_back(buf->address());
-        }
-        runtime_args.push_back(static_cast<uint32_t>(c));
-        SetRuntimeArgs(program, shared_vars.reader_kernel_id, cores[c], runtime_args);
+    // Recompute full core list to get shard index for our single core
+    const auto& nd_shard_spec = input_tensors[0].nd_shard_spec().value();
+    const std::vector<CoreCoord> all_cores_list =
+        corerange_to_cores(nd_shard_spec.grid, std::nullopt, nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    const CoreCoord& single_core = cores[0];
+    const auto shard_id_it = std::find(all_cores_list.begin(), all_cores_list.end(), single_core);
+    TT_FATAL(shard_id_it != all_cores_list.end(), "Single core must be in grid");
+    const uint32_t shard_id = static_cast<uint32_t>(std::distance(all_cores_list.begin(), shard_id_it));
+
+    std::vector<uint32_t> runtime_args;
+    runtime_args.push_back(output.buffer()->address());
+    for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
+        const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
+        runtime_args.push_back(buf->address());
     }
+    runtime_args.push_back(shard_id);
+    SetRuntimeArgs(program, shared_vars.reader_kernel_id, single_core, runtime_args);
 }
 
 }  // namespace ttnn::prim
