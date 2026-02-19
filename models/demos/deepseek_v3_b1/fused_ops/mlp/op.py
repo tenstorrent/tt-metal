@@ -232,6 +232,12 @@ class MlpRoutedExpertOp:
         reduce_output_tensor=None,
         reduce_semaphores=None,
         reduce_root_coord=None,
+        # Semaphore IDs (caller-provided, see MlpOp for top-level definitions)
+        mcast_data_sender_semaphore_id=0,
+        mcast_data_receiver_semaphore_id=1,
+        gather_noc0_receiver_semaphore_id=2,
+        gather_noc1_receiver_semaphore_id=3,
+        residual_mcast_receiver_semaphore_id=5,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values."""
 
@@ -264,15 +270,6 @@ class MlpRoutedExpertOp:
         full_device_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
-
-        # ==================================================================
-        # Semaphore IDs (no expert_scale_mcast — fewer needed)
-        # ==================================================================
-        mcast_data_sender_semaphore_id = 0
-        mcast_data_receiver_semaphore_id = 1
-        gather_noc0_receiver_semaphore_id = 2
-        gather_noc1_receiver_semaphore_id = 3
-        residual_mcast_receiver_semaphore_id = 5
 
         # ==================================================================
         # CB indices (skip gate_mm CBs 2-8, gate_proj_cb_index 10, mul_scalar CBs 20-21)
@@ -1054,6 +1051,20 @@ class MlpOp:
     into a single unified kernel invocation.
     """
 
+    # Semaphore IDs (top-level definition)
+    # Gather sems overlap 1:1 with mcast receiver sems (different physical cores).
+    # noc1_num_senders=0 for all gathers, so only noc0 sem is used.
+    MCAST_SENDER_SEM = 0
+    MCAST_DATA_RECEIVER_SEM = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER_SEM on sender core
+    DOWN_PROJ_GATHER_SEM = 1  # sender core
+    RESIDUAL_MCAST_RECEIVER_SEM = 2  # mcast grid; overlaps with AG_GATHER_SEM on sender core
+    AG_GATHER_SEM = 2  # sender core
+    BG_GATHER_SEM = 3  # sender core
+    SHARED_DOWN_MCAST_RECEIVER_SEM = 3  # mcast grid; overlaps with BG_GATHER_SEM on sender core
+    OUTPUT_GATHER_SEM = 4  # sender core
+    SHARED_OUTPUT_MCAST_RECEIVER_SEM = 4  # mcast grid; overlaps with OUTPUT_GATHER_SEM on sender core
+    REDUCE_WORKER_FABRIC_SEM_BASE = 5  # on fabric cores only (5, 6, 7, 8 per worker slot)
+
     @staticmethod
     def golden(
         input_tensor,
@@ -1210,6 +1221,12 @@ class MlpOp:
             reduce_output_tensor=reduce_output_tensor,
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
+            # Semaphore IDs from top-level
+            mcast_data_sender_semaphore_id=MlpOp.MCAST_SENDER_SEM,
+            mcast_data_receiver_semaphore_id=MlpOp.MCAST_DATA_RECEIVER_SEM,
+            gather_noc0_receiver_semaphore_id=MlpOp.DOWN_PROJ_GATHER_SEM,
+            gather_noc1_receiver_semaphore_id=MlpOp.DOWN_PROJ_GATHER_SEM,
+            residual_mcast_receiver_semaphore_id=MlpOp.RESIDUAL_MCAST_RECEIVER_SEM,
         )
 
         # ==================================================================
@@ -1242,6 +1259,17 @@ class MlpOp:
             mcast_grid=routed_ctx.mcast_grid,
             k_parallel=shared_k_parallel,
             n_parallel=shared_n_parallel,
+            # Semaphore IDs from top-level
+            ag_receiver_semaphore_id=MlpOp.AG_GATHER_SEM,
+            bg_receiver_semaphore_id=MlpOp.BG_GATHER_SEM,
+            ag_noc1_receiver_semaphore_id=MlpOp.AG_GATHER_SEM,
+            bg_noc1_receiver_semaphore_id=MlpOp.BG_GATHER_SEM,
+            shared_mcast_sender_semaphore_id=MlpOp.MCAST_SENDER_SEM,
+            shared_mcast_receiver_semaphore_id=MlpOp.SHARED_DOWN_MCAST_RECEIVER_SEM,
+            output_gather_noc0_receiver_semaphore_id=MlpOp.OUTPUT_GATHER_SEM,
+            output_gather_noc1_receiver_semaphore_id=MlpOp.OUTPUT_GATHER_SEM,
+            output_mcast_sender_semaphore_id=MlpOp.MCAST_SENDER_SEM,
+            output_mcast_receiver_semaphore_id=MlpOp.SHARED_OUTPUT_MCAST_RECEIVER_SEM,
         )
 
         # ==================================================================
@@ -1261,75 +1289,33 @@ class MlpOp:
         per_core_descs += shared_per_core
 
         # ==================================================================
-        # Semaphore descriptors (no expert_scale_mcast semaphore)
+        # Semaphore descriptors (5 unique IDs: 0-4)
+        # Gather sems overlap with mcast receiver sems (different physical cores).
+        # Reduce fabric sems (5+) are added later when enable_reduce_to_one.
         # ==================================================================
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.mcast_data_sender_semaphore_id,
+                id=MlpOp.MCAST_SENDER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.mcast_data_receiver_semaphore_id,
+                id=MlpOp.MCAST_DATA_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.gather_noc0_receiver_semaphore_id,
+                id=MlpOp.RESIDUAL_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.gather_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            # No expert_scale_mcast_receiver_semaphore (was semaphore 4 in MoE)
-        ]
-        # Shared expert gather semaphores
-        semaphore_descriptors += [
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.ag_receiver_semaphore_id,
+                id=MlpOp.SHARED_DOWN_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=shared_ctx.bg_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.ag_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.bg_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.shared_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_gather_noc0_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_gather_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=routed_ctx.residual_mcast_receiver_semaphore_id,
+                id=MlpOp.SHARED_OUTPUT_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
@@ -1616,8 +1602,7 @@ class MlpOp:
                             break
 
                     # Build per-core BRISC args for reduce worker cores
-                    # Semaphore IDs for worker→fabric signaling (after shared expert's max of 13)
-                    reduce_worker_fabric_sem_base = 14
+                    reduce_worker_fabric_sem_base = MlpOp.REDUCE_WORKER_FABRIC_SEM_BASE
                     reduce_brisc_per_core_args = []
                     for core in reduce_params["worker_cores_list"]:
                         fabric_core = reduce_params["column_to_fabric_core"][core.x]
