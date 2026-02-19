@@ -87,6 +87,7 @@ Tests:
               device: [3, 1]
 
   - name: TestPacketSizesMesh
+    skip: [watcher]
     enable_flow_control: true
     sync: true
     fabric_setup:
