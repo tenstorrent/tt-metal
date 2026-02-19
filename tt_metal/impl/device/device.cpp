@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -31,6 +32,9 @@
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
+#include "profiler/memory_stats_shm.hpp"
+#include "profiler/shm_tracking_processor.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -70,9 +74,6 @@ uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_typ
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
     this->get_program_cache().set_cache_misses_allowed(allowed);
 }
-
-Device::Device(Device&& other) noexcept = default;
-Device& Device::operator=(Device&& other) noexcept = default;
 
 Device::Device(
     ChipId device_id,
@@ -154,6 +155,9 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});
     }
+
+    // Set device pointer for SHM tracking
+    config.device = this;
 
     // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
@@ -438,6 +442,97 @@ bool Device::initialize(
         return true;
     }
 
+    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
+    const char* shm_disabled = std::getenv("TT_METAL_SHM_TRACKING_DISABLED");
+    if (!shm_disabled || std::string(shm_disabled) != "1") {
+        // Compute composite asic_id for globally unique chip identification
+        // asic_id = (board_id << 8) | asic_location_composite
+        uint64_t asic_id = 0;
+
+        try {
+            // Get cluster descriptor and TTDevice to access board info
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            auto* cluster_desc = cluster.get_cluster_desc();
+            const auto& driver = cluster.get_driver();
+            auto* tt_device = driver->get_tt_device(this->id_);
+
+            if (tt_device && cluster_desc) {
+                // Get board_id and board_type from UMD
+                uint64_t board_id = tt_device->get_board_id();
+                BoardType board_type = cluster_desc->get_board_type(this->id_);
+                uint32_t asic_location_composite = 0;
+
+                // For Galaxy (UBB) boards, encode tray_id into asic_location
+                // Galaxy has 4 trays with 8 chips each, and PCI bus ID encodes this:
+                //   - Upper nibble (bus_id & 0xF0) identifies tray
+                //   - Lower nibble (bus_id & 0x0F) identifies chip within tray
+                if (board_type == BoardType::UBB && tt_device->get_pci_device()) {
+                    uint16_t pci_bus = tt_device->get_pci_device()->get_device_info().pci_bus;
+
+                    // Map PCI bus upper nibble to tray (Wormhole Galaxy convention)
+                    // tray_bus_ids = {0xC0, 0x80, 0x00, 0x40} maps to trays 1-4
+                    static const std::vector<uint16_t> tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};
+                    uint16_t bus_upper = pci_bus & 0xF0;
+                    auto tray_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_upper);
+
+                    if (tray_it != tray_bus_ids.end()) {
+                        uint32_t tray_id = static_cast<uint32_t>(tray_it - tray_bus_ids.begin()) + 1;  // 1-4
+                        uint32_t ubb_asic_id = pci_bus & 0x0F;                                         // 0-15
+
+                        // Encode: bits 4-7 = tray_id (0-15), bits 0-3 = ubb_asic_id (0-15)
+                        asic_location_composite = (tray_id << 4) | ubb_asic_id;
+                    } else {
+                        // Fallback: use asic_location from chip_info
+                        asic_location_composite = tt_device->get_chip_info().asic_location;
+                    }
+                } else {
+                    // Non-Galaxy systems: use asic_location from chip_info (0 for MMIO, 1 for remote, etc.)
+                    asic_location_composite = tt_device->get_chip_info().asic_location;
+                }
+
+                // Compute composite asic_id
+                asic_id = (board_id << 8) | asic_location_composite;
+
+                log_debug(
+                    tt::LogMetal,
+                    "Device {}: board_id=0x{:x}, asic_location_composite=0x{:x} (board_type={}) -> asic_id=0x{:x} for "
+                    "SHM tracking",
+                    this->id_,
+                    board_id,
+                    asic_location_composite,
+                    static_cast<int>(board_type),
+                    asic_id);
+            } else {
+                // Fallback: use device_id
+                asic_id = this->id_;
+                log_warning(
+                    tt::LogMetal,
+                    "Could not get TTDevice or ClusterDescriptor for device {}, using device_id as asic_id",
+                    this->id_);
+            }
+        } catch (const std::exception& e) {
+            // If any error, use device_id as fallback
+            log_warning(
+                tt::LogMetal,
+                "Error getting asic_id for device {}: {}. Using device_id as fallback.",
+                this->id_,
+                e.what());
+            asic_id = this->id_;
+        }
+
+        shm_stats_provider_ = std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_);
+        log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
+
+        // Register ShmTrackingProcessor globally once (when first device with SHM is created)
+        static bool shm_processor_registered = false;
+        if (!shm_processor_registered) {
+            tt::tt_metal::GraphTracker::instance().push_processor(
+                std::make_shared<tt::tt_metal::ShmTrackingProcessor>());
+            log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
+            shm_processor_registered = true;
+        }
+    }
+
     this->initialized_ = true;
 
     return true;
@@ -458,6 +553,10 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
+
+    // Clean up shared memory stats provider
+    this->shm_stats_provider_.reset();
+
     this->initialized_ = false;
 
     return true;
@@ -855,5 +954,75 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+
+// Program tracking for accurate CB memory reporting
+void Device::register_program(detail::ProgramImpl* program) {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    active_programs_.insert(program);
+}
+
+void Device::unregister_program(detail::ProgramImpl* program) {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    active_programs_.erase(program);
+}
+
+uint64_t Device::get_total_cb_allocated() const {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+
+    // For PHYSICAL CB tracking accounting for address reuse:
+    // Collect L1 regions per core and merge overlapping addresses
+    // This handles cached/traced programs that share the same physical L1 addresses on the same core
+
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
+
+    for (const auto* program : active_programs_) {
+        size_t num_devices = program->get_num_cb_devices();
+
+        // Get L1 regions per core for this program on this device
+        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
+
+        // Merge into device-wide map
+        for (const auto& [core, regions] : program_regions) {
+            auto& core_regions = device_regions_per_core[core];
+            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
+        }
+    }
+
+    // Merge overlapping regions per core to get actual physical usage
+    uint64_t total_physical = 0;
+
+    for (auto& [core, regions] : device_regions_per_core) {
+        if (regions.empty()) {
+            continue;
+        }
+
+        // Sort by start address
+        std::sort(regions.begin(), regions.end());
+
+        // Merge overlapping ranges
+        std::vector<std::pair<uint64_t, uint64_t>> merged;
+        merged.push_back(regions[0]);
+
+        for (size_t i = 1; i < regions.size(); i++) {
+            auto& last = merged.back();
+            const auto& current = regions[i];
+
+            if (current.first <= last.second) {
+                // Overlapping - merge
+                last.second = std::max(last.second, current.second);
+            } else {
+                // Non-overlapping - add new region
+                merged.push_back(current);
+            }
+        }
+
+        // Sum merged regions for this core
+        for (const auto& [start, end] : merged) {
+            total_physical += (end - start);
+        }
+    }
+
+    return total_physical;
+}
 
 }  // namespace tt::tt_metal
