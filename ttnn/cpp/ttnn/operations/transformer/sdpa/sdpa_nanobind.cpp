@@ -310,6 +310,7 @@ void bind_sdpa(nb::module_& mod) {
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
+            is_causal (bool): Whether to use causal attention masking. Defaults to True.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -346,7 +347,8 @@ void bind_sdpa(nb::module_& mod) {
                const MeshDevice& mesh_device,
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               CoreCoord ccl_core_grid_offset) {
+               CoreCoord ccl_core_grid_offset,
+               bool is_causal) {
                 auto outputs = self(
                     input_tensor_q,
                     input_tensor_k,
@@ -367,6 +369,7 @@ void bind_sdpa(nb::module_& mod) {
                     topology,
                     subdevice_id,
                     ccl_core_grid_offset,
+                    is_causal,
                     scale,
                     compute_kernel_config);
                 return outputs;
@@ -392,7 +395,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("topology"),
             nb::arg("subdevice_id") = nb::none(),
-            nb::arg("ccl_core_grid_offset")});
+            nb::arg("ccl_core_grid_offset"),
+            nb::arg("is_causal").noconvert() = true});
 
     const auto* mla_doc =
         R"doc(

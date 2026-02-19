@@ -169,6 +169,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const CoreCoord ccl_core_grid_offset,
+    bool is_causal,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
@@ -191,6 +192,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         topology,
         ccl_core_grid_offset,
         subdevice_id,
+        is_causal,
         scale,
         compute_kernel_config);
     return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
