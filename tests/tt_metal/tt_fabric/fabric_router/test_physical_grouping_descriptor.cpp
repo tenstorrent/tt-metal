@@ -664,7 +664,7 @@ TEST(PhysicalGroupingDescriptorTests, DuplicateNamesAreUniquified) {
         std::set<std::string> all_names;
         auto all_groupings = desc.get_all_groupings();
         for (const auto& grouping : all_groupings) {
-            EXPECT_TRUE(all_names.find(grouping.name) == all_names.end()) << "Duplicate name found: " << grouping.name;
+            EXPECT_FALSE(all_names.contains(grouping.name)) << "Duplicate name found: " << grouping.name;
             all_names.insert(grouping.name);
         }
     });

@@ -364,7 +364,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         // Corner positions are determined by the mesh dimensions, not ASIC locations
         // For 1D meshes, endpoints can have multiple orientations (e.g., 1x4: first item has NW+SW, last has NE+SE)
         // For 1x1 mesh, the single item has all 4 orientations
-        if (dims.size() >= 1 && info.items.size() > 0) {
+        if (!dims.empty() && !info.items.empty()) {
             size_t total_items = info.items.size();
 
             if (dims.size() == 1) {
@@ -427,7 +427,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
                         size_t nw_idx = 0;
                         size_t ne_idx = static_cast<size_t>(cols - 1);
                         size_t sw_idx = static_cast<size_t>((rows - 1) * cols);
-                        size_t se_idx = static_cast<size_t>((rows - 1) * cols + (cols - 1));
+                        size_t se_idx = static_cast<size_t>(((rows - 1) * cols) + (cols - 1));
 
                         // Set corner orientations based on row-major mesh position
                         if (nw_idx < total_items) {
@@ -533,14 +533,14 @@ void PhysicalGroupingDescriptor::uniquify_duplicate_names(proto::PhysicalGroupin
         }
 
         // If this name is already used, uniquify it
-        if (used_names.find(current_name) != used_names.end()) {
+        if (used_names.contains(current_name)) {
             // Generate unique name with ID suffix
             uint32_t& counter = name_counters[current_name];
             std::string unique_name;
             do {
                 counter++;
                 unique_name = fmt::format("{}_{}", current_name, counter);
-            } while (used_names.find(unique_name) != used_names.end());
+            } while (used_names.contains(unique_name));
 
             // Update the proto with the unique name
             grouping->set_name(unique_name);
@@ -566,7 +566,7 @@ void PhysicalGroupingDescriptor::validate_unique_names(
             continue;  // Empty names are caught by other validation
         }
 
-        if (names.find(name) != names.end()) {
+        if (names.contains(name)) {
             errors.push_back(fmt::format(
                 "Grouping name '{}' appears multiple times (internal error: uniquification failed).", name));
         }
@@ -623,7 +623,7 @@ uint32_t PhysicalGroupingDescriptor::calculate_dependent_grouping_asic_count(
 
         if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
             // Skip preset names that don't exist - they can be auto-populated later
-            if (preset_names.find(item.grouping_name) != preset_names.end()) {
+            if (preset_names.contains(item.grouping_name)) {
                 auto ref_it = groupings_by_name.find(item.grouping_name);
                 if (ref_it == groupings_by_name.end() || ref_it->second.empty()) {
                     // Preset name doesn't exist yet - skip it (will be auto-populated)
@@ -667,8 +667,7 @@ void PhysicalGroupingDescriptor::populate() {
             if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
                 // Only track dependencies on groupings that exist or are not preset names
                 // Preset names can be auto-populated, so don't treat them as blocking dependencies
-                if (groupings_by_name.find(item.grouping_name) != groupings_by_name.end() ||
-                    preset_names.find(item.grouping_name) == preset_names.end()) {
+                if (groupings_by_name.contains(item.grouping_name) || !preset_names.contains(item.grouping_name)) {
                     deps.insert(item.grouping_name);
                 }
             }
@@ -690,7 +689,7 @@ void PhysicalGroupingDescriptor::populate() {
             for (const auto& item : grouping.items) {
                 if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
                     has_any_refs = true;
-                    if (preset_names.find(item.grouping_name) == preset_names.end()) {
+                    if (!preset_names.contains(item.grouping_name)) {
                         only_preset_refs = false;
                         break;
                     }
@@ -900,7 +899,7 @@ void PhysicalGroupingDescriptor::validate_no_cycles(std::vector<std::string>& er
         auto deps_it = dependencies.find(node);
         if (deps_it != dependencies.end()) {
             for (const auto& dep : deps_it->second) {
-                if (all_grouping_types.find(dep) != all_grouping_types.end()) {
+                if (all_grouping_types.contains(dep)) {
                     if (has_cycle(dep)) {
                         return true;
                     }
@@ -988,7 +987,7 @@ void PhysicalGroupingDescriptor::validate_required_groupings(
 
     for (const auto& grouping : proto.groupings()) {
         if (grouping.has_custom_type()) {
-            std::string custom_type = grouping.custom_type();
+            const std::string& custom_type = grouping.custom_type();
             if (custom_type == "hosts") {
                 hosts_count++;
             } else if (custom_type == "meshes" || custom_type == "MESH") {
@@ -1310,7 +1309,7 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
         progress_made = false;
 
         for (GlobalNodeId graph_id : mesh_graph_descriptor.all_graphs()) {
-            if (processed_graphs.find(graph_id) != processed_graphs.end()) {
+            if (processed_graphs.contains(graph_id)) {
                 continue;  // Already processed
             }
 
@@ -1404,8 +1403,7 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
         const std::string& graph_name = graph_instance.name;
 
         // Skip if already processed (same name/type)
-        if (mgd_grouping_infos.find(graph_type) != mgd_grouping_infos.end() &&
-            mgd_grouping_infos[graph_type].find(graph_name) != mgd_grouping_infos[graph_type].end()) {
+        if (mgd_grouping_infos.contains(graph_type) && mgd_grouping_infos.at(graph_type).contains(graph_name)) {
             continue;
         }
 
@@ -1849,7 +1847,7 @@ struct FlattenedMesh {
                     {
                         const int32_t right_col_offset = cols - 1;
                         for (int32_t row = FIRST_ROW; row < rows; ++row) {
-                            add_node_at_index(row * cols + right_col_offset);
+                            add_node_at_index((row * cols) + right_col_offset);
                         }
                     }
                     break;
@@ -1930,7 +1928,7 @@ void join_two_adjacent_meshes(
 // - Empty dims: default to single row [1, total_items]
 // - Single dim: treat as column count [1, dims[0]]
 // - Two dims: already normalized [rows, cols]
-static std::vector<int32_t> normalize_dims(const std::vector<int32_t>& dims, size_t total_items) {
+std::vector<int32_t> normalize_dims(const std::vector<int32_t>& dims, size_t total_items) {
     constexpr int32_t SINGLE_ROW = 1;
     constexpr size_t SINGLE_DIM = 1;
 
@@ -1979,7 +1977,7 @@ AdjacencyGraph<FlattenedMeshNodeInfo> join_mesh_level(
     // Step 2: Connect adjacent meshes along their boundaries
     for (int32_t row = 0; row < rows; ++row) {
         for (int32_t col = 0; col < cols; ++col) {
-            const size_t mesh_idx = static_cast<size_t>(row * cols + col);
+            const size_t mesh_idx = static_cast<size_t>((row * cols) + col);
             const bool has_right_neighbor = (col + 1 < cols);
             const bool has_bottom_neighbor = (row + 1 < rows);
 
@@ -1992,7 +1990,7 @@ AdjacencyGraph<FlattenedMeshNodeInfo> join_mesh_level(
 
             // Connect to bottom neighbor (vertical connection)
             if (has_bottom_neighbor) {
-                const size_t bottom_mesh_idx = static_cast<size_t>((row + 1) * cols + col);
+                const size_t bottom_mesh_idx = static_cast<size_t>(((row + 1) * cols) + col);
                 join_two_adjacent_meshes(
                     adj_set, meshes[mesh_idx], meshes[bottom_mesh_idx], AdjacencyDirection::A_ABOVE_B);
             }
@@ -2008,14 +2006,14 @@ AdjacencyGraph<FlattenedMeshNodeInfo> join_mesh_level(
 }
 
 // Helper to extract tray ID from grouping name (e.g., "tray_1" -> 1, "TRAY_2" -> 2)
-static uint32_t extract_tray_id(const std::string& grouping_name) {
+uint32_t extract_tray_id(const std::string& grouping_name) {
     const std::string lower_name = [&]() {
         std::string result = grouping_name;
         std::transform(result.begin(), result.end(), result.begin(), ::tolower);
         return result;
     }();
 
-    if (lower_name.find("tray_") == 0) {
+    if (lower_name.starts_with("tray_")) {
         try {
             return static_cast<uint32_t>(std::stoul(lower_name.substr(5)));
         } catch (...) {
@@ -2085,6 +2083,7 @@ FlattenedMesh build_flattened_mesh_for_item(
 
     // Multi-item grouping: build sub-meshes recursively
     std::vector<FlattenedMesh> sub_meshes;
+    sub_meshes.reserve(sub_grouping.items.size());
     for (const auto& sub_item : sub_grouping.items) {
         sub_meshes.push_back(build_flattened_mesh_for_item(sub_item, next_global_id, cache, desc, new_path));
     }
@@ -2117,6 +2116,7 @@ AdjacencyGraph<FlattenedMeshNodeInfo> PhysicalGroupingDescriptor::build_flattene
     // Build flattened mesh for each item in the grouping
     uint32_t next_node_id = 0;
     std::vector<FlattenedMesh> meshes;
+    meshes.reserve(grouping.items.size());
     std::vector<std::string> initial_path = {grouping.name};
     for (const auto& item : grouping.items) {
         meshes.push_back(
@@ -2173,6 +2173,7 @@ std::string build_tray_mapping_error_message(
     // Helper to extract and sort locations from nodes
     auto get_locations = [](const std::vector<FlattenedMeshNodeInfo>& nodes) {
         std::vector<uint32_t> locations;
+        locations.reserve(nodes.size());
         for (const auto& node : nodes) {
             locations.push_back(node.asic_location);
         }
@@ -2188,7 +2189,7 @@ std::string build_tray_mapping_error_message(
 
     std::map<uint32_t, std::vector<FlattenedMeshNodeInfo>> unmapped_by_tray;
     for (const auto& node : flat_mesh.get_nodes()) {
-        if (node.tray_id != 0 && node.asic_location != 0 && mapped_nodes.find(node) == mapped_nodes.end()) {
+        if (node.tray_id != 0 && node.asic_location != 0 && !mapped_nodes.contains(node)) {
             unmapped_by_tray[node.tray_id].push_back(node);
         }
     }
@@ -2214,7 +2215,7 @@ std::string build_tray_mapping_error_message(
     // Separate missing trays from mismatches
     std::vector<uint32_t> missing_trays, mismatch_trays;
     for (const auto& [tray_id, _] : unmapped_by_tray) {
-        (physical_trays.find(tray_id) != physical_trays.end() ? mismatch_trays : missing_trays).push_back(tray_id);
+        (physical_trays.contains(tray_id) ? mismatch_trays : missing_trays).push_back(tray_id);
     }
     std::sort(missing_trays.begin(), missing_trays.end());
     std::sort(mismatch_trays.begin(), mismatch_trays.end());
