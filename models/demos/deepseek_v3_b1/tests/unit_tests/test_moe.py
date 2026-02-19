@@ -1113,7 +1113,8 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-def test_moe_fused_with_reduce(bh_2d_mesh_device):
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
+def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -1136,7 +1137,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device):
 
     M = 1
     K = 7168
-    use_hardcoded_expert_index = True
 
     logger.info(f"Testing fused MoE with reduce: K={K}")
 
