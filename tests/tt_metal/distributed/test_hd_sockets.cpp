@@ -30,6 +30,43 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 namespace tt::tt_metal::distributed {
 
+bool is_device_coord_mmio_mapped(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, const MeshCoordinate& device_coord);
+
+namespace {
+
+constexpr uint32_t kBenchmarkTargetTrayId = 1;
+constexpr uint32_t kBenchmarkTargetAsicLocation = 6;
+
+std::optional<MeshCoordinate> find_target_mmio_coord(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    uint32_t target_tray_id,
+    uint32_t target_asic_location) {
+    auto physical_system_descriptor = PhysicalSystemDescriptor(
+        MetalContext::instance().get_cluster().get_driver(),
+        MetalContext::instance().get_distributed_context_ptr(),
+        &MetalContext::instance().hal(),
+        MetalContext::instance().rtoptions(),
+        true);
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
+        if (!is_device_coord_mmio_mapped(mesh_device, coord)) {
+            continue;
+        }
+        auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
+        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
+        if (*asic_desc.tray_id == target_tray_id && *asic_desc.asic_location == target_asic_location) {
+            return coord;
+        }
+    }
+
+    return std::nullopt;
+}
+
+}  // namespace
+
 void test_h2d_socket(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -353,7 +390,7 @@ TEST_F(HDSocketFixture, D2HSocketThroughputBenchmark) {
         1024UL * 1024 * 1024  // 1GB
     };
 
-    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
+    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
     std::vector<std::size_t> fifo_sizes = {
         1024,
         2048,
@@ -386,36 +423,14 @@ TEST_F(HDSocketFixture, D2HSocketThroughputBenchmark) {
         return page_size * std::max<std::size_t>(pages, 1);
     };
 
-    // Select a specific sender ASIC by physical location.
-    constexpr uint32_t target_tray_id = 1;
-    constexpr uint32_t target_asic_location = 6;
-    auto physical_system_descriptor = PhysicalSystemDescriptor(
-        MetalContext::instance().get_cluster().get_driver(),
-        MetalContext::instance().get_distributed_context_ptr(),
-        &MetalContext::instance().hal(),
-        MetalContext::instance().rtoptions(),
-        true);
-
-    // Find MMIO-mapped device matching tray/location.
-    std::optional<MeshCoordinate> sender_coord_opt;
-    const auto& control_plane = MetalContext::instance().get_control_plane();
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (!is_device_coord_mmio_mapped(mesh_device_, coord)) {
-            continue;
-        }
-        auto fabric_node_id = mesh_device_->get_fabric_node_id(coord);
-        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
-        auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
-        if (*asic_desc.tray_id == target_tray_id && *asic_desc.asic_location == target_asic_location) {
-            sender_coord_opt = coord;
-            break;
-        }
-    }
+    std::optional<MeshCoordinate> sender_coord_opt =
+        find_target_mmio_coord(mesh_device_, kBenchmarkTargetTrayId, kBenchmarkTargetAsicLocation);
     ASSERT_TRUE(sender_coord_opt.has_value())
-        << "No MMIO-mapped device found for Tray ID " << target_tray_id << " ASIC Location " << target_asic_location;
+        << "No MMIO-mapped device found for Tray ID " << kBenchmarkTargetTrayId << " ASIC Location "
+        << kBenchmarkTargetAsicLocation;
     auto sender_coord = sender_coord_opt.value();
     MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
-    std::cout << "# sender target tray=" << target_tray_id << " asic_location=" << target_asic_location
+    std::cout << "# sender target tray=" << kBenchmarkTargetTrayId << " asic_location=" << kBenchmarkTargetAsicLocation
               << " mesh_coord=" << sender_coord << std::endl;
 
     std::cout << "page_size,socket_fifo_size,total_data,data_size,pages_per_iter,"
@@ -642,19 +657,15 @@ TEST_F(HDSocketFixture, D2HSocketLatencyBenchmark) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
     std::vector<std::size_t> fifo_sizes = {1024, 4096, 16384, 65536, 512UL * 1024 * 1024};
     uint32_t num_iterations = 100;
 
-    // Find first MMIO-mapped device
-    std::optional<MeshCoordinate> lat_sender_opt;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
-            lat_sender_opt = coord;
-            break;
-        }
-    }
-    ASSERT_TRUE(lat_sender_opt.has_value()) << "No MMIO-mapped device found";
+    std::optional<MeshCoordinate> lat_sender_opt =
+        find_target_mmio_coord(mesh_device_, kBenchmarkTargetTrayId, kBenchmarkTargetAsicLocation);
+    ASSERT_TRUE(lat_sender_opt.has_value())
+        << "No MMIO-mapped device found for Tray ID " << kBenchmarkTargetTrayId << " ASIC Location "
+        << kBenchmarkTargetAsicLocation;
     auto sender_coord = lat_sender_opt.value();
     MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
 
@@ -714,7 +725,7 @@ TEST_F(HDSocketFixture, H2DSocketThroughputBenchmark) {
         1024UL * 1024 * 1024  // 1GB
     };
 
-    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
     // H2D FIFOs are in L1 (limited to ~1.4MB), not host RAM like D2H
     // Cap at 512KB to leave room for recv buffer, measurement buffer, and kernel overhead
     std::vector<std::size_t> fifo_sizes = {
@@ -738,14 +749,11 @@ TEST_F(HDSocketFixture, H2DSocketThroughputBenchmark) {
         return page_size * std::max<std::size_t>(pages, 1);
     };
 
-    std::optional<MeshCoordinate> recv_coord_opt;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
-            recv_coord_opt = coord;
-            break;
-        }
-    }
-    ASSERT_TRUE(recv_coord_opt.has_value()) << "No MMIO-mapped device found";
+    std::optional<MeshCoordinate> recv_coord_opt =
+        find_target_mmio_coord(mesh_device_, kBenchmarkTargetTrayId, kBenchmarkTargetAsicLocation);
+    ASSERT_TRUE(recv_coord_opt.has_value())
+        << "No MMIO-mapped device found for Tray ID " << kBenchmarkTargetTrayId << " ASIC Location "
+        << kBenchmarkTargetAsicLocation;
     auto recv_coord = recv_coord_opt.value();
     MeshCoreCoord recv_core = {recv_coord, CoreCoord(0, 0)};
 
@@ -871,14 +879,11 @@ TEST_F(HDSocketFixture, D2HSocketPingBenchmark) {
     std::vector<std::size_t> fifo_sizes = {4096};
     uint32_t num_iterations = 100;
 
-    std::optional<MeshCoordinate> ping_sender_opt;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
-            ping_sender_opt = coord;
-            break;
-        }
-    }
-    ASSERT_TRUE(ping_sender_opt.has_value()) << "No MMIO-mapped device found";
+    std::optional<MeshCoordinate> ping_sender_opt =
+        find_target_mmio_coord(mesh_device_, kBenchmarkTargetTrayId, kBenchmarkTargetAsicLocation);
+    ASSERT_TRUE(ping_sender_opt.has_value())
+        << "No MMIO-mapped device found for Tray ID " << kBenchmarkTargetTrayId << " ASIC Location "
+        << kBenchmarkTargetAsicLocation;
     auto sender_coord = ping_sender_opt.value();
     MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
 
@@ -1010,14 +1015,11 @@ TEST_F(HDSocketFixture, H2DSocketPingBenchmark) {
     std::size_t fifo_size = 4096;
     uint32_t num_iterations = 100;
 
-    std::optional<MeshCoordinate> recv_coord_opt;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
-            recv_coord_opt = coord;
-            break;
-        }
-    }
-    ASSERT_TRUE(recv_coord_opt.has_value()) << "No MMIO-mapped device found";
+    std::optional<MeshCoordinate> recv_coord_opt =
+        find_target_mmio_coord(mesh_device_, kBenchmarkTargetTrayId, kBenchmarkTargetAsicLocation);
+    ASSERT_TRUE(recv_coord_opt.has_value())
+        << "No MMIO-mapped device found for Tray ID " << kBenchmarkTargetTrayId << " ASIC Location "
+        << kBenchmarkTargetAsicLocation;
     auto recv_coord = recv_coord_opt.value();
     MeshCoreCoord recv_core = {recv_coord, CoreCoord(0, 0)};
 
@@ -1250,18 +1252,15 @@ TEST_F(HDSocketFixture, H2DSocketLatencyBenchmark) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
     std::vector<std::size_t> fifo_sizes = {1024, 4096, 16384, 65536, 262144, 524288};
     uint32_t num_iterations = 100;
 
-    std::optional<MeshCoordinate> recv_coord_opt;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
-            recv_coord_opt = coord;
-            break;
-        }
-    }
-    ASSERT_TRUE(recv_coord_opt.has_value()) << "No MMIO-mapped device found";
+    std::optional<MeshCoordinate> recv_coord_opt =
+        find_target_mmio_coord(mesh_device_, kBenchmarkTargetTrayId, kBenchmarkTargetAsicLocation);
+    ASSERT_TRUE(recv_coord_opt.has_value())
+        << "No MMIO-mapped device found for Tray ID " << kBenchmarkTargetTrayId << " ASIC Location "
+        << kBenchmarkTargetAsicLocation;
     auto recv_coord = recv_coord_opt.value();
     MeshCoreCoord recv_core = {recv_coord, CoreCoord(0, 0)};
 
