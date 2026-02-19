@@ -1,6 +1,10 @@
 name: "[Tier 2] Models Unit Tests"
 
 on:
+  push:
+    branches: ["models-ci/model_unit_pipeline"]
+    paths:
+      - ".github/workflows/models-t2-unit-tests.yaml"
   workflow_dispatch:
     inputs:
       model:
