@@ -88,6 +88,7 @@ class TtSDXLPipeline(LightweightModule):
         self.image_processing_compiled = False
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
+        self._traces_released = False  # Track if traces have been released for safe cleanup
 
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
         if pipeline_config.is_galaxy:
@@ -454,10 +455,10 @@ class TtSDXLPipeline(LightweightModule):
         prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
 
         all_prompt_embeds_torch = torch.cat(
-            [torch.stack(negative_prompt_embeds, dim=0), torch.stack(prompt_embeds, dim=0)], dim=1
+            [torch.cat(negative_prompt_embeds, dim=0), torch.cat(prompt_embeds, dim=0)], dim=0
         )
         torch_add_text_embeds = torch.cat(
-            [torch.stack(negative_pooled_prompt_embeds, dim=0), torch.stack(pooled_prompt_embeds, dim=0)], dim=1
+            [torch.cat(negative_pooled_prompt_embeds, dim=0), torch.cat(pooled_prompt_embeds, dim=0)], dim=0
         )
 
         profiler.end("encode_prompts")
@@ -475,8 +476,10 @@ class TtSDXLPipeline(LightweightModule):
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
+        start_latents=None,
     ):
         # Generate user input tensors for the TT model.
+        # For img2img workflows, pass start_latents instead of start_latent_seed.
 
         # Validate timesteps/sigmas at the beginning if custom values are provided
         if timesteps is not None or sigmas is not None:
@@ -496,26 +499,58 @@ class TtSDXLPipeline(LightweightModule):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        # Generate random latents
-        latents_list = []
-        for index in range(self.batch_size):
-            if start_latent_seed is not None:
-                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-            latents = self.torch_pipeline.prepare_latents(
-                1,
-                num_channels_latents,
-                height,
-                width,
-                all_prompt_embeds_torch.dtype,
-                self.cpu_device,
-                None,
-                None,
-            )
-            B, C, H, W = latents.shape  # 1, 4, 128, 128
-            latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
-            latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            latents_list.append(latents)
-        tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        # Validate that we don't have both start_latents and start_latent_seed
+        if start_latents is not None and start_latent_seed is not None:
+            raise ValueError("Cannot specify both start_latents and start_latent_seed. Choose one.")
+
+        # Use provided latents for img2img, or generate random latents for txt2img
+        if start_latents is not None:
+            # Img2img mode: use provided latents
+            logger.info("Using provided start_latents for img2img mode")
+
+            # Validate latent shape
+            if start_latents.dim() != 4:
+                raise ValueError(f"start_latents must be 4D tensor [B, C, H, W], got shape {start_latents.shape}")
+
+            B, C, H, W = start_latents.shape
+            if C != num_channels_latents:
+                raise ValueError(f"start_latents channels ({C}) must match unet in_channels ({num_channels_latents})")
+
+            # Convert to expected format: [B, C, H, W] -> [B, 1, H*W, C]
+            latents = start_latents.permute(0, 2, 3, 1)  # [B, H, W, C]
+            tt_latents = latents.reshape(B, 1, H * W, C)  # [B, 1, H*W, C]
+
+            # For img2img, we expect batch_size to match
+            if B != self.batch_size:
+                logger.warning(
+                    f"start_latents batch size ({B}) doesn't match pipeline batch_size ({self.batch_size}). Using latent batch size."
+                )
+        else:
+            # Txt2img mode: generate random latents
+            logger.info("Generating random latents for txt2img mode")
+            latents_list = []
+            for index in range(self.batch_size):
+                # Create generator from seed if provided for reproducibility
+                # Using torch.Generator() ensures consistent results with original implementation
+                generator = None
+                if start_latent_seed is not None:
+                    generator = torch.Generator()
+                    generator.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+                latents = self.torch_pipeline.prepare_latents(
+                    1,
+                    num_channels_latents,
+                    height,
+                    width,
+                    all_prompt_embeds_torch.dtype,
+                    self.cpu_device,
+                    generator,
+                    None,
+                )
+                B, C, H, W = latents.shape  # 1, 4, 128, 128
+                latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
+                latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+                latents_list.append(latents)
+            tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
@@ -547,6 +582,8 @@ class TtSDXLPipeline(LightweightModule):
             tt_prompt_embeds=tt_prompt_embeds,
             tt_text_embeds=tt_add_text_embeds,
             tt_time_ids=torch_add_time_ids,
+            all_prompt_embeds_torch=all_prompt_embeds_torch,
+            torch_add_text_embeds=torch_add_text_embeds,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_latents")
@@ -576,6 +613,12 @@ class TtSDXLPipeline(LightweightModule):
     def generate_images(self, return_latents=False):
         # SDXL inference run.
         # If return_latents=True, skip VAE decoding and return latents instead of images
+
+        # WORKAROUND: Re-capture trace if it was invalidated due to embedding changes
+        if self.pipeline_config.capture_trace and not self.image_processing_compiled:
+            logger.info("Re-capturing trace with updated embeddings...")
+            self.compile_image_processing()
+
         assert self.image_processing_compiled, "Image processing is not compiled"
         assert self.generated_input_tensors, "Input tensors are not re/generated"
 
@@ -684,11 +727,16 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("load_tt_componenets")
 
-    def __allocate_device_tensors(self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids):
+    def __allocate_device_tensors(
+        self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids, all_prompt_embeds_torch, torch_add_text_embeds
+    ):
         # Allocation of device tensors for the input data.
-        if not self.allocated_device_tensors:
-            profiler.start("allocate_input_tensors")
+        # First call: allocate device tensors
+        # Subsequent calls: copy data to existing tensors (in-place update for trace compatibility)
+        profiler.start("allocate_input_tensors")
 
+        if not self.allocated_device_tensors:
+            # First allocation - create device tensors
             self.tt_latents_device = ttnn.allocate_tensor_on_device(
                 tt_latents.shape,
                 tt_latents.dtype,
@@ -697,20 +745,24 @@ class TtSDXLPipeline(LightweightModule):
                 ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.tt_prompt_embeds_device = ttnn.allocate_tensor_on_device(
-                tt_prompt_embeds[0].shape,
-                tt_prompt_embeds[0].dtype,
-                tt_prompt_embeds[0].layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
+            # Create device tensor with mesh mapper
+            self.tt_prompt_embeds_device = ttnn.from_torch(
+                all_prompt_embeds_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
             )
 
-            self.tt_text_embeds_device = ttnn.allocate_tensor_on_device(
-                tt_text_embeds[0].shape,
-                tt_text_embeds[0].dtype,
-                tt_text_embeds[0].layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
+            # Create device tensor with mesh mapper
+            self.tt_text_embeds_device = ttnn.from_torch(
+                torch_add_text_embeds,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
             )
 
             self.tt_time_ids_device = ttnn.from_torch(
@@ -722,20 +774,32 @@ class TtSDXLPipeline(LightweightModule):
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
             )
             self.tt_time_ids_device = ttnn.squeeze(self.tt_time_ids_device, dim=0)
-            ttnn.synchronize_device(self.ttnn_device)
-            profiler.end("prepare_input_tensors")
 
             self.allocated_device_tensors = True
+            logger.info("Allocated device tensors (first call)")
         else:
-            tt_time_ids_host = ttnn.from_torch(
-                tt_time_ids,
+            # Subsequent calls - copy data to existing device tensors (in-place update)
+            # Create host tensors with mesh_mapper (no device placement)
+            logger.info("Updating device tensors in-place (subsequent call)")
+            tt_prompt_embeds_host = ttnn.from_torch(
+                all_prompt_embeds_torch,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
             )
-            tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
+            tt_text_embeds_host = ttnn.from_torch(
+                torch_add_text_embeds,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+            )
 
-            ttnn.copy_host_to_device_tensor(tt_time_ids_host, self.tt_time_ids_device)
+            # Copy to existing device tensors (no new allocation)
+            ttnn.copy_host_to_device_tensor(tt_prompt_embeds_host, self.tt_prompt_embeds_device)
+            ttnn.copy_host_to_device_tensor(tt_text_embeds_host, self.tt_text_embeds_device)
+
+        ttnn.synchronize_device(self.ttnn_device)
+        profiler.end("allocate_input_tensors")
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
         # Instantiation of user host input tensors for the TT model.
@@ -771,7 +835,7 @@ class TtSDXLPipeline(LightweightModule):
     def __trace_image_processing(self):
         # Helper method for image processing trace capture.
 
-        self.__release_trace()
+        self.release_traces()  # Release any existing traces before capturing new ones
 
         logger.info("Capturing model trace...")
         profiler.start("capture_model_trace")
@@ -798,9 +862,17 @@ class TtSDXLPipeline(LightweightModule):
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
+        self._traces_released = False  # New traces captured, reset flag
 
-    def __release_trace(self):
-        # Helper method for trace release.
+    def release_traces(self):
+        """Release captured traces before device cleanup.
+
+        This method is safe to call multiple times - it tracks release state
+        to prevent double-release errors and segfaults during shutdown.
+        """
+        if self._traces_released:
+            return  # Already released, skip to prevent segfault
+
         if self.pipeline_config.capture_trace and hasattr(self, "tid") and self.tid is not None:
             ttnn.release_trace(self.ttnn_device, self.tid)
             delattr(self, "tid")
@@ -809,8 +881,15 @@ class TtSDXLPipeline(LightweightModule):
             ttnn.release_trace(self.ttnn_device, self.tid_vae)
             delattr(self, "tid_vae")
 
+        self._traces_released = True
+
     def forward(self, *args, **kwargs):
         raise NotImplementedError("Use individual methods for text encoding and image generation.")
 
     def __del__(self):
-        self.__release_trace()
+        # Safety fallback - release_traces() should be called explicitly before device closure
+        # This is a last-resort cleanup that may fail if device is already closed
+        try:
+            self.release_traces()
+        except Exception:
+            pass  # Ignore errors during destruction - device may already be closed

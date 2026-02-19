@@ -8,6 +8,7 @@ import ttnn
 import torch
 import inspect
 from typing import List, Optional, Union
+from tqdm import tqdm
 
 from transformers import CLIPTextModelWithProjection
 from ttnn.distributed.distributed import ConcatMeshToTensor
@@ -274,7 +275,12 @@ def batch_encode_prompt_on_device(
     data_parallel = determine_data_parallel(ttnn_device, use_cfg_parallel)
 
     prompt = normalize_prompt_for_text_encoder(prompt, tensor_parallel, data_parallel)
-    prompt_2 = prompt_2 or prompt
+    # Handle prompt_2: convert None or lists with None values to prompt
+    if prompt_2 is None:
+        prompt_2 = prompt
+    elif isinstance(prompt_2, list):
+        # Replace None values with corresponding prompt values
+        prompt_2 = [p if p is not None else prompt[i % len(prompt)] for i, p in enumerate(prompt_2)]
     prompt_2 = normalize_prompt_for_text_encoder(prompt_2, tensor_parallel, data_parallel)
 
     assert len(prompt) == ttnn_device.get_num_devices(), "Prompt length must be equal to number of devices"
@@ -387,7 +393,19 @@ def batch_encode_prompt_on_device(
         negative_pooled_prompt_embeds = torch.zeros_like(pooled_prompt_embeds)
     elif do_classifier_free_guidance and negative_prompt_embeds is None:
         negative_prompt = negative_prompt or ""
-        negative_prompt_2 = negative_prompt_2 or negative_prompt
+
+        # Handle negative_prompt_2: convert None or lists with None values to negative_prompt
+        if negative_prompt_2 is None:
+            negative_prompt_2 = negative_prompt
+        elif isinstance(negative_prompt_2, list):
+            # Replace None values with corresponding negative_prompt values
+            negative_prompt_list = (
+                batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+            )
+            negative_prompt_2 = [
+                p if p is not None else negative_prompt_list[i % len(negative_prompt_list)]
+                for i, p in enumerate(negative_prompt_2)
+            ]
 
         # normalize str to list
         negative_prompt = normalize_prompt_for_text_encoder(negative_prompt, tensor_parallel, data_parallel)
@@ -767,6 +785,7 @@ def run_tt_iteration(
         encoder_hidden_states=ttnn_prompt_embeds,
         time_ids=time_ids,
         text_embeds=text_embeds,
+        batch_size=B,
     )
 
     return ttnn_noise_pred, output_shape
@@ -833,12 +852,20 @@ def run_tt_image_gen(
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    for i in range(num_steps):
+    for i in tqdm(range(num_steps), total=num_steps):
         unet_outputs = []
         if tid is None or capture_trace:
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
             for unet_slice in range(tt_prompt_embeds.shape[0]):
                 latent_model_input = tt_latents
+                # Extract and reshape text_embeds for this slice
+                if not use_cfg_parallel:
+                    text_embeds_slice = tt_text_embeds[unet_slice]
+                    # Ensure correct shape [1, 1280] by reshaping
+                    text_embeds_slice = ttnn.reshape(text_embeds_slice, (1, 1280))
+                else:
+                    text_embeds_slice = tt_text_embeds
+
                 noise_pred, _ = run_tt_iteration(
                     tt_unet,
                     tt_scheduler,
@@ -846,7 +873,7 @@ def run_tt_image_gen(
                     input_shape,
                     tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
                     tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
-                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
+                    text_embeds_slice,
                 )
 
                 unet_outputs.append(noise_pred)
@@ -868,7 +895,7 @@ def run_tt_image_gen(
             else:
                 noise_pred_uncond, noise_pred_text = unet_outputs
 
-            # ttnn.clone doesn't work with L1 sharded tensors
+            # Move noise_pred_text to L1 for clone operation (ttnn.clone doesn't work with L1 sharded tensors)
             noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(noise_pred_text)
             noise_pred_text = noise_pred_text_new
@@ -877,11 +904,12 @@ def run_tt_image_gen(
             # perform guidance
             noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
             noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-            noise_pred = ttnn.add(noise_pred_uncond, noise_pred_text)
+            noise_pred = ttnn.add(noise_pred_uncond, noise_pred_text)  # NOT add_
 
             ttnn.deallocate(noise_pred_uncond)
             ttnn.deallocate(noise_pred_text)
 
+            # Move noise_pred to L1 for std operations
             noise_pred_new = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(noise_pred)
             noise_pred = noise_pred_new
@@ -898,6 +926,8 @@ def run_tt_image_gen(
             original_term = ttnn.mul(noise_pred, one_minus_guidance_rescale)
             ttnn.deallocate(noise_pred)
             noise_pred = ttnn.add(rescaled_term, original_term)
+
+            # Cleanup temporary tensors
             ttnn.deallocate(std_text)
             ttnn.deallocate(std_cfg)
             ttnn.deallocate(std_ratio)
@@ -905,6 +935,8 @@ def run_tt_image_gen(
             ttnn.deallocate(rescaled_term)
             ttnn.deallocate(original_term)
             ttnn.deallocate(noise_pred_text_orig)
+
+            # Move back to DRAM
             noise_pred = ttnn.move(noise_pred)
 
             tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
@@ -913,13 +945,17 @@ def run_tt_image_gen(
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
         else:
             ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
+            # Synchronize to ensure trace completes before updating scheduler state
+            # Without this, the loop runs ahead and overwrites device tensors
+            # before the trace can read them (causing the "jump to step 26" issue)
+            ttnn.synchronize_device(ttnn_device)
 
         if i < (num_steps - 1):
             tt_scheduler.inc_step_index()
 
     ttnn.synchronize_device(ttnn_device)
 
-    # set_begin_index resets both begin and step index of the scheduler
+    # Reset scheduler - use set_begin_index to reset both begin_index and step_index
     tt_scheduler.set_begin_index(0)
 
     profiler.end("denoising_loop")

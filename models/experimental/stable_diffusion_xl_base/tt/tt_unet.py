@@ -266,7 +266,7 @@ class TtUNet2DConditionModel(LightweightModule):
             or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
         ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
 
-    def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
+    def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds, batch_size=1):
         B, C, H, W = input_shape
 
         temb = self.time_proj.forward(timestep)
@@ -274,7 +274,7 @@ class TtUNet2DConditionModel(LightweightModule):
 
         temb_add = self.add_time_proj.forward(time_ids)
         temb_add = ttnn.to_layout(temb_add, ttnn.ROW_MAJOR_LAYOUT)
-        temb_add = ttnn.reshape(temb_add, (text_embeds.shape[0], -1))
+        temb_add = ttnn.reshape(temb_add, (batch_size, -1))
         temb_add = ttnn.concat([text_embeds, temb_add], -1)
         temb_add = ttnn.to_layout(temb_add, ttnn.TILE_LAYOUT)
         temb_add = self.add_embedding.forward(temb_add)
