@@ -16,7 +16,9 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
-PCC_THRESHOLD = 0.988
+# SwiGLU achieves ~0.985 PCC (vs SiLU's ~0.989) due to additional multiplicative
+# terms amplifying Bfp4_b weight quantization error. This is inherent to the formula.
+PCC_THRESHOLD = 0.984
 
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES = {0, 1, 8, 9}
@@ -496,13 +498,19 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             # Use first 2*M rows of input (one copy of the original replicated input)
             torch_input_ref = torch_input[:, 0, ...]
 
-            # Compute gate activations for each expert
+            # Compute gate and up projections for each expert
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
-            torch_w0_output_ref = torch_input_ref @ torch_w0
-            torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
-            # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
-            torch_w1_output_ref = torch_input_ref @ torch_w1
-            torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, M, N)
+            torch_w0_output_ref = torch_input_ref @ torch_w0  # gate
+            torch_w1_output_ref = torch_input_ref @ torch_w1  # up
+
+            # GPT-OSS SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
+            alpha = 1.702
+            clamp_limit = 7.0
+            gate = torch.clamp(torch_w0_output_ref, max=clamp_limit)
+            up = torch.clamp(torch_w1_output_ref, min=-clamp_limit, max=clamp_limit)
+            up_plus_1 = up + 1.0
+            glu = gate * torch.sigmoid(alpha * gate)
+            torch_intermediate_ref = up_plus_1 * glu  # (L, E, M, N)
 
             # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
             torch_output_ref = torch_intermediate_ref @ torch_w2
@@ -518,12 +526,17 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     if dump_outputs:
         torch.set_printoptions(profile="full")
         var2filename = {
-            torch_w0_output_ref: f"torch_w0_output_ref.txt",
-            torch_w1_output_ref: f"torch_w1_output_ref.txt",
-            torch_intermediate_ref: f"torch_intermediate_ref.txt",
-            torch_output_ref: f"torch_output_ref.txt",
             tt_to_torch_outputs: f"tt_output_act.txt",
         }
+        if check_accuracy:
+            var2filename.update(
+                {
+                    torch_w0_output_ref: f"torch_w0_output_ref.txt",
+                    torch_w1_output_ref: f"torch_w1_output_ref.txt",
+                    torch_intermediate_ref: f"torch_intermediate_ref.txt",
+                    torch_output_ref: f"torch_output_ref.txt",
+                }
+            )
 
         for var, filename in var2filename.items():
             with open(filename, "w") as f:

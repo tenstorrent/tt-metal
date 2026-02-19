@@ -11,9 +11,7 @@
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
-#include "ckernel_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "swiglu_sfpu.h"
 #endif
 
 void kernel_main() {
@@ -104,8 +102,8 @@ void kernel_main() {
     // Initialize matmul for W0
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
-    // Initialize SFPU for SILU and eltwise multiply
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+    // Initialize SFPU for GPT-OSS SwiGLU activation
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -151,13 +149,12 @@ void kernel_main() {
             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
             //---------------------------------------------------------------------
-            // Apply SILU activation and then eltwise multiply
+            // Apply GPT-OSS SwiGLU activation
+            // SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
+            // Dest layout: [gate0, up0, gate1, up1] at tile indices [0, 1, 2, 3]
             //---------------------------------------------------------------------
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
 
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
