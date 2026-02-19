@@ -24,6 +24,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
         is_qwen=False,
+        use_prefetcher=False,
     ):
         """
         - sub devices
@@ -72,7 +73,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
             mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id_prefill)
             mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
-        else:
+        elif use_prefetcher:
             ##### Set up the global circular buffer #####
             # Global CB must be large enough to atleast double buffer weights
             # This ensures that back to back matmuls (for eg. in MLP) can run
@@ -80,10 +81,6 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # To fit entire MLP we'd need ~742 * 1088 but using block-wise prefetching and 732 tiles this is sufficient for now
             self.global_cb_size = 728 * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
-            # self.global_circular_buffer = ttnn.create_global_circular_buffer(
-            #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
-            # )
-            # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
             self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
@@ -96,6 +93,17 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id_decode)
             mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
+        else:
+            # Prefetcher disabled: merge sender cores into worker sub-device
+            self.global_circular_buffer = None
+            self.prefetcher_sub_device_id = None
+            self.worker_sub_device = ttnn.SubDevice([self.all_core_range_set])
+            self.worker_sub_device_id = ttnn.SubDeviceId(0)
+            if mesh_sub_device_manager_id_decode is None:
+                mesh_sub_device_manager_id_decode = mesh_device.create_sub_device_manager([self.worker_sub_device], 0)
+            self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
+            mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id_decode)
+            mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses

@@ -52,6 +52,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
+        self.use_prefetcher = configuration.use_prefetcher
 
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -92,7 +93,6 @@ class TtLlamaAttention(LightweightModule):
         self.transformation_mats = transformation_mats
 
         self.model_config = configuration.get_model_config()
-        self.model_config["USE_PREFETCHER"] = configuration.use_prefetcher
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
 
@@ -310,7 +310,7 @@ class TtLlamaAttention(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and self.use_prefetcher:
             self.prefetcher_setup.insert_tensor(self.wqkv)
             self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl
@@ -392,7 +392,7 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            global_cb=self.prefetcher_setup.global_circular_buffer if self.use_prefetcher else None,
             dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
@@ -546,7 +546,7 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            global_cb=self.prefetcher_setup.global_circular_buffer if self.use_prefetcher else None,
             dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
