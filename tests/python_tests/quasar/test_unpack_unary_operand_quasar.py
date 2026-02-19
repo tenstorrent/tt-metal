@@ -31,13 +31,13 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
-    INPUT_DIMENSIONS,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -171,7 +171,7 @@ def test_unpack_unary_operand_quasar(
         "sources/quasar/unpack_unary_operand_quasar_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(

@@ -47,8 +47,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     for (std::uint32_t j = 0; j < params->KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(
-            L1_ADDRESS(buffer_A[0]),
-            L1_ADDRESS(buffer_B[0]),
+            L1_ADDRESS(params->buffer_A[0]),
+            L1_ADDRESS(params->buffer_B[0]),
             j,
             j * params->CT_DIM,
             TILE_SIZE_UNPACK_A,
@@ -121,7 +121,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     {
         const std::uint32_t tile_index = params->DST_INDEX + i;
         LLK_ASSERT((tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile_index exceeds max dest tiles");
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_index, L1_ADDRESS(buffer_Res[i]));
+        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_index, L1_ADDRESS(params->buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

@@ -35,7 +35,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, false /* enforce_fp32_accumulation */>(params->TEST_FACE_R_DIM, params->num_faces);
     for (int i = 0; i < params->INPUT_TILE_CNT; ++i)
     {
-        _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[0]));
+        _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(L1_ADDRESS(params->buffer_A[i]), L1_ADDRESS(params->buffer_B[0]));
     }
 }
 
@@ -115,7 +115,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
         _llk_packer_wait_for_math_done_();
         for (int i = 0; i < tiles_from_dest; ++i)
         {
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>(i, L1_ADDRESS(buffer_Res[params->OUTPUT_TILE_CNT - remaining_tiles + i]));
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>(
+                i, L1_ADDRESS(params->buffer_Res[params->OUTPUT_TILE_CNT - remaining_tiles + i]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         remaining_tiles -= tiles_from_dest;

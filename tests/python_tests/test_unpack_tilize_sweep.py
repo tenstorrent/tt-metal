@@ -18,13 +18,13 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     NARROW_TILE,
     NUM_FACES,
     STOCHASTIC_ROUNDING,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -130,7 +130,7 @@ def test_unpack_tilize_comprehensive(
         formats,
         templates=[
             STOCHASTIC_ROUNDING(stoch_rnd_type),
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),

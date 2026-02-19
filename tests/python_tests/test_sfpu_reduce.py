@@ -24,9 +24,9 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
-    INPUT_DIMENSIONS,
     MATH_OP,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -120,7 +120,7 @@ def test_sfpu_reduce(
         "sources/sfpu_reduce_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
         ],

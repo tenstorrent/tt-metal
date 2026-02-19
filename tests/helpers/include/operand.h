@@ -9,11 +9,13 @@
 class Operand
 {
 public:
-    constexpr Operand(std::uint32_t base, std::uint32_t size) : base_addr(base), tile_size(size)
+    Operand() = default;
+
+    Operand(std::uint32_t base, std::uint32_t size) : base_addr(base), tile_size(size)
     {
     }
 
-    [[nodiscard]] constexpr std::uint32_t operator[](std::uint32_t index) const noexcept
+    [[nodiscard]] std::uint32_t operator[](std::uint32_t index) const volatile noexcept
     {
         return base_addr + index * tile_size;
     }

@@ -32,7 +32,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
     // src A input configuration
     tdma_descriptor_t tdma_desc_src_a;
-    tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(buffer_A[0]);
+    tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params->buffer_A[0]);
     tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_src);
     tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
@@ -43,7 +43,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     // src B input configuration
     tdma_descriptor_t tdma_desc_src_b;
-    tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(buffer_B[0]);
+    tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params->buffer_B[0]);
     tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_src);
     tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
@@ -103,7 +103,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     tdma_descriptor_t tdma_desc_dst;
-    tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(buffer_Res[0]);
+    tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params->buffer_Res[0]);
     tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
     tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;

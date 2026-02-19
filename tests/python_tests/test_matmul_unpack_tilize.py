@@ -10,8 +10,8 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     MATH_FIDELITY,
+    generate_input_dim,
 )
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
@@ -66,7 +66,7 @@ def test_matmul_unpack_tilize(
         "sources/matmul_unpack_tilize_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
         ],
         runtimes=[],

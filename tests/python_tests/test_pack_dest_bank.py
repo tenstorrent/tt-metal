@@ -15,11 +15,11 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
-    INPUT_DIMENSIONS,
     L1_ACC,
     NUM_FACES,
     TILE_COUNT,
     TILIZE,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -109,7 +109,7 @@ def test_pack_dest_bank(
         "sources/pack_dest_bank_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
         ],
         runtimes=[

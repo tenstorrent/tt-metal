@@ -30,7 +30,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     // Single call works on 1 tile that goes to srcA and then reuses it for 4 srcB tiles that are changeable
     for (int i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
     {
-        _llk_unpack_bcastA_B_(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i * params->SRCA_REUSE_COUNT]), params->SRCA_REUSE_COUNT);
+        _llk_unpack_bcastA_B_(L1_ADDRESS(params->buffer_A[i]), L1_ADDRESS(params->buffer_B[i * params->SRCA_REUSE_COUNT]), params->SRCA_REUSE_COUNT);
     }
 }
 
@@ -88,7 +88,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     for (int i = 0; i < params->TILE_CNT; i++)
     {
         LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "i exceeds max dest tiles");
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(buffer_Res[i]));
+        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(params->buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

@@ -29,7 +29,7 @@ from ttexalens.tt_exalens_lib import (
 )
 
 from .fused_operation import FusedOperation
-from .llk_params import DataFormat, Mailbox, format_dict
+from .llk_params import DataFormat, MailboxesPerf, format_dict
 from .pack import (
     pack_bfp8_b,
     pack_bfp16,
@@ -45,13 +45,14 @@ from .target_config import TestTargetConfig
 from .tilize_untilize import untilize_block
 from .unpack import unpack_res_tiles
 
+Mailbox = MailboxesPerf
+
 
 class LLKAssertException(Exception):
     pass
 
 
-# Constant - indicates the TRISC kernel run status
-KERNEL_COMPLETE = 1  # Kernel completed its run
+KERNEL_COMPLETE = 0xFF
 
 
 class BootMode(Enum):
@@ -229,17 +230,14 @@ def wait_for_tensix_operations_finished(
     elfs, core_loc="0,0", timeout=2, max_backoff=0.1
 ):
     """
-    Polls a value from the device with an exponential backoff timer and fails if it doesn't read 1 within the timeout.
-
     Args:
+        elfs: List of ELF file paths (used for assert diagnostics).
         location: The location of the core to poll.
-        mailbox_addr: The mailbox address to read from.
-        timeout: Maximum time to wait (in seconds) before timing out. Default is 30 seconds. If running on a simulator it is 600 seconds.
-        max_backoff: Maximum backoff time (in seconds) between polls. Default is 5 seconds.
+        timeout: Maximum time to wait (in seconds) before timing out.
+        max_backoff: Maximum backoff time (in seconds) between polls.
     """
 
     mailboxes = {Mailbox.Unpacker, Mailbox.Math, Mailbox.Packer}
-
     test_target = TestTargetConfig()
     timeout = 600 if test_target.run_simulator else timeout
 
@@ -276,11 +274,12 @@ def wait_for_tensix_operations_finished(
 
 
 def reset_mailboxes(location: str = "0,0"):
-    """Reset all core mailboxes before each test."""
-    reset_value = 0  # Constant - indicates the TRISC kernel run status
+    """Reset all core mailboxes (Unpacker, Math, Packer) before each test."""
 
-    target_addr = min(Mailbox.Packer.value, Mailbox.Math.value, Mailbox.Unpacker.value)
-    write_words_to_device(location=location, addr=target_addr, data=3 * [reset_value])
+    mailboxes_start_value = min([core.value for core in Mailbox])
+    write_words_to_device(
+        location=location, addr=mailboxes_start_value, data=len(Mailbox) * [0xA3]
+    )
 
 
 def pull_coverage_stream_from_tensix(
@@ -328,7 +327,7 @@ def write_pipeline_operands_to_l1(
     location: str = "0,0",
 ):
     TILE_ELEMENTS = 1024
-    current_address = 0x1A000
+    current_address = 0x21000
 
     def calculate_size(data_format: DataFormat, tile_count: int) -> int:
         return data_format.num_bytes_per_tile(TILE_ELEMENTS) * tile_count

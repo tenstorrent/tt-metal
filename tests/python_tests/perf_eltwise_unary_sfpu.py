@@ -20,7 +20,6 @@ from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     FAST_MODE,
-    INPUT_DIMENSIONS,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -166,7 +165,6 @@ def test_perf_eltwise_unary_sfpu(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),

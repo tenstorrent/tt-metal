@@ -255,11 +255,13 @@ def passed_test(
 
         except RuntimeError:
             print(
-                f"Could not reshape to 32x32 matrix, showing linear indices: {res_tensor.size()[0]}"
+                f"Could not reshape to 32x32 matrix, showing linear indices: {res_tensor.size()[0]}",
+                file=sys.stderr,
             )
             for idx in diff_indices[:10]:
                 print(
-                    f"Failed at index {idx} with result={res_tensor[idx]}, golden={golden_tensor[idx]}"
+                    f"Failed at index {idx} with result={res_tensor[idx]}, golden={golden_tensor[idx]}",
+                    file=sys.stderr,
                 )
 
     pcc = calculate_pcc(res_tensor, golden_tensor)

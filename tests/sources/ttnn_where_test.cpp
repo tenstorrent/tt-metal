@@ -20,7 +20,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     using DataFormatUT = std::underlying_type_t<DataFormat>;
     auto to_ufmt       = [](DataFormat fmt) constexpr { return static_cast<DataFormatUT>(fmt); };
@@ -43,16 +43,12 @@ void run_kernel(const volatile struct RuntimeParams *params)
         UNPACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    constexpr std::uint32_t buffer_condition = buffer_A[0];
-    constexpr std::uint32_t buffer_true      = buffer_B[0];
-    constexpr std::uint32_t buffer_false     = buffer_C[0];
-
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_FMT, UNPACK_FMT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(buffer_condition), UNPACK_FMT, UNPACK_FMT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(buffer_true), UNPACK_FMT, UNPACK_FMT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(buffer_false), UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params->buffer_A[0]), UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params->buffer_B[0]), UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params->buffer_C[0]), UNPACK_FMT, UNPACK_FMT);
 }
 
 #endif
@@ -71,7 +67,7 @@ using namespace ckernel;
 
 // using namespace sfpu;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams*)
 {
     using DataFormatUT = std::underlying_type_t<DataFormat>;
     auto to_ufmt       = [](DataFormat fmt) constexpr { return static_cast<DataFormatUT>(fmt); };
@@ -133,7 +129,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     using DataFormatUT = std::underlying_type_t<DataFormat>;
     auto to_ufmt       = [](DataFormat fmt) constexpr { return static_cast<DataFormatUT>(fmt); };
@@ -156,8 +152,6 @@ void run_kernel(const volatile struct RuntimeParams *params)
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    constexpr std::uint32_t buffer_Dest = buffer_Res[0];
-
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
 #else
@@ -173,7 +167,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Dest));
+    _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(params->buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

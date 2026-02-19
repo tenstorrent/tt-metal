@@ -25,10 +25,10 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
-    INPUT_DIMENSIONS,
     MATH_FIDELITY,
     MATH_OP,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
@@ -135,7 +135,7 @@ def test_matmul_and_unary_sfpu(
         test_name,
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
             APPROX_MODE(approx_mode),
             MATH_OP(mathop=mathop),

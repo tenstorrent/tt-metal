@@ -9,10 +9,10 @@ from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     NUM_FACES,
     TILE_COUNT,
+    generate_input_dim,
 )
 
 
@@ -74,7 +74,7 @@ def test_fast_tilize_perf(
         "sources/fast_tilize_test.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1],
-        templates=[INPUT_DIMENSIONS(input_dimensions, input_dimensions)],
+        templates=[generate_input_dim(input_dimensions, input_dimensions)],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(1024), NUM_FACES(4)],
         variant_stimuli=StimuliConfig(
             None,

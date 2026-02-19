@@ -17,9 +17,9 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    INPUT_DIMENSIONS,
     NUM_FACES,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -101,7 +101,7 @@ def test_pack_untilize(
         "sources/pack_untilize_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(
+            generate_input_dim(
                 input_dimensions,
                 input_dimensions,
                 block_ct_dim,

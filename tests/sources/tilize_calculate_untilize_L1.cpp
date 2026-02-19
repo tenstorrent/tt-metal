@@ -42,10 +42,10 @@ void run_kernel(const volatile struct RuntimeParams *params)
         4 /* num_faces */);
 
     _llk_unpack_tilize_init_(formats_array[run].unpack_src, formats_array[run].unpack_dst, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(buffer_A[0]), 0, formats_array[run].unpack_src, formats_array[run].unpack_dst, block_ct_dim, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_(L1_ADDRESS(params->buffer_A[0]), 0, formats_array[run].unpack_src, formats_array[run].unpack_dst, block_ct_dim, FACE_R_DIM, 4, false);
 
     _llk_unpack_tilize_init_(formats_array[run].unpack_src, formats_array[run].unpack_dst, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(buffer_B[0]), 0, formats_array[run].unpack_src, formats_array[run].unpack_dst, block_ct_dim, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_(L1_ADDRESS(params->buffer_B[0]), 0, formats_array[run].unpack_src, formats_array[run].unpack_dst, block_ct_dim, FACE_R_DIM, 4, false);
 
     /*
     In this test we fuse two LLK pipeline runs, one is to unpack untilized buffers/operands from L1 (39-45) and pack them in tilized format(130-145).
@@ -173,7 +173,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(res_dst_index, L1_ADDRESS(buffer_Res[0]));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(res_dst_index, L1_ADDRESS(params->buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

@@ -16,7 +16,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
-    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
@@ -99,7 +98,6 @@ def test_perf_matmul(perf_report, combos, math_fidelity, workers_tensix_coordina
         formats,
         run_types,
         templates=[
-            INPUT_DIMENSIONS(matrix_a, matrix_b),
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(),
             THROTTLE_LEVEL(),

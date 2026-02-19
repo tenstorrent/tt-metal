@@ -40,7 +40,7 @@ constexpr std::uint8_t PACK_STREAM_SEMAPHORE                  = 6;
 constexpr std::uint8_t TENSIX_UNPACK_TO_DEST_PACK_SEMAPHORE   = p_stall::SEMAPHORE_7;
 constexpr std::uint8_t UNPACK_TO_DEST_PACK_SEMAPHORE          = 7;
 
-constexpr std::uint32_t KERNEL_COMPLETE = 0x1;
+constexpr std::uint32_t KERNEL_COMPLETE = 0xFF;
 
 volatile std::uint32_t *const reg_base        = (volatile std::uint32_t *)0xFFB10000;
 volatile std::uint32_t *const pc_buf_base     = (volatile std::uint32_t *)PC_BUF_BASE;

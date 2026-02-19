@@ -33,7 +33,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_unpack_AB_init_<>();
 
     // Unpack one tile from each input buffer (A and B)
-    _llk_unpack_AB_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]));
+    _llk_unpack_AB_<>(L1_ADDRESS(params->buffer_A[0]), L1_ADDRESS(params->buffer_B[0]));
 }
 
 #endif // LLK_TRISC_UNPACK
@@ -91,7 +91,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_untilize_<ct_dim>(L1_ADDRESS(buffer_Res[0]), formats.pack_dst, FACE_R_DIM, 4, 0);
+    _llk_pack_untilize_<ct_dim>(L1_ADDRESS(params->buffer_Res[0]), formats.pack_dst, FACE_R_DIM, 4, 0);
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 

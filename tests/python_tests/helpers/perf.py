@@ -301,7 +301,7 @@ class PerfConfig(TestConfig):
         self.passed_runtimes = runtimes
         self.current_run_type = None
 
-        # TODO Add check for all selected runs, to see if the profiler/counter supports them
+        # TODO Add check here for all selected runs, to see if the profiler/counter supports them
 
         self.run_configs = [
             (

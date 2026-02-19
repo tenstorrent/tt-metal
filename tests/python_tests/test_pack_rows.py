@@ -10,9 +10,9 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     NUM_ROWS_TO_PACK,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -70,7 +70,7 @@ def test_pack_rows(
         "sources/pack_rows_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(dimensions, dimensions),
+            generate_input_dim(dimensions, dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

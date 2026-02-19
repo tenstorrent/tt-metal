@@ -60,7 +60,7 @@ constexpr std::uint32_t PACK_FLUSH_COUNTERS = // counters flush
 
 constexpr std::uint32_t RESET_VAL          = 0;
 constexpr std::uint32_t KERNEL_IN_PROGRESS = 15;
-constexpr std::uint32_t KERNEL_COMPLETE    = 1;
+constexpr std::uint32_t KERNEL_COMPLETE    = 0xFF;
 
 extern volatile std::uint32_t tt_reg_ptr *reg_base;
 extern volatile std::uint32_t tt_reg_ptr *pc_buf_base;

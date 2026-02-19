@@ -77,7 +77,7 @@ using namespace ckernel::sfpu;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
-    constexpr std::uint32_t block_height = BLOCK_RT_DIM;
+    const std::uint32_t block_height = BLOCK_RT_DIM;
 
     {
         ZONE_SCOPED("INIT")
@@ -157,7 +157,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
 
                     // Call the SFPU SDPA reduce function
-                    constexpr std::uint32_t block_height = BLOCK_RT_DIM;
+                    const std::uint32_t block_height = BLOCK_RT_DIM;
                     _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(block_height);
 
                     _llk_math_eltwise_unary_sfpu_done_();

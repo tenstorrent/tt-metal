@@ -37,7 +37,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     for (int i = 0; i < params->TILE_CNT; ++i)
     {
         _llk_unpack_A_<BroadcastType::NONE, false /* is_fp32_dest_acc_en - why true does not work? */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(buffer_A[i]), formats.unpack_src, formats.unpack_dst);
+            L1_ADDRESS(params->buffer_A[i]), formats.unpack_src, formats.unpack_dst);
     }
 }
 
@@ -129,7 +129,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         {
             LLK_ASSERT((block_tile < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
 
-            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, /* untilize */ false>(block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
+            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, /* untilize */ false>(block_tile, L1_ADDRESS(params->buffer_Res[block_start + block_tile]));
         }
         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

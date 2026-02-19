@@ -29,7 +29,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_unpack_tilize_init_(formats.unpack_src, formats.unpack_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
 
     // Unpack and tilize single tile A (stored in src A register - index 0)
-    _llk_unpack_tilize_(L1_ADDRESS(buffer_A[0]), 0, formats.unpack_src, formats.unpack_dst, BLOCK_CT_DIM, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_(L1_ADDRESS(params->buffer_A[0]), 0, formats.unpack_src, formats.unpack_dst, BLOCK_CT_DIM, FACE_R_DIM, 4, false);
 }
 
 #endif
@@ -104,7 +104,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     // Pack the single result tile from destination register to output buffer
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, UNTILIZE>(0, L1_ADDRESS(buffer_Res[0]));
+    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, UNTILIZE>(0, L1_ADDRESS(params->buffer_Res[0]));
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 

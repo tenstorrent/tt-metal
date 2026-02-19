@@ -37,20 +37,26 @@ int main()
 {
 #if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
     device_setup();
+    clear_trisc_soft_reset(); // Release the rest of the triscs
+#endif
 
-    // Release the rest of the triscs
-    clear_trisc_soft_reset();
+#ifdef COVERAGE
+    constexpr std::uint32_t mailboxes_start = 0x63FC0;
+#else
+    constexpr std::uint32_t mailboxes_start = 0x1FFC0;
 #endif
 
 #if defined(LLK_TRISC_UNPACK)
-    volatile std::uint32_t* const mailbox = reinterpret_cast<volatile std::uint32_t*>(0x19FFC);
+    constexpr std::uint32_t mailbox_offset = sizeof(std::uint32_t);
 #elif defined(LLK_TRISC_MATH)
-    volatile std::uint32_t* const mailbox = reinterpret_cast<volatile std::uint32_t*>(0x19FF8);
+    constexpr std::uint32_t mailbox_offset = 2 * sizeof(std::uint32_t);
 #elif defined(LLK_TRISC_PACK)
-    volatile std::uint32_t* const mailbox = reinterpret_cast<volatile std::uint32_t*>(0x19FF4);
+    constexpr std::uint32_t mailbox_offset = 3 * sizeof(std::uint32_t);
 #endif
 
+    volatile std::uint32_t* const mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
     std::fill(ckernel::regfile, ckernel::regfile + 64, 0);
+
 #ifndef ARCH_QUASAR
     ckernel::reset_cfg_state_id();
     ckernel::reset_dest_offset_id();
@@ -67,5 +73,5 @@ int main()
         ckernel::tensix_sync();
     }
 
-    *mailbox = ckernel::KERNEL_COMPLETE; // 0x1
+    *mailbox = ckernel::KERNEL_COMPLETE;
 }

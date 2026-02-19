@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from typing import ClassVar
+
 from ttexalens.tt_exalens_lib import (
     read_from_device,
     write_to_device,
@@ -32,7 +34,10 @@ from .unpack import (
 class StimuliConfig:
 
     # === STATIC VARIABLES ===
-    STIMULI_L1_ADDRESS = 0x65000
+    STIMULI_L1_ADDRESS_PERF = 0x21000
+    STIMULI_L1_ADDRESS_DEBUG = 0x65000
+
+    WITH_COVERAGE: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -83,7 +88,12 @@ class StimuliConfig:
             self.stimuli_B_format, self.tile_dimensions, format_tile_sizes
         )
 
-        self.buf_a_addr = StimuliConfig.STIMULI_L1_ADDRESS
+        self.buf_a_addr = 0
+        if StimuliConfig.WITH_COVERAGE:
+            self.buf_a_addr = StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
+        else:
+            self.buf_a_addr = StimuliConfig.STIMULI_L1_ADDRESS_PERF
+
         self.buf_b_addr = self.buf_a_addr + self.tile_size_A_bytes * self.tile_count_A
 
         if self.buffer_C is not None:
@@ -100,6 +110,55 @@ class StimuliConfig:
             self.buf_res_addr = (
                 self.buf_b_addr + self.tile_size_B_bytes * self.tile_count_B
             )
+
+    def generate_runtime_operands_values(self, formats) -> list:
+        # Use actual tile sizes based on tile_dimensions
+        input_format = DataFormat.Float16_b if formats is None else formats.input_format
+        output_format = (
+            DataFormat.Float16_b if formats is None else formats.output_format
+        )
+
+        buf_a_tile_size = calculate_tile_size_bytes(
+            input_format, self.tile_dimensions, format_tile_sizes
+        )
+        buf_b_tile_size = calculate_tile_size_bytes(
+            input_format, self.tile_dimensions, format_tile_sizes
+        )
+        buf_res_tile_size = calculate_tile_size_bytes(
+            output_format, self.tile_dimensions, format_tile_sizes
+        )
+
+        values = [
+            self.buf_a_addr,
+            buf_a_tile_size,
+            self.buf_b_addr,
+            buf_b_tile_size,
+            self.buf_res_addr,
+            buf_res_tile_size,
+        ]
+
+        if self.buffer_C is not None:
+            buf_c_tile_size = calculate_tile_size_bytes(
+                input_format, self.tile_dimensions, format_tile_sizes
+            )
+
+            values.extend([self.buf_c_addr, buf_c_tile_size])
+
+        return values
+
+    def generate_runtime_struct_fields(self) -> tuple[list[str], str]:
+        lines: list[str] = [
+            "Operand buffer_A;",
+            "Operand buffer_B;",
+            "Operand buffer_Res;",
+        ]
+        pack_formats = "IIIIII"
+
+        if self.buffer_C is not None:
+            lines.append("Operand buffer_C;")
+            pack_formats += "II"
+
+        return lines, pack_formats
 
     def generate_stimuli_header_addresses(self, formats) -> list[str]:
         # Use actual tile sizes based on tile_dimensions

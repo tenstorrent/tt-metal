@@ -13,9 +13,9 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
-    INPUT_DIMENSIONS,
     MATH_OP,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -118,7 +118,7 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coord
         "sources/sfpu_binary_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             APPROX_MODE(),
         ],
@@ -189,7 +189,7 @@ def sfpu_binary(formats, dest_acc, mathop, workers_tensix_coordinates):
         "sources/sfpu_binary_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             APPROX_MODE(),
         ],

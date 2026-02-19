@@ -48,8 +48,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     for (std::uint32_t j = 0; j < params->KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(
-            L1_ADDRESS(buffer_A[0]),
-            L1_ADDRESS(buffer_B[0]),
+            L1_ADDRESS(params->buffer_A[0]),
+            L1_ADDRESS(params->buffer_B[0]),
             j,
             j * params->CT_DIM,
             TILE_SIZE_UNPACK_A,
@@ -106,7 +106,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_packer_wait_for_math_done_();
     for (int i = 0; i < params->TILE_CNT; i++)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>(i, L1_ADDRESS(buffer_Res[i]));
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>(i, L1_ADDRESS(params->buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

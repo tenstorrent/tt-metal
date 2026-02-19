@@ -15,7 +15,6 @@ from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    INPUT_DIMENSIONS,
     MATH_FIDELITY,
     MATH_OP,
     SRCA_REUSE_COUNT,
@@ -62,7 +61,6 @@ def test_perf_col_tile_sdpa(
         # For now only L1_TO_L1 and PACK_ISOLATE are supported because of custom usage of dvalid signals
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE],
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),

@@ -12,11 +12,11 @@ from helpers.param_config import (
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_OP,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
+    generate_input_dim,
 )
 
 
@@ -70,9 +70,9 @@ def test_perf_sfpu_reduce_sdpa(
             # PerfRunType.PACK_ISOLATE,     # Pack timing for reference
         ],
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             REDUCE_POOL_TYPE(reduce_pool),
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

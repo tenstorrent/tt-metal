@@ -44,7 +44,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // Main tilize loop - handle different tile configurations
     for (std::uint32_t row = 0; row < BLOCK_RT_DIM; ++row)
     {
-        std::uint32_t tile_row_addr = L1_ADDRESS(buffer_A[read_offset]);
+        std::uint32_t tile_row_addr = L1_ADDRESS(params->buffer_A[read_offset]);
         for (std::uint32_t col = 0; col < BLOCK_CT_DIM; ++col)
         {
             _llk_unpack_tilize_(
@@ -130,7 +130,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     {
         LLK_ASSERT(
             (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(i, L1_ADDRESS(buffer_Res[i]));
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(i, L1_ADDRESS(params->buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

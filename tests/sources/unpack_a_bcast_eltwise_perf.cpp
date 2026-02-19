@@ -47,7 +47,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         {
             for (std::uint32_t i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
             {
-                _llk_unpack_bcastA_B_(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i * params->SRCA_REUSE_COUNT]), params->SRCA_REUSE_COUNT);
+                _llk_unpack_bcastA_B_(L1_ADDRESS(params->buffer_A[i]), L1_ADDRESS(params->buffer_B[i * params->SRCA_REUSE_COUNT]), params->SRCA_REUSE_COUNT);
             }
         }
         PROFILER_SYNC();

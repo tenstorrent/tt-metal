@@ -29,7 +29,6 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     IN_TILE_DIMS,
-    INPUT_DIMENSIONS,
     MATH_FIDELITY,
     NUM_FACES,
     PARTIAL_FACE,
@@ -38,6 +37,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -165,7 +165,7 @@ def test_math_matmul(
         "sources/math_matmul_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_A_dimensions, input_B_dimensions),
+            generate_input_dim(input_A_dimensions, input_B_dimensions),
             STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
             MATH_FIDELITY(math_fidelity),
             THROTTLE_LEVEL(throttle),

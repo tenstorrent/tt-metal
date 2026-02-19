@@ -13,9 +13,9 @@ from helpers.param_config import (
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     TILE_COUNT,
+    generate_input_dim,
 )
 
 
@@ -75,7 +75,7 @@ def test_perf_pack_untilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[INPUT_DIMENSIONS(dimensions, dimensions, block_ct_dim)],
+        templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR()],
         variant_stimuli=StimuliConfig(
             None,

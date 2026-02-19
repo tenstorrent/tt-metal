@@ -15,9 +15,9 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     MATH_OP,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -74,7 +74,7 @@ def test_sfpu_reduce_sdpa(
         "sources/sfpu_reduce_sdpa_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],

@@ -24,9 +24,9 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
-    INPUT_DIMENSIONS,
     MATH_OP,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -244,7 +244,7 @@ def eltwise_unary_sfpu(
         test_name,
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(approx_mode),
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
@@ -323,7 +323,7 @@ def test_exponential_clamp_negative(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.Yes),
             FAST_MODE(FastMode.Yes),
             CLAMP_NEGATIVE(clamp_negative),

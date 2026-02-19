@@ -8,9 +8,9 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     TILE_COUNT,
+    generate_input_dim,
 )
 
 
@@ -37,7 +37,7 @@ def test_perf_unpack_untilize(
         "sources/unpack_untilize_perf.cpp",
         formats,
         [PerfRunType.L1_TO_L1],
-        templates=[INPUT_DIMENSIONS(input_dimensions, input_dimensions)],
+        templates=[generate_input_dim(input_dimensions, input_dimensions)],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR()],
         variant_stimuli=StimuliConfig(
             None,

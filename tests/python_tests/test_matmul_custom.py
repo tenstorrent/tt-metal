@@ -20,7 +20,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
-    INPUT_DIMENSIONS,
     MATH_FIDELITY,
     NUM_FACES,
     TILE_COUNT,
@@ -134,10 +133,7 @@ def test_matmul_custom(
     configuration = TestConfig(
         "sources/matmul_custom_test.cpp",
         formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            INPUT_DIMENSIONS(input_A_dimensions, input_B_dimensions),
-        ],
+        templates=[MATH_FIDELITY(math_fidelity)],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),

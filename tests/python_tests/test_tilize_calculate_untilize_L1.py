@@ -15,10 +15,10 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    INPUT_DIMENSIONS,
     MATH_FIDELITY,
     MATH_OP,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
@@ -63,7 +63,7 @@ def test_tilize_calculate_untilize_L1(
         "sources/tilize_calculate_untilize_L1.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
         ],

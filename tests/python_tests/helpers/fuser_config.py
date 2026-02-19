@@ -207,7 +207,7 @@ class FuserConfig:
         from .fused_generator import FUSED_TESTS_DIR
         from .fused_golden import FusedGolden
 
-        write_pipeline_operands_to_l1(self.pipeline)
+        write_pipeline_operands_to_l1(self.pipeline, location)
 
         cpp_path = FUSED_TESTS_DIR / f"{self.global_config.test_name}.cpp"
 

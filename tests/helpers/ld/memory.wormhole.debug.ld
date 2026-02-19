@@ -10,7 +10,7 @@ TRISC_L0_LENGTH = 2K;
 NCRISC_L0_LENGTH = 4K;
 
 L1_BASE = 0x0;
-RUNTIME_ARGS_START = 0x61000;
+RUNTIME_ARGS_START = 0x64000;
 UNDEFINED = 0;
 
 /* The address space layout goes as follows:
