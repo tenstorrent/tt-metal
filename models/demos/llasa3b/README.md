@@ -79,7 +79,7 @@ TTNN weight caches will be generated on first run and stored at `model_cache/HKU
 Generate speech from text on Tenstorrent hardware:
 ```bash
 export HF_MODEL=HKUSTAudio/Llasa-3B
-pytest models/demos/llasa3b/demo/llasa_demo.py -s -k "test_llasa_tts"
+pytest models/demos/llasa3b/demo/llasa_demo.py -s -k "test_llasa_zero_shot"
 ```
 
 **Process:**
@@ -87,14 +87,14 @@ pytest models/demos/llasa3b/demo/llasa_demo.py -s -k "test_llasa_tts"
 2. Run prefill and autoregressive decode on TTNN
 3. Extract speech token IDs from generated output
 4. Decode speech tokens to waveform using XCodec2 (on CPU)
-5. Save audio to `models/demos/llasa3b/demo/output/llasa_output.wav`
+5. Save audio to `models/demos/llasa3b/demo/output/llasa_output_{i}.wav`
 
 ### Prompted TTS / Voice Cloning (TTNN Demo)
 Clone the voice from `Anna.wav` and generate new speech:
 ```bash
 export HF_MODEL=HKUSTAudio/Llasa-3B
 # Modify ANNA_PROMPT_TEXT and ANNA_TARGET_TEXT in llasa_demo.py to customize
-pytest models/demos/llasa3b/demo/llasa_demo.py -s -k "test_llasa_tts_prompted"
+pytest models/demos/llasa3b/demo/llasa_demo.py -s -k "test_llasa_voice_cloning"
 ```
 Output: `models/demos/llasa3b/demo/output/llasa_output_prompted.wav` (contains only the generated speech).
 

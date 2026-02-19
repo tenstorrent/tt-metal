@@ -205,7 +205,7 @@ def run_llasa_tts(
             reset_batch=(iteration == 0),
         )
 
-        _, out_tok = sample_host(logits, temperature=0.5, top_p=1.0, on_host=True)
+        _, out_tok = sample_host(logits, temperature=0.7, top_p=1.0, on_host=True)
         iter_time = time.time() - t_iter_start
 
         if iteration == 0:
@@ -315,15 +315,16 @@ OPTIMIZATIONS = [
 
 
 @pytest.mark.parametrize(
-    "input_text",
-    [entry["text"] for entry in SAMPLE_INPUTS[:1]],
-    ids=[f"{entry['lang']}-{i}" for i, entry in enumerate(SAMPLE_INPUTS[:1])],
+    "index, input_text",
+    [(i, entry["text"]) for i, entry in enumerate(SAMPLE_INPUTS)],
+    ids=[f"{entry['lang']}-{i}" for i, entry in enumerate(SAMPLE_INPUTS)],
 )
 @pytest.mark.parametrize("max_generated_tokens", [500])
 @pytest.mark.parametrize("optimizations", OPTIMIZATIONS, ids=["performance"])
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_SHAPE, indirect=True)
-def test_llasa_tts(
+def test_llasa_zero_shot(
+    index,
     input_text,
     max_generated_tokens,
     optimizations,
@@ -349,8 +350,10 @@ def test_llasa_tts(
     if speech_ids:
         output_dir = "models/demos/llasa3b/demo/output"
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, "llasa_output.wav")
+        output_filename = f"llasa_output_{index}.wav"
+        output_path = os.path.join(output_dir, output_filename)
         result = decode_speech_to_audio(speech_ids, output_path=output_path)
+
         if result:
             logger.info(f"Audio saved to {result}")
     else:
@@ -367,16 +370,10 @@ ANNA_PROMPT_TEXT = (
     "Anna, you don't know how it feels to lose a sister. "
     "Anna, I'm sorry, but your father asked me not to tell you anything."
 )
-# ANNA_TARGET_TEXT = (
-#     "Dealing with family secrets is never easy. Yet, sometimes, omission is a form of protection, "
-#     "intending to safeguard some from the harsh truths. One day, I hope you understand the reasons "
-#     "behind my actions. Until then, Anna, please, bear with me."
-# )
-
 ANNA_TARGET_TEXT = (
-    "I'm afraid that this test will not be very interesting, "
-    "hopefully I can complete this task in a satisfying way "
-    "Until then, Anna, please, bear with me."
+    "Dealing with family secrets is never easy. Yet, sometimes, omission is a form of protection, "
+    "intending to safeguard some from the harsh truths. One day, I hope you understand the reasons "
+    "behind my actions. Until then, Anna, please, bear with me."
 )
 
 
@@ -400,7 +397,7 @@ def download_anna_wav():
 @pytest.mark.parametrize("optimizations", OPTIMIZATIONS, ids=["performance"])
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_SHAPE, indirect=True)
-def test_llasa_tts_prompted(
+def test_llasa_voice_cloning(
     max_generated_tokens,
     optimizations,
     mesh_device,
