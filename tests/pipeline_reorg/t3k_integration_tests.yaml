@@ -171,3 +171,12 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: qwenimage
+
+- name: t3k_deepseek_module_tests
+  cmd: run_t3000_deepseek_module_tests
+  skus:
+    wh_llmbox:
+      timeout: 60
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  model-name: deepseek-modules
