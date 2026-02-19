@@ -21,11 +21,8 @@ MPI_HOSTS = "10.140.20.237,10.140.20.239,10.140.20.238,10.140.20.240"
 RANKFILE = "tests/scale_out/4x_bh_quietbox/rankfile/4x4.txt"
 RANK_BINDING = "tests/scale_out/4x_bh_quietbox/rank_bindings/4x4.yaml"
 
-MPI_COMMON_ARGS = (
-    f"--allow-run-as-root --tag-output --host {MPI_HOSTS} "
-    f"--map-by rankfile:file={RANKFILE} --mca btl self,tcp "
-    f"--mca btl_tcp_if_include enp10s0f1np1"
-)
+MPI_COMMON_ARGS = f"--allow-run-as-root --host {MPI_HOSTS} --map-by rankfile:file={RANKFILE}"
+TCP_INTERFACE = "enp10s0f1np1"
 
 # Retry Configuration
 MAX_RETRIES = 10  # Maximum number of attempts before giving up
@@ -103,7 +100,18 @@ def run_cluster_validation(attempt_number=1):
         logger.info(header("Running cluster validation..."))
 
     # Construct the full tt-run command
-    cmd = ["tt-run", "--mpi-args", MPI_COMMON_ARGS, "--rank-binding", RANK_BINDING, "bash", "-c", VALIDATION_CMD]
+    cmd = [
+        "tt-run",
+        "--tcp-interface",
+        TCP_INTERFACE,
+        "--mpi-args",
+        MPI_COMMON_ARGS,
+        "--rank-binding",
+        RANK_BINDING,
+        "bash",
+        "-c",
+        VALIDATION_CMD,
+    ]
 
     # Run command and capture output
     with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".log") as temp_log:

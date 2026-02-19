@@ -297,7 +297,6 @@ static std::vector<Tensor> pool2d_L1(
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-        input_tensor_sharded.memory_config(),
         is_out_tiled,
         config_tensor_in_dram);
 
@@ -1039,7 +1038,7 @@ static std::vector<Tensor> pool2d(
     return result;
 }
 
-std::vector<Tensor> MaxPool2DOp::invoke(
+std::vector<Tensor> max_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -1086,7 +1085,7 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     return result;
 }
 
-Tensor AvgPool2DOp::invoke(
+Tensor avg_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,

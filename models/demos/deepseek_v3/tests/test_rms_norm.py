@@ -26,16 +26,16 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 
 @pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 32),
         ("prefill", _prefill_seq_len),
     ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
 )
 @pytest.mark.parametrize(
     "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
