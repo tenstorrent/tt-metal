@@ -20,6 +20,12 @@ class SdpaOpTest(OpTestBaseMulti):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def generate_torch_activations(self, shape):
+        return torch.randn(shape, dtype=torch.bfloat16)
+
+    def generate_torch_input(self, shape):
+        return torch.randn(shape, dtype=torch.bfloat16)
+
     def run_device_operation(self):
         return ttnn.transformer.scaled_dot_product_attention(
             self.activations,
