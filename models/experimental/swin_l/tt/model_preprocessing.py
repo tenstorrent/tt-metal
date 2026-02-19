@@ -87,7 +87,7 @@ def _unfold_to_concat_perm(C: int) -> torch.Tensor:
 
 
 def load_backbone_weights(
-    checkpoint_path: str,
+    checkpoint_path_or_state_dict,
     device: ttnn.Device,
     embed_dim: int = 192,
     depths: Tuple[int, ...] = (2, 2, 18, 2),
@@ -97,6 +97,10 @@ def load_backbone_weights(
 ) -> dict:
     """
     Load backbone weights from mmdet checkpoint and return TTNN parameter dict.
+
+    Args:
+        checkpoint_path_or_state_dict: either a path string to a .pth file,
+            or a pre-loaded state_dict (avoids redundant torch.load calls).
 
     Works with any mmdet checkpoint containing a Swin-L backbone.
     Only loads per-stage output norms for stages in `out_indices`
@@ -109,8 +113,11 @@ def load_backbone_weights(
         "norm{s}": {"weight", "bias"} for s in out_indices,
       }
     """
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-    sd = ckpt.get("state_dict", ckpt)
+    if isinstance(checkpoint_path_or_state_dict, dict):
+        sd = checkpoint_path_or_state_dict
+    else:
+        ckpt = torch.load(checkpoint_path_or_state_dict, map_location="cpu")
+        sd = ckpt.get("state_dict", ckpt)
 
     params: Dict = {}
 
