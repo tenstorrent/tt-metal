@@ -15,7 +15,8 @@ namespace ttnn::kernel {
 constexpr std::uint32_t CONCAT_ND_SHARDED_MAX_NUM_INPUTS = 16u;
 
 // Runtime args layout (per core, via SetRuntimeArgs):
-//   [0 .. num_input_tensors]: buffer addresses (output at 0, then input0, input1, ...)
-//   [num_input_tensors + 1]: shard_id (this core's index in the grid)
+//   [0]: output buffer address
+//   [1 .. 16]: input buffer addresses (input0..input15; absent filled from first input)
+//   [17]: shard_id (this core's index in the grid)
 
 }  // namespace ttnn::kernel

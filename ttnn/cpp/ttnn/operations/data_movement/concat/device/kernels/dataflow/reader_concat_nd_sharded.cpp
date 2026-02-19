@@ -12,132 +12,88 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "api/tensor/tensor_accessor.h"
 #include "concat_nd_sharded_args.hpp"
 
 namespace {
 
 constexpr uint32_t CONCAT_ND_SHARDED_MAX_NUM_INPUTS = ttnn::kernel::CONCAT_ND_SHARDED_MAX_NUM_INPUTS;
-constexpr uint32_t NUM_TENSORS = 1u + CONCAT_ND_SHARDED_MAX_NUM_INPUTS;  // output + inputs
 
-// Compile-time: 0 = num_input_tensors, 1..17 = page_size, 18+ = TensorAccessorArgs (output, in0..in15)
-constexpr uint32_t CTA_NUM_INPUTS = 0;
-constexpr uint32_t CTA_PAGE_SIZE_BASE = 1;
-constexpr uint32_t CTA_TENSOR_ACCESSOR_ARGS_START = 18;
-
-// Runtime: 0..16 = buffer addresses (output, in0..in15), 17 = shard_id
-constexpr uint32_t RT_SHARD_ID = 17;
-
-constexpr uint32_t CB_ID_SCRATCH = 0;
-
-template <typename OutputAccessor, typename InputAccessor>
-void copy_one_input_shard_to_output(
-    const OutputAccessor& output_accessor,
-    const InputAccessor& input_accessor,
-    uint32_t shard_id,
-    uint32_t page_size,
-    uint32_t& output_page_offset_in_shard) {
-    auto input_pages = input_accessor.shard_pages(shard_id);
-    for (const auto& page : input_pages) {
-        cb_reserve_back(CB_ID_SCRATCH, 1);
-        uint32_t l1_addr = get_write_ptr(CB_ID_SCRATCH);
-        noc_async_read(page.noc_addr(), l1_addr, page_size);
-        noc_async_read_barrier();
-
-        uint64_t out_noc_addr = output_accessor.get_shard_noc_addr(shard_id, output_page_offset_in_shard * page_size);
-        noc_async_write(l1_addr, out_noc_addr, page_size);
-        noc_async_write_barrier();
-
-        cb_push_back(CB_ID_SCRATCH, 1);
-        ++output_page_offset_in_shard;
-    }
-}
+// Compile-time layout: [0]=num_input_tensors, [1]=output_page_size, [2..17]=input_page_sizes,
+// [18..]=output TensorAccessorArgs, then input0..input15 TensorAccessorArgs.
+constexpr uint32_t CT_NUM_INPUTS = 0;
+constexpr uint32_t CT_OUTPUT_PAGE_SIZE = 1;
+constexpr uint32_t CT_INPUT_PAGE_SIZE_BASE = 2;
+constexpr uint32_t CT_TENSOR_ACCESSOR_ARGS_BASE = 18;
 
 }  // namespace
 
 void kernel_main() {
-    const uint32_t num_input_tensors = get_compile_time_arg_val(CTA_NUM_INPUTS);
-    const uint32_t page_size = get_compile_time_arg_val(CTA_PAGE_SIZE_BASE);
-    const uint32_t shard_id = get_arg_val<uint32_t>(RT_SHARD_ID);
+    constexpr uint32_t num_input_tensors = get_compile_time_arg_val(CT_NUM_INPUTS);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(CT_OUTPUT_PAGE_SIZE);
 
-    constexpr auto tensor_accessor_args_tuple =
-        make_tensor_accessor_args_tuple<NUM_TENSORS, CTA_TENSOR_ACCESSOR_ARGS_START>();
+    uint32_t argidx = 0;
+    const uint32_t output_addr = get_arg_val<uint32_t>(argidx++);
+    uint32_t input_addrs[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
+    for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
+        input_addrs[i] = get_arg_val<uint32_t>(argidx++);
+    }
+    const uint32_t shard_id = get_arg_val<uint32_t>(argidx++);
 
-    auto accessors_tuple = tensor_accessor::detail::make_tensor_accessor_tuple(
-        tensor_accessor_args_tuple,
-        /*address_rt_arg_index_start=*/0,
-        /*page_size_ct_arg_index_start=*/CTA_PAGE_SIZE_BASE);
+    // Build TensorAccessorArgs chain: output at 18, then input0..input15
+    constexpr auto out_args = TensorAccessorArgs<CT_TENSOR_ACCESSOR_ARGS_BASE>();
+    constexpr auto in0_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    constexpr auto in2_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+    constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
+    constexpr auto in4_args = TensorAccessorArgs<in3_args.next_compile_time_args_offset()>();
+    constexpr auto in5_args = TensorAccessorArgs<in4_args.next_compile_time_args_offset()>();
+    constexpr auto in6_args = TensorAccessorArgs<in5_args.next_compile_time_args_offset()>();
+    constexpr auto in7_args = TensorAccessorArgs<in6_args.next_compile_time_args_offset()>();
+    constexpr auto in8_args = TensorAccessorArgs<in7_args.next_compile_time_args_offset()>();
+    constexpr auto in9_args = TensorAccessorArgs<in8_args.next_compile_time_args_offset()>();
+    constexpr auto in10_args = TensorAccessorArgs<in9_args.next_compile_time_args_offset()>();
+    constexpr auto in11_args = TensorAccessorArgs<in10_args.next_compile_time_args_offset()>();
+    constexpr auto in12_args = TensorAccessorArgs<in11_args.next_compile_time_args_offset()>();
+    constexpr auto in13_args = TensorAccessorArgs<in12_args.next_compile_time_args_offset()>();
+    constexpr auto in14_args = TensorAccessorArgs<in13_args.next_compile_time_args_offset()>();
+    constexpr auto in15_args = TensorAccessorArgs<in14_args.next_compile_time_args_offset()>();
 
-    const auto& output_accessor = std::get<0>(accessors_tuple);
-    uint32_t output_page_offset_in_shard = 0;
+    const auto output_accessor = TensorAccessor(out_args, output_addr, output_page_size);
+
+    // Create TensorAccessor for each input and DPRINT: input data (pages), input page size,
+    // output data (pages), output page size.
+#define CONCAT_ND_DPRINT_INPUT(n)                                                                      \
+    do {                                                                                               \
+        constexpr uint32_t in_page_size_##n = get_compile_time_arg_val(CT_INPUT_PAGE_SIZE_BASE + (n)); \
+        const auto in##n##_accessor = TensorAccessor(in##n##_args, input_addrs[n], in_page_size_##n);  \
+        DPRINT << "input " << (n) << ": data (pages)=" << in##n##_accessor.dspec().tensor_volume()     \
+               << " page_size=" << in_page_size_##n                                                    \
+               << " output data (pages)=" << output_accessor.dspec().tensor_volume()                   \
+               << " output page_size=" << output_page_size << ENDL();                                  \
+    } while (0)
 
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
         switch (i) {
-            case 0:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<1>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 1:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<2>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 2:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<3>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 3:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<4>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 4:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<5>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 5:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<6>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 6:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<7>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 7:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<8>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 8:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<9>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 9:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<10>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 10:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<11>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 11:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<12>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 12:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<13>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 13:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<14>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 14:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<15>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
-            case 15:
-                copy_one_input_shard_to_output(
-                    output_accessor, std::get<16>(accessors_tuple), shard_id, page_size, output_page_offset_in_shard);
-                break;
+            case 0: CONCAT_ND_DPRINT_INPUT(0); break;
+            case 1: CONCAT_ND_DPRINT_INPUT(1); break;
+            case 2: CONCAT_ND_DPRINT_INPUT(2); break;
+            case 3: CONCAT_ND_DPRINT_INPUT(3); break;
+            case 4: CONCAT_ND_DPRINT_INPUT(4); break;
+            case 5: CONCAT_ND_DPRINT_INPUT(5); break;
+            case 6: CONCAT_ND_DPRINT_INPUT(6); break;
+            case 7: CONCAT_ND_DPRINT_INPUT(7); break;
+            case 8: CONCAT_ND_DPRINT_INPUT(8); break;
+            case 9: CONCAT_ND_DPRINT_INPUT(9); break;
+            case 10: CONCAT_ND_DPRINT_INPUT(10); break;
+            case 11: CONCAT_ND_DPRINT_INPUT(11); break;
+            case 12: CONCAT_ND_DPRINT_INPUT(12); break;
+            case 13: CONCAT_ND_DPRINT_INPUT(13); break;
+            case 14: CONCAT_ND_DPRINT_INPUT(14); break;
+            case 15: CONCAT_ND_DPRINT_INPUT(15); break;
             default: break;
         }
     }
+#undef CONCAT_ND_DPRINT_INPUT
 }
