@@ -22,7 +22,7 @@ struct KernelGroup;
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
-// Per-risc config matching dfb_initializer_per_risc_t (40 bytes)
+// Per-risc config matching dfb_initializer_per_risc_t (50 bytes)
 struct LocalDFBInterfaceHost {
     std::array<uint32_t, 4> base_addr = {0};
     std::array<uint32_t, 4> limit = {0};
@@ -31,6 +31,12 @@ struct LocalDFBInterfaceHost {
     uint8_t remapper_pair_index = 0;
     bool should_init_tc = false;
     uint32_t consumer_tcs = 0;
+    // Per-risc transaction ID fields (only used by DM RISCs with implicit sync)
+    uint8_t num_txn_ids = 0;
+    std::array<uint8_t, ::experimental::NUM_TXN_IDS> txn_ids = {0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t num_entries_per_txn_id = 0;  // entries to post (producer) or ack (consumer) per txn ID
+    uint8_t num_entries_per_txn_id_per_tc = 0;
+    bool init_txn_id_descriptor = false;
 };
 
 struct DFBRiscConfig {
@@ -51,11 +57,10 @@ struct DataflowBufferImpl {
     // Shared config fields (written to dfb_initializer_t)
     uint32_t entry_size = 0;
     uint32_t stride_size = 0;
-    std::array<uint8_t, 4> txn_ids = {0};
-    uint8_t num_entries_per_txn_id = 0;
-    uint8_t num_entries_per_txn_id_per_tc = 0;
     uint8_t remapper_consumer_mask = 0;
-    uint8_t num_txn_ids = 0;
+    // Thresholds for implicit sync - how many entries each txn ID tracks before posting/acking
+    uint8_t num_entries_to_process_threshold_producer = 0xFF;
+    uint8_t num_entries_to_process_threshold_consumer = 0xFF;
 
     std::optional<uint32_t> allocated_address;
 
@@ -80,6 +85,20 @@ public:
 
 private:
     std::unordered_map<CoreCoord, uint8_t> next_index_;
+};
+
+class TransactionIdAllocator {
+public:
+    static constexpr uint8_t TXN_IDS_PER_ALLOCATION = 2;
+
+    // Allocates 2 transaction IDs for a DM RISC (producer or consumer)
+    // Called once per DM RISC side that needs txn IDs
+    std::array<uint8_t, 2> allocate();
+
+    void reset() { next_txn_id_ = 0; }
+
+private:
+    uint8_t next_txn_id_ = 0;
 };
 
 uint32_t finalize_dfbs(

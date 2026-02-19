@@ -96,8 +96,9 @@ void deassert_trisc() {
     deassert_trisc_reset();
 }
 // Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
-thread_local ::experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
+thread_local experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
+volatile TxnDFBDescriptor g_txn_dfb_descriptor[MAX_TOTAL_TXN_IDS] __attribute__((used));
 
 void device_setup() {
     // instn_buf
