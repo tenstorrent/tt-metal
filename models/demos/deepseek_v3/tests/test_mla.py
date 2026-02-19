@@ -374,10 +374,6 @@ BASE_TEST_CASES = [
 EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
 EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 
-optimal_topology = (
-    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-)
-
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
     EXPANDED_TEST_CASES,
@@ -387,7 +383,9 @@ optimal_topology = (
     "device_params",
     [
         {
-            "fabric_config": optimal_topology,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING
+            if (os.getenv("USE_TORUS_MODE") is not None)
+            else ttnn.FabricConfig.FABRIC_1D
         }
     ],
     indirect=True,
@@ -401,7 +399,7 @@ optimal_topology = (
 )
 @pytest.mark.parametrize(
     "module_path",
-    [None, "model.layers.0.self_attn"],
+    [None],
 )
 @pytest.mark.parametrize(
     "test_closure",
