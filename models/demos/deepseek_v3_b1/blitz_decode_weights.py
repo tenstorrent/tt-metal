@@ -691,57 +691,36 @@ class BlitzDecodeWeights:
     def get_tt_o_proj_and_gate_mm_weights(
         self,
         o_proj_weights: torch.Tensor,
-        gate_mm_weights: torch.Tensor,
+        gate_mm_weights: torch.Tensor | None,
         attn_norm: torch.Tensor,
         q_norm: torch.Tensor,
         kv_norm: torch.Tensor,
         ffn_norm: torch.Tensor,
     ) -> list[OverlappedTensor]:
-        """Fuse o_proj, gate_mm, and 4 RMSNorm gammas into one WIDTH_SHARDED tensor.
+        """Fuse o_proj, optionally gate_mm, and 4 RMSNorm gammas into one WIDTH_SHARDED tensor.
 
         The fused buffer is a UINT32 raw-byte container where each core's
-        shard is zero-padded to the same maximum byte size.  The six
-        sub-tensors use three distinct formats:
+        shard is zero-padded to the same maximum byte size.  When gate_mm_weights
+        is provided there are six sub-tensors; when None (dense layers) there
+        are five (no gate_mm cores).
 
         * **o_proj** — BFP8 (32×32 tiles) on 112 cores.
-        * **gate_mm** — BFP16 (32×32 tiles) on 8 cores.
-        * **attn_norm, q_norm, ffn_norm** — BFP16
-          (1×32 tiles) back-to-back on core (12, 9).
+        * **gate_mm** — BFP16 (32×32 tiles) on 8 cores (omitted when gate_mm_weights is None).
+        * **attn_norm, q_norm, ffn_norm** — BFP16 (1×32 tiles) back-to-back on core (12, 9).
         * **kv_norm** — BFP16 (1×32 tiles) on dedicated core (0, 8).
-
-        Layout::
-
-            -- o_proj region: 112 cores --
-            o_proj (8192, 7168) as bfloat8_b
-              shard (8192, 64) = 512 tiles × 1088 B = 557 056 B
-
-            -- gate_mm region: 8 cores (col 12, rows 0-7) --
-            gate_mm (7168, 256) as bfloat16
-              shard (7168, 32) = 224 tiles × 2048 B = 458 752 B
-
-            -- gamma core: 1 core (12, 9) --
-            attn_norm (1, 7168)   @ offset 0      → 14 336 B
-            q_norm (1, 1536)  @ offset 14 336  →  3 072 B
-            ffn_norm (1, 7168) @ offset 17 408 → 14 336 B
-
-            -- kv_norm core: 1 core (0, 8) --
-            kv_norm (1, 512) @ offset 0 → 1 024 B
-
-            combined: 122 cores, shard = max_shard_bytes
 
         Args:
             o_proj_weights:     Raw o_proj tensor, shape (8192, 7168).
-            gate_mm_weights:    Raw gate_mm tensor, shape (7168, 256).
+            gate_mm_weights:    Raw gate_mm tensor, shape (7168, 256), or None for dense layers.
             attn_norm:      Pre-SDPA attention-input RMSNorm gamma, shape (1, 7168).
             q_norm:     Pre-SDPA post-matmul1 RMSNorm gamma, shape (1, 1536).
             kv_norm:  Pre-SDPA KV-cache-branch RMSNorm gamma, shape (1, 512).
             ffn_norm:  MoE pre-MLP RMSNorm gamma, shape (1, 7168).
 
         Returns:
-            A list of six :class:`OverlappedTensor` views
-            ``[o_proj, gate_mm, attn_norm, q_norm,
-            kv_norm, ffn_norm]`` sharing the same
-            underlying fused device buffer.
+            When gate_mm_weights is not None: list of six OverlappedTensors
+            ``[o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm]``.
+            When gate_mm_weights is None: list of five (no gate_mm).
         """
         cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_OVERLAP_CFG
 
@@ -749,9 +728,10 @@ class BlitzDecodeWeights:
         assert (
             o_proj_weights.shape == cfg.o_proj_shape
         ), f"o_proj must be {cfg.o_proj_shape}, got {tuple(o_proj_weights.shape)}"
-        assert (
-            gate_mm_weights.shape == cfg.gate_mm_shape
-        ), f"gate_mm must be {cfg.gate_mm_shape}, got {tuple(gate_mm_weights.shape)}"
+        if gate_mm_weights is not None:
+            assert (
+                gate_mm_weights.shape == cfg.gate_mm_shape
+            ), f"gate_mm must be {cfg.gate_mm_shape}, got {tuple(gate_mm_weights.shape)}"
         assert (
             tuple(attn_norm.shape) == cfg.attn_norm_shape
         ), f"attn_norm must be {cfg.attn_norm_shape}, got {tuple(attn_norm.shape)}"
@@ -781,13 +761,14 @@ class BlitzDecodeWeights:
             packed.extend(shard_raw)
             packed.extend(b"\x00" * (max_shard_bytes - cfg.o_proj_shard_bytes))
 
-        # gate_mm shards (bfloat16) — 8 cores
-        for i in range(g_num_cores):
-            shard_data = gate_mm_weights[:, i * g_shard_w : (i + 1) * g_shard_w].contiguous()
-            shard_raw = BlitzDecodeWeights._tilize_and_pack_bfloat16(shard_data, cfg.tile_h, cfg.tile_w)
-            assert len(shard_raw) == cfg.gate_mm_shard_bytes
-            packed.extend(shard_raw)
-            packed.extend(b"\x00" * (max_shard_bytes - cfg.gate_mm_shard_bytes))
+        # gate_mm shards (bfloat16) — 8 cores (skipped when gate_mm_weights is None)
+        if gate_mm_weights is not None:
+            for i in range(g_num_cores):
+                shard_data = gate_mm_weights[:, i * g_shard_w : (i + 1) * g_shard_w].contiguous()
+                shard_raw = BlitzDecodeWeights._tilize_and_pack_bfloat16(shard_data, cfg.tile_h, cfg.tile_w)
+                assert len(shard_raw) == cfg.gate_mm_shard_bytes
+                packed.extend(shard_raw)
+                packed.extend(b"\x00" * (max_shard_bytes - cfg.gate_mm_shard_bytes))
 
         # Gamma core (12, 9) — attn_norm + q_norm + ffn_norm
         gamma_shard = bytearray(max_shard_bytes)
@@ -811,17 +792,18 @@ class BlitzDecodeWeights:
         packed.extend(kv_norm_shard)
 
         # -- Build UINT32 tensor on device ------------------------------
-        total_cores = o_num_cores + g_num_cores + 2  # +1 gamma core, +1 kv_norm core
+        total_cores = o_num_cores + (g_num_cores if gate_mm_weights is not None else 0) + 2  # +1 gamma, +1 kv_norm
         uint32_per_shard = max_shard_bytes // 4
 
         raw_data = torch.frombuffer(bytes(packed), dtype=torch.int32).clone()
 
-        combined_crs = ttnn.CoreRangeSet(
+        combined_crs_ranges = (
             list(cfg.o_proj_core_range_set.ranges())
-            + list(cfg.gate_mm_core_range_set.ranges())
+            + (list(cfg.gate_mm_core_range_set.ranges()) if gate_mm_weights is not None else [])
             + list(cfg.gamma_core_range_set.ranges())
             + list(cfg.kv_norm_core_range_set.ranges())
         )
+        combined_crs = ttnn.CoreRangeSet(combined_crs_ranges)
         shard_spec = ttnn.ShardSpec(
             combined_crs,
             (1, uint32_per_shard),
@@ -846,7 +828,7 @@ class BlitzDecodeWeights:
         tile_32x32 = (cfg.tile_h, cfg.tile_w)
         tile_1x32 = (cfg.gamma_tile_h, cfg.gamma_tile_w)
 
-        return [
+        result: list[OverlappedTensor] = [
             OverlappedTensor(
                 fused_tensor=fused,
                 tensor_shape=cfg.o_proj_shape,
@@ -856,52 +838,60 @@ class BlitzDecodeWeights:
                 tile_shape=tile_32x32,
                 byte_offset=0,
             ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.gate_mm_shape,
-                shard_shape=(cfg.gate_mm_shape[0], g_shard_w),
-                core_range_set=cfg.gate_mm_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_32x32,
-                byte_offset=0,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.attn_norm_shape,
-                shard_shape=cfg.attn_norm_shape,
-                core_range_set=cfg.gamma_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.attn_norm_byte_offset,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.q_norm_shape,
-                shard_shape=cfg.q_norm_shape,
-                core_range_set=cfg.gamma_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.q_norm_byte_offset,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.kv_norm_shape,
-                shard_shape=cfg.kv_norm_shape,
-                core_range_set=cfg.kv_norm_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.kv_norm_byte_offset,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.ffn_norm_shape,
-                shard_shape=cfg.ffn_norm_shape,
-                core_range_set=cfg.gamma_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.ffn_norm_byte_offset,
-            ),
         ]
+        if gate_mm_weights is not None:
+            result.append(
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.gate_mm_shape,
+                    shard_shape=(cfg.gate_mm_shape[0], g_shard_w),
+                    core_range_set=cfg.gate_mm_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_32x32,
+                    byte_offset=0,
+                )
+            )
+        result.extend(
+            [
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.attn_norm_shape,
+                    shard_shape=cfg.attn_norm_shape,
+                    core_range_set=cfg.gamma_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.attn_norm_byte_offset,
+                ),
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.q_norm_shape,
+                    shard_shape=cfg.q_norm_shape,
+                    core_range_set=cfg.gamma_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.q_norm_byte_offset,
+                ),
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.kv_norm_shape,
+                    shard_shape=cfg.kv_norm_shape,
+                    core_range_set=cfg.kv_norm_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.kv_norm_byte_offset,
+                ),
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.ffn_norm_shape,
+                    shard_shape=cfg.ffn_norm_shape,
+                    core_range_set=cfg.gamma_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.ffn_norm_byte_offset,
+                ),
+            ]
+        )
+        return result
 
     def get_tt_kv_b12_proj_weights(
         self,
