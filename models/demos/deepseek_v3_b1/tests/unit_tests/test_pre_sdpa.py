@@ -789,7 +789,7 @@ def test_pre_sdpa(
             passing
         ), f"Device {device_idx} failed: {pcc_message}"  # Read back from kv cache tensor in DRAM to check PCC
 
-        compare_kv_cache = kv_cache_output_torch[..., position_id, :]
+        compare_kv_cache = kv_cache_output_torch[device_idx, ..., position_id, :]
 
         # Split into nope (first 512 elements) and rope (last 64 elements)
         compare_nope = compare_kv_cache[..., :KNOPE_DIM]
@@ -798,21 +798,21 @@ def test_pre_sdpa(
         # Check nope portion
         nope_max_diff = torch.max(torch.abs(expected_nope - compare_nope)).item()
         nope_mean_diff = torch.mean(torch.abs(expected_nope - compare_nope)).item()
-        logger.info(f"KV Cache NOPE absolute difference: {nope_max_diff}")
-        logger.info(f"KV Cache NOPE mean absolute difference: {nope_mean_diff}")
+        logger.info(f"Device {device_idx} KV Cache NOPE absolute difference: {nope_max_diff}")
+        logger.info(f"Device {device_idx} KV Cache NOPE mean absolute difference: {nope_mean_diff}")
         nope_passing, nope_pcc_message = comp_pcc(compare_nope, expected_nope, 0.98)
-        logger.info(f"KV Cache NOPE PCC: {nope_pcc_message}")
+        logger.info(f"Device {device_idx} KV Cache NOPE PCC: {nope_pcc_message}")
 
         # Check rope portion
         rope_max_diff = torch.max(torch.abs(expected_rope - compare_rope)).item()
         rope_mean_diff = torch.mean(torch.abs(expected_rope - compare_rope)).item()
-        logger.info(f"KV Cache ROPE absolute difference: {rope_max_diff}")
-        logger.info(f"KV Cache ROPE mean absolute difference: {rope_mean_diff}")
+        logger.info(f"Device {device_idx} KV Cache ROPE absolute difference: {rope_max_diff}")
+        logger.info(f"Device {device_idx} KV Cache ROPE mean absolute difference: {rope_mean_diff}")
         rope_passing, rope_pcc_message = comp_pcc(compare_rope, expected_rope, 0.98)
-        logger.info(f"KV Cache ROPE PCC: {rope_pcc_message}")
+        logger.info(f"Device {device_idx} KV Cache ROPE PCC: {rope_pcc_message}")
 
-        assert nope_passing, f"KV Cache NOPE verification failed: {nope_pcc_message}"
-        assert rope_passing, f"KV Cache ROPE verification failed: {rope_pcc_message}"
+        assert nope_passing, f"Device {device_idx} KV Cache NOPE verification failed: {nope_pcc_message}"
+        assert rope_passing, f"Device {device_idx} KV Cache ROPE verification failed: {rope_pcc_message}"
 
     logger.info("✓ PreSDPA mesh test passed!")
 
