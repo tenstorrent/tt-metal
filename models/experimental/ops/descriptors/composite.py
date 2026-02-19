@@ -6,7 +6,8 @@ from typing import List, Union
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import FusedOp, OpDescriptor
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors.fusion.fusion import FusedOp
 
 
 def launch(op_descriptors: List[Union[OpDescriptor, FusedOp]]) -> List[List["ttnn.Tensor"]]:
