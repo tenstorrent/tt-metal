@@ -31,7 +31,7 @@ def _get_config_and_checkpoint():
 
     config = os.environ.get(
         "SWIN_L_CONFIG",
-        str(base / "models/experimental/dino_5scale_swin_l/references/dino_5scale_swin_l.py"),
+        str(base / "models/experimental/dino_5scale_swin_l/reference/dino_5scale_swin_l.py"),
     )
 
     ckpt = os.environ.get("SWIN_L_CKPT", "")

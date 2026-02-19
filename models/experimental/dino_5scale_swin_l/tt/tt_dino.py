@@ -526,6 +526,7 @@ class TtDINO:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         backbone_feats_tt = self.backbone(image_tt)
+        ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Backbone: {len(backbone_feats_tt)} feature maps")
 
         backbone_feats_torch = None
@@ -535,6 +536,7 @@ class TtDINO:
         # --- Neck ---
         logger.info("Neck: ChannelMapper...")
         neck_feats_tt = self.neck(backbone_feats_tt)
+        ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Neck: {len(neck_feats_tt)} output levels")
 
         neck_feats_torch = []
@@ -570,6 +572,7 @@ class TtDINO:
         )
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
+        ttnn.ReadDeviceProfiler(self.device)
 
         encoder_memory_torch = None
         if return_intermediates:
@@ -589,6 +592,8 @@ class TtDINO:
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
+
+        ttnn.ReadDeviceProfiler(self.device)
 
         all_cls, all_coords = self.forward_heads(hidden_states, references)
 
