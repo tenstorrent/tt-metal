@@ -1,11 +1,6 @@
 name: "[Tier 2] Models End-To-End Tests"
-# no-op change to trigger push pipeline
 
 on:
-  push:
-    branches: ["models-ci/model_unit_pipeline"]
-    paths:
-      - ".github/workflows/models-t2-e2e-tests.yaml"
   workflow_dispatch:
     inputs:
       model:
