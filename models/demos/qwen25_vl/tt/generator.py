@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
-from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.common import Mode, copy_host_to_device
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
@@ -329,6 +329,7 @@ class Generator(WarmupForwardMixin):
         )
 
         # Extract per-user logits from hidden states [1, 1, batch*padded_len, hidden]
+        lm_head_input_mem_cfg = self.model.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
         for user_id in range(batch):
             lt_idx = last_token_indices[user_id]
             offset = user_id * padded_len
@@ -336,9 +337,9 @@ class Generator(WarmupForwardMixin):
             # Slice the 32-token tile containing the last token
             tile = ttnn.slice(tt_hidden, (0, 0, get_last, 0), (1, 1, get_last + 32, tt_hidden.shape[-1]))
             # Apply norm + LM head
-            tile = self.model.norm(tile, mode="prefill")
-            if self.model.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
-                tile = ttnn.interleaved_to_sharded(tile, self.model.model_config["LM_HEAD_INPUT_MEMCFG"])
+            tile = self.model.norm(tile, mode=Mode.PREFILL)
+            if lm_head_input_mem_cfg.is_sharded():
+                tile = ttnn.interleaved_to_sharded(tile, lm_head_input_mem_cfg)
             logits = self.model.lm_head(tile)
             logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             output_logits[user_id] = self.model.process_output_prefill(logits.cpu(), last_token_idx=(lt_idx % 32))
