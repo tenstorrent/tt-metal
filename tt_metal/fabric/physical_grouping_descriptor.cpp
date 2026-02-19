@@ -81,6 +81,105 @@ bool grouping_exists(const proto::PhysicalGroupings& proto, const std::string& g
 }
 
 // Helper function to build adjacency graph from all-to-all connection
+// Helper function to assign corner orientations to items in a GroupingInfo based on mesh dimensions
+// This is used for both PGD groupings (with multiple items) and MGD mesh instances (with a single item)
+void assign_corner_orientations_to_grouping(GroupingInfo& info, const std::vector<int32_t>& dims) {
+    using CO = GroupingItemInfo::CornerOrientation;
+
+    if (dims.empty() || info.items.empty()) {
+        return;
+    }
+
+    size_t total_items = info.items.size();
+
+    if (dims.size() == 1) {
+        // 1D mesh: single dimension
+        int32_t length = dims[0];
+        if (total_items == static_cast<size_t>(length)) {
+            // First item: NW + SW (top-left + bottom-left)
+            if (total_items > 0) {
+                info.items[0].corners.push_back(CO::NW);
+                info.items[0].corners.push_back(CO::SW);
+            }
+            // Last item: NE + SE (top-right + bottom-right)
+            if (total_items > 1) {
+                size_t last_idx = total_items - 1;
+                info.items[last_idx].corners.push_back(CO::NE);
+                info.items[last_idx].corners.push_back(CO::SE);
+            }
+        }
+    } else if (dims.size() >= 2) {
+        int32_t rows = dims[0];
+        int32_t cols = dims[1];
+
+        if (rows == 1 && cols == 1) {
+            // 1x1 mesh: single item has all 4 orientations
+            if (total_items == 1) {
+                info.items[0].corners.push_back(CO::NW);
+                info.items[0].corners.push_back(CO::NE);
+                info.items[0].corners.push_back(CO::SW);
+                info.items[0].corners.push_back(CO::SE);
+            }
+        } else if (rows == 1) {
+            // 1D row mesh (1xN): first item has NW+SW, last item has NE+SE
+            if (total_items == static_cast<size_t>(cols)) {
+                if (total_items > 0) {
+                    info.items[0].corners.push_back(CO::NW);
+                    info.items[0].corners.push_back(CO::SW);
+                }
+                if (total_items > 1) {
+                    size_t last_idx = total_items - 1;
+                    info.items[last_idx].corners.push_back(CO::NE);
+                    info.items[last_idx].corners.push_back(CO::SE);
+                }
+            }
+        } else if (cols == 1) {
+            // 1D column mesh (Nx1): first item has NW+NE, last item has SW+SE
+            if (total_items == static_cast<size_t>(rows)) {
+                if (total_items > 0) {
+                    info.items[0].corners.push_back(CO::NW);
+                    info.items[0].corners.push_back(CO::NE);
+                }
+                if (total_items > 1) {
+                    size_t last_idx = total_items - 1;
+                    info.items[last_idx].corners.push_back(CO::SW);
+                    info.items[last_idx].corners.push_back(CO::SE);
+                }
+            }
+        } else {
+            // 2D mesh: standard 4 corners
+            if (total_items == static_cast<size_t>(rows * cols)) {
+                // Multiple items: assign corners to specific items based on position
+                size_t nw_idx = 0;
+                size_t ne_idx = static_cast<size_t>(cols - 1);
+                size_t sw_idx = static_cast<size_t>((rows - 1) * cols);
+                size_t se_idx = static_cast<size_t>(((rows - 1) * cols) + (cols - 1));
+
+                // Set corner orientations based on row-major mesh position
+                if (nw_idx < total_items) {
+                    info.items[nw_idx].corners.push_back(CO::NW);
+                }
+                if (ne_idx < total_items && ne_idx != nw_idx) {
+                    info.items[ne_idx].corners.push_back(CO::NE);
+                }
+                if (sw_idx < total_items && sw_idx != nw_idx && sw_idx != ne_idx) {
+                    info.items[sw_idx].corners.push_back(CO::SW);
+                }
+                if (se_idx < total_items && se_idx != nw_idx && se_idx != ne_idx && se_idx != sw_idx) {
+                    info.items[se_idx].corners.push_back(CO::SE);
+                }
+            } else if (total_items == 1) {
+                // Single item representing entire mesh (e.g., MGD mesh instance)
+                // Assign all 4 corners to indicate it's a complete 2D mesh
+                info.items[0].corners.push_back(CO::NW);
+                info.items[0].corners.push_back(CO::NE);
+                info.items[0].corners.push_back(CO::SW);
+                info.items[0].corners.push_back(CO::SE);
+            }
+        }
+    }
+}
+
 AdjacencyGraph<uint32_t> build_all_to_all_graph(const std::vector<uint32_t>& instance_ids) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
@@ -364,88 +463,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         // Corner positions are determined by the mesh dimensions, not ASIC locations
         // For 1D meshes, endpoints can have multiple orientations (e.g., 1x4: first item has NW+SW, last has NE+SE)
         // For 1x1 mesh, the single item has all 4 orientations
-        if (!dims.empty() && !info.items.empty()) {
-            size_t total_items = info.items.size();
-
-            if (dims.size() == 1) {
-                // 1D mesh: single dimension
-                int32_t length = dims[0];
-                if (total_items == static_cast<size_t>(length)) {
-                    // First item: NW + SW (top-left + bottom-left)
-                    if (total_items > 0) {
-                        info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                        info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                    }
-                    // Last item: NE + SE (top-right + bottom-right)
-                    if (total_items > 1) {
-                        size_t last_idx = total_items - 1;
-                        info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                        info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                    }
-                }
-            } else if (dims.size() >= 2) {
-                int32_t rows = dims[0];
-                int32_t cols = dims[1];
-
-                if (rows == 1 && cols == 1) {
-                    // 1x1 mesh: single item has all 4 orientations
-                    if (total_items == 1) {
-                        info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                        info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                        info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                        info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                    }
-                } else if (rows == 1) {
-                    // 1D row mesh (1xN): first item has NW+SW, last item has NE+SE
-                    if (total_items == static_cast<size_t>(cols)) {
-                        if (total_items > 0) {
-                            info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                            info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                        }
-                        if (total_items > 1) {
-                            size_t last_idx = total_items - 1;
-                            info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                            info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                        }
-                    }
-                } else if (cols == 1) {
-                    // 1D column mesh (Nx1): first item has NW+NE, last item has SW+SE
-                    if (total_items == static_cast<size_t>(rows)) {
-                        if (total_items > 0) {
-                            info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                            info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                        }
-                        if (total_items > 1) {
-                            size_t last_idx = total_items - 1;
-                            info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                            info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                        }
-                    }
-                } else {
-                    // 2D mesh: standard 4 corners
-                    if (total_items == static_cast<size_t>(rows * cols)) {
-                        size_t nw_idx = 0;
-                        size_t ne_idx = static_cast<size_t>(cols - 1);
-                        size_t sw_idx = static_cast<size_t>((rows - 1) * cols);
-                        size_t se_idx = static_cast<size_t>(((rows - 1) * cols) + (cols - 1));
-
-                        // Set corner orientations based on row-major mesh position
-                        if (nw_idx < total_items) {
-                            info.items[nw_idx].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                        }
-                        if (ne_idx < total_items && ne_idx != nw_idx) {
-                            info.items[ne_idx].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                        }
-                        if (sw_idx < total_items && sw_idx != nw_idx && sw_idx != ne_idx) {
-                            info.items[sw_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                        }
-                        if (se_idx < total_items && se_idx != nw_idx && se_idx != ne_idx && se_idx != sw_idx) {
-                            info.items[se_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                        }
-                    }
-                }
-            }
-        }
+        assign_corner_orientations_to_grouping(info, dims);
     } else if (grouping.has_custom()) {
         const auto& custom = grouping.custom();
         info.adjacency_graph = build_custom_connections_graph(node_ids, custom);
@@ -1384,13 +1402,29 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
         // Get required ASIC count (calculated above)
         uint32_t asic_count = required_asics_map.at(mesh_type).at(mesh_name);
 
+        // Get device topology dimensions for corner orientation assignment
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
+        TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null");
+        const auto& device_topology = mesh_desc->device_topology();
+        std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+
         // Create GroupingInfo
         GroupingInfo grouping_info;
         grouping_info.name = mesh_name;  // Keep original name for matching
         grouping_info.type = mesh_type;
         grouping_info.asic_count = asic_count;
         grouping_info.adjacency_graph = std::move(adjacency_graph);
-        // items left empty - not needed for matching
+
+        // Create a single item representing the mesh (for corner orientation assignment)
+        // The item represents the entire mesh as a single unit
+        GroupingItemInfo mesh_item;
+        mesh_item.type = GroupingItemInfo::ItemType::GROUPING_REF;
+        mesh_item.grouping_name = mesh_name;
+        grouping_info.items.push_back(std::move(mesh_item));
+
+        // Assign corner orientations based on mesh dimensions
+        // For mesh instances with a single item, the helper function will assign corners appropriately
+        assign_corner_orientations_to_grouping(grouping_info, device_dims);
 
         // Store keyed by mesh definition name (not instance key)
         mgd_grouping_infos[mesh_type][mesh_name] = std::move(grouping_info);
@@ -1596,7 +1630,9 @@ void process_higher_layer_and_recurse(
 }  // namespace
 
 std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
-PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescriptor& mesh_graph_descriptor) const {
+PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>> result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
@@ -1667,7 +1703,19 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
                 // Look up the GroupingInfo from lookup map
                 auto lookup_it = mesh_grouping_lookup.find(match_name);
                 if (lookup_it != mesh_grouping_lookup.end()) {
-                    result[instance_type][instance_name].push_back(lookup_it->second);
+                    const GroupingInfo& candidate_grouping = lookup_it->second;
+
+                    // Phase 2: If PSD is provided, validate that this mesh grouping is valid on the PSD
+                    if (physical_system_descriptor != nullptr) {
+                        if (validate_grouping_with_psd(
+                                *this, candidate_grouping, *physical_system_descriptor, nullptr)) {
+                            result[instance_type][instance_name].push_back(candidate_grouping);
+                        }
+                        // Skip invalid groupings - they don't match the PSD
+                    } else {
+                        // No PSD provided - include all topology matches
+                        result[instance_type][instance_name].push_back(candidate_grouping);
+                    }
                 }
             }
         }
@@ -1911,11 +1959,36 @@ void join_two_adjacent_meshes(
     const auto edge_a_nodes = mesh_a.get_edge(edge_a_dir);
     const auto edge_b_nodes = mesh_b.get_edge(edge_b_dir);
 
+    // Helper to convert CardinalDirection to string
+    auto dir_to_string = [](CardinalDirection dir) -> const char* {
+        switch (dir) {
+            case CardinalDirection::North: return "North";
+            case CardinalDirection::South: return "South";
+            case CardinalDirection::East: return "East";
+            case CardinalDirection::West: return "West";
+            default: return "Unknown";
+        }
+    };
+
+    // Error if mesh has no directions (empty edges)
+    TT_FATAL(
+        !edge_a_nodes.empty(),
+        "Mesh A has no {} edge (no directions available). Mesh must have valid 2D dimensions to determine edges.",
+        dir_to_string(edge_a_dir));
+    TT_FATAL(
+        !edge_b_nodes.empty(),
+        "Mesh B has no {} edge (no directions available). Mesh must have valid 2D dimensions to determine edges.",
+        dir_to_string(edge_b_dir));
+
+    // Error if mesh boundaries don't match (bigger or smaller than expected)
     TT_FATAL(
         edge_a_nodes.size() == edge_b_nodes.size(),
-        "Mesh boundary size mismatch: {} vs {}",
+        "Mesh boundary size mismatch: mesh A has {} nodes on {} edge, mesh B has {} nodes on {} edge. Meshes must have "
+        "matching boundary sizes.",
         edge_a_nodes.size(),
-        edge_b_nodes.size());
+        dir_to_string(edge_a_dir),
+        edge_b_nodes.size(),
+        dir_to_string(edge_b_dir));
 
     // Connect corresponding nodes on the two edges (1-to-1 mapping)
     for (size_t i = 0; i < edge_a_nodes.size(); ++i) {
@@ -1957,16 +2030,44 @@ AdjacencyGraph<FlattenedMeshNodeInfo> join_mesh_level(
         return AdjacencyGraph<FlattenedMeshNodeInfo>();
     }
     if (meshes.size() == SINGLE_MESH) {
-        return meshes[0].graph;
+        // Validate single mesh has valid dimensions
+        const auto& mesh = meshes[0];
+        TT_FATAL(
+            mesh.dims.size() >= 2 && mesh.dims[ROW_INDEX] > 0 && mesh.dims[COL_INDEX] > 0,
+            "Single mesh has invalid dimensions [rows={}, cols={}]. Mesh must have valid 2D dimensions.",
+            mesh.dims.size() > 0 ? mesh.dims[ROW_INDEX] : 0,
+            mesh.dims.size() > 1 ? mesh.dims[COL_INDEX] : 0);
+        return mesh.graph;
     }
 
     const std::vector<int32_t> normalized_dims = normalize_dims(dims, meshes.size());
     const int32_t rows = normalized_dims[ROW_INDEX];
     const int32_t cols = normalized_dims[COL_INDEX];
+
+    // Validate that we have the expected number of meshes for the layout
+    const int32_t expected_mesh_count = rows * cols;
+    TT_FATAL(
+        static_cast<int32_t>(meshes.size()) == expected_mesh_count,
+        "Mesh count mismatch: expected {} meshes for {}x{} layout, but got {}. Mesh layout must match the number of "
+        "meshes.",
+        expected_mesh_count,
+        rows,
+        cols,
+        meshes.size());
+
     std::map<FlattenedMeshNodeInfo, std::set<FlattenedMeshNodeInfo>> adj_set;
 
     // Step 1: Copy all existing internal edges from each mesh
-    for (const auto& mesh : meshes) {
+    // Also validate each mesh has valid dimensions
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        const auto& mesh = meshes[i];
+        TT_FATAL(
+            mesh.dims.size() >= 2 && mesh.dims[ROW_INDEX] > 0 && mesh.dims[COL_INDEX] > 0,
+            "Mesh {} has invalid dimensions [rows={}, cols={}]. Each mesh must have valid 2D dimensions.",
+            i,
+            mesh.dims.size() > 0 ? mesh.dims[ROW_INDEX] : 0,
+            mesh.dims.size() > 1 ? mesh.dims[COL_INDEX] : 0);
+
         for (const auto& node : mesh.nodes_row_major) {
             for (const auto& neighbor : mesh.graph.get_neighbors(node)) {
                 adj_set[node].insert(neighbor);
@@ -2089,7 +2190,21 @@ FlattenedMesh build_flattened_mesh_for_item(
     }
 
     // Infer layout from corner orientations, then join sub-meshes
-    const std::vector<int32_t> layout = normalize_dims(infer_dims_from_corners(sub_grouping), sub_meshes.size());
+    const std::vector<int32_t> inferred_dims = infer_dims_from_corners(sub_grouping);
+
+    // Error if we can't infer dimensions from corners (e.g., grouping uses all_to_all or custom connections)
+    // Exception: single-item groupings don't need dimensions (they're handled as single meshes)
+    if (sub_meshes.size() > 1) {
+        TT_FATAL(
+            !inferred_dims.empty(),
+            "Cannot infer mesh dimensions from grouping '{}' with {} items - grouping must use row_major_mesh "
+            "connection type to determine layout. "
+            "Groupings with all_to_all or custom connections cannot be flattened into a mesh.",
+            sub_grouping.name,
+            sub_meshes.size());
+    }
+
+    const std::vector<int32_t> layout = normalize_dims(inferred_dims, sub_meshes.size());
     FlattenedMesh mesh;
     mesh.graph = join_mesh_level(sub_meshes, layout);
     mesh.dims = layout;
@@ -2105,7 +2220,6 @@ FlattenedMesh build_flattened_mesh_for_item(
 
 }  // unnamed namespace
 
-// Build a flattened ASIC-level adjacency graph from a hierarchical grouping
 // Top-level entry point: builds meshes for each item, then joins them based on inferred layout
 AdjacencyGraph<FlattenedMeshNodeInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
@@ -2124,7 +2238,23 @@ AdjacencyGraph<FlattenedMeshNodeInfo> PhysicalGroupingDescriptor::build_flattene
     }
 
     // Infer layout from corner orientations and join all meshes
-    const std::vector<int32_t> layout = normalize_dims(infer_dims_from_corners(grouping), meshes.size());
+    // Validation for no directions and dimension mismatches happens inside join_mesh_level
+    const std::vector<int32_t> inferred_dims = infer_dims_from_corners(grouping);
+
+    // Error if we can't infer dimensions from corners (e.g., grouping uses all_to_all or custom connections)
+    // This means the grouping doesn't have row_major_mesh structure
+    // Exception: single-item groupings don't need dimensions (they're handled as single meshes)
+    if (meshes.size() > 1) {
+        TT_FATAL(
+            !inferred_dims.empty(),
+            "Cannot infer mesh dimensions from grouping '{}' with {} items - grouping must use row_major_mesh "
+            "connection type to determine layout. "
+            "Groupings with all_to_all or custom connections cannot be flattened into a mesh.",
+            grouping.name,
+            meshes.size());
+    }
+
+    const std::vector<int32_t> layout = normalize_dims(inferred_dims, meshes.size());
     return join_mesh_level(meshes, layout);
 }
 
@@ -2259,27 +2389,21 @@ bool validate(
 
 }  // namespace
 
-bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
+bool PhysicalGroupingDescriptor::validate_grouping_with_psd(
+    const PhysicalGroupingDescriptor& pgd,
+    const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    std::vector<std::string>* errors_out) const {
-    auto mesh_groupings = get_groupings_by_type("MESH");
-    if (mesh_groupings.empty()) {
-        log_warning(tt::LogFabric, "No MESH groupings found in PGD, skipping preformed groups validation");
-        return true;
-    }
-
+    std::vector<std::string>* errors_out) {
     std::vector<std::string> errors;
     auto physical_graph = build_physical_adjacency_graph_for_cluster(physical_system_descriptor);
 
-    for (const auto& mesh_grouping : mesh_groupings) {
-        auto flat_mesh = build_flattened_adjacency_mesh(mesh_grouping);
+    auto flat_mesh = pgd.build_flattened_adjacency_mesh(grouping);
 
-        if (flat_mesh.get_nodes().empty()) {
-            TT_THROW("Internal error: mesh grouping produced empty graph");
-        }
-
-        validate(mesh_grouping.name, flat_mesh, physical_graph, physical_system_descriptor, errors);
+    if (flat_mesh.get_nodes().empty()) {
+        TT_THROW("Internal error: grouping produced empty graph");
     }
+
+    validate(grouping.name, flat_mesh, physical_graph, physical_system_descriptor, errors);
 
     // log the validation errors
     for (const auto& err : errors) {
@@ -2291,11 +2415,6 @@ bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_
     }
 
     return errors.empty();
-}
-
-bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
-    return validate_preformed_groups_from_physical_system_descriptor(physical_system_descriptor, nullptr);
 }
 
 // Stream operator for FlattenedMeshNodeInfo (required by topology solver)
