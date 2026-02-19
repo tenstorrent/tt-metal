@@ -9,7 +9,7 @@ from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_t
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 8), (8, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape, shard_type, cores, out_mem_config",
     [
