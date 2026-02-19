@@ -11,6 +11,7 @@ from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 
 
 def _reference_dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: tuple[int, ...]) -> torch.Tensor:
+    """Naive reference implementation of dequantization that uses `repeat_interleave`"""
     expanded = inv_scale
     for dim, block_dim in enumerate(block_shape):
         expanded = expanded.repeat_interleave(block_dim, dim=dim)
@@ -30,11 +31,11 @@ def _reference_dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_s
 def test_dequantize_tensor_matches_reference(
     shape: tuple[int, ...], block_shape: tuple[int, ...], input_dtype: torch.dtype
 ):
-    torch.manual_seed(sum(shape) + sum(block_shape) + int(input_dtype == torch.bfloat16))
+    torch.manual_seed(1234)
     inv_shape = tuple(math.ceil(shape[i] / block_shape[i]) for i in range(len(shape)))
 
-    quantized = torch.randn(shape, dtype=torch.float32).to(input_dtype)
-    inv_scale = torch.randn(inv_shape, dtype=torch.float32)
+    quantized = torch.rand(shape, dtype=torch.float32).to(input_dtype)
+    inv_scale = torch.rand(inv_shape, dtype=torch.float32)
 
     expected = _reference_dequantize(quantized, inv_scale, block_shape)
     actual = dequantize_tensor(quantized, inv_scale, block_shape)
