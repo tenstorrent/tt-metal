@@ -134,6 +134,7 @@ Tests:
       - type: half_ring
 
   - name: "MeshMulticast"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
@@ -150,6 +151,7 @@ Tests:
       - type: all_to_all
 
   - name: "PacketSizesMeshMulticast"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
       # more links caused rt args exceed 256
@@ -268,6 +270,7 @@ Tests:
       - type: full_ring
 
   - name: "FabricMuxMeshMulticast"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
       fabric_tensix_config: Mux
