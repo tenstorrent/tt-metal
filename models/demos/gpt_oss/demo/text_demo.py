@@ -401,8 +401,6 @@ def test_gpt_oss_demo(
         pytest.skip(
             f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
         )
-    if mesh_shape[0] > 1 and (batch_size * data_parallel) == 1:
-        pytest.skip("For 4x8 mesh, batch * DP should be greater than 1.")
 
     if os.environ.get("CI", None) and long_context_mode:
         pytest.skip(f"Long-context mode skipped for CI environment.")
@@ -1047,7 +1045,7 @@ def test_gpt_oss_demo(
                 if len(prompt) > 200
                 else prompt
             )
-            user_label = f"USER {i} (row {i // users_per_row})" if long_context_mode else f"USER {i}"
+            user_label = f"USER {i} (row {i // max(users_per_row,1)})" if long_context_mode else f"USER {i}"
             logger.info(
                 f"\n==REPEAT BATCH {batch_idx}\n=={user_label} - PROMPT\n{short_prompt} \n=={user_label} - OUTPUT\n{text_after_prompt.strip()}\n"
             )
