@@ -39,6 +39,13 @@ on:
   push:
     branches: ["main"]
 
+run-name: >
+  ${{
+    ((github.event_name == 'schedule' || github.event.inputs.arch == 'blackhole') && '(BH Galaxy) Quick') ||
+    ((github.event_name == 'push' || github.event.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Quick') ||
+    '(Unspecified Galaxy) Quick'
+  }}
+
 permissions:
   packages: write
   contents: write

@@ -94,10 +94,11 @@
 - name: Galaxy DeepSeek V3 decode perf tests
   cmd: export MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3/demo/test_decode_demo_perf.py --timeout=1200
   model: deepseek_v3
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U03HY7MK4BT
   team: models
-  timeout: 20
   arch: wormhole_b0
   save-perf-data: true
   model-type: deepseek_v3

@@ -119,9 +119,6 @@ def test_full_like_callback(device, input_shape, fill_value, layout):
             assert num_program_cache_entries > 0
         else:
             assert device.num_program_cache_entries() == num_program_cache_entries
-        torch_dummy = torch.randn([32, 32])
-        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
-
     assert torch.equal(torch_output, tt_output_cpu)
 
 
@@ -286,9 +283,6 @@ def test_full_like_callback_nd_sharded(
             assert num_program_cache_entries > 0
         else:
             assert device.num_program_cache_entries() == num_program_cache_entries
-        torch_dummy = torch.randn([32, 32])
-        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
-
     assert torch.equal(torch_output, tt_output_cpu)
 
 
@@ -627,7 +621,4 @@ def test_full_like_callback_legacy_sharded(
             assert num_program_cache_entries > 0
         else:
             assert device.num_program_cache_entries() == num_program_cache_entries
-        torch_dummy = torch.randn([32, 32])
-        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
-
     assert torch.equal(torch_output, tt_output_cpu)

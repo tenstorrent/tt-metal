@@ -537,9 +537,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mul_cb_in1"),
                 get_named_compile_time_arg_val("mul_cb_out"),
                 get_named_compile_time_arg_val("mul_num_tiles"),
-                get_named_compile_time_arg_val("up_proj_cb_mm_out"),   // cb_in0_wait
-                get_named_compile_time_arg_val("up_proj_per_core_n"),  // cb_in0_wait tiles
-                0,                                                     // cb_scalar (unused)
+                get_named_compile_time_arg_val("up_proj_cb_mm_out"),     // cb_in0_wait (actual producer)
+                get_named_compile_time_arg_val("up_proj_per_core_n"),    // cb_in0_wait_tiles
+                get_named_compile_time_arg_val("gate_proj_cb_out"),      // cb_in1_wait (actual producer)
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),  // cb_in1_wait_tiles
+                0,                                                       // cb_scalar (unused)
                 get_named_compile_time_arg_val("mul_fp32_dest_acc_en"),
                 0>;  // enable_scalar=0
 
@@ -568,8 +570,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("add_cb_in1"),
                 get_named_compile_time_arg_val("add_cb_out"),
                 get_named_compile_time_arg_val("add_num_tiles"),
-                get_named_compile_time_arg_val("add_cb_in0"),  // cb_in0_wait = cb_in0
-                get_named_compile_time_arg_val("add_cb_in0_wait_tiles"),
+                get_named_compile_time_arg_val("down_proj_cb_out"),      // cb_in0_wait (actual producer)
+                get_named_compile_time_arg_val("down_proj_per_core_n"),  // cb_in0_wait_tiles
                 get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
                 get_named_compile_time_arg_val("add_sender_index"),
                 get_named_compile_time_arg_val("add_slice_size_bytes")>;
@@ -661,215 +663,237 @@ void kernel_main() {
     // Operation calls — Mlp::Routed::* for types, mlp.routed.* for args
     // ============================================================================
 
-    // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
-    {
-        DeviceZoneScopedN("RESIDUAL_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Mlp::Routed::ResidualMcastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Shared::is_mcast_receiver_core,
-            false>  // pop_src=false: keep input for RMSNorm
-            residual_mcast;
-        residual_mcast.init(mlp.routed.residual_mcast_args);
-        residual_mcast(mlp.routed.residual_mcast_args);
-    }
-
-    // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
-    {
-        DeviceZoneScopedN("RMSNORM");
-        deepseek_b1_ops::RMSNorm::Op<
-            Mlp::Routed::RMSNormCTArgs,
-            Core::is_sender_core,
-            true>  // pop_input=true: done with raw input in residual_mcast_src_cb
-            rmsnorm;
-        rmsnorm(mlp.routed.rmsnorm_args);
-    }
-
-    // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
+    // Declare mcast before the loop (needs teardown after all iterations)
     deepseek_b1_ops::Mcast::Op<
-        Mlp::Routed::McastCTArgs,
+        Mlp::Routed::ResidualMcastCTArgs,
         Core::is_sender_core,
         Core::is_mcast_grid_core,
-        Core::is_input_mcast_receiver,
-        true>
-        mcast;
-    {
-        DeviceZoneScopedN("MCAST");
-        mcast(mlp.routed.mcast_args);
-    }
+        Core::Shared::is_mcast_receiver_core,
+        false>  // pop_src=false: keep input for RMSNorm
+        residual_mcast;
+    residual_mcast.init(mlp.routed.residual_mcast_args);
 
-    // No step 2 (Gate Matmul) — MLP has no routing
-    // No step 3 (Gate Gather) — MLP has no routing
+    constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
 
-    // 3a. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
-    {
-        deepseek_b1_ops::KNSlicedMatmul::Op<Mlp::Shared::GUMatmulCTArgs, Core::Shared::is_compute_core, false, false>
-            shared_gu_matmul;
-        shared_gu_matmul(mlp.shared.gu_matmul_args);
-    }
+    auto mlp_body = [&]() {
+        // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
+        {
+            DeviceZoneScopedN("RESIDUAL_MCAST");
+            residual_mcast(mlp.routed.residual_mcast_args);
+        }
 
-    // No step 4 (Gate TopK) — MLP has no routing
-    // No step 5 (Mcast Index) — MLP has no routing
-    // No step 5b (Mcast Expert Scale) — MLP has no routing
+        // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
+        {
+            DeviceZoneScopedN("RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<
+                Mlp::Routed::RMSNormCTArgs,
+                Core::is_sender_core,
+                false>  // pop_input=false: tensor-backed CB, keep for next iteration
+                rmsnorm;
+            rmsnorm(mlp.routed.rmsnorm_args);
+        }
 
-    // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
-    {
-        DeviceZoneScopedN("SHARED_GATE_GATHER");
-        deepseek_b1_ops::MoeGather::Op<
-            Core::Shared::is_gate_compute_core,
-            Core::Shared::is_gated_reduce_core,
-            true,  // pop_src
-            true>  // UsePerCoreSenderIdx
-            shared_gate_gather;
-        shared_gate_gather(mlp.shared.ag_args);
-    }
+        // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
+        {
+            DeviceZoneScopedN("MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Mlp::Routed::McastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::is_input_mcast_receiver,
+                true>
+                mcast;
+            mcast(mlp.routed.mcast_args);
+        }
 
-    // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
-    {
-        DeviceZoneScopedN("SHARED_UP_GATHER");
-        deepseek_b1_ops::MoeGather::Op<
-            Core::Shared::is_up_compute_core,
-            Core::Shared::is_gated_reduce_core,
-            true,  // pop_src
-            true>  // UsePerCoreSenderIdx
-            shared_up_gather;
-        shared_up_gather(mlp.shared.bg_args);
-    }
+        // No step 2 (Gate Matmul) — MLP has no routing
+        // No step 3 (Gate Gather) — MLP has no routing
 
-    // 5e. Shared Expert: Gated Reduce — SiLU(sum(gate)) * sum(up)
-    {
-        DeviceZoneScopedN("SHARED_GATED_REDUCE");
-        deepseek_b1_ops::GatedReduce::Op<Mlp::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
-            gated_reduce;
-        gated_reduce(mlp.shared.gated_reduce_args);
-    }
+        // 3a. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
+        //     CB 1 (act) is shared: on gate_proj cores it is also consumed by gate_proj (step 6)
+        //     and up_proj (step 7, which pops it). So we only pop here on non-gate_proj cores.
+        {
+            DeviceZoneScopedN("SHARED_GU_MATMUL");
+            deepseek_b1_ops::KNSlicedMatmul::Op<
+                Mlp::Shared::GUMatmulCTArgs,
+                Core::Shared::is_compute_core,
+                !Core::Routed::is_gate_proj_core,  // pop_act
+                false>                             // pop_weights
+                shared_gu_matmul;
+            shared_gu_matmul(mlp.shared.gu_matmul_args);
+        }
 
-    // 6. gate_proj: DRAM Streaming Matmul + SiLU (PopIn0=false, keep input for up_proj)
-    {
-        DeviceZoneScopedN("GATE_PROJ");
-        constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-        deepseek_b1_ops::DRAMStreamingMatmul::
-            Op<Mlp::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, true, gate_proj_cb_in1_addr>
-                gate_proj_mm;
-        gate_proj_mm();
-    }
+        // No step 4 (Gate TopK) — MLP has no routing
+        // No step 5 (Mcast Index) — MLP has no routing
+        // No step 5b (Mcast Expert Scale) — MLP has no routing
 
-    // 7. up_proj: DRAM Streaming Matmul (PopIn0=true, ResetCBIn1=true — shared CB with gate_proj)
-    {
-        DeviceZoneScopedN("UP_PROJ");
-        constexpr uint32_t cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-        deepseek_b1_ops::DRAMStreamingMatmul::
-            Op<Mlp::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, true, cb_in1_addr>
-                up_proj;
-        up_proj();
-    }
+        // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
+        {
+            DeviceZoneScopedN("SHARED_GATE_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_gate_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                true,  // pop_src
+                true>  // UsePerCoreSenderIdx
+                shared_gate_gather;
+            shared_gate_gather(mlp.shared.ag_args);
+        }
 
-    // 8. Mul: Element-wise multiply (up_proj * gate_proj) — no expert_scale
-    {
-        DeviceZoneScopedN("MUL");
-        deepseek_b1_ops::EltwiseMul::Op<Mlp::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
-        mul_op();
-    }
+        // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
+        {
+            DeviceZoneScopedN("SHARED_UP_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_up_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                true,  // pop_src
+                true>  // UsePerCoreSenderIdx
+                shared_up_gather;
+            shared_up_gather(mlp.shared.bg_args);
+        }
 
-    // 9. down_proj Gather: Gather fused output from gate_proj cores to sender core
-    {
-        DeviceZoneScopedN("DOWN_PROJ_GATHER");
-        deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
-            down_proj_gather;
-        down_proj_gather(mlp.routed.down_proj_gather_args);
-    }
+        // 5e. Shared Expert: Gated Reduce — SiLU(sum(gate)) * sum(up)
+        {
+            DeviceZoneScopedN("SHARED_GATED_REDUCE");
+            deepseek_b1_ops::GatedReduce::Op<Mlp::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
+                gated_reduce;
+            gated_reduce(mlp.shared.gated_reduce_args);
+        }
 
-    // 10. down_proj Mcast: Broadcast gathered fused output to gate_proj cores
-    {
-        DeviceZoneScopedN("DOWN_PROJ_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Mlp::Routed::McastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Routed::is_gate_proj_core,
-            true>  // pop_src
-            down_proj_mcast;
-        down_proj_mcast(mlp.routed.down_proj_mcast_args);
-    }
+        // 6. gate_proj: DRAM Streaming Matmul + SiLU (PopIn0=false, keep input for up_proj)
+        {
+            DeviceZoneScopedN("GATE_PROJ");
+            constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+            deepseek_b1_ops::DRAMStreamingMatmul::
+                Op<Mlp::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, true, gate_proj_cb_in1_addr>
+                    gate_proj_mm;
+            gate_proj_mm();
+        }
 
-    // 11. down_proj: DRAM Streaming Matmul
-    {
-        DeviceZoneScopedN("DOWN_PROJ");
-        constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
-        deepseek_b1_ops::DRAMStreamingMatmul::
-            Op<Mlp::Routed::DownProjCTArgs, Core::Routed::is_gate_proj_core, true, true, down_proj_cb_in1_addr>
-                down_proj;
-        down_proj();
-    }
+        // 7. up_proj: DRAM Streaming Matmul (PopIn0=true, ResetCBIn1=true — shared CB with gate_proj)
+        {
+            DeviceZoneScopedN("UP_PROJ");
+            constexpr uint32_t cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+            deepseek_b1_ops::DRAMStreamingMatmul::
+                Op<Mlp::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, true, cb_in1_addr>
+                    up_proj;
+            up_proj();
+        }
 
-    // 11b. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
-    {
-        DeviceZoneScopedN("SHARED_DOWN_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Mlp::Shared::DownMcastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Shared::is_mcast_receiver_core,
-            true>
-            shared_down_mcast;
-        shared_down_mcast(mlp.shared.down_mcast_args);
-    }
+        // 8. Mul: Element-wise multiply (up_proj * gate_proj) — no expert_scale
+        {
+            DeviceZoneScopedN("MUL");
+            deepseek_b1_ops::EltwiseMul::Op<Mlp::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
+            mul_op();
+        }
 
-    // 11c. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
-    {
-        DeviceZoneScopedN("SHARED_DOWN_MATMUL");
-        deepseek_b1_ops::Matmul::Op<
-            Mlp::Shared::DownMatmulCTArgs,
-            Core::Shared::is_mcast_receiver_core,
-            /*pop_in0=*/true,
-            /*pop_in1=*/false>
-            shared_down_matmul;
-        shared_down_matmul(mlp.shared.down_matmul_args);
-    }
+        // 9. down_proj Gather: Gather fused output from gate_proj cores to sender core
+        {
+            DeviceZoneScopedN("DOWN_PROJ_GATHER");
+            deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
+                down_proj_gather;
+            down_proj_gather(mlp.routed.down_proj_gather_args);
+        }
 
-    // 11d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
-    {
-        DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
-        deepseek_b1_ops::ResidualAdd::Op<Mlp::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
-            shared_residual_add;
-        shared_residual_add(mlp.shared.residual_add_args);
-    }
+        // 10. down_proj Mcast: Broadcast gathered fused output to gate_proj cores
+        {
+            DeviceZoneScopedN("DOWN_PROJ_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Mlp::Routed::McastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::Routed::is_gate_proj_core,
+                true>  // pop_src
+                down_proj_mcast;
+            down_proj_mcast(mlp.routed.down_proj_mcast_args);
+        }
 
-    // 11e. Shared: Output Gather — 112 matmul cores → sender core
-    {
-        DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
-        deepseek_b1_ops::MoeGather::Op<
-            Core::Shared::is_mcast_receiver_core,  // IsSenderCore: 112 matmul cores
-            Core::is_sender_core,                  // IsReceiverCore: sender core
-            /*pop_src=*/true,
-            /*UsePerCoreSenderIdx=*/true>
-            shared_output_gather;
-        shared_output_gather(mlp.shared.og_args);
-    }
+        // 11. down_proj: DRAM Streaming Matmul
+        {
+            DeviceZoneScopedN("DOWN_PROJ");
+            constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
+            deepseek_b1_ops::DRAMStreamingMatmul::
+                Op<Mlp::Routed::DownProjCTArgs, Core::Routed::is_gate_proj_core, true, true, down_proj_cb_in1_addr>
+                    down_proj;
+            down_proj();
+        }
 
-    // 11f. Shared: Output Mcast — sender core → 130 cores (DRAM cores receive into add_cb_in1)
-    {
-        DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Mlp::Shared::OutputMcastCTArgs,
-            Core::is_sender_core,             // IsSenderCore
-            Core::is_mcast_grid_core,         // IsMcastGridCore (all 130 cores for semaphore ack)
-            Core::Routed::is_gate_proj_core,  // IsReceiverCore (8 DRAM cores receive into add_cb_in1)
-            /*pop_src=*/true>
-            shared_output_mcast;
-        shared_output_mcast(mlp.shared.output_mcast_args);
-    }
+        // 11b. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
+        {
+            DeviceZoneScopedN("SHARED_DOWN_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Mlp::Shared::DownMcastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::Shared::is_mcast_receiver_core,
+                true>
+                shared_down_mcast;
+            shared_down_mcast(mlp.shared.down_mcast_args);
+        }
 
-    // 12. Eltwise Add: down_proj + shared_expert_output
-    {
-        DeviceZoneScopedN("ELTWISE_ADD");
-        deepseek_b1_ops::EltwiseAdd::Op<Mlp::Routed::AddCTArgs, Core::Routed::is_gate_proj_core> add_op;
-        add_op();
+        // 11c. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
+        {
+            DeviceZoneScopedN("SHARED_DOWN_MATMUL");
+            deepseek_b1_ops::Matmul::Op<
+                Mlp::Shared::DownMatmulCTArgs,
+                Core::Shared::is_mcast_receiver_core,
+                /*pop_in0=*/true,
+                /*pop_in1=*/false>
+                shared_down_matmul;
+            shared_down_matmul(mlp.shared.down_matmul_args);
+        }
+
+        // 11d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
+        {
+            DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
+            deepseek_b1_ops::ResidualAdd::Op<Mlp::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
+                shared_residual_add;
+            shared_residual_add(mlp.shared.residual_add_args);
+        }
+
+        // 11e. Shared: Output Gather — 112 matmul cores → sender core
+        {
+            DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_mcast_receiver_core,  // IsSenderCore: 112 matmul cores
+                Core::is_sender_core,                  // IsReceiverCore: sender core
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true>
+                shared_output_gather;
+            shared_output_gather(mlp.shared.og_args);
+        }
+
+        // 11f. Shared: Output Mcast — sender core → 130 cores (DRAM cores receive into add_cb_in1)
+        {
+            DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Mlp::Shared::OutputMcastCTArgs,
+                Core::is_sender_core,             // IsSenderCore
+                Core::is_mcast_grid_core,         // IsMcastGridCore (all 130 cores for semaphore ack)
+                Core::Routed::is_gate_proj_core,  // IsReceiverCore (8 DRAM cores receive into add_cb_in1)
+                /*pop_src=*/true>
+                shared_output_mcast;
+            shared_output_mcast(mlp.shared.output_mcast_args);
+        }
+
+        // 12. Eltwise Add: down_proj + shared_expert_output
+        {
+            DeviceZoneScopedN("ELTWISE_ADD");
+            deepseek_b1_ops::EltwiseAdd::Op<
+                Mlp::Routed::AddCTArgs,
+                Core::Routed::is_gate_proj_core,
+                true,  // PopInputs
+                true>  // PopOutput (for looping)
+                add_op;
+            add_op();
+        }
+    };
+
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        mlp_body();
     }
 
     // Teardown (one teardown since all mcasts reuse the same semaphores)
-    mcast.teardown();
+    residual_mcast.teardown();
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();
