@@ -15,6 +15,7 @@ target_sources(
         device/full_like_device_operation.cpp
         device/full_like_program_factory_interleaved.cpp
         device/full_like_program_factory_nd_sharded.cpp
+        device/full_like_program_factory_sharded.cpp
         full_like.cpp
 )
 

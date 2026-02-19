@@ -41,7 +41,7 @@ FullLikeNDShardedProgramFactory::cached_program_t FullLikeNDShardedProgramFactor
     std::vector<CoreCoord> worker_cores;
     if (memory_config.is_dram()) {  // If it is DRAM sharding, ordered_cores_with_data is the DRAM banks with data.
                                     // Thus, we need to map the DRAM banks to the compute cores.
-        IDevice* device = output.device();
+        const auto* device = output.device();
         const auto grid_size = device->compute_with_storage_grid_size();
         for (uint32_t i = 0; i < num_compute_cores; i++) {
             worker_cores.push_back(CoreCoord(i % grid_size.x, i / grid_size.x));

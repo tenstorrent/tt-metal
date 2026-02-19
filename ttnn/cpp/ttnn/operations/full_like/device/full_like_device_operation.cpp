@@ -14,10 +14,13 @@ namespace ttnn::prim {
 
 FullLikeDeviceOperation::program_factory_t FullLikeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    if (operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
-        return FullLikeInterleavedProgramFactory{};
+    if (operation_attributes.memory_config.is_sharded()) {
+        if (operation_attributes.memory_config.shard_spec().has_value()) {
+            return FullLikeShardedProgramFactory{};
+        }
+        return FullLikeNDShardedProgramFactory{};
     }
-    return FullLikeNDShardedProgramFactory{};
+    return FullLikeInterleavedProgramFactory{};
 }
 
 void FullLikeDeviceOperation::validate(
@@ -34,12 +37,6 @@ void FullLikeDeviceOperation::validate(
     }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Full Like: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Full Like: Input must be allocated in buffer on device");
-    // TT_FATAL(
-    //     input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-    //     "Full Like: Not currently supporting sharding");
-    // TT_FATAL(
-    //     operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-    //     "Full Like: Not currently supporting sharding");
 }
 
 void FullLikeDeviceOperation::validate_on_program_cache_miss(

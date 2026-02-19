@@ -13,6 +13,7 @@
 #include "ttnn/types.hpp"
 #include "full_like_device_operation_types.hpp"
 #include "full_like_program_factory_interleaved.hpp"
+#include "full_like_program_factory_sharded.hpp"
 #include "full_like_program_factory_nd_sharded.hpp"
 
 namespace ttnn::prim {
@@ -22,7 +23,8 @@ struct FullLikeDeviceOperation {
     using tensor_args_t = tensor_args_t;
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
-    using program_factory_t = std::variant<FullLikeInterleavedProgramFactory, FullLikeNDShardedProgramFactory>;
+    using program_factory_t =
+        std::variant<FullLikeInterleavedProgramFactory, FullLikeShardedProgramFactory, FullLikeNDShardedProgramFactory>;
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate(const operation_attributes_t&, const tensor_args_t&);
