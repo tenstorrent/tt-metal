@@ -26,4 +26,16 @@ ttnn::Tensor gram_polynomial(
     std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
+// Full Muon preconditioner: X' = aX + (cG^2 + bG)X where G = XX^T
+// Runs 3 phases: G = gram_matmul(X), H = gram_polynomial_phase2(G, b, c), X' = HX + aX
+ttnn::Tensor muon_precondition(
+    const ttnn::Tensor& x_tensor,
+    float a,
+    float b,
+    float c,
+    const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config = std::nullopt,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
 }  // namespace ttml::metal

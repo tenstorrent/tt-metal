@@ -38,4 +38,21 @@ struct tensor_args_t {
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 
+// Phase 3: X' = H @ X + a*X
+struct phase3_operation_attributes_t {
+    float a;
+    std::optional<GramPolynomialConfig> config;
+    std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
+    std::optional<tt::tt_metal::DataType> output_dtype;
+    ttnn::DeviceComputeKernelConfig compute_kernel_config;
+};
+
+struct phase3_tensor_args_t {
+    ttnn::Tensor h_tensor;  // H [M, M] square
+    ttnn::Tensor x_tensor;  // X [M, K] rectangular
+};
+
+using phase3_tensor_return_value_t = ttnn::Tensor;
+using phase3_spec_return_value_t = ttnn::TensorSpec;
+
 }  // namespace ttml::metal::ops::gram_polynomial::device

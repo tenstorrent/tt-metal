@@ -328,6 +328,8 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/device/gram_polynomial_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/device/gram_polynomial_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/device/gram_polynomial_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/device/gram_polynomial_phase3_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_polynomial/device/gram_polynomial_phase3_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
