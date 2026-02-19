@@ -20,10 +20,6 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
-def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
-
-
 def create_sliding_window_mask_prefill(b, nh, seq_len, sliding_window=0, is_causal=True):
     """
     Create attention mask for sliding window attention in prefill mode.
@@ -568,7 +564,6 @@ def run_test_sdpa_with_attention_sink(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram_interleaved"])
 @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
@@ -598,7 +593,6 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
     )
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
@@ -615,7 +609,6 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
 @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
@@ -635,7 +628,6 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     assert device.num_program_cache_entries() == 1
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])
