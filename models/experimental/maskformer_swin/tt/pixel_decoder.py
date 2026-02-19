@@ -59,9 +59,9 @@ class MaskFormerPixelDecoder:
         # moreh_group_norm has shown instability (TT_FATAL / segfault) on N300 in 320x320 runs.
         # Default to disabled; enable explicitly to experiment.
         self._prefer_moreh_group_norm = os.environ.get("MASKFORMER_TT_USE_MOREH_GROUP_NORM", "0").strip() != "0"
-        # NOTE: Caching conv2d prepared weights across forwards has shown stability issues on N300 for 320x320.
-        # Default to disabled; enable explicitly if/when the underlying conv2d prepared-weight reuse is fixed.
-        self._cache_conv2d_weights = os.environ.get("MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS", "0").strip() != "0"
+        # Cache conv2d prepared weights across forwards to avoid repeated host-side preparation.
+        # Stable on N300 for this model; set to 0 explicitly for A/B validation.
+        self._cache_conv2d_weights = os.environ.get("MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS", "1").strip() != "0"
         self._debug_group_norm = os.environ.get("MASKFORMER_TT_DEBUG_GROUP_NORM", "0").strip() == "1"
         self._debug_conv2d = os.environ.get("MASKFORMER_TT_DEBUG_CONV2D", "0").strip() == "1"
         self._debug_seen_conv2d_sites: set[str] = set()
