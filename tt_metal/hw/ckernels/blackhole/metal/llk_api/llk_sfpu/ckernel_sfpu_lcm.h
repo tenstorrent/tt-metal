@@ -18,7 +18,7 @@ namespace sfpu {
 inline void calculate_sfpu_mul_u16_to_u32_body() {
     TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG4, sfpi::SFPMUL24_MOD1_UPPER);
     TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG5, sfpi::SFPMUL24_MOD1_LOWER);
-    TTI_SFPSHFT(-23 & 0xfff, 0, p_sfpu::LREG4, 1); // SFPSHFT_MOD1_ARG_IMM
+    TTI_SFPSHFT(23, 0, p_sfpu::LREG4, 1); // SFPSHFT_MOD1_ARG_IMM
     TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
 }
 
