@@ -93,7 +93,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             batch_size (int): B*D[A]
             seq_size (int): S
             select_experts_k (int): K
-            experts (int) E*D[A]
+            experts (int) E*D, total experts across all devices
             axis (int): A
             topology (ttnn.Topology): Line or Ring supported
             num_links (int): Number of fabric links to utilize

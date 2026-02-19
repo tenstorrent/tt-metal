@@ -28,8 +28,6 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    const auto num_devices = mesh_view.num_devices();
-
     const auto hidden_size = operation_attributes.hidden_size;
 
     const uint32_t batch_size = operation_attributes.batch_size;
@@ -38,11 +36,12 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     const uint32_t experts = operation_attributes.experts;
 
     const auto& axis = operation_attributes.axis;
-    const uint32_t replicate_dim = axis.has_value() ? mesh_device->shape()[!axis.value()] : 1;
+    const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    const uint32_t total_tokens_per_device = batch_size * seq_size * replicate_dim / num_devices;
+    const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
+    const uint32_t experts_per_cluster = experts / num_devices_cluster;
 
-    auto output_shape = ttnn::Shape({total_tokens_per_device, experts, hidden_size});
+    auto output_shape = ttnn::Shape({total_tokens_per_device, experts_per_cluster, hidden_size});
 
     auto mem_config = operation_attributes.output_memory_config;
     return TensorSpec(

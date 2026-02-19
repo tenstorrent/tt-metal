@@ -90,7 +90,20 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     return dense_metadata_buffer, dense_metadata_len, dense_token_maps, active_token_counts
 
 
-def _active_token_core_split_counts(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
+# this is the algorithm currently used by MoE compute
+def _active_token_core_split_counts_simple(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
+    split_token_end_indexes = []
+    for act in active_token_counts.tolist():
+        end_index = [math.ceil(act / token_parallel_core_dim) for _ in range(token_parallel_core_dim - 1)]
+        end_index + [act - (token_parallel_core_dim - 1) * math.ceil(act / token_parallel_core_dim)]
+
+        split_token_end_indexes.append(list(reversed(end_index)))
+
+    return split_token_end_indexes
+
+
+# this is the algorithm currently used by MoE compute
+def _active_token_core_split_counts_even(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
     split_token_end_indexes = []
     for act in active_token_counts.tolist():
         end_index = [act // token_parallel_core_dim for _ in range(token_parallel_core_dim)]
@@ -123,10 +136,9 @@ def gen_dense_input_contribs(
 
     dense_input_contribs_tensor = torch.zeros([experts, batch * seq, hidden_size]).bfloat16()
     token_parallel_block_size = batch // token_parallel_core_dim
-    block_counts = _active_token_core_split_counts(
+    block_counts = _active_token_core_split_counts_simple(
         token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
-
     assert len(block_counts) == experts
 
     dense_contribs = 0
@@ -187,7 +199,7 @@ def gen_output_ref(
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
 
     token_parallel_block_size = batch // token_parallel_core_dim
-    block_counts = _active_token_core_split_counts(
+    block_counts = _active_token_core_split_counts_simple(
         token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
 

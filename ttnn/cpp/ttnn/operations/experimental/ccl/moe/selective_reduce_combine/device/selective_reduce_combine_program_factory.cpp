@@ -189,11 +189,10 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    const uint32_t num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     const uint32_t num_devices_total = mesh_view.num_devices();
 
     // this should eventually be variable per device
-    const uint32_t experts_per_device = experts / num_devices_cluster;
+    const uint32_t experts_per_device = experts / num_devices_total;
 
     const auto input_dtype = input_tensor.dtype();
     const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();
