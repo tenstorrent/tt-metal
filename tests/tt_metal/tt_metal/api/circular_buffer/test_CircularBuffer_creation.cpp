@@ -193,9 +193,8 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
         CoreRangeSet cr_set({cr});
 
         CBConfig cb_config;
-        CircularBufferConfig config =
-            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
-                .set_page_size(0, cb_config.page_size);
+        CircularBufferConfig config = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                          .set_page_size(0, cb_config.page_size);
         CreateCircularBuffer(program_, cr_set, config);
 
         EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));

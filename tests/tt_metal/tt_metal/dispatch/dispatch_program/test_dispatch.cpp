@@ -461,8 +461,7 @@ TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
 
         uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
         CircularBufferConfig config =
-            CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}})
-                .set_page_size(0, page_size);
+            CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
         CreateCircularBuffer(program_, cr_set, config);
 
         EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
