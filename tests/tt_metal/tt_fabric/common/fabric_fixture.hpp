@@ -305,7 +305,7 @@ protected:
 
     void SetUp() override {
         if (should_skip_) {
-            GTEST_SKIP() << "UDM fixture tests are skipped (watcher enabled or Wormhole Galaxy system)";
+            GTEST_SKIP() << "Tensix fixture tests are not supported on Wormhole Galaxy systems";
         }
         BaseFabricFixture::SetUp();
     }

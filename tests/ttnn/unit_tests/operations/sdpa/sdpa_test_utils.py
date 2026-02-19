@@ -16,6 +16,10 @@ import math
 import numpy as np
 
 
+def is_watcher_enabled():
+    return os.environ.get("TT_METAL_WATCHER") is not None
+
+
 def nearest_n(x, n):
     return ((x + n - 1) // n) * n
 

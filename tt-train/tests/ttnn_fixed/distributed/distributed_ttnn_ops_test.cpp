@@ -6,7 +6,6 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
-#include <numeric>
 #include <umd/device/cluster.hpp>
 #include <vector>
 

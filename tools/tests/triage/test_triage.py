@@ -13,6 +13,7 @@ import pytest
 import subprocess
 import time
 
+
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 triage_script = os.path.join(metal_home, "tools", "tt-triage.py")
 triage_home = os.path.join(metal_home, "tools", "triage")

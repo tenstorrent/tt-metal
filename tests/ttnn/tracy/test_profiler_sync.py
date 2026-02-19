@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 
+
 def test_with_ops(device):
     torch.manual_seed(0)
 
@@ -41,4 +42,4 @@ def test_with_ops(device):
 def test_mesh_device(
     mesh_device,
 ):
-    logger.debug("Testing All Devices")
+    logger.debug("Testing Mesh Device")

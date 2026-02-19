@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import math
 import time
 import torch
@@ -8,7 +9,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import is_watcher_enabled
 
 torch.set_printoptions(threshold=torch.inf, linewidth=200, edgeitems=20)
 
@@ -19,6 +19,11 @@ def fa_rand(*shape):
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
+
+
+def is_watcher_enabled():
+    """Check if TT_METAL_WATCHER is enabled"""
+    return os.environ.get("TT_METAL_WATCHER") is not None
 
 
 def gather_and_reshuffle_ring_outputs(ring_outputs, ring_size, global_seq_len):
