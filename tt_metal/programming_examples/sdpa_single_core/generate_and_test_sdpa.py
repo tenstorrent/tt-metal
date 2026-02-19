@@ -191,10 +191,12 @@ def save_test_inputs(
         str(mm_throttle_level),
     ]
 
+    import json
+
     with open(os.path.join(out_dir, "cmd.txt"), "w") as f:
         f.write(f"{binary} {' '.join(args)}\n")
-        f.write(f"\n# launch.json args:\n")
-        f.write(f'# "args": {args}\n')
+        f.write(f"\n// launch.json args:\n")
+        f.write(f'"args": {json.dumps(args)}\n')
 
     logger.info(f"Saved test inputs to {out_dir}")
     return out_dir
