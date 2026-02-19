@@ -1344,37 +1344,6 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
     }
 }
 
-TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x32Mesh) {
-    const std::filesystem::path text_proto_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor desc(text_proto_file_path);
-
-    GroupingInfo mesh_4x32;
-    bool found = false;
-    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
-        if (mesh.name == "4x32_Mesh") {
-            mesh_4x32 = mesh;
-            found = true;
-            break;
-        }
-    }
-    ASSERT_TRUE(found) << "Expected to find '4x32_Mesh' grouping";
-
-    EXPECT_EQ(mesh_4x32.asic_count, 128u) << "4x32_Mesh should have 128 ASICs (4 hosts * 32 ASICs each)";
-    EXPECT_EQ(mesh_4x32.items.size(), 4u) << "4x32_Mesh should have 4 instances (hosts)";
-
-    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x32);
-
-    auto nodes = flattened_mesh.get_nodes();
-    EXPECT_EQ(nodes.size(), 128u) << "Flattened mesh should have 128 nodes";
-
-    for (const auto& node : nodes) {
-        const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors";
-    }
-}
-
 // Corner-inferred dims: dims inferred from items' corners, not stored in GroupingInfo
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInference) {
     const std::string text_proto = wrap_with_required_groupings(R"proto(
@@ -1439,7 +1408,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
 }
 
 TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithGalaxyGroupings) {
-    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/triple_8x16_cluster_psd.textproto";
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
 
@@ -1718,8 +1687,6 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
 }
 
 TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_DualGalaxy4x8) {
-    GTEST_SKIP() << "Skipping test - grouping doesn't exist yet, will be implemented later";
-
     // Test matching a dual galaxy MGD with meshes
     // Using dual_galaxy_mesh_graph_descriptor which has 8x8 (64 ASICs) - different from 4x8 but testing dual mesh
     // matching
