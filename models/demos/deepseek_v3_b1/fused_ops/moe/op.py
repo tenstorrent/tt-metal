@@ -253,17 +253,20 @@ class MoeRoutedExpertOp:
     def setup_dram_matmul(
         device,
         weights_tensor,
-        output_tensor,
         working_buf_tensor,
-        core_ranges,
         cb_in1_index,
         cb_out_index,
         fp32_dest_acc_en,
         num_subblocks_k,
+        output_data_format,
+        output_tile,
+        output_tensor=None,
     ):
         """
         Set up parameters and CB descriptors for a DRAM streaming matmul operation.
         Uses a tensor-backed working buffer for the weights CB.
+        Output CB is tensor-backed if output_tensor is provided (for CB aliasing),
+        otherwise non-tensor-backed.
         """
         weights_tile = weights_tensor.get_tile()
         weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
@@ -281,8 +284,25 @@ class MoeRoutedExpertOp:
         # CB in1: tensor-backed weights working buffer
         cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, working_buf_tensor)
 
-        # CB out: tensor-backed output
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+        # CB out: tensor-backed if output_tensor provided (needed for CB aliasing),
+        # otherwise non-tensor-backed
+        if output_tensor is not None:
+            cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+        else:
+            out_core_ranges = working_buf_tensor.memory_config().shard_spec.grid
+            out_tile_size = output_tile.get_tile_size(output_data_format)
+            cb_out_descriptor = ttnn.CBDescriptor(
+                total_size=per_core_n * out_tile_size,
+                core_ranges=out_core_ranges,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_out_index,
+                        data_format=output_data_format,
+                        page_size=out_tile_size,
+                        tile=ttnn.TileDescriptor(output_tile),
+                    )
+                ],
+            )
 
         # subblock_w
         if fp32_dest_acc_en:
@@ -314,20 +334,21 @@ class MoeRoutedExpertOp:
 
     @staticmethod
     def setup_eltwise_mul(
-        in0_tensor,
-        in1_tensor,
-        out_tensor,
         cb_in0_index,
         cb_in1_index,
         cb_out_index,
         per_core_n,
         cb_scalar_index,
         cb_scalar_src_index,
-        scalar_src_tensor,
-        scalar_buf_tensor,
+        compute_core_ranges,
+        scalar_src_core_ranges,
+        in0_tensor=None,
+        in1_tensor=None,
     ):
         """
         Set up parameters and CB descriptors for element-wise multiply with CB aliasing and scalar multiply.
+        in0/in1 CBs are tensor-backed if tensors provided (for aliasing with matmul output CBs),
+        otherwise non-tensor-backed. Out and scalar CBs are always non-tensor-backed.
         """
         M = 1
         tile_width = 32
@@ -338,29 +359,91 @@ class MoeRoutedExpertOp:
         tile_16x16_size = TILE_16x16.get_tile_size(ttnn.bfloat16)
         tile_16x16_desc = ttnn.TileDescriptor(TILE_16x16)
 
-        # CB for in0: alias of in0_tensor with 16x16 tile format
-        cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
-        cb_in0_descriptor.total_size = mul_num_tiles * tile_16x16_size
-        cb_in0_descriptor.format_descriptors[0].tile = tile_16x16_desc
-        cb_in0_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        mul_total_size = mul_num_tiles * tile_16x16_size
 
-        # CB for in1: alias of in1_tensor with 16x16 tile format
-        cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
-        cb_in1_descriptor.total_size = mul_num_tiles * tile_16x16_size
-        cb_in1_descriptor.format_descriptors[0].tile = tile_16x16_desc
-        cb_in1_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        # CB for in0: tensor-backed alias of up_proj output (if tensor provided), else non-tensor-backed
+        if in0_tensor is not None:
+            cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
+            cb_in0_descriptor.total_size = mul_total_size
+            cb_in0_descriptor.format_descriptors[0].tile = tile_16x16_desc
+            cb_in0_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        else:
+            cb_in0_descriptor = ttnn.CBDescriptor(
+                total_size=mul_total_size,
+                core_ranges=compute_core_ranges,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_in0_index,
+                        data_format=ttnn.bfloat16,
+                        page_size=tile_16x16_size,
+                        tile=tile_16x16_desc,
+                    )
+                ],
+            )
 
-        # CB for out: output with 16x16 tile format (tensor-backed)
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
-        cb_out_descriptor.total_size = mul_num_tiles * tile_16x16_size
-        cb_out_descriptor.format_descriptors[0].tile = tile_16x16_desc
-        cb_out_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        # CB for in1: tensor-backed alias of gate_proj output (if tensor provided), else non-tensor-backed
+        if in1_tensor is not None:
+            cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
+            cb_in1_descriptor.total_size = mul_total_size
+            cb_in1_descriptor.format_descriptors[0].tile = tile_16x16_desc
+            cb_in1_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        else:
+            cb_in1_descriptor = ttnn.CBDescriptor(
+                total_size=mul_total_size,
+                core_ranges=compute_core_ranges,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_in1_index,
+                        data_format=ttnn.bfloat16,
+                        page_size=tile_16x16_size,
+                        tile=tile_16x16_desc,
+                    )
+                ],
+            )
 
-        # CB for scalar source: receives mcasted scalar (tensor-backed)
-        cb_scalar_src_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_src_index, scalar_src_tensor)
+        # CB for out: non-tensor-backed with 16x16 tile format
+        cb_out_descriptor = ttnn.CBDescriptor(
+            total_size=mul_total_size,
+            core_ranges=compute_core_ranges,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_out_index,
+                    data_format=ttnn.bfloat16,
+                    page_size=tile_16x16_size,
+                    tile=tile_16x16_desc,
+                )
+            ],
+        )
 
-        # CB for scalar working buffer: tensor-backed
-        cb_scalar_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_index, scalar_buf_tensor)
+        # CB for scalar source: receives mcasted scalar (non-tensor-backed, 1x16 tile)
+        TILE_1x16 = ttnn.Tile((1, 16))
+        tile_1x16_size = TILE_1x16.get_tile_size(ttnn.bfloat16)
+        cb_scalar_src_descriptor = ttnn.CBDescriptor(
+            total_size=tile_1x16_size,
+            core_ranges=scalar_src_core_ranges,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_scalar_src_index,
+                    data_format=ttnn.bfloat16,
+                    page_size=tile_1x16_size,
+                    tile=ttnn.TileDescriptor(TILE_1x16),
+                )
+            ],
+        )
+
+        # CB for scalar working buffer: non-tensor-backed (16x16 tile)
+        cb_scalar_descriptor = ttnn.CBDescriptor(
+            total_size=tile_16x16_size,
+            core_ranges=compute_core_ranges,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_scalar_index,
+                    data_format=ttnn.bfloat16,
+                    page_size=tile_16x16_size,
+                    tile=tile_16x16_desc,
+                )
+            ],
+        )
 
         return {
             "mul_num_tiles": mul_num_tiles,
@@ -375,47 +458,43 @@ class MoeRoutedExpertOp:
 
     @staticmethod
     def setup_eltwise_add(
-        in0_tensor,
-        in1_tensor,
         out_tensor,
         cb_in0_index,
         cb_in1_index,
         cb_out_index,
+        width_per_core,
+        total_width,
+        core_ranges,
+        data_format,
+        in0_tensor=None,
     ):
         """
         Set up parameters and CB descriptors for element-wise add with per-core indexing.
 
         Used after down_proj to add fused_add tensor. Each core uses sender_index to
-        offset into the replicated in1 tensor.
+        offset into the replicated in1 data.
 
         Args:
-            in0_tensor: First input tensor (e.g., down_proj output), WIDTH_SHARDED
-            in1_tensor: Second input tensor (e.g., fused_add), HEIGHT_SHARDED (replicated)
-            out_tensor: Output tensor, WIDTH_SHARDED (padded to 32x32 tile)
+            out_tensor: Output tensor, WIDTH_SHARDED (padded to 32x32 tile, tensor-backed)
             cb_in0_index: CB index for first input (aliased with 32x32 tile format)
-            cb_in1_index: CB index for second input (replicated tensor)
+            cb_in1_index: CB index for second input (replicated data)
             cb_out_index: CB index for output
+            width_per_core: Per-core width of down_proj output (e.g., 896)
+            total_width: Full width of shared expert output (e.g., 7168)
+            core_ranges: CoreRangeSet for compute cores
+            data_format: Data format (e.g., ttnn.bfloat16)
+            in0_tensor: Optional tensor for CB aliasing with down_proj output
 
         Returns:
             Dictionary with eltwise_add parameters and CB descriptors
         """
-        # Get core ranges from in0_tensor (same as previous mm)
-        core_ranges = in0_tensor.memory_config().shard_spec.grid
         compute_cores_list = ttnn.corerange_to_cores(core_ranges, row_wise=True)
-        # Get tensor info
-        in0_dtype = in0_tensor.dtype
-        in0_shard_shape = in0_tensor.memory_config().shard_spec.shape
-        in1_shard_shape = in1_tensor.memory_config().shard_spec.shape
-
-        # Dimensions
-        width_per_core = in0_shard_shape[1]  # per-core width (e.g., 896)
-        total_width = in1_shard_shape[1]  # full width of replicated tensor (e.g., 7168)
 
         # Element size
-        if in0_dtype == ttnn.bfloat16:
+        if data_format == ttnn.bfloat16:
             element_size_bytes = 2
         else:
-            raise ValueError(f"Unsupported dtype: {in0_dtype}")
+            raise ValueError(f"Unsupported dtype: {data_format}")
 
         slice_size_bytes = width_per_core * element_size_bytes
 
@@ -444,17 +523,39 @@ class MoeRoutedExpertOp:
         num_tiles = out_shard_elements // cb_tile_elements
         assert num_tiles == 1, f"Expected 1 tile (32x32 view), got {num_tiles}"
 
-        # CB for in0: down_proj output aliased with 32x32 tile format
-        cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
-        cb_in0_descriptor.total_size = in0_size_bytes
-        cb_in0_descriptor.format_descriptors[0].tile = cb_tile_desc
-        cb_in0_descriptor.format_descriptors[0].page_size = in0_size_bytes
+        # CB for in0: tensor-backed alias of down_proj output (if tensor provided), else non-tensor-backed
+        if in0_tensor is not None:
+            cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
+            cb_in0_descriptor.total_size = in0_size_bytes
+            cb_in0_descriptor.format_descriptors[0].tile = cb_tile_desc
+            cb_in0_descriptor.format_descriptors[0].page_size = in0_size_bytes
+        else:
+            cb_in0_descriptor = ttnn.CBDescriptor(
+                total_size=in0_size_bytes,
+                core_ranges=core_ranges,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_in0_index,
+                        data_format=data_format,
+                        page_size=in0_size_bytes,
+                        tile=cb_tile_desc,
+                    )
+                ],
+            )
 
-        # CB for in1: replicated tensor (tensor-backed)
-        cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
-        cb_in1_descriptor.total_size = in1_size_bytes
-        cb_in1_descriptor.format_descriptors[0].tile = cb_tile_desc
-        cb_in1_descriptor.format_descriptors[0].page_size = in0_size_bytes  # page_size = slice size for reading
+        # CB for in1: non-tensor-backed, receives shared expert output via mcast
+        cb_in1_descriptor = ttnn.CBDescriptor(
+            total_size=in1_size_bytes,
+            core_ranges=core_ranges,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_in1_index,
+                    data_format=data_format,
+                    page_size=in0_size_bytes,  # page_size = slice size for reading
+                    tile=cb_tile_desc,
+                )
+            ],
+        )
 
         # CB for out: output (tensor-backed, uses 32x32 CB view)
         cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
@@ -653,33 +754,25 @@ class MoeRoutedExpertOp:
     @staticmethod
     def _setup_dimensions(
         input_tensor,
-        mcast_output_tensor,
         gate_mm_weights_tensor,
-        gate_mm_output_tensor,
         gate_input_tensor,
         gate_bias_tensor,
         gate_indices_tensor,
         gate_output_scores_tensor,
         gate_output_indices_tensor,
-        expert_index_tensor,
-        expert_scale_tensor,
         gate_proj_weights_tensor,
-        gate_proj_output_tensor,
         up_proj_weights_tensor,
-        up_proj_mm_out_tensor,
-        fused_output_tensor,
         down_proj_gather_output_tensor,
-        down_proj_mcast_output_tensor,
         down_proj_weights_tensor,
-        down_proj_output_tensor,
-        fused_add_tensor,
         final_output_tensor,
         gate_proj_in1_buf_tensor,
         down_proj_in1_buf_tensor,
-        mul_scalar_buf_tensor,
         shared_residual_mcast_src_tensor,
-        shared_residual_mcast_dst_tensor,
         rmsnorm_gamma_tensor,
+        # Aliased output tensors (needed for CB aliasing between matmul out → consumer CBs)
+        gate_proj_output_tensor=None,
+        up_proj_mm_out_tensor=None,
+        down_proj_output_tensor=None,
         epsilon=1e-6,
         use_hardcoded_expert_index=False,
         reduce_intermediate_tensors=None,
@@ -719,8 +812,8 @@ class MoeRoutedExpertOp:
         device = ttnn.get_device_tensors(input_tensor)[0].device()
 
         # Core grids
-        gate_proj_core_ranges = gate_proj_output_tensor.memory_config().shard_spec.grid
-        mcast_grid = mcast_output_tensor.memory_config().shard_spec.grid
+        gate_proj_core_ranges = gate_proj_in1_buf_tensor.memory_config().shard_spec.grid
+        mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
         num_gate_proj_cores = gate_proj_core_ranges.num_cores()
 
         # Full device grid
@@ -803,9 +896,12 @@ class MoeRoutedExpertOp:
             sender_core=sender_core,
             mcast_grid=mcast_grid,
             src_cb=residual_mcast_src_cb,
-            src_tensor=shared_residual_mcast_src_tensor,
+            src_num_pages=num_tiles_k,  # Will be overridden later
             dst_cb=residual_mcast_dst_cb,
-            dst_tensor=shared_residual_mcast_dst_tensor,
+            dst_num_pages=num_tiles_k,
+            dst_data_format=data_format,
+            dst_page_size=tile_1x32_size,
+            dst_tile=TILE_1x32,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
             receiver_semaphore_id=residual_mcast_receiver_semaphore_id,
             data_size_bytes=residual_mcast_data_size_bytes,
@@ -817,9 +913,18 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # RMSNorm (sender core: residual_mcast_src → rmsnorm_output)
         # ==================================================================
-        rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(rmsnorm_output_cb, input_tensor)
-        rmsnorm_output_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
-        rmsnorm_output_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
+        rmsnorm_output_cb_descriptor = ttnn.CBDescriptor(
+            total_size=rmsnorm_num_tiles * rmsnorm_cb_page_size,
+            core_ranges=input_core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=rmsnorm_output_cb,
+                    data_format=data_format,
+                    page_size=rmsnorm_cb_page_size,
+                    tile=rmsnorm_tile_descriptor,
+                )
+            ],
+        )
 
         rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(rmsnorm_gamma_cb, rmsnorm_gamma_tensor)
         rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
@@ -840,15 +945,16 @@ class MoeRoutedExpertOp:
             sender_core=sender_core,
             mcast_grid=mcast_grid,
             src_cb=rmsnorm_output_cb,
-            src_tensor=input_tensor,
+            src_num_pages=num_tiles_k,  # Will be overridden to rmsnorm_num_tiles
             dst_cb=gate_mm_input_cb,
-            dst_tensor=mcast_output_tensor,
+            dst_num_pages=num_tiles_k,
+            dst_data_format=data_format,
+            dst_page_size=tile_1x32_size,
+            dst_tile=TILE_1x32,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
             receiver_semaphore_id=mcast_data_receiver_semaphore_id,
             data_size_bytes=rmsnorm_mcast_data_size_bytes,
         )
-        # Override src_num_pages: RMSNorm pushes rmsnorm_num_tiles (7) 32x32-tile pages,
-        # but receiver (CB 1) still needs num_tiles_k (224) 1x32-tile pages for gate MM
         rmsnorm_mcast_params["src_num_pages"] = rmsnorm_num_tiles
 
         # ==================================================================
@@ -859,19 +965,30 @@ class MoeRoutedExpertOp:
             in1_cb=gate_mm_weights_cb,
             out_cb=gate_mm_output_cb,
             weights_tensor=gate_mm_weights_tensor,
-            output_tensor=gate_mm_output_tensor,
             k_num_tiles=num_tiles_k,
+            output_data_format=data_format,
+            output_tile=TILE_1x32,
             fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
         )
 
-        # Pre-built CB descriptors (tensor-backed, not from setup helpers)
-        gate_mm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_mm_input_cb, mcast_output_tensor)
+        # Pre-built CB descriptors (non-tensor-backed)
+        gate_mm_input_cb_descriptor = ttnn.CBDescriptor(
+            total_size=num_tiles_k * tile_1x32_size,
+            core_ranges=mcast_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=gate_mm_input_cb,
+                    data_format=data_format,
+                    page_size=tile_1x32_size,
+                    tile=ttnn.TileDescriptor(TILE_1x32),
+                )
+            ],
+        )
 
         # ==================================================================
         # Gate MM Gather
         # ==================================================================
-        gate_mm_output_tile = gate_mm_output_tensor.get_tile()
-        gate_mm_output_tile_size = gate_mm_output_tile.get_tile_size(data_format)
+        gate_mm_output_tile_size = tile_1x32_size  # gate_mm output uses 1x32 tiles, bfloat16
         gate_mm_gather_data_size_bytes = gate_mm_params["out_w"] * gate_mm_output_tile_size
 
         gate_mm_gather_params = MoeOp.setup_gather(
@@ -912,18 +1029,28 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Index Mcast
         # ==================================================================
-        gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_proj_cb_index, expert_index_tensor)
-        index_tile = expert_index_tensor.get_tile()
-        index_tile_size = index_tile.get_tile_size(expert_index_tensor.dtype)
-        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender semaphore
+        TILE_1x16 = ttnn.Tile((1, 16))
+        index_tile_size = TILE_1x16.get_tile_size(ttnn.uint16)
+        gate_proj_cb_index_descriptor = ttnn.CBDescriptor(
+            total_size=index_tile_size,
+            core_ranges=mcast_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=gate_proj_cb_index,
+                    data_format=ttnn.uint16,
+                    page_size=index_tile_size,
+                    tile=ttnn.TileDescriptor(TILE_1x16),
+                )
+            ],
+        )
+        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
         # ==================================================================
         # Expert Scale Mcast
         # ==================================================================
-        expert_scale_tile = expert_scale_tensor.get_tile()
-        expert_scale_tile_size = expert_scale_tile.get_tile_size(expert_scale_tensor.dtype)
+        expert_scale_tile_size = TILE_1x16.get_tile_size(data_format)  # bfloat16
         expert_scale_mcast_num_pages = 1
         expert_scale_mcast_data_size_bytes = expert_scale_tile_size
 
@@ -933,13 +1060,14 @@ class MoeRoutedExpertOp:
         gate_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
             weights_tensor=gate_proj_weights_tensor,
-            output_tensor=gate_proj_output_tensor,
             working_buf_tensor=gate_proj_in1_buf_tensor,
-            core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
             fp32_dest_acc_en=True,
             num_subblocks_k=4,
+            output_data_format=data_format,
+            output_tile=TILE_1x32,
+            output_tensor=gate_proj_output_tensor,
         )
 
         # ==================================================================
@@ -948,30 +1076,30 @@ class MoeRoutedExpertOp:
         up_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
             weights_tensor=up_proj_weights_tensor,
-            output_tensor=up_proj_mm_out_tensor,
-            working_buf_tensor=gate_proj_in1_buf_tensor,  # Shares CB with gate_proj
-            core_ranges=gate_proj_core_ranges,
+            working_buf_tensor=gate_proj_in1_buf_tensor,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
             fp32_dest_acc_en=True,
             num_subblocks_k=4,
+            output_data_format=data_format,
+            output_tile=TILE_1x32,
+            output_tensor=up_proj_mm_out_tensor,
         )
 
         # ==================================================================
         # Eltwise Mul: silu(gate_proj) * up_proj * expert_scale
         # ==================================================================
         mul_params = MoeRoutedExpertOp.setup_eltwise_mul(
-            in0_tensor=up_proj_mm_out_tensor,
-            in1_tensor=gate_proj_output_tensor,
-            out_tensor=fused_output_tensor,
             cb_in0_index=mul_cb_in0,
             cb_in1_index=mul_cb_in1,
             cb_out_index=mul_cb_out,
             per_core_n=gate_proj_params["per_core_n"],
             cb_scalar_index=mul_cb_scalar,
             cb_scalar_src_index=mul_cb_scalar_src,
-            scalar_src_tensor=expert_scale_tensor,
-            scalar_buf_tensor=mul_scalar_buf_tensor,
+            compute_core_ranges=gate_proj_core_ranges,
+            scalar_src_core_ranges=mcast_grid,
+            in0_tensor=up_proj_mm_out_tensor,
+            in1_tensor=gate_proj_output_tensor,
         )
         mul_num_tiles = mul_params["mul_num_tiles"]
 
@@ -1008,9 +1136,12 @@ class MoeRoutedExpertOp:
             sender_core=sender_core,
             mcast_grid=mcast_grid,
             src_cb=down_proj_gather_dst_cb,
-            src_tensor=down_proj_gather_output_tensor,
+            src_num_pages=down_proj_mcast_num_tiles,
             dst_cb=down_proj_mcast_dst_cb,
-            dst_tensor=down_proj_mcast_output_tensor,
+            dst_num_pages=down_proj_mcast_num_tiles,
+            dst_data_format=data_format,
+            dst_page_size=tile_1x32_size,
+            dst_tile=TILE_1x32,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
             receiver_semaphore_id=down_proj_mcast_receiver_semaphore_id,
             data_size_bytes=down_proj_mcast_data_size_bytes,
@@ -1022,25 +1153,33 @@ class MoeRoutedExpertOp:
         down_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
             weights_tensor=down_proj_weights_tensor,
-            output_tensor=down_proj_output_tensor,
             working_buf_tensor=down_proj_in1_buf_tensor,
-            core_ranges=gate_proj_core_ranges,
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
             fp32_dest_acc_en=True,
             num_subblocks_k=2,
+            output_data_format=data_format,
+            output_tile=TILE_1x32,
+            output_tensor=down_proj_output_tensor,
         )
 
         # ==================================================================
         # Eltwise Add: down_proj + fused_add
         # ==================================================================
+        down_proj_tile_w = 32  # Known from weights tile shape
+        add_width_per_core = down_proj_params["per_core_n"] * down_proj_tile_w
+        add_total_width = add_width_per_core * num_gate_proj_cores
+
         add_params = MoeRoutedExpertOp.setup_eltwise_add(
-            in0_tensor=down_proj_output_tensor,
-            in1_tensor=fused_add_tensor,
             out_tensor=final_output_tensor,
             cb_in0_index=add_cb_in0,
             cb_in1_index=add_cb_in1,
             cb_out_index=add_cb_out,
+            width_per_core=add_width_per_core,
+            total_width=add_total_width,
+            core_ranges=gate_proj_core_ranges,
+            data_format=data_format,
+            in0_tensor=down_proj_output_tensor,
         )
 
         # ==================================================================
@@ -1733,27 +1872,32 @@ class MoeSharedExpertOp:
     @staticmethod
     def setup_kn_sliced_matmul(
         weights_tensor,
-        output_tensor,
         cb_weights_index,
         cb_out_index,
         num_tiles_k,
         k_parallel,
         n_parallel,
+        output_data_format,
+        output_tile,
+        compute_core_ranges,
     ):
         """
         Setup KN-sliced matmul: [1, K] x [K, N] distributed across K*N cores.
 
         Each core holds a shard of shape [K/k_parallel, N/n_parallel] of the weight matrix.
         Each core computes: activation[k_offset:k_offset+k_per_core] @ weights_shard → 1 output tile.
+        Output CB is non-tensor-backed.
 
         Args:
             weights_tensor: Gate/Up weights tensor (HEIGHT_SHARDED on K*N compute cores)
-            output_tensor: Matmul output tensor (HEIGHT_SHARDED on K*N compute cores, 1 tile per core)
             cb_weights_index: CB index for weights
             cb_out_index: CB index for output
             num_tiles_k: Total K dimension in tiles
             k_parallel: K parallelism factor (number of K slices)
             n_parallel: N parallelism factor (number of N slices)
+            output_data_format: Data format for output CB
+            output_tile: Tile format for output CB
+            compute_core_ranges: CoreRangeSet for compute cores
 
         Returns:
             dict with:
@@ -1761,14 +1905,26 @@ class MoeSharedExpertOp:
             - act_total_tiles: Total activation tiles (= num_tiles_k)
             - weights_num_pages: Pages in weights CB per core (= k_per_core)
             - cb_weights_descriptor: CB descriptor for weights (tensor-backed)
-            - cb_out_descriptor: CB descriptor for output (tensor-backed)
+            - cb_out_descriptor: CB descriptor for output (non-tensor-backed)
         """
         k_per_core = num_tiles_k // k_parallel
         act_total_tiles = num_tiles_k
         weights_num_pages = k_per_core
 
         cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+        out_tile_size = output_tile.get_tile_size(output_data_format)
+        cb_out_descriptor = ttnn.CBDescriptor(
+            total_size=out_tile_size,  # 1 tile per core
+            core_ranges=compute_core_ranges,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_out_index,
+                    data_format=output_data_format,
+                    page_size=out_tile_size,
+                    tile=ttnn.TileDescriptor(output_tile),
+                )
+            ],
+        )
 
         return {
             "k_per_core": k_per_core,
@@ -1782,8 +1938,6 @@ class MoeSharedExpertOp:
     def setup_gated_reduce(
         group1_tensor,
         group2_tensor,
-        intermed_tensor,
-        output_tensor,
         cb_group1_index,
         cb_group2_index,
         cb_intermed_index,
@@ -1792,18 +1946,17 @@ class MoeSharedExpertOp:
         data_format,
         k_parallel,
         n_parallel,
+        sender_core_grid,
     ):
         """
         Setup gated reduce: SiLU(reduce(group1)) * reduce(group2).
 
         Requires face-view optimization (asserted). Creates CB descriptors
-        with face-view tile aliasing.
+        with face-view tile aliasing. Intermediate and output CBs are non-tensor-backed.
 
         Args:
             group1_tensor: Gate gather destination tensor (tensor-backed on sender)
             group2_tensor: Up gather destination tensor (tensor-backed on sender)
-            intermed_tensor: Intermediate tensor for reduce (tensor-backed on sender)
-            output_tensor: Gated reduce output / mcast source tensor (tensor-backed on sender)
             cb_group1_index: CB index for gate gather destination
             cb_group2_index: CB index for up gather destination
             cb_intermed_index: CB index for intermediate
@@ -1812,6 +1965,7 @@ class MoeSharedExpertOp:
             data_format: Data format (dtype)
             k_parallel: K parallelism factor (= tiles_per_k)
             n_parallel: N parallelism factor (= k_num_tiles)
+            sender_core_grid: CoreRangeSet for sender core (for intermed/output CBs)
 
         Returns:
             dict with:
@@ -1821,7 +1975,7 @@ class MoeSharedExpertOp:
             - face_tile_desc, face_tile_size: Face tile descriptor and size
             - input_tile_size, reduce_tile_size: Tile sizes
             - cb_group1_descriptor, cb_group2_descriptor: CB descriptors (face-view aliased)
-            - cb_intermed_descriptor, cb_out_descriptor: CB descriptors
+            - cb_intermed_descriptor, cb_out_descriptor: CB descriptors (non-tensor-backed)
         """
         tiles_per_k = k_parallel
         k_num_tiles = n_parallel
@@ -1841,7 +1995,7 @@ class MoeSharedExpertOp:
         mcast_src_num_pages = 1
         reduce_tile_size = face_tile_size
 
-        # CB descriptors with face-view aliasing
+        # CB descriptors with face-view aliasing (tensor-backed for gather destinations)
         cb_group1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_group1_index, group1_tensor)
         cb_group1_descriptor.format_descriptors[0].tile = face_tile_desc
         cb_group1_descriptor.format_descriptors[0].page_size = face_tile_size
@@ -1850,8 +2004,33 @@ class MoeSharedExpertOp:
         cb_group2_descriptor.format_descriptors[0].tile = face_tile_desc
         cb_group2_descriptor.format_descriptors[0].page_size = face_tile_size
 
-        cb_intermed_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_intermed_index, intermed_tensor)
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+        # Non-tensor-backed CB for intermediate (2 face tiles on sender core)
+        cb_intermed_descriptor = ttnn.CBDescriptor(
+            total_size=2 * face_tile_size,
+            core_ranges=sender_core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_intermed_index,
+                    data_format=data_format,
+                    page_size=face_tile_size,
+                    tile=face_tile_desc,
+                )
+            ],
+        )
+
+        # Non-tensor-backed CB for gated reduce output (1 face tile on sender core)
+        cb_out_descriptor = ttnn.CBDescriptor(
+            total_size=mcast_src_num_pages * reduce_tile_size,
+            core_ranges=sender_core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_out_index,
+                    data_format=data_format,
+                    page_size=reduce_tile_size,
+                    tile=face_tile_desc,
+                )
+            ],
+        )
 
         return {
             "tiles_per_k": tiles_per_k,
@@ -1871,30 +2050,47 @@ class MoeSharedExpertOp:
 
     @staticmethod
     def setup_residual_add(
-        output_tensor,
         cb_out_index,
         num_matmul_cores,
         out_w_per_core,
+        output_data_format,
+        output_tile,
+        output_core_ranges,
     ):
         """
         Setup residual add: matmul_out + residual → residual_add_out on matmul cores.
 
         A simple element-wise add where both operands are already present on
         each core (matmul output and mcasted residual).
+        Output CB is non-tensor-backed.
 
         Args:
-            output_tensor: Output tensor for residual add (WIDTH_SHARDED on matmul cores)
             cb_out_index: CB index for output
             num_matmul_cores: Number of matmul cores performing the add
             out_w_per_core: Output width per core in tiles
+            output_data_format: Data format for output CB
+            output_tile: Tile format for output CB
+            output_core_ranges: CoreRangeSet for matmul cores
 
         Returns:
             dict with:
             - out_cb: Output CB index
             - total_in1_tiles: Total residual tiles across all cores
-            - cb_out_descriptor: CB descriptor for output (tensor-backed)
+            - cb_out_descriptor: CB descriptor for output (non-tensor-backed)
         """
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+        out_tile_size = output_tile.get_tile_size(output_data_format)
+        cb_out_descriptor = ttnn.CBDescriptor(
+            total_size=out_w_per_core * out_tile_size,
+            core_ranges=output_core_ranges,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_out_index,
+                    data_format=output_data_format,
+                    page_size=out_tile_size,
+                    tile=ttnn.TileDescriptor(output_tile),
+                )
+            ],
+        )
 
         return {
             "out_cb": cb_out_index,
@@ -1984,16 +2180,10 @@ class MoeSharedExpertOp:
     def _setup_dimensions(
         device,
         shared_gate_up_weights_tensor,
-        shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
         shared_output_tensor,
         shared_ag_gather_dst_tensor,
         shared_bg_gather_dst_tensor,
-        shared_gu_out_tensor,
-        shared_intermed_tensor,
-        shared_down_mcast_src_tensor,
-        shared_down_matmul_out_tensor,
-        shared_residual_add_out_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
@@ -2022,16 +2212,10 @@ class MoeSharedExpertOp:
         Args:
             device: TT device (single chip)
             shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
-            shared_down_mcast_dst_tensor: Destination tensor for down mcast (on mcast grid)
             shared_down_weights_tensor: Down projection weights tensor
             shared_output_tensor: Output tensor for shared expert
             shared_ag_gather_dst_tensor: Tensor-backed CB for gate gather destination (sender core)
             shared_bg_gather_dst_tensor: Tensor-backed CB for up gather destination (sender core)
-            shared_gu_out_tensor: Tensor-backed CB for gate/up matmul output (128 compute cores)
-            shared_intermed_tensor: Tensor-backed CB for gated reduce intermediate (sender core)
-            shared_down_mcast_src_tensor: Tensor-backed CB for gated reduce output / down mcast source (sender core)
-            shared_down_matmul_out_tensor: Tensor-backed CB for down proj matmul output (112 matmul cores)
-            shared_residual_add_out_tensor: Tensor-backed CB for residual add output (112 matmul cores)
             num_tiles_k: Number of K tiles (from routed expert context)
             tile_1x32_size: Size of a 1x32 tile in bytes
             data_format: Data format (dtype)
@@ -2105,19 +2289,19 @@ class MoeSharedExpertOp:
         # ==================================================================
         gu_matmul_params = MoeSharedExpertOp.setup_kn_sliced_matmul(
             weights_tensor=shared_gate_up_weights_tensor,
-            output_tensor=shared_gu_out_tensor,
             cb_weights_index=shared_gu_weights_cb,
             cb_out_index=shared_gu_out_cb,
             num_tiles_k=num_tiles_k,
             k_parallel=k_parallel,
             n_parallel=n_parallel,
+            output_data_format=data_format,
+            output_tile=input_tile,
+            compute_core_ranges=compute_core_grid,
         )
 
         gated_reduce_params = MoeSharedExpertOp.setup_gated_reduce(
             group1_tensor=shared_ag_gather_dst_tensor,
             group2_tensor=shared_bg_gather_dst_tensor,
-            intermed_tensor=shared_intermed_tensor,
-            output_tensor=shared_down_mcast_src_tensor,
             cb_group1_index=shared_group1_cb,
             cb_group2_index=shared_group2_cb,
             cb_intermed_index=shared_intermed_cb,
@@ -2126,6 +2310,7 @@ class MoeSharedExpertOp:
             data_format=data_format,
             k_parallel=k_parallel,
             n_parallel=n_parallel,
+            sender_core_grid=sender_core_grid,
         )
 
         # ==================================================================
@@ -2138,11 +2323,14 @@ class MoeSharedExpertOp:
         down_mcast_params = MoeOp.setup_mcast(
             device=device,
             sender_core=sender_core,
-            mcast_grid=shared_down_mcast_dst_tensor.memory_config().shard_spec.grid,
+            mcast_grid=mcast_grid,
             src_cb=shared_mcast_src_cb,
-            src_tensor=shared_down_mcast_src_tensor,
+            src_num_pages=mcast_src_num_pages,
             dst_cb=shared_down_mcast_dst_cb,
-            dst_tensor=shared_down_mcast_dst_tensor,
+            dst_num_pages=mcast_src_num_pages,  # Must match src (1 face page) for kernel receiver
+            dst_data_format=data_format,
+            dst_page_size=input_tile_size,
+            dst_tile=input_tile,
             sender_semaphore_id=shared_mcast_sender_semaphore_id,
             receiver_semaphore_id=shared_mcast_receiver_semaphore_id,
             data_size_bytes=down_mcast_data_size_bytes,
@@ -2153,23 +2341,27 @@ class MoeSharedExpertOp:
         # ==================================================================
         from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 
+        TILE_1x32 = ttnn.Tile((1, 32))
         down_matmul_params = MoeOp.setup_sram_matmul(
             in0_cb=shared_down_mcast_dst_cb,
             in1_cb=shared_down_matmul_in1_cb,
             out_cb=shared_down_matmul_out_cb,
             weights_tensor=shared_down_weights_tensor,
-            output_tensor=shared_down_matmul_out_tensor,
             k_num_tiles=n_parallel,  # K_down_tiles = n_parallel
+            output_data_format=data_format,
+            output_tile=TILE_1x32,
         )
 
         # ==================================================================
         # Residual Add (matmul_out + residual → residual_add_out on 112 cores)
         # ==================================================================
         residual_add_params = MoeSharedExpertOp.setup_residual_add(
-            output_tensor=shared_residual_add_out_tensor,
             cb_out_index=shared_residual_add_out_cb,
             num_matmul_cores=DownProj.NUM_MATMUL_CORES,
             out_w_per_core=down_matmul_params["out_w"],
+            output_data_format=data_format,
+            output_tile=TILE_1x32,
+            output_core_ranges=DownProj.build_matmul_core_grid(),
         )
 
         # ==================================================================
@@ -2251,7 +2443,7 @@ class MoeSharedExpertOp:
             bg_dummy_tensor=shared_bg_gather_dst_tensor,
             ag_receiver_data_addr=ag_receiver_data_addr,
             bg_receiver_data_addr=bg_receiver_data_addr,
-            down_mcast_dst_dummy_tensor=shared_down_mcast_dst_tensor,
+            down_mcast_dst_dummy_tensor=None,
             output_gather_dst_dummy_tensor=shared_output_tensor,
             # Setup result dicts
             gu_matmul_params=gu_matmul_params,
@@ -2537,9 +2729,12 @@ class MoeOp:
         sender_core,
         mcast_grid,
         src_cb,
-        src_tensor,
+        src_num_pages,
         dst_cb,
-        dst_tensor,
+        dst_num_pages,
+        dst_data_format,
+        dst_page_size,
+        dst_tile,
         sender_semaphore_id,
         receiver_semaphore_id,
         data_size_bytes,
@@ -2548,15 +2743,19 @@ class MoeOp:
         Set up parameters for a multicast operation.
 
         Mcast broadcasts data from a sender core to all cores in the mcast grid.
+        Destination CB is non-tensor-backed.
 
         Args:
             device: TT device
             sender_core: Logical CoreCoord of the sender (single core)
             mcast_grid: CoreRangeSet of destination cores (rectangular grid)
             src_cb: Source CB index on sender core
-            src_tensor: Source tensor on sender core (for num_pages calculation)
+            src_num_pages: Number of pages in source CB
             dst_cb: Destination CB index on receiver cores
-            dst_tensor: Destination tensor on receiver cores (for CB descriptor)
+            dst_num_pages: Number of pages in destination CB
+            dst_data_format: Data format for destination CB
+            dst_page_size: Page size for destination CB in bytes
+            dst_tile: Tile format for destination CB
             sender_semaphore_id: Semaphore ID for sender
             receiver_semaphore_id: Semaphore ID for receivers
             data_size_bytes: Total data size to mcast in bytes
@@ -2581,13 +2780,22 @@ class MoeOp:
         sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
         is_sender_part_of_receiver_grid = mcast_grid.contains(sender_core_grid)
 
-        # Calculate num_pages from source tensor shard shape
-        src_shard_shape = src_tensor.memory_config().shard_spec.shape
-        src_tile = src_tensor.get_tile()
-        src_num_pages = (src_shard_shape[0] * src_shard_shape[1]) // (src_tile.tile_shape[0] * src_tile.tile_shape[1])
-
-        # CB descriptor for destination
-        dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(dst_cb, dst_tensor)
+        # Non-tensor-backed CB descriptor for destination
+        # Use data_size_bytes for total_size (not dst_num_pages * dst_page_size)
+        # because dst_num_pages is the kernel's page count which may differ from
+        # the CB's tile-based page count (e.g., shared down mcast: 1 face page vs 8 input tiles).
+        dst_cb_descriptor = ttnn.CBDescriptor(
+            total_size=data_size_bytes,
+            core_ranges=mcast_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=dst_cb,
+                    data_format=dst_data_format,
+                    page_size=dst_page_size,
+                    tile=ttnn.TileDescriptor(dst_tile),
+                )
+            ],
+        )
 
         return {
             # Sender args (BRISC)
@@ -2604,7 +2812,7 @@ class MoeOp:
             "is_sender_part_of_receiver_grid": is_sender_part_of_receiver_grid,
             # Receiver args (NCRISC)
             "dst_cb": dst_cb,
-            "dst_num_pages": src_num_pages,  # Same as src_num_pages
+            "dst_num_pages": dst_num_pages,
             # CB descriptor
             "dst_cb_descriptor": dst_cb_descriptor,
         }
@@ -2703,23 +2911,25 @@ class MoeOp:
         in1_cb,
         out_cb,
         weights_tensor,
-        output_tensor,
         k_num_tiles,
+        output_data_format,
+        output_tile,
         fused_activation=0,
     ):
         """
         Set up parameters for an SRAM matmul operation.
 
         SRAM matmul computes: output = input @ weights with optional fused activation.
-        Weights and output are sharded in L1 (SRAM).
+        Weights are sharded in L1 (SRAM). Output CB is non-tensor-backed.
 
         Args:
             in0_cb: Input CB index (receives mcasted input)
             in1_cb: Weights CB index
             out_cb: Output CB index
             weights_tensor: Weight tensor (WIDTH_SHARDED in L1)
-            output_tensor: Output tensor (WIDTH_SHARDED in L1)
             k_num_tiles: K dimension in tiles
+            output_data_format: Data format for output CB
+            output_tile: Tile format for output CB
             fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
 
         Returns:
@@ -2736,7 +2946,19 @@ class MoeOp:
 
         # CB descriptors
         weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_tensor)
-        output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
+        out_tile_size = output_tile.get_tile_size(output_data_format)
+        output_cb_descriptor = ttnn.CBDescriptor(
+            total_size=out_w * out_tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=out_cb,
+                    data_format=output_data_format,
+                    page_size=out_tile_size,
+                    tile=ttnn.TileDescriptor(output_tile),
+                )
+            ],
+        )
 
         return {
             # CB indices
@@ -2838,49 +3060,35 @@ class MoeOp:
     @staticmethod
     def op(
         input_tensor,
-        mcast_output_tensor,
         gate_mm_weights_tensor,
-        gate_mm_output_tensor,
         gate_input_tensor,
         gate_bias_tensor,
         gate_indices_tensor,
         gate_output_scores_tensor,
         gate_output_indices_tensor,
-        expert_index_tensor,
-        expert_scale_tensor,
         gate_proj_weights_tensor,
-        gate_proj_output_tensor,
         up_proj_weights_tensor,
-        up_proj_mm_out_tensor,
-        fused_output_tensor,
         down_proj_gather_output_tensor,
-        down_proj_mcast_output_tensor,
         down_proj_weights_tensor,
-        down_proj_output_tensor,
-        fused_add_tensor,
         final_output_tensor,
         gate_proj_in1_buf_tensor,
         down_proj_in1_buf_tensor,
-        mul_scalar_buf_tensor,
         # RMSNorm gamma weights (sender core)
         rmsnorm_gamma_tensor,
         # Shared expert tensors
         shared_residual_mcast_src_tensor,
         shared_gate_up_weights_tensor,
-        shared_residual_mcast_dst_tensor,
-        shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
         shared_output_tensor,
-        # Shared expert tensor-backed CB tensors
+        # Shared expert tensor-backed CB tensors (gather destinations)
         shared_ag_gather_dst_tensor,
         shared_bg_gather_dst_tensor,
-        shared_gu_out_tensor,
-        shared_intermed_tensor,
-        shared_down_mcast_src_tensor,
-        shared_down_matmul_out_tensor,
-        shared_residual_add_out_tensor,
         shared_k_parallel,
         shared_n_parallel,
+        # Aliased output tensors (CB aliasing: matmul out → consumer CBs share L1)
+        gate_proj_output_tensor=None,
+        up_proj_mm_out_tensor=None,
+        down_proj_output_tensor=None,
         epsilon=1e-6,
         use_hardcoded_expert_index=False,
         num_iterations=1,
@@ -2908,33 +3116,24 @@ class MoeOp:
         # ==================================================================
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
             input_tensor,
-            mcast_output_tensor,
             gate_mm_weights_tensor,
-            gate_mm_output_tensor,
             gate_input_tensor,
             gate_bias_tensor,
             gate_indices_tensor,
             gate_output_scores_tensor,
             gate_output_indices_tensor,
-            expert_index_tensor,
-            expert_scale_tensor,
             gate_proj_weights_tensor,
-            gate_proj_output_tensor,
             up_proj_weights_tensor,
-            up_proj_mm_out_tensor,
-            fused_output_tensor,
             down_proj_gather_output_tensor,
-            down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
-            down_proj_output_tensor,
-            fused_add_tensor,
             final_output_tensor,
             gate_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
-            mul_scalar_buf_tensor,
             shared_residual_mcast_src_tensor=shared_residual_mcast_src_tensor,
-            shared_residual_mcast_dst_tensor=shared_residual_mcast_dst_tensor,
             rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
+            gate_proj_output_tensor=gate_proj_output_tensor,
+            up_proj_mm_out_tensor=up_proj_mm_out_tensor,
+            down_proj_output_tensor=down_proj_output_tensor,
             epsilon=epsilon,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             reduce_intermediate_tensors=reduce_intermediate_tensors,
@@ -2963,16 +3162,10 @@ class MoeOp:
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
             shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
-            shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
             shared_down_weights_tensor=shared_down_weights_tensor,
             shared_output_tensor=shared_output_tensor,
             shared_ag_gather_dst_tensor=shared_ag_gather_dst_tensor,
             shared_bg_gather_dst_tensor=shared_bg_gather_dst_tensor,
-            shared_gu_out_tensor=shared_gu_out_tensor,
-            shared_intermed_tensor=shared_intermed_tensor,
-            shared_down_mcast_src_tensor=shared_down_mcast_src_tensor,
-            shared_down_matmul_out_tensor=shared_down_matmul_out_tensor,
-            shared_residual_add_out_tensor=shared_residual_add_out_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -3066,49 +3259,69 @@ class MoeOp:
         # ==================================================================
         io_tensors = [
             input_tensor,
-            mcast_output_tensor,
             gate_mm_weights_tensor,
-            gate_mm_output_tensor,
             gate_input_tensor,
             gate_bias_tensor,
             gate_indices_tensor,
             gate_output_scores_tensor,
             gate_output_indices_tensor,
-            expert_index_tensor,
             gate_proj_weights_tensor,
-            gate_proj_output_tensor,
             up_proj_weights_tensor,
-            up_proj_mm_out_tensor,
-            fused_output_tensor,
-            expert_scale_tensor,
             down_proj_gather_output_tensor,
-            down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
-            down_proj_output_tensor,
-            fused_add_tensor,
             final_output_tensor,
             # Tensor-backed working buffers
             gate_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
-            mul_scalar_buf_tensor,
             # RMSNorm gamma weights (sender core)
             rmsnorm_gamma_tensor,
             # Shared expert tensors
             shared_residual_mcast_src_tensor,
             shared_gate_up_weights_tensor,
-            shared_ag_gather_dst_tensor,
-            shared_bg_gather_dst_tensor,
-            shared_residual_mcast_dst_tensor,
-            shared_down_mcast_dst_tensor,
             shared_down_weights_tensor,
             shared_output_tensor,
-            # Shared expert tensor-backed CB tensors
-            shared_gu_out_tensor,
-            shared_intermed_tensor,
-            shared_down_mcast_src_tensor,
-            shared_down_matmul_out_tensor,
-            shared_residual_add_out_tensor,
+            # Shared expert tensor-backed CB tensors (gather destinations)
+            shared_ag_gather_dst_tensor,
+            shared_bg_gather_dst_tensor,
         ]
+        # Add aliased output tensors to io_tensors (needed for CB aliasing keep-alive)
+        if gate_proj_output_tensor is not None:
+            io_tensors.append(gate_proj_output_tensor)
+        if up_proj_mm_out_tensor is not None:
+            io_tensors.append(up_proj_mm_out_tensor)
+        if down_proj_output_tensor is not None:
+            io_tensors.append(down_proj_output_tensor)
+
+        # ==================================================================
+        # Debug: log all compile-time args with addresses + CB descriptors
+        # ==================================================================
+        _ncrisc_dbg, _brisc_dbg, _trisc_dbg = MoeRoutedExpertOp._build_compile_time_args(routed_ctx, 0)
+        _s_ncrisc, _s_brisc, _s_trisc = MoeSharedExpertOp._build_compile_time_args(
+            shared_ctx, routed_ctx.rmsnorm_mcast_params["dst_cb"], routed_ctx.rmsnorm_mcast_params
+        )
+        print("=== MoeOp Debug: all CT args with 'addr' or 'size' or 'pages' ===")
+        for name, val in _ncrisc_dbg + _s_ncrisc:
+            if "addr" in name or "size" in name or "pages" in name or "num_tiles" in name.lower():
+                print(f"  NCRISC {name} = {val}")
+        for name, val in _brisc_dbg + _s_brisc:
+            if "addr" in name or "size" in name or "pages" in name or "num_tiles" in name.lower():
+                print(f"  BRISC  {name} = {val}")
+        for name, val in _trisc_dbg + _s_trisc:
+            if "addr" in name or "size" in name or "pages" in name or "num_tiles" in name.lower():
+                print(f"  TRISC  {name} = {val}")
+        # Log CB descriptors
+        all_cbs = cb_descriptors
+        print(f"=== CB descriptors ({len(all_cbs)} total) ===")
+        for i, desc in enumerate(all_cbs):
+            try:
+                cb_idx = desc.format_descriptors[0].buffer_index
+                ts = desc.total_size
+                ps = desc.format_descriptors[0].page_size
+                df = desc.format_descriptors[0].data_format
+                print(f"  CB[{i}] idx={cb_idx} total_size={ts} page_size={ps} data_format={df}")
+            except Exception as e:
+                print(f"  CB[{i}] error reading: {e}")
+        print("=== End Debug ===")
 
         # ==================================================================
         # Create per-device programs (mesh loop)

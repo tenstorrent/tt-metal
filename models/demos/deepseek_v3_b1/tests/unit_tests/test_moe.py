@@ -234,38 +234,6 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
         **from_torch_kwargs,
     )
 
-    # ── Down mcast destination tensor (gated reduce output [1, K_down] → all 130 cores) ──
-    down_mcast_dst_shard = ttnn.ShardSpec(mcast_grid, (M, K_down), ttnn.ShardOrientation.ROW_MAJOR)
-    down_mcast_dst_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, down_mcast_dst_shard
-    )
-    ttnn_down_mcast_dst = ttnn.from_torch(
-        torch.zeros((M, K_down), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=down_mcast_dst_mem,
-        tile=a_tile,
-        **from_torch_kwargs,
-    )
-
-    # ── Output mcast destination tensor (shared expert output [1, N] → all 130 cores) ──
-    # This will replace fused_add_tensor: mcast writes shared expert output into add_cb_in1
-    num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
-    output_mcast_dst_shard = ttnn.ShardSpec(mcast_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
-    output_mcast_dst_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_mcast_dst_shard
-    )
-    ttnn_output_mcast_dst = ttnn.from_torch(
-        torch.zeros((M * num_mcast_cores, N), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=output_mcast_dst_mem,
-        tile=out_tile,
-        **from_torch_kwargs,
-    )
-
     # ── Tensor-backed CB tensors ──
 
     # CB 30/31: Gate/Up gather destination (64 tiles each on sender core)
@@ -292,103 +260,18 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
         **from_torch_kwargs,
     )
 
-    # Determine face-view tile for intermed/mcast_src CBs
-    from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
-
-    use_face_view = can_use_face_view(M, 32, k_parallel, n_parallel)
-    assert use_face_view, "Expected face_view=True for M=1, tile_w=32, k_parallel=8, n_parallel=8"
-    face_tile = ttnn.Tile([FACE_HEIGHT, FACE_WIDTH])
-
-    # CB 29: Gate/Up matmul output (1 tile per core on 128 compute cores)
-    gu_out_shard = ttnn.ShardSpec(compute_core_grid, (M, 32), ttnn.ShardOrientation.ROW_MAJOR)
-    gu_out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gu_out_shard)
-    num_compute_cores = len(compute_cores_list)
-    ttnn_gu_out = ttnn.from_torch(
-        torch.zeros((M * num_compute_cores, 32), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=gu_out_mem,
-        tile=a_tile,
-        **from_torch_kwargs,
-    )
-
-    # CB 32: Gated reduce intermediate (2 face tiles on sender core)
-    intermed_shard = ttnn.ShardSpec(sender_core_grid, (2 * FACE_HEIGHT, FACE_WIDTH), ttnn.ShardOrientation.ROW_MAJOR)
-    intermed_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, intermed_shard)
-    ttnn_intermed = ttnn.from_torch(
-        torch.zeros((2 * FACE_HEIGHT, FACE_WIDTH), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=intermed_mem,
-        tile=face_tile,
-        **from_torch_kwargs,
-    )
-
-    # CB 33: Gated reduce output / down mcast source (1 face tile on sender core)
-    mcast_src_shard = ttnn.ShardSpec(sender_core_grid, (FACE_HEIGHT, FACE_WIDTH), ttnn.ShardOrientation.ROW_MAJOR)
-    mcast_src_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, mcast_src_shard)
-    ttnn_down_mcast_src = ttnn.from_torch(
-        torch.zeros((FACE_HEIGHT, FACE_WIDTH), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mcast_src_mem,
-        tile=face_tile,
-        **from_torch_kwargs,
-    )
-
-    # CB 36: Down proj matmul output (N_per_core/32 tiles of [1,32] per core on 112 matmul cores)
-    down_matmul_out_shard = ttnn.ShardSpec(matmul_core_grid, (M, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
-    down_matmul_out_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, down_matmul_out_shard
-    )
-    num_matmul_cores = DownProj.NUM_MATMUL_CORES
-    ttnn_down_matmul_out = ttnn.from_torch(
-        torch.zeros((M, N_per_core * num_matmul_cores), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=down_matmul_out_mem,
-        tile=out_tile,
-        **from_torch_kwargs,
-    )
-
-    # CB 37: Residual add output (same shape as down matmul output on 112 matmul cores)
-    residual_add_out_shard = ttnn.ShardSpec(matmul_core_grid, (M, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
-    residual_add_out_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, residual_add_out_shard
-    )
-    ttnn_residual_add_out = ttnn.from_torch(
-        torch.zeros((M, N_per_core * num_matmul_cores), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=residual_add_out_mem,
-        tile=out_tile,
-        **from_torch_kwargs,
-    )
-
     return {
         # TTNN tensors
         "ttnn_activation": ttnn_activation,
         "ttnn_gate_up_weights": ttnn_gate_up_weights,
         "ttnn_down_weights": ttnn_down_weights,
         "ttnn_output": ttnn_output,
-        "ttnn_down_mcast_dst": ttnn_down_mcast_dst,
-        "ttnn_output_mcast_dst": ttnn_output_mcast_dst,
         # Params
         "k_parallel": k_parallel,
         "n_parallel": n_parallel,
         # Tensor-backed CB tensors
         "ttnn_ag_gather_dst": ttnn_ag_gather_dst,
         "ttnn_bg_gather_dst": ttnn_bg_gather_dst,
-        "ttnn_gu_out": ttnn_gu_out,
-        "ttnn_intermed": ttnn_intermed,
-        "ttnn_down_mcast_src": ttnn_down_mcast_src,
-        "ttnn_down_matmul_out": ttnn_down_matmul_out,
-        "ttnn_residual_add_out": ttnn_residual_add_out,
         # Torch tensors for golden
         "torch_activation": torch_activation,
         "torch_gate_weights": torch_gate_weights,
@@ -513,40 +396,8 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
-    # Mcast output tensor: sharded on rectangular grid from (0,0) to sender core
+    # Mcast grid: rectangular grid from (0,0) to sender core (used by shared expert tensors)
     mcast_output_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), input_core)])
-    mcast_output_shard_spec = ttnn.ShardSpec(
-        mcast_output_core_grid,
-        (M, K),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    mcast_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, mcast_output_shard_spec
-    )
-    ttnn_mcast_output = ttnn.from_torch(
-        torch.zeros((M, K), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mcast_output_mem_config,
-        tile=tile_1x32,
-        **from_torch_kwargs,
-    )
-
-    # ── Residual mcast destination tensor (on full mcast grid, populated by residual mcast) ──
-    residual_mcast_dst_shard = ttnn.ShardSpec(mcast_output_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
-    residual_mcast_dst_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, residual_mcast_dst_shard
-    )
-    ttnn_residual_mcast_dst = ttnn.from_torch(
-        torch.zeros(M, K, dtype=torch.bfloat16).float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=residual_mcast_dst_mem,
-        tile=tile_1x32,
-        **from_torch_kwargs,
-    )
 
     # Gate matmul weights: width-sharded across 8 cores
     gate_mm_weights_shard_spec = ttnn.ShardSpec(
@@ -565,26 +416,6 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         device=device,
         memory_config=gate_mm_weights_mem_config,
         tile=tile_32x32,
-        **from_torch_kwargs,
-    )
-
-    # Gate matmul output: width-sharded across compute cores
-    gate_mm_output_shard_spec = ttnn.ShardSpec(
-        compute_core_grid,
-        (M, N_per_core),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    gate_mm_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_output_shard_spec
-    )
-
-    ttnn_gate_mm_output = ttnn.from_torch(
-        torch.zeros((M, N), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=gate_mm_output_mem_config,
-        tile=tile_1x32,
         **from_torch_kwargs,
     )
 
@@ -665,36 +496,6 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         **from_torch_kwargs,
     )
 
-    # Expert index tensor [1, 16] on mcast grid
-    expert_index_shard_spec = ttnn.ShardSpec(
-        mcast_output_core_grid,
-        (1, 16),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    expert_index_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, expert_index_shard_spec
-    )
-    expert_index_tensor = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.uint16),
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=expert_index_mem_config,
-        tile=tile_1x16,
-        **from_torch_kwargs,
-    )
-
-    # Expert scale tensor [1, 16] on mcast grid
-    expert_scale_tensor = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=expert_index_mem_config,
-        tile=tile_1x16,
-        **from_torch_kwargs,
-    )
-
     (
         gate_proj_weights,
         gate_proj_output,
@@ -734,20 +535,9 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         mesh_mapper=mesh_mapper,
     )
 
-    # Fused output tensor
+    # down_proj tensors
     num_banks = device.dram_grid_size().x
     gate_proj_N_padded = ((gate_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
-    fused_output_tensor = ttnn.from_torch(
-        torch.zeros([1, 1, M, gate_proj_N_padded]).bfloat16().float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=up_proj_mm_out_tensor.memory_config(),
-        tile=up_proj_mm_out_tensor.get_tile(),
-        **from_torch_kwargs,
-    )
-
-    # down_proj tensors
     down_proj_K = gate_proj_N
     down_proj_N = K
 
@@ -765,24 +555,6 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=down_proj_gather_mem_config,
-        tile=tile_1x32,
-        **from_torch_kwargs,
-    )
-
-    down_proj_mcast_shard_spec = ttnn.ShardSpec(
-        mcast_output_core_grid,
-        (M, gate_proj_N_padded),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    down_proj_mcast_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, down_proj_mcast_shard_spec
-    )
-    down_proj_mcast_output_tensor = ttnn.from_torch(
-        torch.zeros([M, gate_proj_N_padded]).bfloat16(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=down_proj_mcast_mem_config,
         tile=tile_1x32,
         **from_torch_kwargs,
     )
@@ -807,32 +579,8 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         mesh_mapper=mesh_mapper,
     )
 
-    # fused_add tensor
     down_proj_N_padded = ((down_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
     per_core_down_proj_N = down_proj_N_padded // num_banks
-
-    torch.manual_seed(1024)
-    fused_add_torch = torch.randn([1, 1, 1, down_proj_N_padded]).bfloat16().float()
-
-    fused_add_replicated = fused_add_torch.repeat(1, 1, num_gate_proj_cores, 1)
-
-    fused_add_shard_spec = ttnn.ShardSpec(
-        gate_proj_core_ranges,
-        (1, down_proj_N_padded),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    fused_add_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fused_add_shard_spec
-    )
-    fused_add_tensor = ttnn.from_torch(
-        fused_add_replicated,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=fused_add_mem_config,
-        tile=tile_1x32,
-        **from_torch_kwargs,
-    )
 
     # Final output tensor
     final_output_width_per_core = 32 * 32
@@ -890,52 +638,31 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         device, down_proj_weights, gate_proj_core_ranges, num_gate_proj_cores, num_subblocks_k=2
     )
 
-    # Scalar working buffer (16x16 tile, bfloat16)
-    tile_16x16_buf = ttnn.Tile([16, 16])
-    scalar_shard = ttnn.ShardSpec(gate_proj_core_ranges, (16, 16), ttnn.ShardOrientation.ROW_MAJOR)
-    scalar_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, scalar_shard)
-    mul_scalar_buf_tensor = ttnn.from_torch(
-        torch.zeros(16, 16 * num_gate_proj_cores, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=scalar_mem,
-        tile=tile_16x16_buf,
-        **from_torch_kwargs,
-    )
-
     return {
         # TTNN tensors for op()
         "ttnn_rmsnorm_output": ttnn_rmsnorm_output,
         "ttnn_residual_mcast_src": ttnn_residual_mcast_src,
-        "ttnn_residual_mcast_dst": ttnn_residual_mcast_dst,
         "ttnn_rmsnorm_gamma": ttnn_rmsnorm_gamma,
         "torch_rmsnorm_gamma": torch_rmsnorm_gamma,
-        "ttnn_mcast_output": ttnn_mcast_output,
         "ttnn_gate_mm_weights": ttnn_gate_mm_weights,
-        "ttnn_gate_mm_output": ttnn_gate_mm_output,
         "ttnn_gate_input": ttnn_gate_input,
         "ttnn_gate_bias": ttnn_gate_bias,
         "ttnn_gate_indices": ttnn_gate_indices,
         "gate_output_scores_tensor": gate_output_scores_tensor,
         "gate_output_indices_tensor": gate_output_indices_tensor,
-        "expert_index_tensor": expert_index_tensor,
-        "expert_scale_tensor": expert_scale_tensor,
         "gate_proj_weights": gate_proj_weights,
         "gate_proj_output": gate_proj_output,
         "up_proj_weights": up_proj_weights,
         "up_proj_mm_out_tensor": up_proj_mm_out_tensor,
-        "fused_output_tensor": fused_output_tensor,
         "down_proj_gather_output_tensor": down_proj_gather_output_tensor,
-        "down_proj_mcast_output_tensor": down_proj_mcast_output_tensor,
         "down_proj_weights": down_proj_weights,
         "down_proj_output": down_proj_output,
-        "fused_add_tensor": fused_add_tensor,
         "final_output_tensor": final_output_tensor,
         # Tensor-backed working buffers (gate_proj and up_proj share one buffer)
         "gate_proj_in1_buf_tensor": gate_up_proj_in1_buf_tensor,
         "down_proj_in1_buf_tensor": down_proj_in1_buf_tensor,
-        "mul_scalar_buf_tensor": mul_scalar_buf_tensor,
+        # Mcast grid (for shared expert tensor creation)
+        "mcast_grid": mcast_output_core_grid,
         # Keep-alive references (prevent garbage collection)
         "gate_proj_expert_tensors": gate_proj_expert_tensors,
         "up_proj_expert_tensors": up_proj_expert_tensors,
@@ -947,7 +674,6 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         "expert_weights_dict": expert_weights_dict,
         "up_proj_weights_dict": up_proj_weights_dict,
         "down_proj_weights_dict": down_proj_weights_dict,
-        "fused_add_torch": fused_add_torch,
         # Constants for golden
         "gate_eps": gate_eps,
         "gate_scaling_factor": gate_scaling_factor,
@@ -997,55 +723,41 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
     logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
     r = create_routed_expert_tensors(device, use_hardcoded_expert_index)
-    mcast_grid = r["ttnn_mcast_output"].memory_config().shard_spec.grid
+    mcast_grid = r["mcast_grid"]
     s = create_shared_expert_tensors(device, M, K, mcast_grid)
 
     num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
         r["ttnn_rmsnorm_output"],
-        r["ttnn_mcast_output"],
         r["ttnn_gate_mm_weights"],
-        r["ttnn_gate_mm_output"],
         r["ttnn_gate_input"],
         r["ttnn_gate_bias"],
         r["ttnn_gate_indices"],
         r["gate_output_scores_tensor"],
         r["gate_output_indices_tensor"],
-        r["expert_index_tensor"],
-        r["expert_scale_tensor"],
         r["gate_proj_weights"],
-        r["gate_proj_output"],
         r["up_proj_weights"],
-        r["up_proj_mm_out_tensor"],
-        r["fused_output_tensor"],
         r["down_proj_gather_output_tensor"],
-        r["down_proj_mcast_output_tensor"],
         r["down_proj_weights"],
-        r["down_proj_output"],
-        s["ttnn_output_mcast_dst"],
         r["final_output_tensor"],
         r["gate_proj_in1_buf_tensor"],
         r["down_proj_in1_buf_tensor"],
-        r["mul_scalar_buf_tensor"],
         # RMSNorm gamma weights (sender core)
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
         shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
-        shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
-        shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
         shared_output_tensor=s["ttnn_output"],
-        # Shared expert tensor-backed CB tensors
+        # Shared expert tensor-backed CB tensors (gather destinations)
         shared_ag_gather_dst_tensor=s["ttnn_ag_gather_dst"],
         shared_bg_gather_dst_tensor=s["ttnn_bg_gather_dst"],
-        shared_gu_out_tensor=s["ttnn_gu_out"],
-        shared_intermed_tensor=s["ttnn_intermed"],
-        shared_down_mcast_src_tensor=s["ttnn_down_mcast_src"],
-        shared_down_matmul_out_tensor=s["ttnn_down_matmul_out"],
-        shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
         shared_k_parallel=s["k_parallel"],
         shared_n_parallel=s["n_parallel"],
+        # Aliased output tensors (CB aliasing: matmul out → consumer CBs share L1)
+        gate_proj_output_tensor=r["gate_proj_output"],
+        up_proj_mm_out_tensor=r["up_proj_mm_out_tensor"],
+        down_proj_output_tensor=r["down_proj_output"],
         use_hardcoded_expert_index=use_hardcoded_expert_index,
         num_iterations=num_iterations,
     )
@@ -1143,7 +855,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     # ── Create MoE tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(submesh, use_hardcoded_expert_index, mesh_mapper=mesh_mapper)
-    mcast_grid = r["ttnn_mcast_output"].memory_config().shard_spec.grid
+    mcast_grid = r["mcast_grid"]
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
 
     # ── ReduceToOne tensors and semaphores ──
@@ -1209,49 +921,35 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r["ttnn_rmsnorm_output"],
-        r["ttnn_mcast_output"],
         r["ttnn_gate_mm_weights"],
-        r["ttnn_gate_mm_output"],
         r["ttnn_gate_input"],
         r["ttnn_gate_bias"],
         r["ttnn_gate_indices"],
         r["gate_output_scores_tensor"],
         r["gate_output_indices_tensor"],
-        r["expert_index_tensor"],
-        r["expert_scale_tensor"],
         r["gate_proj_weights"],
-        r["gate_proj_output"],
         r["up_proj_weights"],
-        r["up_proj_mm_out_tensor"],
-        r["fused_output_tensor"],
         r["down_proj_gather_output_tensor"],
-        r["down_proj_mcast_output_tensor"],
         r["down_proj_weights"],
-        r["down_proj_output"],
-        s["ttnn_output_mcast_dst"],  # fused_add_tensor (shared expert output)
         r["final_output_tensor"],
         r["gate_proj_in1_buf_tensor"],
         r["down_proj_in1_buf_tensor"],
-        r["mul_scalar_buf_tensor"],
         # RMSNorm gamma
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
         shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
-        shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
-        shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
         shared_output_tensor=s["ttnn_output"],
-        # Shared expert tensor-backed CB tensors
+        # Shared expert tensor-backed CB tensors (gather destinations)
         shared_ag_gather_dst_tensor=s["ttnn_ag_gather_dst"],
         shared_bg_gather_dst_tensor=s["ttnn_bg_gather_dst"],
-        shared_gu_out_tensor=s["ttnn_gu_out"],
-        shared_intermed_tensor=s["ttnn_intermed"],
-        shared_down_mcast_src_tensor=s["ttnn_down_mcast_src"],
-        shared_down_matmul_out_tensor=s["ttnn_down_matmul_out"],
-        shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
         shared_k_parallel=s["k_parallel"],
         shared_n_parallel=s["n_parallel"],
+        # Aliased output tensors (CB aliasing: matmul out → consumer CBs share L1)
+        gate_proj_output_tensor=r["gate_proj_output"],
+        up_proj_mm_out_tensor=r["up_proj_mm_out_tensor"],
+        down_proj_output_tensor=r["down_proj_output"],
         use_hardcoded_expert_index=use_hardcoded_expert_index,
         num_iterations=num_iterations,
         # ReduceToOne parameters
