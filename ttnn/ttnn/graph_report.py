@@ -184,8 +184,6 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         """
         CREATE TABLE IF NOT EXISTS stack_traces (
             operation_id int,
-            node_counter int,
-            operation_name text,
             stack_trace text
         )
     """
@@ -394,7 +392,13 @@ def _validate_graph_integrity(
     return warnings
 
 
-def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0, devices: list = None) -> dict:
+def import_graph(
+    cursor: sqlite3.Cursor,
+    graph: list,
+    base_operation_id: int = 0,
+    devices: list = None,
+    detailed: bool = False,
+) -> dict:
     """
     Import graph trace into database using batch inserts for performance.
 
@@ -408,6 +412,9 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
 
     Args:
         devices: Raw device info dicts from the report, used to compute per-bank buffer sizes.
+        detailed: When False (default), only device tensors are imported and duplicates
+            are merged by address to match the legacy Python capture behavior.
+            When True, all tensors (host + device) are imported with full detail.
 
     Returns dict with stats about what was imported.
     """
@@ -423,12 +430,7 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
     buffers_batch = []
     errors_batch = []
     edges_batch = []
-
-    # Store raw graph JSON (single insert is fine)
-    cursor.execute(
-        """INSERT INTO captured_graph VALUES (?, ?)""",
-        (base_operation_id, json.dumps(graph)),
-    )
+    captured_graph_batch = []
 
     # Build device bank info for per-bank buffer size computation
     device_bank_info = {}
@@ -444,6 +446,9 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
     function_stack = []
     operation_counter = 0
     tensor_ids_seen = set()
+    active_buffers = []
+    current_op_nodes = []
+    op_nesting_depth = 0
 
     # First pass: collect all data
     for node in graph:
@@ -451,33 +456,51 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
         counter = node.get("counter", 0)
         params = node.get("params", {})
 
+        # Collect nodes for per-operation captured_graph subgraphs
+        if op_nesting_depth > 0:
+            current_op_nodes.append(node)
+
         if node_type == "function_start":
             name = params.get("name", "unknown")
+            is_nested = not detailed and len(function_stack) > 0
             function_stack.append(
                 {
                     "counter": counter,
                     "name": name,
                     "arguments": node.get("arguments", []),
                     "input_tensors": node.get("input_tensors", []),
+                    "nested": is_nested,
                 }
             )
 
-            nodes_batch.append((base_operation_id, counter, operation_counter, name))
+            if not is_nested:
+                op_nesting_depth += 1
+                current_op_nodes = [node]
+                nodes_batch.append((base_operation_id, counter, operation_counter, name))
 
-            stack_trace = node.get("stack_trace", [])
-            if stack_trace:
-                stack_traces_batch.append((base_operation_id, counter, name, "\n".join(stack_trace)))
+                stack_trace = node.get("stack_trace", [])
+                if stack_trace:
+                    stack_traces_batch.append((base_operation_id + operation_counter, "\n".join(stack_trace)))
+            else:
+                op_nesting_depth += 1
 
         elif node_type == "function_end":
             name = params.get("name", "unknown")
+
+            start_node = function_stack.pop() if function_stack else None
+            if start_node and start_node.get("nested"):
+                op_nesting_depth -= 1
+                continue
+
+            op_nesting_depth -= 1
+
             duration_ns = node.get("duration_ns", 0)
             duration_s = duration_ns / 1e9 if duration_ns else 0
 
             operation_id = base_operation_id + operation_counter
             operations_batch.append((operation_id, name, duration_s))
 
-            if function_stack:
-                start_node = function_stack.pop()
+            if start_node:
                 for idx, arg in enumerate(start_node.get("arguments", [])):
                     operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg)))
 
@@ -490,6 +513,7 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
                                 input_tensors_batch.append((operation_id, idx, int(real_tensor_id)))
 
             # Output tensor relationships from connections
+            output_tensor_nodes = []
             connections = node.get("connections", [])
             output_idx = 0
             for conn_id in connections:
@@ -500,6 +524,34 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
                         if tensor_id:
                             output_tensors_batch.append((operation_id, output_idx, tensor_id))
                             output_idx += 1
+                            output_tensor_nodes.append(conn_node)
+
+            # Per-operation captured_graph subgraph
+            capture_start = {
+                "arguments": [],
+                "connections": [1],
+                "counter": 0,
+                "input_tensors": [],
+                "node_type": "capture_start",
+                "params": {},
+                "stacking_level": 0,
+            }
+            capture_end = {
+                "arguments": [],
+                "connections": [],
+                "counter": 0,
+                "input_tensors": [],
+                "node_type": "capture_end",
+                "params": {},
+                "stacking_level": 0,
+            }
+            subgraph = [capture_start] + current_op_nodes + output_tensor_nodes + [capture_end]
+            captured_graph_batch.append((operation_id, json.dumps(subgraph)))
+            current_op_nodes = []
+
+            # Cumulative buffer snapshot: emit all currently-active buffers for this operation
+            for buf in active_buffers:
+                buffers_batch.append((operation_id, *buf))
 
             operation_counter += 1
 
@@ -525,7 +577,9 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
                 if device_tensors_str:
                     device_tensors = json.loads(device_tensors_str)
                     for dt in device_tensors:
-                        device_tensors_batch.append((tensor_id, dt.get("device_id"), dt.get("address")))
+                        device_tensors_batch.append(
+                            (tensor_id, dt.get("mesh_device_id", dt.get("device_id")), dt.get("address"))
+                        )
 
         elif node_type == "buffer_allocate":
             device_id = int(params.get("device_id", 0))
@@ -545,7 +599,11 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
                 num_cores,
                 device_bank_info.get(device_id, {}),
             )
-            buffers_batch.append((base_operation_id, device_id, address, max_size_per_bank, buffer_type, layout_int))
+            active_buffers.append((device_id, address, max_size_per_bank, buffer_type, layout_int))
+
+        elif node_type == "buffer_deallocate":
+            dealloc_address = int(params.get("address", 0))
+            active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
 
         elif node_type == "error":
             error_type = params.get("error_type", "unknown")
@@ -570,11 +628,63 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
 
             edges_batch.append((base_operation_id, source_id, sink_id, output_idx, input_idx, key))
 
+    # Compatible mode: deduplicate tensors by address, keep only device tensors
+    if not detailed:
+        # tensors_batch schema: (tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type)
+        seen_addresses = {}
+        tensor_id_remap = {}
+        filtered_tensors = []
+        for t in tensors_batch:
+            tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
+            if dev_id is None:
+                continue
+            if addr is not None and addr in seen_addresses:
+                tensor_id_remap[int(tid) if isinstance(tid, str) else tid] = seen_addresses[addr]
+                continue
+            kept_id = int(tid) if isinstance(tid, str) else tid
+            if addr is not None:
+                seen_addresses[addr] = kept_id
+            filtered_tensors.append(t)
+        tensors_batch = filtered_tensors
+
+        kept_tensor_ids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
+
+        def _remap_tid(tid):
+            tid_int = int(tid) if isinstance(tid, str) else tid
+            return tensor_id_remap.get(tid_int, tid_int)
+
+        input_tensors_batch = [
+            (op_id, idx, _remap_tid(tid))
+            for op_id, idx, tid in input_tensors_batch
+            if _remap_tid(tid) in kept_tensor_ids
+        ]
+        output_tensors_batch = [
+            (op_id, idx, _remap_tid(tid))
+            for op_id, idx, tid in output_tensors_batch
+            if _remap_tid(tid) in kept_tensor_ids
+        ]
+        device_tensors_batch = [
+            (_remap_tid(tid), dev_id, addr)
+            for tid, dev_id, addr in device_tensors_batch
+            if _remap_tid(tid) in kept_tensor_ids
+        ]
+        # Deduplicate device_tensors by (tensor_id, address)
+        seen_dt = set()
+        filtered_dt = []
+        for dt in device_tensors_batch:
+            key = (dt[0], dt[2])
+            if key not in seen_dt:
+                seen_dt.add(key)
+                filtered_dt.append(dt)
+        device_tensors_batch = filtered_dt
+
     # Batch inserts
+    if captured_graph_batch:
+        cursor.executemany("""INSERT INTO captured_graph VALUES (?, ?)""", captured_graph_batch)
     if nodes_batch:
         cursor.executemany("""INSERT INTO nodes VALUES (?, ?, ?, ?)""", nodes_batch)
     if stack_traces_batch:
-        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?, ?)""", stack_traces_batch)
+        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?)""", stack_traces_batch)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?)""", operations_batch)
     if operation_arguments_batch:
@@ -675,6 +785,7 @@ def import_report(
     output_dir: Union[str, Path],
     db_name: str = "db.sqlite",
     generate_svgs: bool = False,
+    detailed: bool = False,
 ) -> Path:
     """
     Import a C++ graph capture report into ttnn-visualizer SQLite database.
@@ -686,6 +797,9 @@ def import_report(
         output_dir: Directory to create SQLite database in
         db_name: Database filename
         generate_svgs: If True, generate SVG visualizations for each report
+        detailed: When False (default), only device tensors are imported and duplicates
+            are merged by address to match the legacy Python capture behavior.
+            When True, all tensors (host + device) are imported with full detail.
 
     Returns:
         Path to created database
@@ -740,7 +854,9 @@ def import_report(
                 total_stats["devices"] += len(device_ids)
 
             if "graph" in report:
-                stats = import_graph(cursor, report["graph"], base_operation_id=idx * 10000, devices=devices_data)
+                stats = import_graph(
+                    cursor, report["graph"], base_operation_id=idx * 10000, devices=devices_data, detailed=detailed
+                )
                 total_stats["operations"] += stats["operations"]
                 total_stats["tensors"] += stats["tensors"]
                 total_stats["device_tensors"] = total_stats.get("device_tensors", 0) + stats.get("device_tensors", 0)
