@@ -1679,8 +1679,8 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
 }
 
 std::string RunTimeOptions::get_watcher_hash() const {
-    // Deterministic string encoding watcher/compile options. Caller (impl) hashes this for cache paths.
-    // Only the ones which have #define on the device side need to be listed here.
+    // These values will cause kernels / firmware to be recompiled if they change
+    // Only the ones which have #define on the device side need to be listed here
     std::string hash_str;
     hash_str += std::to_string(watcher_feature_disabled(watcher_waypoint_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_noc_sanitize_str));

@@ -336,8 +336,7 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled.load(std::memory_order_relaxed); }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
-    // Return a deterministic string encoding which watcher features are enabled (for compile hash; hashing is done by
-    // caller).
+    // Return a hash string of which watcher features are enabled
     std::string get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
     void set_watcher_interval(int interval_ms) {
