@@ -38,7 +38,7 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
     const uint32_t experts_per_cluster = experts / num_clusters;
 
-    auto output_shape = ttnn::Shape({total_tokens_per_device, experts_per_cluster, hidden_size});
+    auto output_shape = ttnn::Shape({experts_per_cluster, total_tokens_per_device, hidden_size});
 
     auto mem_config = operation_attributes.output_memory_config;
     return TensorSpec(

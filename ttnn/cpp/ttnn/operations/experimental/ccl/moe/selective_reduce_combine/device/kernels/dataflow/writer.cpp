@@ -40,11 +40,11 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
     }
 }
 
-// output is [token, k, hidden]
-template <uint32_t TokensPerDevice, uint32_t ClusterExperts>
+// output is [cluster experts ,tokens, hidden]
+template <uint32_t TokensPerDevice>
 inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t expert_offset) {
     uint32_t t_idx = t % TokensPerDevice;
-    return t_idx * ClusterExperts + expert_offset;
+    return expert_offset * TokensPerDevice + t_idx;
 }
 }  // namespace detail
 
@@ -191,7 +191,7 @@ void kernel_main() {
 
             // figure out output page index, noc address.
             const uint32_t output_page_idx =
-                detail::get_output_page_idx<tokens_per_device, num_cluster_experts>(st, cluster_expert_offset + e);
+                detail::get_output_page_idx<tokens_per_device>(st, cluster_expert_offset + e);
 
             const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
                                               dt * source_token_segment_buffer_size_bytes;
