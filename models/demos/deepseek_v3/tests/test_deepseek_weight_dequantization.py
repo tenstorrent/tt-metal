@@ -9,6 +9,7 @@ import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
+import models.demos.deepseek_v3.scripts.dequantize_hf_checkpoint as dequant_script
 from models.demos.deepseek_v3.scripts.dequantize_hf_checkpoint import convert_checkpoint
 
 
@@ -262,3 +263,148 @@ def test_convert_checkpoint_num_workers_must_be_positive(tmp_path: Path):
             max_output_shard_size_bytes=1024 * 1024,
             num_workers=0,
         )
+
+
+def test_convert_checkpoint_resume_reuses_existing_tmp_outputs(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input_ckpt"
+    output_dir = tmp_path / "output_ckpt"
+    quantized_weight, scale_inv, _normal_weight = _write_tiny_checkpoint(input_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    index_obj = dequant_script.load_index(input_dir / "model.safetensors.index.json")
+    weight_map = index_obj["weight_map"]
+    keys_by_file = dequant_script.build_keys_by_file(weight_map)
+    shard_names = sorted(keys_by_file.keys())
+    shard_1_name = shard_names[0]
+    shard_1_keys = keys_by_file[shard_1_name]
+    block_shape = dequant_script.load_block_shape(input_dir / "config.json")
+
+    shard_1_result = dequant_script.process_source_shard(
+        shard_idx=1,
+        shard_name=shard_1_name,
+        keys=shard_1_keys,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        weight_map=weight_map,
+        block_shape=block_shape,
+        out_dtype=torch.bfloat16,
+        keep_scale_inv=False,
+        max_output_shard_size_bytes=1024 * 1024,
+    )
+    dequant_script.write_source_shard_manifest(
+        output_dir=output_dir,
+        result=shard_1_result,
+        source_keys=shard_1_keys,
+        out_dtype=torch.bfloat16,
+        keep_scale_inv=False,
+    )
+
+    original_process_source_shard = dequant_script.process_source_shard
+
+    def _process_source_shard_with_guard(*args, **kwargs):
+        shard_idx = kwargs.get("shard_idx")
+        if shard_idx is None and args:
+            shard_idx = args[0]
+        if shard_idx == 1:
+            raise AssertionError("Shard 1 should have been resumed, not regenerated.")
+        return original_process_source_shard(*args, **kwargs)
+
+    monkeypatch.setattr(dequant_script, "process_source_shard", _process_source_shard_with_guard)
+
+    convert_checkpoint(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        out_dtype=torch.bfloat16,
+        keep_scale_inv=False,
+        max_output_shard_size_bytes=1024 * 1024,
+        num_workers=1,
+        resume=True,
+    )
+
+    index = json.loads((output_dir / "model.safetensors.index.json").read_text(encoding="utf-8"))
+    expected = _expected_dequantized(quantized_weight, scale_inv, (2, 2)).to(torch.bfloat16)
+    out_dequant = _load_tensor_from_output(output_dir, index, "model.layers.0.mlp.gate_proj.weight")
+    torch.testing.assert_close(out_dequant, expected, rtol=0, atol=0)
+
+    assert not dequant_script.source_shard_manifest_path(output_dir, 1).exists()
+
+
+def test_convert_checkpoint_resume_recovers_legacy_tmp_outputs_without_manifest(tmp_path: Path, monkeypatch):
+    input_dir = tmp_path / "input_ckpt"
+    output_dir = tmp_path / "output_ckpt"
+    quantized_weight, scale_inv, _normal_weight = _write_tiny_checkpoint(input_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    index_obj = dequant_script.load_index(input_dir / "model.safetensors.index.json")
+    weight_map = index_obj["weight_map"]
+    keys_by_file = dequant_script.build_keys_by_file(weight_map)
+    shard_names = sorted(keys_by_file.keys())
+    shard_1_name = shard_names[0]
+    shard_1_keys = keys_by_file[shard_1_name]
+    block_shape = dequant_script.load_block_shape(input_dir / "config.json")
+
+    # Simulate a legacy crashed run that wrote tmp output shards but no resume manifest.
+    dequant_script.process_source_shard(
+        shard_idx=1,
+        shard_name=shard_1_name,
+        keys=shard_1_keys,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        weight_map=weight_map,
+        block_shape=block_shape,
+        out_dtype=torch.bfloat16,
+        keep_scale_inv=False,
+        max_output_shard_size_bytes=1024 * 1024,
+    )
+
+    original_process_source_shard = dequant_script.process_source_shard
+
+    def _process_source_shard_with_guard(*args, **kwargs):
+        shard_idx = kwargs.get("shard_idx")
+        if shard_idx is None and args:
+            shard_idx = args[0]
+        if shard_idx == 1:
+            raise AssertionError("Shard 1 should have been recovered from legacy tmp files.")
+        return original_process_source_shard(*args, **kwargs)
+
+    monkeypatch.setattr(dequant_script, "process_source_shard", _process_source_shard_with_guard)
+
+    convert_checkpoint(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        out_dtype=torch.bfloat16,
+        keep_scale_inv=False,
+        max_output_shard_size_bytes=1024 * 1024,
+        num_workers=1,
+        resume=True,
+    )
+
+    index = json.loads((output_dir / "model.safetensors.index.json").read_text(encoding="utf-8"))
+    expected = _expected_dequantized(quantized_weight, scale_inv, (2, 2)).to(torch.bfloat16)
+    out_dequant = _load_tensor_from_output(output_dir, index, "model.layers.0.mlp.gate_proj.weight")
+    torch.testing.assert_close(out_dequant, expected, rtol=0, atol=0)
+
+
+def test_convert_checkpoint_resume_ignores_corrupt_legacy_tmp_files(tmp_path: Path):
+    input_dir = tmp_path / "input_ckpt"
+    output_dir = tmp_path / "output_ckpt"
+    quantized_weight, scale_inv, _normal_weight = _write_tiny_checkpoint(input_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Simulate a crashed writer that left a truncated/corrupt tmp safetensors file.
+    (output_dir / ".tmp-s00001-00001.safetensors").write_bytes(b"not-a-valid-safetensors-file")
+
+    convert_checkpoint(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        out_dtype=torch.bfloat16,
+        keep_scale_inv=False,
+        max_output_shard_size_bytes=1024 * 1024,
+        num_workers=1,
+        resume=True,
+    )
+
+    index = json.loads((output_dir / "model.safetensors.index.json").read_text(encoding="utf-8"))
+    expected = _expected_dequantized(quantized_weight, scale_inv, (2, 2)).to(torch.bfloat16)
+    out_dequant = _load_tensor_from_output(output_dir, index, "model.layers.0.mlp.gate_proj.weight")
+    torch.testing.assert_close(out_dequant, expected, rtol=0, atol=0)

@@ -182,6 +182,7 @@ Implemented arguments:
 - `--overwrite`: allow writing into non-empty output directory.
 - `--max-output-shard-size-mb`: output shard flush budget (default `5120` = 5 GiB).
 - `--num-workers`: number of parallel source-shard conversion workers (default `1`).
+- `--resume`: reuse completed temporary shard outputs from prior interrupted runs.
 
 Behavior rules:
 
