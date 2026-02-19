@@ -257,6 +257,9 @@ struct WorkerToFabricEdmSenderImpl {
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
+            DPRINT << "edm_has_space: wr=" << this->buffer_slot_write_counter.counter
+                   << " rd=" << *this->edm_buffer_local_free_slots_read_ptr << " used=" << used_slots
+                   << " num_bufs=" << (uint32_t)this->num_buffers_per_channel << ENDL();
             if constexpr (num_slots == 1) {
                 return used_slots < this->num_buffers_per_channel;
             } else {
