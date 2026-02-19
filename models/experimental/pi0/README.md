@@ -105,7 +105,7 @@ pi0/
 │   └── ttnn_common.py          # Common TTNN utilities
 ├── tests/
 │   ├── pcc/                    # PCC (accuracy) tests
-│   ├── perf/                   # Performance benchmarks
+│   ├── perf/                   # Performance benchmarks and e2e (2CQ + Trace)
 │   ├── demo/                   # Demo scripts with ALOHA/LIBERO datasets
 │   └── download_pretrained_weights.py
 └── weights/                    # Pretrained checkpoints
@@ -261,6 +261,12 @@ pytest models/experimental/pi0/tests/perf/test_perf_ttnn_pi0_model.py -v -s
 python models/experimental/pi0/tests/perf/test_perf_ttnn_pi0_model.py
 ```
 
+### Performance Test (end-to-end (2CQ + Trace))
+```bash
+# Direct execution
+pytest models/experimental/pi0/tests/perf/test_perf_e2e.py
+```
+
 ## Demo Scripts
 
 Demo scripts visualize model inference on robotics datasets.
@@ -320,12 +326,6 @@ python models/experimental/pi0/tests/download_pretrained_weights.py
 | Image Size | 224×224 |
 | Action Dimension | 32 |
 | Action Horizon | 50 |
-
-## Future Optimizations
-
-### Trace + 2CQ (Two Command Queue)
-
-**Status:** Not yet implemented
 
 ## License
 

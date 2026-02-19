@@ -181,18 +181,8 @@ class PatchEmbeddingTTNN:
         Returns:
             TTNN tensor (batch_size, num_patches, hidden_size)
         """
-        # Convert to PyTorch if needed (shouldn't happen in normal flow)
-        if isinstance(pixel_values, ttnn.Tensor):
-            pixel_values = ttnn.to_torch(pixel_values)
 
-        # Step 1: Transfer to device in TILE layout directly (B, C, H, W)
-        x = ttnn.from_torch(
-            pixel_values,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        x = pixel_values
 
         # Step 2: Permute to channel-last: (B, C, H, W) -> (B, H, W, C)
         # Note: This uses generic kernel since last 2 dims move, but unavoidable
@@ -862,9 +852,6 @@ class SigLIPVisionTowerTTNN:
         # Run through TTNN transformer blocks
         for block in self.blocks:
             hidden_states = block.forward(hidden_states)
-            ttnn.ReadDeviceProfiler(
-                self.device
-            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:
