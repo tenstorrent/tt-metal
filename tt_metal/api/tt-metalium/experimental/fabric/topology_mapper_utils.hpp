@@ -430,6 +430,25 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
+/**
+ * @brief Group hosts into meshes of a given shape using host topology and adjacency
+ *
+ * Partitions the set of hosts into one or more meshes. Each mesh has a host grid
+ * matching host_grid_shape (as specified in an MGD host_topology.dims) and is formed
+ * from hosts that are connected according to host_adjacency. The chip-level mesh
+ * shape is provided for context (e.g. validation or layout).
+ *
+ * @param mesh_shape       Chip-level mesh shape (e.g. 2x4)
+ * @param host_grid_shape  Host-level grid shape from MGD (e.g. 2x2 = 4 hosts per mesh)
+ * @param host_adjacency   Adjacency graph where nodes are host names (host_name -> neighbor host names)
+ * @return std::vector<std::vector<std::pair<std::string, uint32_t>>> List of meshes; each inner vector is one
+ * mesh's (host name, rank) pairs in row-major order
+ */
+std::vector<std::vector<std::pair<std::string, uint32_t>>> group_hosts_into_meshes(
+    tt::tt_metal::distributed::MeshShape mesh_shape,
+    tt::tt_metal::distributed::MeshShape host_grid_shape,
+    const std::map<std::string, std::vector<std::string>>& host_adjacency);
+
 }  // namespace tt::tt_metal::experimental::tt_fabric
 
 // Formatter for LogicalExitNode to enable fmt::format debugging

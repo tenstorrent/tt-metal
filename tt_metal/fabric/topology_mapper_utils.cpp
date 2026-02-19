@@ -1176,4 +1176,180 @@ TopologyMappingResult map_multi_mesh_to_physical(
     return result;
 }
 
+namespace {
+// Build adjacency map for a row-major 2D mesh of shape host_grid_shape.
+// Each node (rank) has shape base_mesh_shape; the number of connections to a neighbor
+// equals the number of edges on the shared boundary. East/West boundaries have
+// base_mesh_shape[0] edges; North/South boundaries have base_mesh_shape[1] edges.
+// Neighbors are repeated in the list to reflect connection multiplicity.
+std::map<uint32_t, std::vector<uint32_t>> build_rank_adjacency_map(
+    tt::tt_metal::distributed::MeshShape base_mesh_shape, tt::tt_metal::distributed::MeshShape host_grid_shape) {
+    std::map<uint32_t, std::vector<uint32_t>> rank_adjacency_map;
+    const uint32_t rows = host_grid_shape[0];
+    const uint32_t cols = host_grid_shape[1];
+    const uint32_t mesh_size = host_grid_shape.mesh_size();
+    const uint32_t east_west_connections = base_mesh_shape[0];
+    const uint32_t north_south_connections = base_mesh_shape[1];
+    for (uint32_t rank = 0; rank < mesh_size; ++rank) {
+        std::vector<uint32_t> neighbors;
+        const uint32_t col = rank % cols;
+        const uint32_t row = rank / cols;
+        // East: same row, col+1 (valid when not in last column); boundary has base_mesh_shape[0] edges
+        if (col + 1 < cols) {
+            for (uint32_t k = 0; k < east_west_connections; ++k) {
+                neighbors.push_back(rank + 1);
+            }
+        }
+        // West: same row, col-1 (valid when not in first column); boundary has base_mesh_shape[0] edges
+        if (col > 0) {
+            for (uint32_t k = 0; k < east_west_connections; ++k) {
+                neighbors.push_back(rank - 1);
+            }
+        }
+        // North: row-1, same col (valid when not in first row); boundary has base_mesh_shape[1] edges
+        if (row > 0) {
+            for (uint32_t k = 0; k < north_south_connections; ++k) {
+                neighbors.push_back(rank - cols);
+            }
+        }
+        // South: row+1, same col (valid when not in last row); boundary has base_mesh_shape[1] edges
+        if (row + 1 < rows) {
+            for (uint32_t k = 0; k < north_south_connections; ++k) {
+                neighbors.push_back(rank + cols);
+            }
+        }
+        rank_adjacency_map[rank] = std::move(neighbors);
+    }
+    return rank_adjacency_map;
+}
+
+std::vector<std::string> find_potential_corners(
+    tt::tt_metal::distributed::MeshShape host_grid_shape,
+    const std::map<size_t, std::vector<std::string>>& hosts_by_neighbour_count) {
+    // calculate minimum neighbours for corner
+    size_t min_neighbours_for_corner = 0;
+    if (host_grid_shape[0] > 1) {
+        min_neighbours_for_corner += 1;
+    }
+    if (host_grid_shape[1] > 1) {
+        min_neighbours_for_corner += 1;
+    }
+    // find potential corners in the host adjacency graph
+    std::vector<std::string> corners;
+    while (corners.empty() && min_neighbours_for_corner < 5) {
+        if (hosts_by_neighbour_count.find(min_neighbours_for_corner) != hosts_by_neighbour_count.end()) {
+            corners = hosts_by_neighbour_count.at(min_neighbours_for_corner);
+            break;
+        }
+        // assume we are dealing with a ring or a torus
+        min_neighbours_for_corner++;
+    }
+    return corners;
+}
+
+std::pair<std::map<std::string, std::vector<std::string>>, std::set<std::string>> prune_host_adjacency(
+    const std::map<std::string, std::vector<std::string>>& host_adjacency,
+    const std::vector<std::string>& hosts_to_prune) {
+    std::map<std::string, std::vector<std::string>> pruned_host_adjacency;
+    std::set<std::string> potential_corners;
+    for (const auto& [host, neighbours] : host_adjacency) {
+        if (std::find(hosts_to_prune.begin(), hosts_to_prune.end(), host) == hosts_to_prune.end()) {
+            std::vector<std::string> pruned_neighbours;
+            for (const auto& neighbour : neighbours) {
+                if (std::find(hosts_to_prune.begin(), hosts_to_prune.end(), neighbour) == hosts_to_prune.end()) {
+                    pruned_neighbours.push_back(neighbour);
+                }
+            }
+            // if the number of neighbours is different, then the host is a potential corner
+            if (pruned_neighbours.size() != neighbours.size()) {
+                potential_corners.insert(host);
+            }
+            pruned_host_adjacency[host] = std::move(pruned_neighbours);
+        }
+    }
+
+    return {pruned_host_adjacency, potential_corners};
+}
+}  // namespace
+
+std::vector<std::vector<std::pair<std::string, uint32_t>>> group_hosts_into_meshes(
+    tt::tt_metal::distributed::MeshShape mesh_shape,
+    tt::tt_metal::distributed::MeshShape host_grid_shape,
+    const std::map<std::string, std::vector<std::string>>& host_adjacency) {
+    // given mesh_shape and host_grid_shape, calculate base_mesh shape
+    tt::tt_metal::distributed::MeshShape base_mesh_shape(
+        mesh_shape[0] / host_grid_shape[0], mesh_shape[1] / host_grid_shape[1]);
+
+    // group hosts by unique neighbour counts
+    std::map<size_t, std::vector<std::string>> hosts_by_neighbour_count;
+    for (const auto& [host_name, neighbours] : host_adjacency) {
+        size_t neighbour_count = std::unordered_set(neighbours.begin(), neighbours.end()).size();
+        hosts_by_neighbour_count[neighbour_count].push_back(host_name);
+    }
+
+    auto corners = find_potential_corners(host_grid_shape, hosts_by_neighbour_count);
+
+    // group hosts into meshes
+    auto rank_adjacency_map = build_rank_adjacency_map(base_mesh_shape, host_grid_shape);
+    tt::tt_fabric::AdjacencyGraph<uint32_t> rank_adjacency_graph(rank_adjacency_map);
+    std::vector<std::vector<std::pair<std::string, uint32_t>>> meshes;
+    std::set<std::string> visited_hosts;
+    auto current_host_adjacency = host_adjacency;
+    // Starting with one of the corners
+    //  * pin the corner to rank 0
+    //  * use topology solver to place the desired rank graph
+    //  * prune the host adjacency graph to remove the hosts that are already in a mesh
+    //  * find new potential corners
+    //  * repeat until no new corners are found
+    // This way we should end up placing meshes next to each other in the grid, if possible.
+    for (const auto& corner : corners) {
+        if (visited_hosts.contains(corner)) {
+            continue;
+        }
+        std::vector<std::string> new_corners = {corner};
+        while (!new_corners.empty()) {
+            const auto& host = new_corners.front();
+            new_corners.erase(new_corners.begin());
+            if (visited_hosts.contains(host)) {
+                continue;
+            }
+            tt::tt_fabric::AdjacencyGraph<std::string> host_adjacency_graph(current_host_adjacency);
+            tt::tt_fabric::MappingConstraints<uint32_t, std::string> constraints;
+            // pin the mesh corner to rank 0
+            constraints.add_required_constraint(0, host);
+            auto result = tt::tt_fabric::solve_topology_mapping(
+                rank_adjacency_graph,
+                host_adjacency_graph,
+                constraints,
+                tt::tt_fabric::ConnectionValidationMode::RELAXED,
+                true);
+            if (result.success) {
+                std::vector<std::pair<std::string, uint32_t>> mesh;
+                for (const auto& [rank, host_name] : result.target_to_global) {
+                    mesh.push_back({host_name, rank});
+                    visited_hosts.insert(host_name);
+                }
+                meshes.push_back(mesh);
+                std::vector<std::string> mesh_hosts;
+                for (const auto& [h, r] : mesh) {
+                    mesh_hosts.push_back(h);
+                }
+                auto [pruned_host_adjacency, potential_corners] =
+                    prune_host_adjacency(current_host_adjacency, mesh_hosts);
+                current_host_adjacency = pruned_host_adjacency;
+                // count unique neighbours for each potential corner
+                std::map<size_t, std::vector<std::string>> unique_neighbours_by_count;
+                for (const auto& host : potential_corners) {
+                    std::unordered_set<std::string> unique_neighbours(
+                        pruned_host_adjacency[host].begin(), pruned_host_adjacency[host].end());
+                    unique_neighbours_by_count[unique_neighbours.size()].push_back(host);
+                }
+                new_corners = find_potential_corners(host_grid_shape, unique_neighbours_by_count);
+            }
+        }
+    }
+
+    return meshes;
+}
+
 }  // namespace tt::tt_metal::experimental::tt_fabric

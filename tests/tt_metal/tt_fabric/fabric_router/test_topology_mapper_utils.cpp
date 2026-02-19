@@ -2698,5 +2698,206 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }));
 }
 
+namespace {
+std::map<std::string, std::vector<std::string>> build_host_grid_adjacency(
+    tt::tt_metal::distributed::MeshShape host_grid_shape, tt::tt_metal::distributed::MeshShape base_mesh_shape) {
+    std::map<std::string, std::vector<std::string>> adjacency;
+    const uint32_t rows = host_grid_shape[0];
+    const uint32_t cols = host_grid_shape[1];
+    const uint32_t mesh_size = host_grid_shape.mesh_size();
+    const uint32_t east_west_connections = base_mesh_shape[0];
+    const uint32_t north_south_connections = base_mesh_shape[1];
+    for (uint32_t rank = 0; rank < mesh_size; ++rank) {
+        std::vector<std::string> neighbors;
+        const uint32_t col = rank % cols;
+        const uint32_t row = rank / cols;
+        // East: same row, col+1 (valid when not in last column); boundary has base_mesh_shape[0] edges
+        if (col + 1 < cols) {
+            for (uint32_t k = 0; k < east_west_connections; ++k) {
+                neighbors.push_back("h" + std::to_string(rank + 1));
+            }
+        }
+        // West: same row, col-1 (valid when not in first column); boundary has base_mesh_shape[0] edges
+        if (col > 0) {
+            for (uint32_t k = 0; k < east_west_connections; ++k) {
+                neighbors.push_back("h" + std::to_string(rank - 1));
+            }
+        }
+        // North: row-1, same col (valid when not in first row); boundary has base_mesh_shape[1] edges
+        if (row > 0) {
+            for (uint32_t k = 0; k < north_south_connections; ++k) {
+                neighbors.push_back("h" + std::to_string(rank - cols));
+            }
+        }
+        // South: row+1, same col (valid when not in last row); boundary has base_mesh_shape[1] edges
+        if (row + 1 < rows) {
+            for (uint32_t k = 0; k < north_south_connections; ++k) {
+                neighbors.push_back("h" + std::to_string(rank + cols));
+            }
+        }
+        adjacency["h" + std::to_string(rank)] = std::move(neighbors);
+    }
+    return adjacency;
+}
+
+void disconnect_hosts_in_adjacency(
+    std::map<std::string, std::vector<std::string>>& adjacency,
+    const std::vector<std::pair<std::string, std::string>>& connections) {
+    for (const auto& [from, to] : connections) {
+        adjacency[from].erase(std::remove(adjacency[from].begin(), adjacency[from].end(), to), adjacency[from].end());
+        adjacency[to].erase(std::remove(adjacency[to].begin(), adjacency[to].end(), from), adjacency[to].end());
+    }
+}
+}  // namespace
+
+// =============================================================================
+// Group Hosts Into Meshes Tests
+// =============================================================================
+
+TEST_F(TopologyMapperUtilsTest, GroupHostsIntoMeshes_2x2) {
+    const auto mesh_shape = tt::tt_metal::distributed::MeshShape(4, 4);
+    const auto host_grid_shape = tt::tt_metal::distributed::MeshShape(2, 2);
+    const auto adjacency = build_host_grid_adjacency(host_grid_shape, tt::tt_metal::distributed::MeshShape(2, 2));
+    const auto meshes = group_hosts_into_meshes(mesh_shape, host_grid_shape, adjacency);
+    ASSERT_EQ(meshes.size(), 1);
+    ASSERT_EQ(meshes[0].size(), 4);
+    std::vector<std::pair<std::string, uint32_t>> expected = {{"h0", 0}, {"h1", 1}, {"h2", 2}, {"h3", 3}};
+    EXPECT_EQ(meshes[0], expected);
+}
+
+TEST_F(TopologyMapperUtilsTest, GroupHostsIntoMeshes_2x2_on_4x4) {
+    const auto mesh_shape = tt::tt_metal::distributed::MeshShape(4, 4);
+    const auto host_grid_shape = tt::tt_metal::distributed::MeshShape(2, 2);
+    const auto adjacency = build_host_grid_adjacency(
+        tt::tt_metal::distributed::MeshShape(4, 4), tt::tt_metal::distributed::MeshShape(2, 2));
+    const auto meshes = group_hosts_into_meshes(mesh_shape, host_grid_shape, adjacency);
+    ASSERT_EQ(meshes.size(), 4);
+    std::vector<std::set<std::string>> expected_meshes = {
+        {"h0", "h1", "h4", "h5"}, {"h2", "h3", "h6", "h7"}, {"h8", "h9", "h12", "h13"}, {"h10", "h11", "h14", "h15"}};
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        std::set<std::string> actual_mesh;
+        for (const auto& [host, rank] : meshes[i]) {
+            actual_mesh.insert(host);
+        }
+        EXPECT_TRUE(std::find(expected_meshes.begin(), expected_meshes.end(), actual_mesh) != expected_meshes.end())
+            << "Mesh " << i << " is not expected";
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, GroupHostsIntoMeshes_2x2_on_4x4_WithHoles1) {
+    const auto mesh_shape = tt::tt_metal::distributed::MeshShape(4, 4);
+    const auto host_grid_shape = tt::tt_metal::distributed::MeshShape(2, 2);
+    auto adjacency = build_host_grid_adjacency(
+        tt::tt_metal::distributed::MeshShape(4, 4), tt::tt_metal::distributed::MeshShape(2, 2));
+    disconnect_hosts_in_adjacency(adjacency, {{"h5", "h6"}, {"h9", "h10"}});
+    // host grid
+    // h0  - h1  - h2  - h3
+    //  |     |     |     |
+    // h4  - h5    h6  - h7
+    //  |     |     |     |
+    // h8  - h9    h10 - h11
+    //  |     |     |     |
+    // h12 - h13 - h14 - h15
+    const auto meshes = group_hosts_into_meshes(mesh_shape, host_grid_shape, adjacency);
+    ASSERT_EQ(meshes.size(), 4);
+    std::vector<std::set<std::string>> expected_meshes = {
+        {"h0", "h1", "h4", "h5"}, {"h2", "h3", "h6", "h7"}, {"h8", "h9", "h12", "h13"}, {"h10", "h11", "h14", "h15"}};
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        std::set<std::string> actual_mesh;
+        for (const auto& [host, rank] : meshes[i]) {
+            actual_mesh.insert(host);
+        }
+        EXPECT_TRUE(std::find(expected_meshes.begin(), expected_meshes.end(), actual_mesh) != expected_meshes.end())
+            << "Mesh " << i << " is not expected";
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, GroupHostsIntoMeshes_2x2_on_4x4_WithHoles2) {
+    const auto mesh_shape = tt::tt_metal::distributed::MeshShape(4, 4);
+    const auto host_grid_shape = tt::tt_metal::distributed::MeshShape(2, 2);
+    auto adjacency = build_host_grid_adjacency(
+        tt::tt_metal::distributed::MeshShape(4, 4), tt::tt_metal::distributed::MeshShape(2, 2));
+    disconnect_hosts_in_adjacency(adjacency, {{"h5", "h6"}, {"h9", "h10"}, {"h2", "h6"}, {"h3", "h7"}});
+    // host grid
+    // h0  - h1  - h2  - h3
+    //  |     |
+    // h4  - h5    h6  - h7
+    //  |     |     |     |
+    // h8  - h9    h10 - h11
+    //  |     |     |     |
+    // h12 - h13 - h14 - h15
+    const auto meshes = group_hosts_into_meshes(mesh_shape, host_grid_shape, adjacency);
+    ASSERT_EQ(meshes.size(), 3);
+    std::vector<std::set<std::string>> expected_meshes = {
+        {"h0", "h1", "h4", "h5"},
+        {"h8", "h9", "h12", "h13"},
+        // either of these meshes is valid
+        {"h6", "h7", "h10", "h11"},
+        {"h10", "h11", "h14", "h15"}};
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        std::set<std::string> actual_mesh;
+        for (const auto& [host, rank] : meshes[i]) {
+            actual_mesh.insert(host);
+        }
+        EXPECT_TRUE(std::find(expected_meshes.begin(), expected_meshes.end(), actual_mesh) != expected_meshes.end())
+            << "Mesh " << i << " is not expected";
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, GroupHostsIntoMeshes_2x2_on_Two2x4) {
+    const auto mesh_shape = tt::tt_metal::distributed::MeshShape(4, 4);
+    const auto host_grid_shape = tt::tt_metal::distributed::MeshShape(2, 2);
+    auto adjacency = build_host_grid_adjacency(
+        tt::tt_metal::distributed::MeshShape(4, 4), tt::tt_metal::distributed::MeshShape(2, 2));
+    disconnect_hosts_in_adjacency(adjacency, {{"h5", "h6"}, {"h9", "h10"}, {"h1", "h2"}, {"h13", "h14"}});
+    // host grid
+    // h0  - h1    h2  - h3
+    //  |     |     |     |
+    // h4  - h5    h6  - h7
+    //  |     |     |     |
+    // h8  - h9    h10 - h11
+    //  |     |     |     |
+    // h12 - h13   h14 - h15
+    const auto meshes = group_hosts_into_meshes(mesh_shape, host_grid_shape, adjacency);
+    ASSERT_EQ(meshes.size(), 4);
+    std::vector<std::set<std::string>> expected_meshes = {
+        {"h0", "h1", "h4", "h5"}, {"h2", "h3", "h6", "h7"}, {"h8", "h9", "h12", "h13"}, {"h10", "h11", "h14", "h15"}};
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        std::set<std::string> actual_mesh;
+        for (const auto& [host, rank] : meshes[i]) {
+            actual_mesh.insert(host);
+        }
+        EXPECT_TRUE(std::find(expected_meshes.begin(), expected_meshes.end(), actual_mesh) != expected_meshes.end())
+            << "Mesh " << i << " is not expected";
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, GroupHostsIntoMeshes_2x2_on_4x4_AsymmetricBaseMesh) {
+    const auto mesh_shape = tt::tt_metal::distributed::MeshShape(4, 6);
+    const auto host_grid_shape = tt::tt_metal::distributed::MeshShape(2, 2);
+    auto adjacency = build_host_grid_adjacency(
+        tt::tt_metal::distributed::MeshShape(4, 4), tt::tt_metal::distributed::MeshShape(2, 3));
+    // host grid
+    // h0  - h1  - h2  - h3
+    //  |     |     |     |
+    // h4  - h5  - h6  - h7
+    //  |     |     |     |
+    // h8  - h9  - h10 - h11
+    //  |     |     |     |
+    // h12 - h13 - h14 - h15
+    const auto meshes = group_hosts_into_meshes(mesh_shape, host_grid_shape, adjacency);
+    ASSERT_EQ(meshes.size(), 4);
+    std::vector<std::set<std::string>> expected_meshes = {
+        {"h0", "h1", "h4", "h5"}, {"h2", "h3", "h6", "h7"}, {"h8", "h9", "h12", "h13"}, {"h10", "h11", "h14", "h15"}};
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        std::set<std::string> actual_mesh;
+        for (const auto& [host, rank] : meshes[i]) {
+            actual_mesh.insert(host);
+        }
+        EXPECT_TRUE(std::find(expected_meshes.begin(), expected_meshes.end(), actual_mesh) != expected_meshes.end())
+            << "Mesh " << i << " is not expected";
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::tt_fabric
