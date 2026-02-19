@@ -134,6 +134,19 @@ void JitBuildEnv::init(
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
         this->gpp_ = "ccache ";
+
+        // Check if inode cache file exists when CCACHE_TEMPDIR is set
+        const char* ccache_tempdir = std::getenv("CCACHE_TEMPDIR");
+        if (ccache_tempdir) {
+            std::string inode_cache_path = std::string(ccache_tempdir) + "/inode-cache-64.v2";
+            if (!std::filesystem::exists(inode_cache_path)) {
+                log_warning(
+                    tt::LogBuildKernels,
+                    "CCACHE_TEMPDIR is set but inode cache file not found at {}. "
+                    "ccache may not work optimally.",
+                    inode_cache_path);
+            }
+        }
     } else {
         this->gpp_ = "";
     }
