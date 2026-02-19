@@ -91,6 +91,8 @@ struct ExecuteRingJointAttention {
         ttnn::ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
         CoreCoord ccl_core_grid_offset,
+        bool is_causal = false,
+        bool is_balanced = false,
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
