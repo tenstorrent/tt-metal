@@ -1,15 +1,15 @@
-# MaskFormer Swin‑B (TT‑NN)
+# MaskFormer Swin-B (TT-NN)
 
 Full TTNN implementation of the Hugging Face checkpoint `facebook/maskformer-swin-base-coco`.
 
 Coverage:
-- TT (TTNN): Swin‑B backbone + pixel decoder + transformer decoder + heads
+- TT (TTNN): Swin-B backbone + pixel decoder + transformer decoder + heads
 
 ## Platform
 - Tested on Wormhole (N300) only.
 
 ## Prerequisites
-- Follow `INSTALLING.md` at repo root to build TT‑Metal/TT‑NN and Python bindings.
+- Follow `INSTALLING.md` at repo root to build TT-Metal/TT-NN and Python bindings.
 - Python deps (demo + tests + perf + COCO eval):
 
   ```bash
