@@ -16,6 +16,7 @@ Owner:
     adjordjevic-TT
 """
 
+from collections import defaultdict
 import json
 import os
 from triage import ScriptConfig, log_warning, run_script, log_check_location
@@ -136,17 +137,19 @@ def run(args, context: Context):
 
     # Extract the collected data from wrapped results and write to single JSON file
     if results:
-        all_debug_bus_data = {}
+        all_debug_bus_data = defaultdict(dict)
         for r in results:
             if r.result is None:
                 continue
             # Build full structure using info from PerBlockCheckResult wrapper
             device = r.device_description.device
             location = r.location
-            block_type = device.get_block_type(location)
-            all_debug_bus_data[f"Device {device.id}"] = {
-                "location": location.to_user_str(),
-                "block_type": block_type,
+            block_type = (
+                device.get_block_type(location) if device.get_block_type(location) != "functional_workers" else "tensix"
+            )
+            if block_type not in all_debug_bus_data[f"Device {device.id}"]:
+                all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
+            all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = {
                 "failed_riscs": r.result["failed_riscs"],
                 "debug_bus_signals": r.result["debug_bus_signals"],
             }
