@@ -219,8 +219,6 @@ def test_pipeline_performance(
     logger.info("Running performance measurement iterations...")
     num_perf_runs = 1  # For now use 1 prompt to minimize test time.
 
-    # reset the profiler
-    benchmark_profiler = BenchmarkProfiler()
     for i in range(num_perf_runs):
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
@@ -260,8 +258,9 @@ def test_pipeline_performance(
     # Remove batch dimension
     frames = frames[0]
     try:
-        export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-        print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+        if not is_ci_env:
+            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
+            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
 

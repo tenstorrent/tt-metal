@@ -11,7 +11,7 @@ import ttnn
 
 from ..parallel.manager import CCLManager
 from ..utils.tensor import bf16_tensor, typed_tensor, unflatten
-from .linear import ColParallelLinear, Linear
+from .linear import ColParallelLinear, Linear, RowParallelLinear
 from .module import Module, Parameter
 
 # TODO: Fuse with linear instead
@@ -34,8 +34,8 @@ class Timesteps(Module):
         max_period: int = 10000,
         downscale_freq_shift: float = 0,
         scale: int = 1,
+        dtype: ttnn.DataType = ttnn.bfloat16,
         mesh_device=None,
-        dtype: ttnn.DataType = ttnn.float32,
     ):
         super().__init__()
         self.num_channels = num_channels
@@ -68,9 +68,17 @@ class Timesteps(Module):
         return timesteps_proj
 
 
-# Helper classes for SD35Transformer2DModel
 class TimestepEmbedding(Module):
-    def __init__(self, in_channels, time_embed_dim, mesh_device=None, act_fn="silu", dtype=ttnn.float32):
+    def __init__(
+        self,
+        in_channels,
+        time_embed_dim,
+        act_fn="silu",
+        dtype=ttnn.bfloat16,
+        mesh_device=None,
+        tp_mesh_axis=None,
+        ccl_manager=None,
+    ):
         super().__init__()
 
         self.in_channels = in_channels
@@ -78,7 +86,19 @@ class TimestepEmbedding(Module):
         self.mesh_device = mesh_device
         self.act_fn = ACT2CLS[act_fn]  # TODO: Fuse with linear instead
         self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
-        self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+
+        if tp_mesh_axis is None:
+            self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+        else:  # Specifically for Wan2.2
+            self.linear_2 = ColParallelLinear(
+                time_embed_dim,
+                time_embed_dim,
+                bias=True,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                mesh_axis=tp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
@@ -111,7 +131,7 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
         self.pooled_projection_dim = pooled_projection_dim
         self.mesh_device = mesh_device
 
-        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
         self.text_embedder = (
             PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
             if pooled_projection_dim > 0
@@ -538,19 +558,24 @@ class WanTimeTextImageEmbedding(Module):
         assert image_embed_dim is None, "WanTimeTextImageEmbedding does not support image embedding"
         self.mesh_device = mesh_device
         self.tp_mesh_axis = tp_mesh_axis
-        self.timesteps_proj = Timesteps(num_channels=time_freq_dim, mesh_device=self.mesh_device, dtype=timestep_dtype)
+        self.timesteps_proj = Timesteps(num_channels=time_freq_dim, dtype=timestep_dtype, mesh_device=self.mesh_device)
         self.time_embedder = TimestepEmbedding(
-            in_channels=time_freq_dim, time_embed_dim=dim, mesh_device=self.mesh_device, dtype=timestep_dtype
+            in_channels=time_freq_dim,
+            time_embed_dim=dim,
+            dtype=timestep_dtype,
+            mesh_device=self.mesh_device,
+            tp_mesh_axis=tp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
         self.pre_time_proj_activation = ttnn.silu
-        self.time_proj = ColParallelLinear(
+        self.time_proj = RowParallelLinear(
             dim,
             time_proj_dim,
             bias=True,
+            dtype=timestep_dtype,
             mesh_device=self.mesh_device,
             mesh_axis=tp_mesh_axis,
             ccl_manager=ccl_manager,
-            dtype=timestep_dtype,
         )  # Output is fractured according to the older behaviour when sharding from torch. See _prepare_torch_state(...)
         self.text_embedder = PixArtAlphaTextProjection(
             text_embed_dim, dim, act_fn="gelu_tanh", mesh_device=self.mesh_device
@@ -562,7 +587,7 @@ class WanTimeTextImageEmbedding(Module):
             timestep = unflatten(timestep, 0, (-1, timestep_seq_len))
 
         temb = self.time_embedder(timestep)
-        timestep_proj = self.time_proj(self.pre_time_proj_activation(temb))  # TODO: Fuse with linear instead
+        timestep_proj = self.time_proj(self.pre_time_proj_activation(temb), use_persistent_buffer=False)
         return temb, timestep_proj
 
     def forward_text(self, encoder_hidden_states: ttnn.Tensor) -> ttnn.Tensor:

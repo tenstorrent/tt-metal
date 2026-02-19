@@ -56,7 +56,6 @@ def test_pipeline_inference(
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
-
     # Test parameters
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 
@@ -77,6 +76,7 @@ def test_pipeline_inference(
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
     )
 
+    seed = 42
     # Run inference
     with torch.no_grad():
         result = pipeline(
@@ -85,6 +85,9 @@ def test_pipeline_inference(
             width=width,
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
+            seed=seed,
+            guidance_scale=4.0,
+            guidance_scale_2=3.0,
         )
 
     # Check output
@@ -108,6 +111,6 @@ def test_pipeline_inference(
     frames = frames[0]
     try:
         export_to_video(frames, "wan_output_video.mp4", fps=16)
+        print("✓ Saved video to: wan_output_video.mp4")
     except AttributeError as e:
         print(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
