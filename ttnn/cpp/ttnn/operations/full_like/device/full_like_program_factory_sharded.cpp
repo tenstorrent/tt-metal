@@ -167,7 +167,7 @@ FullLikeShardedProgramFactory::cached_program_t FullLikeShardedProgramFactory::c
             (shard_row_idx * shard_height_in_pages * tensor_width_in_pages) + shard_col_idx * shard_width_in_pages;
 
         uint32_t valid_pages_width = (shard_col_idx == num_shards_across_width - 1)
-                                         ? (tensor_width_in_pages - shard_col_idx * shard_width_in_pages)
+                                         ? (tensor_width_in_pages - (shard_col_idx * shard_width_in_pages))
                                          : shard_width_in_pages;
 
         uint32_t valid_pages_height = (shard_row_idx == num_shards_across_height - 1)
