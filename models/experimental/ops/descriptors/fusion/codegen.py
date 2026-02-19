@@ -3,952 +3,319 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Sequential Kernel Chaining Infrastructure
+C++ Parsing and Source Code Generation for Kernel Fusion.
 
-Fuses multiple operations to run sequentially on the SAME cores within a
-single program.  All readers/writers run for every phase.  Data flows through
-DRAM between phases (Writer_N -> DRAM -> Reader_{N+1}).
-
-The fusion tree is a standard tree of OpNode objects.  Each node holds one
-operation and optional children.  Parent→child edges encode sequential
-ordering; sibling nodes run in parallel on disjoint core subsets.  A linear
-chain is a tree with branching factor 1.
-
-CB pool allocation: CBs from all phases are assigned to hardware slots based
-on a compatibility key (data_format, page_size, unpack_to_dest_mode).  Phases
-with matching configs share a slot; mismatches get separate slots.  Errors if
-the total exceeds the device's CB slot limit.
-
-Two-level barrier synchronization between phases:
-  - Local barrier (per core): L1 flags allocated via GlobalSemaphore.
-    Compute/writer signal done, reader waits then resets CBs.
-  - Global barrier (across cores): Reader uses noc_semaphore_inc/wait
-    on GlobalSemaphore L1 words, then sets global_release which also
-    serves as the phase release signal for compute/writer.
-
-Usage (linear chain):
-    >>> fused = Sequential(op0, op1, op2).build()
-    >>> composite.launch([fused])
-
-Usage (branching tree):
-    >>> fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
-    >>> composite.launch([fused])
+Combines C++ kernel source parsing (body extraction, include inlining) with
+fused kernel source generation (phase namespaces, barrier infrastructure,
+compile-time and runtime arg management).
 """
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple, Set, Any
-import logging
-import re
 import os
+import re
+import logging
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
-from ttnn._ttnn.program_descriptor import UnpackToDestMode
 
-from models.experimental.ops.descriptors.op_descriptor import FusedOp, OpDescriptor
-from models.experimental.ops.descriptors import cpp_parser
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors.fusion.common import (
+    BarrierConfig,
+    MultiBarrierSpec,
+    _BuildResult,
+    _get_role_key,
+)
+from models.experimental.ops.descriptors.fusion.cb_allocator import (
+    PhaseInfo,
+    CBPoolAllocator,
+    extract_cb_info,
+    _is_cb_named_arg,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Helper Functions
+# Kernel Body Extraction (from cpp_parser.py)
 # =============================================================================
 
-
-def _core_range_set_to_coords(core_range_set: Any) -> Set[Tuple[int, int]]:
-    """Convert a CoreRangeSet to a set of (x, y) coordinate tuples."""
-    coords: Set[Tuple[int, int]] = set()
-    for cr in core_range_set.ranges():
-        for y in range(cr.start.y, cr.end.y + 1):
-            for x in range(cr.start.x, cr.end.x + 1):
-                coords.add((x, y))
-    return coords
+# Matches `void kernel_main() {` with optional ALWI prefix
+_KERNEL_MAIN_RE = re.compile(r"\b(?:ALWI\s+)?void\s+kernel_main\s*\(\s*\)\s*\{")
 
 
-# =============================================================================
-# Data Structures
-# =============================================================================
+def _is_raw_string_prefix(source: str, quote_pos: int) -> bool:
+    """Check if the ``"`` at *quote_pos* opens a C++ raw string literal.
 
-
-@dataclass
-class CBInfo:
-    """Information about a circular buffer extracted from a CBDescriptor."""
-
-    original_index: int
-    total_size: int
-    data_format: Any  # tt::DataFormat
-    page_size: int
-    core_ranges: Any  # CoreRangeSet
-    has_buffer: bool = False  # True if backed by an L1 Buffer allocation
-    unpack_to_dest_mode: Any = None  # UnpackToDestMode enum (Default or UnpackToDestFp32)
-
-
-@dataclass
-class PhaseInfo:
-    """Information about a phase (op) in the sequential chain."""
-
-    phase_idx: int
-    op_descriptor: OpDescriptor
-    cb_info: Dict[int, CBInfo] = field(default_factory=dict)
-
-
-@dataclass
-class BarrierConfig:
-    """Configuration for the two-level barrier between phases.
-
-    Holds GlobalSemaphore references (to prevent GC) and their L1 addresses,
-    plus physical core coordinates for the global barrier.
+    Raw strings are: ``R"delim(...)delim"`` with optional encoding prefix
+    ``L``, ``u``, ``U``, or ``u8`` before ``R``.  The character before the
+    entire prefix must not be an identifier character, otherwise ``R`` is
+    just part of an identifier like ``myR"..."``.
     """
-
-    # L1 addresses of per-core flags (from GlobalSemaphore.address())
-    compute_done_addr: int = 0
-    writer_done_addr: int = 0
-    global_arrive_addr: int = 0
-    global_release_addr: int = 0
-
-    # Physical core coordinates for global barrier
-    num_cores: int = 1
-    core0_phys_x: int = 0
-    core0_phys_y: int = 0
-    mcast_start_x: int = 0
-    mcast_start_y: int = 0
-    mcast_end_x: int = 0
-    mcast_end_y: int = 0
-
-    # GlobalSemaphore references (prevent GC)
-    _sem_refs: List[Any] = field(default_factory=list)
-
-
-@dataclass
-class OpNode:
-    """A node in the fusion tree.
-
-    Each node holds one operation.  Parent→child edges encode sequential
-    ordering (parent runs before child).  Sibling nodes run in parallel on
-    disjoint core subsets.  A leaf node has no children.
-
-    The node's core range is derived from its op's ProgramDescriptor
-    kernels via ``_get_node_core_range()`` — there is no separate
-    core_range field.
-    """
-
-    op: OpDescriptor
-    children: List["OpNode"] = field(default_factory=list)
-
-
-# =============================================================================
-# Internal intermediate result (not part of public API)
-# =============================================================================
-
-
-class _BuildResult:
-    """Internal intermediate result from building a fused descriptor.
-
-    NOT part of the public API.  Only converted to ``FusedOp`` at the
-    outermost ``build()`` call.
-    """
-
-    __slots__ = ("descriptor", "input_tensors", "output_tensors", "semaphores")
-
-    def __init__(self, descriptor, input_tensors, output_tensors, semaphores=()):
-        self.descriptor = descriptor
-        self.input_tensors = input_tensors
-        self.output_tensors = output_tensors
-        self.semaphores = semaphores
-
-
-# =============================================================================
-# High-Level API: Sequential / Parallel
-# =============================================================================
-
-
-class Sequential:
-    """A sequence of ops to fuse into a single dispatch.
-
-    Items can be ``OpDescriptor``, ``Sequential``, or ``Parallel`` objects.
-    Nested ``Sequential`` items are automatically flattened.
-
-    Usage::
-
-        # Inline
-        fused = Sequential(op0, op1, op2).build()
-
-        # Incremental
-        s = Sequential(op0)
-        s.add(op1).add(op2)
-        fused = s.build()
-
-        # Composition
-        stem = Sequential(op0, op1)
-        full = Sequential(stem, op2).build()  # flattened
-    """
-
-    def __init__(self, *items):
-        if not items:
-            raise ValueError("Sequential() requires at least 1 item")
-        self._items = list(items)
-
-    def add(self, item):
-        """Append an item.  Returns self for chaining."""
-        self._items.append(item)
-        return self
-
-    def build(self, device=None) -> FusedOp:
-        """Build the fused op.  Device is auto-extracted from tensors if not provided."""
-        r = self._build_internal(device)
-        return FusedOp(
-            op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
-            semaphores=r.semaphores,
-        )
-
-    def _build_internal(self, device=None) -> _BuildResult:
-        """Internal build returning intermediate _BuildResult."""
-        if device is None:
-            device = _extract_device(self._items)
-        nodes = _resolve(self)
-        if len(nodes) != 1:
-            raise ValueError("Sequential must resolve to a single root node")
-        return OpGraphBuilder(nodes[0])._build_internal(device)
-
-
-class Parallel:
-    """Items that run in parallel on disjoint core subsets.
-
-    Each item runs independently on its own cores.  Items can be
-    ``OpDescriptor``, ``Sequential``, or ``Parallel`` objects.
-
-    Usage::
-
-        # Inline
-        fused = Parallel(op_a, op_b).build()
-        composite.launch([fused])
-
-        # As part of a Sequential
-        fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
-    """
-
-    def __init__(self, *items):
-        if len(items) < 2:
-            raise ValueError("Parallel() requires at least 2 items")
-        self._items = list(items)
-
-    def add(self, item):
-        """Add a branch.  Returns self for chaining."""
-        self._items.append(item)
-        return self
-
-    def build(self, device=None) -> FusedOp:
-        """Build each item independently and merge into one FusedOp."""
-        r = self._build_internal(device)
-        return FusedOp(
-            op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
-            semaphores=r.semaphores,
-        )
-
-    def _build_internal(self, device=None) -> _BuildResult:
-        """Internal build returning intermediate _BuildResult."""
-        if device is None:
-            device = _extract_device(self._items)
-        built = [_build_item(item, device) for item in self._items]
-        return _merge_build_results(built)
-
-
-def _resolve(item) -> List[OpNode]:
-    """Convert a user-facing item into a list of OpNode trees.
-
-    Handles all three types uniformly:
-    - ``OpDescriptor`` → ``[OpNode(op)]``
-    - ``Parallel`` → flat list of children (one OpNode per branch)
-    - ``Sequential`` → single-element list containing a chain of OpNodes
-
-    When a ``Sequential`` item in the middle resolves to multiple nodes
-    (i.e. it's a ``Parallel``), a ``ValueError`` is raised because the
-    tree diverges and can't rejoin.
-    """
-    if isinstance(item, OpDescriptor):
-        return [OpNode(item)]
-
-    if isinstance(item, Parallel):
-        return [node for child in item._items for node in _resolve(child)]
-
-    if isinstance(item, Sequential):
-        # Flatten nested Sequential items
-        flat: List = []
-        for sub in item._items:
-            if isinstance(sub, Sequential):
-                flat.extend(sub._items)
-            else:
-                flat.append(sub)
-
-        if not flat:
-            raise ValueError("Sequential() has no items after flattening")
-
-        # Process right-to-left: resolve the last item to get tail nodes,
-        # then walk remaining items in reverse, each becoming parent of tail.
-        tail = _resolve(flat[-1])
-
-        for sub_item in reversed(flat[:-1]):
-            parents = _resolve(sub_item)
-            if len(parents) != 1:
-                raise ValueError(
-                    "Items before a Parallel in a Sequential are not allowed — "
-                    "the tree would diverge and can't rejoin.  Place trailing "
-                    "items inside each branch instead."
-                )
-            _set_leaf_children(parents[0], tail)
-            tail = parents
-
-        return tail
-
-    if isinstance(item, FusedOp):
-        raise TypeError(
-            "FusedOp cannot be nested in Sequential/Parallel — "
-            "it is the result of build() and has already been fused."
-        )
-
-    raise TypeError(f"Unsupported item type: {type(item).__name__}")
-
-
-def _extract_device(items):
-    """Walk item tree, return device from first tensor found."""
-    for item in items:
-        if isinstance(item, OpDescriptor):
-            for t in item.input_tensors:
-                return t.device()
-            for t in item.output_tensors:
-                return t.device()
-        elif isinstance(item, (Sequential, Parallel)):
-            dev = _extract_device(item._items)
-            if dev is not None:
-                return dev
-    raise ValueError(
-        "Cannot auto-extract device: no items contain device-backed tensors. "
-        "Pass device explicitly to build(device=...)."
-    )
-
-
-def _extract_device_from_tree(node: OpNode):
-    """Walk an OpNode tree, return device from first tensor found."""
-    for t in node.op.input_tensors:
-        return t.device()
-    for t in node.op.output_tensors:
-        return t.device()
-    for child in node.children:
-        dev = _extract_device_from_tree(child)
-        if dev is not None:
-            return dev
-    return None
-
-
-def _set_leaf_children(node: OpNode, children: List[OpNode]):
-    """Attach children to the deepest single-child leaf of a node subtree."""
-    current = node
-    while current.children:
-        if len(current.children) != 1:
-            raise ValueError("Cannot attach children to a node that already branches")
-        current = current.children[0]
-    current.children = list(children)
-
-
-def _build_item(item, device) -> _BuildResult:
-    """Build a single item into a _BuildResult."""
-    if isinstance(item, OpDescriptor):
-        return _BuildResult(
-            descriptor=item.descriptor,
-            input_tensors=item.input_tensors,
-            output_tensors=item.output_tensors,
-        )
-    if isinstance(item, (Sequential, Parallel)):
-        return item._build_internal(device)
-    raise TypeError(f"Unsupported item type: {type(item).__name__}")
-
-
-def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
-    """Merge multiple _BuildResults into one.
-
-    Combines ProgramDescriptors, deduplicates input tensors (by identity),
-    concatenates output tensors, and unions semaphore refs.
-    """
-    if len(results) == 1:
-        return results[0]
-
-    merged_desc = ttnn.merge_program_descriptors([r.descriptor for r in results])
-
-    # Deduplicate input tensors (shared inputs appear in multiple ops)
-    all_inputs: List = []
-    seen_ids: Set[int] = set()
-    for r in results:
-        for t in r.input_tensors:
-            tid = id(t)
-            if tid not in seen_ids:
-                all_inputs.append(t)
-                seen_ids.add(tid)
-
-    # Output tensors: one per result, in order
-    all_outputs = [t for r in results for t in r.output_tensors]
-
-    # Union semaphore refs
-    all_semaphores = tuple(ref for r in results for ref in r.semaphores)
-
-    return _BuildResult(
-        descriptor=merged_desc,
-        input_tensors=all_inputs,
-        output_tensors=all_outputs,
-        semaphores=all_semaphores,
-    )
-
-
-@dataclass
-class BarrierSegment:
-    """A barrier scope covering a range of phase transitions.
-
-    Each segment has its own ``global_arrive`` / ``global_release``
-    GlobalSemaphore pair and physical core coordinates for NOC multicast.
-    """
-
-    config: BarrierConfig  # Physical core coords + mcast params
-    arrive_addr: int = 0  # GlobalSemaphore L1 address for arrive
-    release_addr: int = 0  # GlobalSemaphore L1 address for release
-
-
-@dataclass
-class MultiBarrierSpec:
-    """Multi-segment barrier for OpGraph paths.
-
-    When a fused kernel transitions between phases, the barrier scope may
-    change (e.g. stem barrier over 8 cores → branch barrier over 4 cores).
-    ``transition_map`` maps each phase-transition index to the barrier
-    segment and per-segment call index to use.
-    """
-
-    segments: List[BarrierSegment] = field(default_factory=list)
-    compute_done_addr: int = 0
-    writer_done_addr: int = 0
-    # Map: phase_transition_index -> (segment_index, call_index_within_segment)
-    transition_map: Dict[int, Tuple[int, int]] = field(default_factory=dict)
-    _sem_refs: List[Any] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class CBPoolKey:
-    """Compatibility key for a CB slot. CBs with the same key can share a slot."""
-
-    data_format: Any  # tt::DataFormat
-    page_size: int
-    has_buffer: bool  # True if backed by an L1 Buffer (prevents sharing with non-buffer CBs)
-    unpack_to_dest_mode: Any  # UnpackToDestMode enum
-
-
-@dataclass
-class CBSlot:
-    """A slot in the CB pool."""
-
-    slot_index: int
-    config: CBPoolKey
-    cb_descriptor: Any  # Best CBDescriptor (largest total_size, phase 0 buffer preferred)
-    total_size: int  # Max total_size across all phases sharing this slot
-    source_phase: int  # Phase that provided the current cb_descriptor
-
-
-class CBPoolAllocator:
-    """Pool-allocates CB hardware slots based on compatibility keys.
-
-    CBs from different phases that share the same (data_format, page_size,
-    unpack_to_dest_mode) configuration are assigned to the same slot.
-    Different configs get separate slots.  Raises ValueError if the total
-    number of slots exceeds the device limit.
-    """
-
-    MAX_SLOTS = 32
-
-    def __init__(self, max_slots: int = MAX_SLOTS):
-        self.max_slots = max_slots
-        self._slots: Dict[int, CBSlot] = {}  # slot_index -> CBSlot
-        # Maps CBPoolKey -> list of slot indices with that config.
-        # Within a phase, each CB gets its own slot even if configs match;
-        # across phases, CBs with the same config can share a slot.
-        self._config_to_slots: Dict[CBPoolKey, List[int]] = {}
-        self._allocated_indices: Set[int] = set()
-        self.phase_remaps: List[Dict[int, int]] = []  # phase_idx -> {orig_cb -> slot_idx}
-        self._next_index = 0  # Next candidate index for allocation
-        # Maps slot_index -> original CB index that created it (for identity-preference)
-        self._slot_to_orig_index: Dict[int, int] = {}
-
-    def _alloc_index(self) -> int:
-        """Find the next free slot index."""
-        while self._next_index in self._allocated_indices:
-            self._next_index += 1
-        idx = self._next_index
-        self._next_index += 1
-        return idx
-
-    def allocate_phase(
-        self,
-        phase_idx: int,
-        cb_info: Dict[int, CBInfo],
-        phantom_cb_indices: Set[int],
-    ) -> None:
-        """Allocate slots for a phase's CBs.
-
-        Within a single phase, each CB gets its own slot even if multiple CBs
-        share the same config (they hold different data concurrently).  Across
-        phases, CBs with matching configs can share a slot because only one
-        phase runs at a time.
-
-        Args:
-            phase_idx: Phase index.
-            cb_info: Dict mapping original CB index -> CBInfo for this phase.
-            phantom_cb_indices: CB indices referenced in named compile-time args
-                but without a corresponding CBDescriptor.  These get identity-mapped
-                reservations to prevent collisions.
-        """
-        remap: Dict[int, int] = {}
-        slots_used_this_phase: Set[int] = set()
-
-        # Reserve phantom CB indices first (identity mapping)
-        for phantom_idx in phantom_cb_indices:
-            if phantom_idx not in self._allocated_indices:
-                self._allocated_indices.add(phantom_idx)
-            remap[phantom_idx] = phantom_idx
-
-        # Two-pass allocation: identity-matching CBs first (preserves cross-phase
-        # slot assignments), then remaining CBs from the pool.
-        identity_cbs, remaining_cbs = self._partition_by_identity(cb_info)
-
-        for orig_idx, info, key in identity_cbs + remaining_cbs:
-            slot_idx = self._find_reusable_slot(key, orig_idx, slots_used_this_phase)
-            if slot_idx is not None:
-                self._reuse_slot(slot_idx, info, phase_idx)
-            else:
-                slot_idx = self._allocate_new_slot(key, info, orig_idx, phase_idx)
-            slots_used_this_phase.add(slot_idx)
-            remap[orig_idx] = slot_idx
-
-        self.phase_remaps.append(remap)
-
-    def _partition_by_identity(
-        self, cb_info: Dict[int, CBInfo]
-    ) -> Tuple[List[Tuple[int, CBInfo, CBPoolKey]], List[Tuple[int, CBInfo, CBPoolKey]]]:
-        """Split CBs into those with an existing identity-matching slot and the rest."""
-        identity_cbs = []
-        remaining_cbs = []
-        for orig_idx, info in sorted(cb_info.items()):
-            key = CBPoolKey(
-                data_format=info.data_format,
-                page_size=info.page_size,
-                has_buffer=info.has_buffer,
-                unpack_to_dest_mode=info.unpack_to_dest_mode,
-            )
-            has_identity = False
-            if key in self._config_to_slots:
-                for candidate_idx in self._config_to_slots[key]:
-                    if self._slot_to_orig_index.get(candidate_idx) == orig_idx:
-                        has_identity = True
-                        break
-            if has_identity:
-                identity_cbs.append((orig_idx, info, key))
-            else:
-                remaining_cbs.append((orig_idx, info, key))
-        return identity_cbs, remaining_cbs
-
-    def _find_reusable_slot(self, key: CBPoolKey, orig_idx: int, slots_used_this_phase: Set[int]) -> Optional[int]:
-        """Find an existing slot compatible with *key* not used by this phase.
-
-        Prefers a slot created from the same original CB index (identity match).
-        """
-        if key not in self._config_to_slots:
-            return None
-        # First: identity match
-        for candidate_idx in self._config_to_slots[key]:
-            if candidate_idx not in slots_used_this_phase:
-                if self._slot_to_orig_index.get(candidate_idx) == orig_idx:
-                    return candidate_idx
-        # Second: any compatible slot
-        for candidate_idx in self._config_to_slots[key]:
-            if candidate_idx not in slots_used_this_phase:
-                return candidate_idx
-        return None
-
-    def _reuse_slot(self, slot_idx: int, info: CBInfo, phase_idx: int) -> None:
-        """Reuse an existing slot, updating total_size if needed."""
-        slot = self._slots[slot_idx]
-        if info.total_size > slot.total_size:
-            slot.total_size = info.total_size
-            if slot.source_phase != 0:
-                slot.cb_descriptor = self._get_cb_descriptor(info, phase_idx)
-                slot.source_phase = phase_idx
-
-    def _allocate_new_slot(self, key: CBPoolKey, info: CBInfo, orig_idx: int, phase_idx: int) -> int:
-        """Allocate a fresh slot, raising ValueError on overflow.
-
-        Prefers identity mapping (orig_idx -> orig_idx) when the slot is free,
-        so that CBs keep their original hardware indices.  This avoids collisions
-        when different phases have non-overlapping CB index sets (e.g., matmul
-        uses {0,1,4,5} and RMS uses {0,2,3,5,...}).
-        """
-        if orig_idx not in self._allocated_indices and orig_idx < self.max_slots:
-            slot_idx = orig_idx
-        else:
-            slot_idx = self._alloc_index()
-        if len(self._slots) + 1 > self.max_slots:
-            breakdown = [
-                f"  slot {si}: fmt={sl.config.data_format}, "
-                f"page_size={sl.config.page_size}, "
-                f"unpack={sl.config.unpack_to_dest_mode}"
-                for si, sl in sorted(self._slots.items())
-            ]
-            raise ValueError(
-                f"CB pool overflow: need {len(self._slots) + 1} slots but "
-                f"device limit is {self.max_slots}.\n"
-                f"Allocated slots:\n" + "\n".join(breakdown)
-            )
-        self._allocated_indices.add(slot_idx)
-        self._slots[slot_idx] = CBSlot(
-            slot_index=slot_idx,
-            config=key,
-            cb_descriptor=self._get_cb_descriptor(info, phase_idx),
-            total_size=info.total_size,
-            source_phase=phase_idx,
-        )
-        self._slot_to_orig_index[slot_idx] = orig_idx
-        if key not in self._config_to_slots:
-            self._config_to_slots[key] = []
-        self._config_to_slots[key].append(slot_idx)
-        return slot_idx
-
-    @staticmethod
-    def _get_cb_descriptor(info: CBInfo, phase_idx: int) -> Dict[str, int]:
-        """Create a lookup key for finding the CBDescriptor later.
-
-        We can't deepcopy CBDescriptors (C++ bindings), so we store the
-        phase index and original CB index.  build_merged_cb_descriptors()
-        uses these to look up the actual CBDescriptor from the phase's
-        ProgramDescriptor.
-        """
-        return {"phase_idx": phase_idx, "cb_idx": info.original_index}
-
-    def get_remap(self, phase_idx: int) -> Dict[int, int]:
-        """Return {orig_cb_idx: slot_idx} for a phase."""
-        return self.phase_remaps[phase_idx]
-
-    def build_merged_cb_descriptors(
-        self,
-        phases: List["PhaseInfo"],
-    ) -> list:
-        """Build merged CB descriptors from the pool.
-
-        Returns one CBDescriptor per allocated slot, sorted by slot index.
-        Uses the largest total_size and prefers phase 0's buffer-backed descriptor.
-
-        Two-phase approach: first collect all (slot, descriptor, format_descriptor)
-        tuples while buffer_indices are still at their original values, then apply
-        all in-place modifications.  This prevents earlier modifications from
-        making later searches find the wrong CBDescriptor (e.g., when slot N's
-        assigned index coincidentally equals another CB's original index).
-        """
-        # Phase 1: Collect all results while buffer_indices are unmodified
-        results = []
-        for slot_idx in sorted(self._slots.keys()):
-            slot = self._slots[slot_idx]
-            ref = slot.cb_descriptor
-            phase = phases[ref["phase_idx"]]
-            orig_idx = ref["cb_idx"]
-
-            # Find the actual CBDescriptor from the phase's ProgramDescriptor
-            best_desc = None
-            best_fmt = None
-            for cb_desc in phase.op_descriptor.descriptor.cbs:
-                for fmt_desc in cb_desc.format_descriptors:
-                    if fmt_desc.buffer_index == orig_idx:
-                        best_desc = cb_desc
-                        best_fmt = fmt_desc
-                        break
-                if best_desc is not None:
-                    break
-
-            if best_desc is not None:
-                results.append((slot_idx, slot.total_size, best_desc, best_fmt))
-
-        # Phase 2: Apply all in-place modifications.
-        # A single CBDescriptor can have multiple format_descriptors (e.g.,
-        # matmul's output and intermediate share one CBDescriptor at indices
-        # {4, 5}).  Each format_descriptor's buffer_index must be updated to
-        # its slot index, but the CBDescriptor must appear exactly once in the
-        # merged list.  Use id() tracking to avoid duplicates.
-        merged = []
-        seen_ids: Set[int] = set()
-        # Compute max total_size per CBDescriptor across all its slots
-        max_size_by_id: Dict[int, int] = {}
-        for slot_idx, total_size, cb_desc, fmt_desc in results:
-            fmt_desc.buffer_index = slot_idx
-            cid = id(cb_desc)
-            max_size_by_id[cid] = max(max_size_by_id.get(cid, 0), total_size)
-
-        for _, _, cb_desc, _ in results:
-            cid = id(cb_desc)
-            if cid not in seen_ids:
-                seen_ids.add(cid)
-                cb_desc.total_size = max_size_by_id[cid]
-                merged.append(cb_desc)
-
-        return merged
-
-    def build_unpack_to_dest_mode(self) -> list:
-        """Build merged unpack_to_dest_mode vector indexed by slot index.
-
-        Returns a list of exactly max_slots entries (matching the device's
-        NUM_CIRCULAR_BUFFERS) with the correct mode at each slot's index,
-        Default elsewhere.  The C++ JIT compiler requires this size.
-        """
-        result = [UnpackToDestMode.Default] * self.max_slots
-        for slot_idx, slot in self._slots.items():
-            if slot.config.unpack_to_dest_mode is not None:
-                result[slot_idx] = slot.config.unpack_to_dest_mode
-        return result
-
-    def get_all_slot_indices(self) -> Set[int]:
-        """All allocated slot indices (for sweep/clear)."""
-        return set(self._slots.keys())
-
-
-# =============================================================================
-# Analysis Functions
-# =============================================================================
-
-
-def extract_cb_info(
-    descriptor: "ttnn.ProgramDescriptor",
-    unpack_to_dest_modes: Optional[list] = None,
-) -> Dict[int, CBInfo]:
-    """Extract CB information from a ProgramDescriptor.
-
-    Args:
-        descriptor: The ProgramDescriptor to extract CB info from.
-        unpack_to_dest_modes: Optional vector of UnpackToDestMode indexed by CB index,
-            typically from ComputeConfigDescriptor.unpack_to_dest_mode.
-
-    Returns a dict mapping CB index -> CBInfo.
-    """
-    cb_info = {}
-    for cb_desc in descriptor.cbs:
-        if cb_desc.has_global_circular_buffer():
-            raise ValueError(
-                "Sequential fusion does not support GlobalCircularBuffer CBs. "
-                "CB with global_circular_buffer detected in ProgramDescriptor."
-            )
-        for fmt_desc in cb_desc.format_descriptors:
-            cb_idx = fmt_desc.buffer_index
-            try:
-                data_format = fmt_desc.data_format
-            except (TypeError, AttributeError):
-                data_format = None
-            # Look up unpack_to_dest_mode for this CB
-            utd_mode = None
-            if unpack_to_dest_modes is not None:
-                try:
-                    if cb_idx < len(unpack_to_dest_modes):
-                        utd_mode = unpack_to_dest_modes[cb_idx]
-                except (TypeError, IndexError):
-                    pass
-            if utd_mode is None:
-                utd_mode = UnpackToDestMode.Default
-            cb_info[cb_idx] = CBInfo(
-                original_index=cb_idx,
-                total_size=cb_desc.total_size,
-                data_format=data_format,
-                page_size=fmt_desc.page_size,
-                core_ranges=cb_desc.core_ranges,
-                has_buffer=cb_desc.has_buffer(),
-                unpack_to_dest_mode=utd_mode,
-            )
-    return cb_info
-
-
-# Convention: CB-reference named compile-time args MUST start with this prefix
-# and have a value in range [0, 31]. Non-CB args MUST NOT use this prefix.
-CB_ARG_PREFIX = "cb_"
-
-
-def _is_cb_named_arg(name: str, value: Any) -> bool:
-    """Check if a named compile-time arg refers to a CB index.
-
-    Returns True if the name starts with CB_ARG_PREFIX and the value
-    is an integer in [0, 31] (valid CB slot range).
-    """
-    if not name.startswith(CB_ARG_PREFIX):
+    # Character immediately before " must be R
+    r = quote_pos - 1
+    if r < 0 or source[r] != "R":
         return False
-    if not isinstance(value, int) or value < 0 or value >= CBPoolAllocator.MAX_SLOTS:
-        logger.warning(
-            "Named arg '%s' starts with '%s' but has value %s outside CB range [0,31]. "
-            "If this is not a CB arg, rename it to not start with '%s'.",
-            name,
-            CB_ARG_PREFIX,
-            value,
-            CB_ARG_PREFIX,
-        )
+
+    # Check for optional encoding prefix before R: L, u, U, u8
+    # Start of the full prefix token (inclusive)
+    start = r
+    before_r = r - 1
+    if before_r >= 0:
+        ch = source[before_r]
+        if ch in "LU":
+            start = before_r  # LR" or UR"
+        elif ch == "u":
+            start = before_r  # uR"
+        elif ch == "8" and before_r >= 1 and source[before_r - 1] == "u":
+            start = before_r - 1  # u8R"
+
+    # The character before the prefix must not be an identifier char,
+    # otherwise this is something like `someVarR"..."` not a raw string.
+    before_prefix = start - 1
+    if before_prefix >= 0 and (source[before_prefix].isalnum() or source[before_prefix] == "_"):
         return False
     return True
 
 
-def extract_cb_names_from_kernel(kernel_desc: "ttnn.KernelDescriptor") -> Dict[str, int]:
-    """Extract CB name -> index mapping from kernel's named compile-time args."""
-    cb_names = {}
-    if hasattr(kernel_desc, "named_compile_time_args"):
-        for name, value in kernel_desc.named_compile_time_args:
-            if _is_cb_named_arg(name, value):
-                cb_names[name] = value
-    return cb_names
+def _skip_raw_string(source: str, quote_pos: int) -> int:
+    """Skip past a raw string literal starting at the ``"`` at *quote_pos*.
+
+    Raw string syntax: ``R"delim(content)delim"`` where *delim* can be
+    empty or up to 16 characters (no spaces, backslashes, or parens).
+
+    Returns the index just past the closing ``"``, or ``len(source)`` if
+    unterminated (malformed source — treat the rest as consumed).
+    """
+    n = len(source)
+    # Find the opening '(' that ends the delimiter
+    paren_pos = source.find("(", quote_pos + 1)
+    if paren_pos == -1 or paren_pos - (quote_pos + 1) > 16:
+        # Not a valid raw string — fall back to treating as regular string
+        return _skip_regular_string(source, quote_pos)
+    delim = source[quote_pos + 1 : paren_pos]
+    # Find the closing sequence: )delim"
+    close_seq = f'){delim}"'
+    end = source.find(close_seq, paren_pos + 1)
+    if end == -1:
+        return n  # unterminated — consume rest
+    return end + len(close_seq)
+
+
+def _skip_regular_string(source: str, quote_pos: int) -> int:
+    """Skip past a regular string literal starting at ``"`` at *quote_pos*.
+
+    Handles ``\\"`` escapes.  Returns the index just past the closing
+    ``"``, or ``len(source)`` if unterminated.
+    """
+    i = quote_pos + 1
+    n = len(source)
+    while i < n:
+        if source[i] == "\\":
+            i += 2  # skip escape sequence
+            continue
+        if source[i] == '"':
+            return i + 1  # past the closing quote
+        i += 1
+    return n  # unterminated
+
+
+def _skip_char_literal(source: str, quote_pos: int) -> int:
+    """Skip past a character literal starting at ``'`` at *quote_pos*.
+
+    Handles ``\\'`` escapes.  Returns the index just past the closing
+    ``'``, or ``len(source)`` if unterminated.
+    """
+    i = quote_pos + 1
+    n = len(source)
+    while i < n:
+        if source[i] == "\\":
+            i += 2
+            continue
+        if source[i] == "'":
+            return i + 1
+        i += 1
+    return n
+
+
+def _find_matching_brace(source: str, open_pos: int) -> Optional[int]:
+    """Find the closing brace matching the opening brace at *open_pos*.
+
+    Full C++ lexer-level scanner that tracks brace depth starting at 1,
+    correctly skipping braces inside:
+
+    - Line comments (``//`` to end of line)
+    - Block comments (``/* ... */``)
+    - Regular string literals (``"..."`` with backslash escapes)
+    - Raw string literals (``R"delim(...)delim"`` and prefixed variants
+      ``LR"``, ``uR"``, ``UR"``, ``u8R"``)
+    - Character literals (``'...'`` with backslash escapes)
+
+    Returns the index of the closing ``}`` or ``None`` if not found.
+    """
+    depth = 1
+    i = open_pos + 1
+    n = len(source)
+
+    while i < n:
+        c = source[i]
+
+        # Line comment: // to end of line
+        if c == "/" and i + 1 < n and source[i + 1] == "/":
+            end = source.find("\n", i + 2)
+            i = n if end == -1 else end + 1
+            continue
+
+        # Block comment: /* ... */
+        if c == "/" and i + 1 < n and source[i + 1] == "*":
+            end = source.find("*/", i + 2)
+            if end == -1:
+                return None  # unterminated block comment
+            i = end + 2
+            continue
+
+        # String literal (regular or raw)
+        if c == '"':
+            if _is_raw_string_prefix(source, i):
+                i = _skip_raw_string(source, i)
+            else:
+                i = _skip_regular_string(source, i)
+            continue
+
+        # Character literal
+        if c == "'":
+            i = _skip_char_literal(source, i)
+            continue
+
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+
+        i += 1
+
+    return None
+
+
+def extract_kernel_body(source: str) -> str:
+    """Extract the body of ``kernel_main()`` using regex + brace matching.
+
+    Returns the inner body (without outer braces) of the kernel_main
+    function definition.  Returns empty string if not found.
+    """
+    match = _KERNEL_MAIN_RE.search(source)
+    if not match:
+        return ""
+    # The '{' is the last character of the match
+    open_brace_pos = match.end() - 1
+    close_pos = _find_matching_brace(source, open_brace_pos)
+    if close_pos is None:
+        return ""
+    return source[open_brace_pos + 1 : close_pos]
 
 
 # =============================================================================
-# CB State Save/Restore
+# Include Inlining (from cpp_parser.py)
 # =============================================================================
 
 
-def _save_cb_state(program_descriptors: List[Any]) -> List[dict]:
-    """Save mutable CB descriptor state before a fused build.
+def inline_local_includes(source: str, kernel_dir: Optional[str]) -> Tuple[List[Tuple[str, str]], str]:
+    """Inline local includes, returning header content separately.
 
-    _build_fused_descriptor mutates buffer_index, total_size, and
-    core_ranges on the original CBDescriptors (can't deepcopy C++
-    bindings).  Save these fields so they can be restored after build.
+    For generated SOURCE_CODE kernels, local includes won't resolve because
+    the compiler doesn't know the original directory.  This function reads
+    them and returns their content separately so callers can place header
+    content at file scope while keeping original source in phase namespaces.
 
-    Args:
-        program_descriptors: List of ProgramDescriptor objects whose
-            CB state should be saved.  Deduplicates by object id.
+    Supports both local-only includes (no path separator) and relative path
+    includes (e.g. ``"subdir/header.h"``), resolving them relative to
+    *kernel_dir*.
+
+    Returns:
+        ``(headers, remaining_source)`` where *headers* is a list of
+        ``(resolved_path, content)`` tuples for each inlined local header,
+        and *remaining_source* is the original source with those
+        ``#include "..."`` lines removed.
     """
-    saved = []
-    seen_cb_ids: set = set()
-    for prog_desc in program_descriptors:
-        for cb_desc in prog_desc.cbs:
-            cb_id = id(cb_desc)
-            if cb_id in seen_cb_ids:
-                continue
-            seen_cb_ids.add(cb_id)
-            saved.append(
-                {
-                    "cb": cb_desc,
-                    "total_size": cb_desc.total_size,
-                    "core_ranges": cb_desc.core_ranges,
-                    "fmt": [(fmt, fmt.buffer_index) for fmt in cb_desc.format_descriptors],
-                }
-            )
-    return saved
+    if kernel_dir is None:
+        return [], source
+
+    lines = source.split("\n")
+    result: List[str] = []
+    headers: List[Tuple[str, str]] = []
+    inlined: Set[str] = set()
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('#include "'):
+            match = re.match(r'#include\s+"([^"]+)"', stripped)
+            if match:
+                inc_path = match.group(1)
+                if inc_path not in inlined:
+                    full_inc = os.path.normpath(os.path.join(kernel_dir, inc_path))
+                    if os.path.exists(full_inc):
+                        with open(full_inc, "r") as f:
+                            inc_content = f.read()
+                        # Strip #pragma once and nested local includes
+                        header_lines: List[str] = []
+                        for inc_line in inc_content.split("\n"):
+                            stripped_inc = inc_line.strip()
+                            if stripped_inc.startswith("#pragma once"):
+                                continue
+                            if stripped_inc.startswith('#include "'):
+                                nested_match = re.match(r'#include\s+"([^"]+)"', stripped_inc)
+                                if nested_match:
+                                    nested = nested_match.group(1)
+                                    nested_full = os.path.normpath(os.path.join(os.path.dirname(full_inc), nested))
+                                    # Only skip nested includes that resolve to
+                                    # local files.  Non-existent paths are kept
+                                    # as-is — they may be system/SDK includes.
+                                    if os.path.exists(nested_full):
+                                        continue
+                            header_lines.append(inc_line)
+                        headers.append((full_inc, "\n".join(header_lines)))
+                        inlined.add(inc_path)
+                        continue  # Remove the #include line from remaining source
+        result.append(line)
+
+    return headers, "\n".join(result)
 
 
-def _restore_cb_state(saved: List[dict]) -> None:
-    """Restore CB descriptor state saved by _save_cb_state."""
-    for entry in saved:
-        entry["cb"].total_size = entry["total_size"]
-        entry["cb"].core_ranges = entry["core_ranges"]
-        for fmt, orig_idx in entry["fmt"]:
-            fmt.buffer_index = orig_idx
+# =============================================================================
+# Collection Helpers (from cpp_parser.py)
+# =============================================================================
 
 
-def _verify_cb_restore(saved: List[dict]) -> None:
-    """Verify that CB descriptor state was correctly restored.
-
-    Called after _restore_cb_state to catch any future code changes
-    that add mutation paths not covered by save/restore.
-
-    Raises:
-        RuntimeError: If any CB field doesn't match its saved value.
-    """
-    for entry in saved:
-        cb = entry["cb"]
-        if cb.total_size != entry["total_size"]:
-            raise RuntimeError(f"CB restore failed: total_size is {cb.total_size}, " f"expected {entry['total_size']}")
-        for fmt, expected_idx in entry["fmt"]:
-            if fmt.buffer_index != expected_idx:
-                raise RuntimeError(
-                    f"CB restore failed: buffer_index is {fmt.buffer_index}, " f"expected {expected_idx}"
-                )
+def collect_includes(sources: List[str]) -> List[str]:
+    """Collect unique #include lines from multiple source strings."""
+    includes = set()
+    for source in sources:
+        for line in source.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("#include"):
+                includes.add(stripped)
+    return sorted(includes)
 
 
-def _create_phase_info(op_descriptor: OpDescriptor, phase_idx: int) -> PhaseInfo:
-    """Create a PhaseInfo from an OpDescriptor.
+def collect_defines(sources: List[str]) -> List[str]:
+    """Collect unique #define lines from multiple source strings (before kernel_main)."""
+    defines: List[str] = []
+    seen: Set[str] = set()
+    for source in sources:
+        # Find where kernel_main starts (line number)
+        match = _KERNEL_MAIN_RE.search(source)
+        kernel_main_line = None
+        if match:
+            kernel_main_line = source[: match.start()].count("\n")
 
-    Extracts CB info and unpack_to_dest_mode from the op's kernels.
-    """
-    utd_modes = None
-    for kd in op_descriptor.descriptor.kernels:
-        config = kd.config
-        if hasattr(config, "unpack_to_dest_mode"):
-            modes = config.unpack_to_dest_mode
-            if modes is not None and len(modes) > 0:
-                utd_modes = modes
+        for line_no, line in enumerate(source.split("\n")):
+            if kernel_main_line is not None and line_no >= kernel_main_line:
                 break
-    cb_info = extract_cb_info(op_descriptor.descriptor, utd_modes)
-    return PhaseInfo(phase_idx=phase_idx, op_descriptor=op_descriptor, cb_info=cb_info)
-
-
-# =============================================================================
-# Kernel Classification
-# =============================================================================
-
-
-def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
-    """Return the RISC processor type: 'riscv_0', 'riscv_1', or 'compute'."""
-    config = kernel_desc.config
-    if isinstance(config, ttnn.ComputeConfigDescriptor):
-        return "compute"
-    elif isinstance(config, ttnn.ReaderConfigDescriptor):
-        return "riscv_0"
-    elif isinstance(config, ttnn.WriterConfigDescriptor):
-        return "riscv_1"
-    elif isinstance(config, ttnn.DataMovementConfigDescriptor):
-        if config.processor == ttnn.DataMovementProcessor.RISCV_0:
-            return "riscv_0"
-        else:
-            return "riscv_1"
-    return "unknown"
-
-
-def _core_ranges_key(core_ranges: Any) -> frozenset:
-    """Create a hashable key from a CoreRangeSet for grouping."""
-    return frozenset((cr.start.x, cr.start.y, cr.end.x, cr.end.y) for cr in core_ranges.ranges())
-
-
-def _same_core_range(a: Any, b: Any) -> bool:
-    """Compare two CoreRangeSets by their keys."""
-    return _core_ranges_key(a) == _core_ranges_key(b)
-
-
-def _coords_to_core_range_set(coords: Set[Tuple[int, int]]) -> Any:
-    """Convert a set of (x, y) tuples to a CoreRangeSet.
-
-    Each coordinate becomes a single-core CoreRange.  CoreRangeSet
-    merges adjacent ranges internally.
-    """
-    ranges = set()
-    for x, y in coords:
-        ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
-    return ttnn.CoreRangeSet(ranges)
-
-
-def _get_node_core_range(node: "OpNode") -> Any:
-    """Extract the core range from a node's op descriptor.
-
-    Returns the union of all kernel core_ranges in the node's
-    ProgramDescriptor.
-    """
-    all_coords: Set[Tuple[int, int]] = set()
-    for kernel in node.op.descriptor.kernels:
-        all_coords |= _core_range_set_to_coords(kernel.core_ranges)
-    return _coords_to_core_range_set(all_coords)
-
-
-def _get_role_key(
-    kernel_desc: "ttnn.KernelDescriptor",
-    core_range_override: Optional[Any] = None,
-) -> Tuple[str, frozenset]:
-    """Return (risc_type, core_ranges_key) identifying this kernel's role.
-
-    If core_range_override is set, all kernels are mapped to that range
-    regardless of their native core_ranges.  This collapses kernels with
-    different ranges (e.g. stem vs branch) into the same role.
-    """
-    cr = core_range_override if core_range_override is not None else kernel_desc.core_ranges
-    return (_get_risc_type(kernel_desc), _core_ranges_key(cr))
+            stripped = line.strip()
+            if stripped.startswith("#define") and stripped not in seen:
+                defines.append(line)
+                seen.add(stripped)
+    return defines
 
 
 # =============================================================================
@@ -1189,7 +556,7 @@ def _generate_phase_namespace(
         lines.append("")
 
     # Transform the kernel body source (CT arg offsets + named arg prefixes)
-    body = cpp_parser.extract_kernel_body(kernel_source)
+    body = extract_kernel_body(kernel_source)
     transformed = _transform_phase_source(body, phase_idx, ct_arg_offset)
 
     lines.append("void run() {")
@@ -1210,6 +577,11 @@ def _generate_phase_namespace(
 
     lines.append("")
     return lines
+
+
+# =============================================================================
+# Barrier Infrastructure
+# =============================================================================
 
 
 def _build_barrier_dispatch(
@@ -1681,17 +1053,6 @@ def _generate_barrier_namespace_compute(
 # =============================================================================
 
 
-def _get_compute_unpack_to_dest_modes(phase: PhaseInfo) -> Optional[list]:
-    """Get the unpack_to_dest_mode vector from a phase's compute kernel config."""
-    for kernel_desc in phase.op_descriptor.descriptor.kernels:
-        config = kernel_desc.config
-        if hasattr(config, "unpack_to_dest_mode"):
-            modes = config.unpack_to_dest_mode
-            if modes is not None and len(modes) > 0:
-                return modes
-    return None
-
-
 def _get_phantom_cb_indices(phase: PhaseInfo) -> Set[int]:
     """Get CB indices referenced in named compile-time args but without CBDescriptors.
 
@@ -1709,11 +1070,6 @@ def _get_phantom_cb_indices(phase: PhaseInfo) -> Set[int]:
                 phantom.add(value)
 
     return phantom
-
-
-# =============================================================================
-# CB Address Rebinding
-# =============================================================================
 
 
 def _compute_rebind_info(
@@ -1767,48 +1123,6 @@ def _compute_rebind_info(
     return rebind_info
 
 
-def _generate_rebind_code(
-    rebinds: List[Tuple[int, int, int]],
-    phase_idx: int,
-    for_compute: bool = False,
-) -> List[str]:
-    """Generate C++ code to rebind CB addresses for a phase.
-
-    Args:
-        rebinds: List of (slot_idx, addr, size) tuples for this phase.
-        phase_idx: Which phase these rebinds are for.
-        for_compute: If True, shift addresses by >> 4 for TRISC and guard
-            with #ifndef TRISC_MATH (TRISC1 has no cb_interface).
-
-    Returns:
-        List of C++ source lines (indented with 4 spaces).
-    """
-    if not rebinds:
-        return []
-    shift = " >> 4" if for_compute else ""
-    lines = [f"    // Rebind CB addresses for phase {phase_idx}"]
-    if for_compute:
-        # TRISC1 (math) doesn't have cb_interface linked in — skip it
-        lines.append("#ifndef TRISC_MATH")
-    for slot_idx, _, _ in rebinds:
-        prefix = f"phase_{phase_idx}_cb{slot_idx}"
-        lines.append(f"    {{")
-        lines.append(
-            f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr"){shift};'
-        )
-        lines.append(
-            f'        constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size"){shift};'
-        )
-        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_rd_ptr = new_addr;")
-        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_wr_ptr = new_addr;")
-        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_size = new_size;")
-        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_limit = new_addr + new_size;")
-        lines.append(f"    }}")
-    if for_compute:
-        lines.append("#endif")
-    return lines
-
-
 # =============================================================================
 # Fused Kernel Source Generation
 # =============================================================================
@@ -1843,7 +1157,7 @@ def _generate_fused_riscv0_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        headers, source = cpp_parser.inline_local_includes(source, kernel_dir)
+        headers, source = inline_local_includes(source, kernel_dir)
         phase_headers[i] = headers
         reader_sources.append((i, source))
 
@@ -1851,8 +1165,8 @@ def _generate_fused_riscv0_source(
         return None
 
     all_combined = ["\n".join(c for _, c in phase_headers.get(i, [])) + "\n" + s for i, s in reader_sources]
-    includes = cpp_parser.collect_includes(all_combined)
-    source_defines = cpp_parser.collect_defines(all_combined)
+    includes = collect_includes(all_combined)
+    source_defines = collect_defines(all_combined)
     must_match_defines, per_phase_defines = _collect_phase_defines(phase_kernels, role_key)
     file_scope_blocks, pre_mains = _extract_phase_pre_main(reader_sources, phase_headers)
 
@@ -1954,7 +1268,7 @@ def _generate_fused_riscv1_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        headers, source = cpp_parser.inline_local_includes(source, kernel_dir)
+        headers, source = inline_local_includes(source, kernel_dir)
         phase_headers[i] = headers
         writer_sources.append((i, source))
 
@@ -1962,8 +1276,8 @@ def _generate_fused_riscv1_source(
         return None
 
     all_combined = ["\n".join(c for _, c in phase_headers.get(i, [])) + "\n" + s for i, s in writer_sources]
-    includes = cpp_parser.collect_includes(all_combined)
-    source_defines = cpp_parser.collect_defines(all_combined)
+    includes = collect_includes(all_combined)
+    source_defines = collect_defines(all_combined)
     must_match_defines, per_phase_defines = _collect_phase_defines(phase_kernels, role_key)
     file_scope_blocks, pre_mains = _extract_phase_pre_main(writer_sources, phase_headers)
 
@@ -2062,7 +1376,7 @@ def _generate_fused_compute_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        headers, source = cpp_parser.inline_local_includes(source, kernel_dir)
+        headers, source = inline_local_includes(source, kernel_dir)
         phase_headers[i] = headers
         compute_sources.append((i, source))
 
@@ -2070,8 +1384,8 @@ def _generate_fused_compute_source(
         return None
 
     all_combined = ["\n".join(c for _, c in phase_headers.get(i, [])) + "\n" + s for i, s in compute_sources]
-    includes = cpp_parser.collect_includes(all_combined)
-    source_defines = cpp_parser.collect_defines(all_combined)
+    includes = collect_includes(all_combined)
+    source_defines = collect_defines(all_combined)
     must_match_defines, per_phase_defines = _collect_phase_defines(phase_kernels, role_key)
     file_scope_blocks, pre_mains = _extract_phase_pre_main(compute_sources, phase_headers)
 
@@ -2387,6 +1701,10 @@ def _merge_compile_time_args(
 
     return merged, offsets
 
+
+# =============================================================================
+# Define Handling
+# =============================================================================
 
 # These defines are referenced by LLK headers at include time and cannot
 # vary per-phase.  They MUST have identical values across all fused phases.
@@ -2869,417 +2187,31 @@ def _build_fused_descriptor(
     )
 
 
-# =============================================================================
-# OpGraph Builder
-# =============================================================================
+def _create_phase_info(op_descriptor: OpDescriptor, phase_idx: int) -> PhaseInfo:
+    """Create a PhaseInfo from an OpDescriptor.
 
-
-class OpGraphBuilder:
-    """Builds fused descriptors from a tree of OpNode objects.
-
-    The fusion tree is a standard tree where each node holds one operation.
-    Parent→child edges encode sequential ordering; sibling nodes run in
-    parallel on disjoint core subsets.  For each root-to-leaf path, a
-    separate fused kernel binary is generated.  Nodes sharing a path
-    segment synchronize via shared GlobalSemaphore addresses.
-
-    Usage::
-
-        root = OpNode(ln_op, children=[OpNode(rms_op_A), OpNode(rms_op_B)])
-        fused = OpGraphBuilder(root).build()
-        # Returns a single FusedOp, suitable for composite.launch()
+    Extracts CB info and unpack_to_dest_mode from the op's kernels.
     """
-
-    def __init__(self, root: OpNode):
-        self._root = root
-        self._built = False
-
-    def build(self, device: Any = None) -> FusedOp:
-        """Build a fused descriptor from the tree.
-
-        Returns a single self-contained FusedOp.  For branching trees,
-        path ProgramDescriptors are merged internally so the result can be
-        dispatched as one unit via ``composite.launch([result])``.
-
-        Output tensors are ordered by leaf in left-to-right DFS order.
-
-        Args:
-            device: Optional device for GlobalSemaphore allocation.
-                If *None*, auto-extracted from the first tensor found
-                in the tree's OpDescriptors.
-        """
-        r = self._build_internal(device)
-        return FusedOp(
-            op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
-            semaphores=r.semaphores,
-        )
-
-    def _build_internal(self, device: Any = None) -> _BuildResult:
-        """Internal build returning intermediate _BuildResult."""
-        if self._built:
-            raise ValueError("Already built")
-        self._built = True
-
-        # Single node with no children = nothing to fuse
-        if not self._root.children:
-            op = self._root.op
-            return _BuildResult(
-                descriptor=op.descriptor,
-                input_tensors=op.input_tensors,
-                output_tensors=op.output_tensors,
-            )
-
-        # Validate tree topology before doing any device allocation
-        self._validate_topology()
-
-        # Auto-extract device from tensors if not provided
-        if device is None:
-            device = _extract_device_from_tree(self._root)
-            if device is None:
-                raise ValueError("Cannot auto-extract device: no tensors found in tree. " "Pass device explicitly.")
-
-        # Trace all root-to-leaf paths
-        paths = self._trace_paths()
-
-        # Compute union of all leaf core ranges
-        union_range = self._compute_union_ranges()
-
-        # Allocate shared per-core monotonic semaphores on union range.
-        sem_compute_done = ttnn.create_global_semaphore(device, union_range, 0)
-        sem_writer_done = ttnn.create_global_semaphore(device, union_range, 0)
-        compute_done_addr = ttnn.get_global_semaphore_address(sem_compute_done)
-        writer_done_addr = ttnn.get_global_semaphore_address(sem_writer_done)
-        all_sem_refs = [sem_compute_done, sem_writer_done]
-
-        # Pre-allocate barrier configs for each unique core range across all
-        # path segments.  Paths that share a segment MUST use the same
-        # arrive/release GlobalSemaphore L1 addresses so that cores running
-        # different kernel binaries synchronize at the same barrier.
-        segment_cache: Dict[frozenset, BarrierConfig] = {}
-        for path in paths:
-            for core_range, _ in path:
-                key = _core_ranges_key(core_range)
-                if key not in segment_cache:
-                    segment_cache[key] = _create_barrier_segment_config(device, core_range)
-                    all_sem_refs.extend(segment_cache[key]._sem_refs)
-
-        results = []
-        for path in paths:
-            # Save CB descriptor state before building each path.
-            # _build_fused_descriptor mutates buffer_index, total_size, and
-            # core_ranges IN-PLACE on the original CBDescriptors (can't
-            # deepcopy C++ bindings).  When paths share ops (e.g. root),
-            # the first path's mutations corrupt subsequent paths' cb_info.
-            path_prog_descs = [op.descriptor for _, phases in path for op in phases]
-            saved_cb_state = _save_cb_state(path_prog_descs)
-
-            result = self._build_path(
-                device,
-                path,
-                compute_done_addr,
-                writer_done_addr,
-                all_sem_refs,
-                segment_cache,
-            )
-            results.append(result)
-
-            # Restore original state so the next path sees uncorrupted indices
-            _restore_cb_state(saved_cb_state)
-            _verify_cb_restore(saved_cb_state)
-
-        return _merge_build_results(results)
-
-    def _trace_paths(self) -> List[List[Tuple[Any, List[OpDescriptor]]]]:
-        """Trace all root-to-leaf paths through the tree.
-
-        Returns a list of paths.  Each path is a list of
-        ``(core_range, [phases])`` segments.  Consecutive nodes with the
-        same core range are grouped into one segment.
-
-        For intermediate nodes (those with children), the segment's
-        core_range is the *effective* range — the union of descendant leaf
-        ranges — rather than the node's own core_range.  This ensures
-        barrier scopes match the cores that actually run through each
-        segment.
-        """
-        raw_paths: List[List[Tuple[Any, OpDescriptor]]] = []
-
-        def _collect(node: OpNode, prefix: List[Tuple[Any, OpDescriptor]]):
-            if not node.children:
-                # Leaf: use the node's own core range
-                core_range = _get_node_core_range(node)
-                raw_paths.append(prefix + [(core_range, node.op)])
-            else:
-                # Internal node: use effective range (union of descendant leaves)
-                eff_coords = self._effective_leaf_range(node)
-                eff_range = _coords_to_core_range_set(eff_coords)
-                current = prefix + [(eff_range, node.op)]
-                for child in node.children:
-                    _collect(child, current)
-
-        _collect(self._root, [])
-        return [self._group_into_segments(raw) for raw in raw_paths]
-
-    @staticmethod
-    def _group_into_segments(
-        raw_path: List[Tuple[Any, OpDescriptor]],
-    ) -> List[Tuple[Any, List[OpDescriptor]]]:
-        """Group consecutive same-range nodes into segments."""
-        segments: List[Tuple[Any, List[OpDescriptor]]] = []
-        for core_range, op in raw_path:
-            if segments and _same_core_range(segments[-1][0], core_range):
-                segments[-1][1].append(op)
-            else:
-                segments.append((core_range, [op]))
-        return segments
-
-    def _compute_union_ranges(self) -> Any:
-        """Compute the union CoreRangeSet of all leaf core ranges.
-
-        Only leaf nodes (those without children) contribute core ranges.
-        """
-        all_coords: Set[Tuple[int, int]] = set()
-
-        def _collect_leaves(node: OpNode):
-            if not node.children:
-                all_coords.update(_core_range_set_to_coords(_get_node_core_range(node)))
-            else:
-                for child in node.children:
-                    _collect_leaves(child)
-
-        _collect_leaves(self._root)
-        return _coords_to_core_range_set(all_coords)
-
-    def _validate_topology(self) -> None:
-        """Validate the tree topology.
-
-        Checks:
-        - Each child's core_range is a subset of its parent's range.
-        - Sibling nodes have disjoint core ranges.
-
-        Children are NOT required to fully cover their parent's range.
-        Unused cores simply don't participate in child phases.
-
-        Raises:
-            ValueError: On any topology violation.
-        """
-
-        def _validate_children(node: OpNode, parent_coords: Set[Tuple[int, int]], depth: int):
-            if not node.children:
-                return
-
-            # Check sibling disjointness
-            seen_coords: Set[Tuple[int, int]] = set()
-            for child in node.children:
-                child_coords = _core_range_set_to_coords(_get_node_core_range(child))
-                overlap = seen_coords & child_coords
-                if overlap:
-                    raise ValueError(
-                        f"OpGraph topology error: sibling nodes at depth {depth + 1} "
-                        f"have overlapping cores {sorted(overlap)}"
-                    )
-                seen_coords |= child_coords
-
-            # Check each child is subset of parent, then recurse
-            for child in node.children:
-                child_coords = _core_range_set_to_coords(_get_node_core_range(child))
-                if not child_coords.issubset(parent_coords):
-                    extra = sorted(child_coords - parent_coords)
-                    raise ValueError(
-                        f"OpGraph topology error: node at depth {depth + 1} "
-                        f"(cores {sorted(child_coords)}) has cores {extra} "
-                        f"outside parent range {sorted(parent_coords)}"
-                    )
-                _validate_children(child, child_coords, depth + 1)
-
-        root_coords = _core_range_set_to_coords(_get_node_core_range(self._root))
-        _validate_children(self._root, root_coords, depth=0)
-
-    @staticmethod
-    def _effective_leaf_range(node: OpNode) -> Set[Tuple[int, int]]:
-        """Compute the union of all descendant leaf core coordinates.
-
-        For leaf nodes, returns the node's own core coords.
-        For internal nodes, returns the union of all leaf descendants.
-        """
-        if not node.children:
-            return _core_range_set_to_coords(_get_node_core_range(node))
-        coords: Set[Tuple[int, int]] = set()
-        for child in node.children:
-            coords |= OpGraphBuilder._effective_leaf_range(child)
-        return coords
-
-    def _build_path(
-        self,
-        device: Any,
-        path: List[Tuple[Any, List[OpDescriptor]]],
-        compute_done_addr: int,
-        writer_done_addr: int,
-        shared_sem_refs: List[Any],
-        segment_cache: Dict[frozenset, BarrierConfig],
-    ) -> _BuildResult:
-        """Build a fused _BuildResult for one root-to-leaf path."""
-        # Flatten phases and determine leaf core range
-        all_phases: List[OpDescriptor] = []
-        for _, phases in path:
-            all_phases.extend(phases)
-
-        # Leaf core range = last segment's core range.
-        # For linear chains (single segment), leaf == union so no override needed.
-        leaf_core_range = path[-1][0] if len(path) > 1 else None
-
-        # Build barrier segments and transition map
-        segments, transition_map = self._build_barrier_segments(
-            path,
-            all_phases,
-            segment_cache,
-        )
-
-        # Build MultiBarrierSpec
-        multi_barrier = MultiBarrierSpec(
-            segments=segments,
-            compute_done_addr=compute_done_addr,
-            writer_done_addr=writer_done_addr,
-            transition_map=transition_map,
-            _sem_refs=list(shared_sem_refs),
-        )
-
-        # Build PhaseInfo list and call module-level _build_fused_descriptor
-        phase_infos = [_create_phase_info(op, i) for i, op in enumerate(all_phases)]
-
-        return _build_fused_descriptor(
-            phase_infos,
-            device,
-            core_range_override=leaf_core_range,
-            multi_barrier=multi_barrier,
-        )
-
-    def _build_barrier_segments(
-        self,
-        path: List[Tuple[Any, List[OpDescriptor]]],
-        all_phases: List[OpDescriptor],
-        segment_cache: Dict[frozenset, BarrierConfig],
-    ) -> Tuple[List[BarrierSegment], Dict[int, Tuple[int, int]]]:
-        """Build barrier segments and transition map for a path.
-
-        Uses ``segment_cache`` (keyed by core_ranges_key) so that paths
-        sharing a segment (e.g. the stem) reuse the same GlobalSemaphore
-        arrive/release addresses for cross-kernel synchronization.
-
-        Returns (segments, transition_map).
-        """
-        segments: List[BarrierSegment] = []
-
-        # Build one barrier segment per path segment that has at least one
-        # transition (i.e. the segment contains phases followed by more phases).
-        # Determine which global-phase transitions belong to which segment.
-        #
-        # Phase layout example for path [(union, [op0, op1]), (branchA, [op2]), (leafA1, [op3])]:
-        #   Global phases: 0=op0, 1=op1, 2=op2, 3=op3
-        #   Transitions:   0 (after op0), 1 (after op1), 2 (after op2)
-        #   Segment 0 (union):  transitions 0, 1  (between stem phases, and stem->branch)
-        #   Segment 1 (branchA): transition 2     (between branch and leaf)
-
-        transition_map: Dict[int, Tuple[int, int]] = {}
-        global_phase_offset = 0
-
-        for seg_path_idx, (core_range, phases) in enumerate(path):
-            num_phases_in_seg = len(phases)
-            if num_phases_in_seg == 0:
-                global_phase_offset += num_phases_in_seg
-                continue
-
-            # Determine how many transitions this segment owns:
-            # - All transitions between consecutive phases within this segment
-            # - Plus the transition from last phase of this segment to first
-            #   phase of the NEXT segment (if there is a next segment)
-            is_last_segment = seg_path_idx == len(path) - 1
-            num_transitions_within = num_phases_in_seg - 1
-            num_transitions = num_transitions_within
-            if not is_last_segment:
-                num_transitions += 1  # transition to next segment
-
-            if num_transitions > 0:
-                # Look up pre-allocated barrier config from cache
-                key = _core_ranges_key(core_range)
-                barrier_cfg = segment_cache[key]
-                seg = BarrierSegment(
-                    config=barrier_cfg,
-                    arrive_addr=barrier_cfg.global_arrive_addr,
-                    release_addr=barrier_cfg.global_release_addr,
-                )
-                segments.append(seg)
-
-                seg_idx = len(segments) - 1
-                call_idx = 0
-
-                # Map transitions within this segment
-                for t in range(num_transitions_within):
-                    global_transition = global_phase_offset + t
-                    transition_map[global_transition] = (seg_idx, call_idx)
-                    call_idx += 1
-
-                # Map transition to next segment (if any)
-                if not is_last_segment:
-                    global_transition = global_phase_offset + num_phases_in_seg - 1
-                    transition_map[global_transition] = (seg_idx, call_idx)
-
-            global_phase_offset += num_phases_in_seg
-
-        return segments, transition_map
-
-
-# =============================================================================
-# Convenience Functions
-# =============================================================================
-
-
-def build_op_graph(
-    root_phases: List[OpDescriptor],
-    children: List[OpNode],
-    device: Any = None,
-) -> FusedOp:
-    """Build a fused descriptor for a tree topology.
-
-    Convenience wrapper around :class:`OpGraphBuilder`.  Converts
-    ``root_phases`` into a chain of nodes, attaches ``children`` to
-    the last root-phase node, then builds.
-
-    Args:
-        root_phases: Phases that run before the tree splits.  Converted
-            into a chain of OpNode objects.
-        children: Subtrees to attach to the last root-phase node.
-        device: Optional device for GlobalSemaphore allocation.
-            If *None*, auto-extracted from the first tensor found
-            in the tree's OpDescriptors.
-
-    Returns:
-        A single self-contained FusedOp suitable for
-        ``composite.launch([result])``.
-    """
-    if not root_phases:
-        raise ValueError("root_phases cannot be empty")
-    # Last root phase gets children attached
-    last = OpNode(root_phases[-1], children=list(children))
-    node = last
-    for desc in reversed(root_phases[:-1]):
-        node = OpNode(desc, children=[node])
-    return OpGraphBuilder(node).build(device)
+    utd_modes = None
+    for kd in op_descriptor.descriptor.kernels:
+        config = kd.config
+        if hasattr(config, "unpack_to_dest_mode"):
+            modes = config.unpack_to_dest_mode
+            if modes is not None and len(modes) > 0:
+                utd_modes = modes
+                break
+    cb_info = extract_cb_info(op_descriptor.descriptor, utd_modes)
+    return PhaseInfo(phase_idx=phase_idx, op_descriptor=op_descriptor, cb_info=cb_info)
 
 
 __all__ = [
-    # High-level API
-    "Sequential",
-    "Parallel",
-    # Core classes
-    "OpGraphBuilder",
-    "OpNode",
-    "CBPoolAllocator",
-    "PhaseInfo",
-    "CBInfo",
-    "BarrierConfig",
-    # Functions
-    "build_op_graph",
-    "extract_cb_info",
-    "extract_cb_names_from_kernel",
+    # C++ parsing (from cpp_parser.py)
+    "extract_kernel_body",
+    "inline_local_includes",
+    "collect_includes",
+    "collect_defines",
+    # Build orchestration
+    "_build_fused_descriptor",
+    "_create_phase_info",
+    "_create_barrier_segment_config",
 ]

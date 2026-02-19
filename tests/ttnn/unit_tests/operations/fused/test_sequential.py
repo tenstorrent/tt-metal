@@ -113,7 +113,7 @@ class TestSequentialChainInfrastructure:
 
     def test_extract_cb_info_from_layernorm(self, device, test_tensors):
         """Test extracting CB info from a real LayerNorm descriptor."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_info
+        from models.experimental.ops.descriptors.fusion import extract_cb_info
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -140,7 +140,7 @@ class TestSequentialChainInfrastructure:
 
     def test_extract_cb_info_from_rmsnorm(self, device, test_tensors):
         """Test extracting CB info from a real RMSNorm descriptor."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_info
+        from models.experimental.ops.descriptors.fusion import extract_cb_info
         from models.experimental.ops.descriptors.normalization import rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -164,7 +164,7 @@ class TestSequentialChainInfrastructure:
 
     def test_chain_builder_with_real_descriptors(self, device, test_tensors):
         """Test building a chain with real LayerNorm/RMSNorm descriptors."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_info, build_op_graph
+        from models.experimental.ops.descriptors.fusion import extract_cb_info, build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -206,7 +206,7 @@ class TestSequentialChainInfrastructure:
 
     def test_barrier_config_added(self, device, test_tensors):
         """Test that fused descriptors get barrier configuration (GlobalSemaphores)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -404,7 +404,7 @@ class TestSequentialChainExecution:
 
         REMAINING: Test actual kernel compilation and device execution.
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -467,7 +467,7 @@ class TestSequentialChainExecution:
 
     def test_four_phase_rms_chain(self, device, test_tensors):
         """Test 4-phase RMS→RMS→RMS→RMS chain to isolate the 4-phase issue."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -530,7 +530,7 @@ class TestSequentialChainExecution:
 
     def test_two_phase_layernorm_chain_multicore(self, device, test_tensors):
         """Test 2-phase LN→LN chain on 2 cores to validate global barrier."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors import composite
 
@@ -584,7 +584,7 @@ class TestSequentialChainExecution:
 
         Both execute in a single program via composite.launch().
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -782,7 +782,7 @@ class TestFusedKernelSource:
 
     def test_fused_source_has_phases(self, device, test_tensors):
         """Test that fused kernel source contains phase functions."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -812,7 +812,7 @@ class TestFusedKernelSource:
 
     def test_fused_source_has_barrier(self, device, test_tensors):
         """Test that fused kernel source contains barrier synchronization."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -850,7 +850,7 @@ class TestParallelChains:
 
     def test_parallel_linear_chains(self, device, test_tensors):
         """Test creating parallel chain descriptors."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         # Create two separate core ranges
@@ -914,7 +914,7 @@ class TestParallelChains:
 
     def test_three_phase_linear_chain(self, device, test_tensors):
         """Test a three-phase linear chain."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -955,8 +955,8 @@ class TestParallelChains:
 
     def test_chain_single_op(self, device, test_tensors):
         """Test that chaining a single op returns FusedOp wrapping the original."""
-        from models.experimental.ops.descriptors.sequential import OpGraphBuilder, OpNode
-        from models.experimental.ops.descriptors.op_descriptor import FusedOp
+        from models.experimental.ops.descriptors.fusion import OpGraphBuilder, OpNode
+        from models.experimental.ops.descriptors.fusion import FusedOp
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -978,7 +978,7 @@ class TestParallelChains:
 
     def test_dump_fused_kernel_files(self, device, test_tensors, tmp_path):
         """Build a fused 3-phase chain and dump all generated kernel files for inspection."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -1026,7 +1026,7 @@ class TestParallelChains:
 
     def test_extract_named_compile_time_args(self, device, test_tensors):
         """Test that named compile-time args can be extracted from LayerNorm kernels."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_names_from_kernel
+        from models.experimental.ops.descriptors.fusion import extract_cb_names_from_kernel
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -1050,7 +1050,7 @@ class TestParallelChains:
 
     def test_cb_overflow_validation(self, device, test_tensors):
         """Test that CB overflow is detected and reported clearly."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -1099,7 +1099,7 @@ class TestParallelChains:
 
     def test_named_args_have_phase_prefix(self, device, test_tensors):
         """Test that fused kernel named args get proper phase prefixes."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -1144,7 +1144,7 @@ class TestParallelChainsExecution:
         - Chain A: LayerNorm -> RMSNorm (on cores 0,0)
         - Chain B: RMSNorm -> LayerNorm (on cores 1,0)
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -1218,7 +1218,7 @@ class TestParallelChainsExecution:
         Test running 4 parallel chains on 4 different cores.
         Each chain is: LayerNorm -> RMSNorm
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -1289,7 +1289,7 @@ class TestParallelExecutionProfiling:
         compile-time args instead of named args, causing incorrect results.
         """
         import time
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -1542,7 +1542,7 @@ class TestMatmulDescriptor:
 
     def test_matmul_descriptor_cb_info(self, device, matmul_tensors):
         """Test extracting CB info from a matmul descriptor."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_info
+        from models.experimental.ops.descriptors.fusion import extract_cb_info
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
         desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
@@ -1559,7 +1559,7 @@ class TestMatmulDescriptor:
 
     def test_matmul_descriptor_named_args(self, device, matmul_tensors):
         """Test that matmul descriptor has named compile-time args for CB indices."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_names_from_kernel
+        from models.experimental.ops.descriptors.fusion import extract_cb_names_from_kernel
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
         desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
@@ -1809,7 +1809,7 @@ class TestMatmulDescriptor:
 
     def test_matmul_2d_offset_composite_with_fused_chain(self, device, test_tensors):
         """Multi-core 2D offset matmul + fused LN->RMS chain in parallel via composite."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -1883,7 +1883,7 @@ class TestStressInfrastructure:
 
     def test_six_parallel_two_phase_chains(self, device, test_tensors):
         """6 independent LN->RMS chains on cores (0,0)-(5,0) in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -1934,7 +1934,7 @@ class TestStressInfrastructure:
     @pytest.mark.parametrize("core_x", [0, 3, 5, 7])
     def test_three_phase_chain_on_various_cores(self, device, test_tensors, core_x):
         """LN->RMS->LN chain on different single-core positions."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -1976,7 +1976,7 @@ class TestStressInfrastructure:
 
     def test_four_phase_all_rms_non_zero_core(self, device, test_tensors):
         """4-phase all-RMS chain on core (5,0)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2019,7 +2019,7 @@ class TestStressInfrastructure:
 
     def test_matmul_plus_two_norm_chains(self, device, test_tensors, matmul_tensors):
         """1 matmul + 2 independent fused norm chains in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -2096,7 +2096,7 @@ class TestStressInfrastructure:
 
     def test_matmul_plus_three_phase_chain(self, device, test_tensors, matmul_tensors):
         """1 matmul + 1 three-phase LN->RMS->LN fused chain in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -2146,7 +2146,7 @@ class TestStressInfrastructure:
 
     def test_mixed_chain_lengths_parallel(self, device, test_tensors):
         """2-phase chain + 3-phase chain running in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2221,7 +2221,7 @@ class TestStressInfrastructure:
 
     def test_repeated_chain_execution(self, device, test_tensors):
         """Run chain 3 times with fresh descriptors each time to check for state leaks."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2259,7 +2259,7 @@ class TestStressInfrastructure:
 
     def test_larger_tensor_chain(self, device):
         """2-phase LN->RMS chain with larger tensors (128x256)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2310,7 +2310,7 @@ class TestStressInfrastructure:
 
     def test_all_ln_three_phase_chain(self, device, test_tensors):
         """LN->LN->LN chain (all same op type, with biases)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2351,7 +2351,7 @@ class TestStressInfrastructure:
 
     def test_three_chains_plus_matmul(self, device, test_tensors, matmul_tensors):
         """1 matmul + 3 independent fused norm chains in parallel (4 total ops)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -2410,7 +2410,7 @@ class TestStressInfrastructure:
 
     def test_two_phase_chain_on_multicore_range(self, device, test_tensors):
         """LN->RMS chain on 4-core range (0,0)-(3,0)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2444,7 +2444,7 @@ class TestStressInfrastructure:
 
     def test_three_phase_chain_on_2x2_grid(self, device, test_tensors):
         """LN->RMS->LN chain on 2x2 core grid (0,0)-(1,1)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2486,7 +2486,7 @@ class TestStressInfrastructure:
 
     def test_three_parallel_chains_on_nonoverlapping_multicore_ranges(self, device, test_tensors):
         """3 independent LN->RMS chains on non-overlapping multi-core ranges."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2540,7 +2540,7 @@ class TestStressInfrastructure:
 
     def test_four_phase_rms_chain_on_multicore(self, device, test_tensors):
         """4-phase all-RMS chain on 3-core range (2,0)-(4,0)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2583,7 +2583,7 @@ class TestStressInfrastructure:
 
     def test_mixed_single_and_multicore_parallel_chains(self, device, test_tensors):
         """Mix of single-core and multi-core chains in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2654,7 +2654,7 @@ class TestStressInfrastructure:
 
     def test_parallel_three_phase_chains_on_separate_multicore_ranges(self, device, test_tensors):
         """2 independent 3-phase LN->RMS->LN chains on separate multi-core ranges."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2720,7 +2720,7 @@ class TestStressInfrastructure:
 
     def test_matmul_plus_multicore_norm_chains(self, device, test_tensors, matmul_tensors):
         """1 matmul + 2 multi-core fused norm chains in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -2797,7 +2797,7 @@ class TestStressInfrastructure:
 
     def test_four_parallel_multicore_chains_stress(self, device, test_tensors):
         """4 independent 2-phase chains on different multi-core ranges - maximum stress."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -2854,7 +2854,7 @@ class TestStressInfrastructure:
 
     def test_multicore_2d_matmul_plus_fused_chain(self, device, test_tensors):
         """Multi-core 2D offset matmul (6 cores) + fused LN->RMS chain (2 cores) in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -2915,7 +2915,7 @@ class TestStressInfrastructure:
 
     def test_multicore_2d_matmul_plus_multiple_chains(self, device, test_tensors):
         """Multi-core 2D offset matmul (6 cores) + 2 fused chains (2c each) + 1 single LN in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -3030,7 +3030,7 @@ class TestStressInfrastructure:
 
     def test_large_2d_matmul_plus_multicore_three_phase_chain(self, device, test_tensors):
         """Large 2D matmul (8 cores) + multi-core 3-phase fused chain (4 cores) in parallel."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -3110,7 +3110,7 @@ class TestShardedSequentialFusion:
 
     def test_two_phase_ln_rms_block_sharded(self, device):
         """LN->RMS chain with BLOCK_SHARDED input."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
@@ -3188,7 +3188,7 @@ class TestShardedSequentialFusion:
 
     def test_two_phase_rms_ln_width_sharded(self, device):
         """RMS->LN chain with WIDTH_SHARDED input (two-stage reduction)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
@@ -3266,7 +3266,7 @@ class TestShardedSequentialFusion:
 
     def test_three_phase_sharded_chain(self, device):
         """LN->RMS->LN chain with BLOCK_SHARDED input."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
@@ -3354,7 +3354,7 @@ class TestShardedSequentialFusion:
 
     def test_parallel_sharded_chains_nonoverlapping_grids(self, device):
         """2 independent LN->RMS chains on non-overlapping sharded grids."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
@@ -3457,7 +3457,7 @@ class TestShardedSequentialFusion:
 
     def test_four_phase_all_rms_sharded(self, device):
         """4-phase all-RMS chain with BLOCK_SHARDED input."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
@@ -3532,7 +3532,7 @@ class TestShardedSequentialFusion:
     @pytest.mark.parametrize("two_stage", [False, True])
     def test_sharded_with_bias_and_residual(self, device, two_stage):
         """LN->RMS chain with bias and residual using sharded tensors."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
@@ -3617,7 +3617,7 @@ class TestShardedSequentialFusion:
 
     def test_sharded_stress_varied_grid_sizes(self, device):
         """Stress test: 3 parallel chains with different sharded grid sizes."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
@@ -3747,7 +3747,7 @@ class TestShardedSequentialFusion:
         tiles without popping. The CB reset between phases must pop one tile at a time
         to handle circular buffer wrapping correctly.
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph
+        from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import rms_norm_golden
@@ -3839,7 +3839,7 @@ class TestCrossOpCompilation:
         (resolved_path, content) tuples from inlined local includes.
         """
         import os
-        from models.experimental.ops.descriptors.cpp_parser import (
+        from models.experimental.ops.descriptors.fusion import (
             inline_local_includes,
         )
 
@@ -3864,7 +3864,7 @@ class TestCrossOpCompilation:
             sources_with_headers: List of (phase_idx, headers, source) tuples.
         """
         import re
-        from models.experimental.ops.descriptors.cpp_parser import (
+        from models.experimental.ops.descriptors.fusion import (
             collect_includes,
             collect_defines,
         )
@@ -4137,7 +4137,7 @@ class TestOpGraphExecution:
 
     def test_simple_two_branch_split(self, device, opgraph_tensors):
         """Stem (1 RMS on 4 cores) -> Branch A (RMS on 2 cores) + Branch B (RMS on 2 cores)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4179,7 +4179,7 @@ class TestOpGraphExecution:
 
     def test_two_phase_stem_two_branches(self, device, opgraph_tensors):
         """Stem (2 RMS on 4 cores) -> Branch A (RMS on 2 cores) + Branch B (RMS on 2 cores)."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4225,7 +4225,7 @@ class TestOpGraphExecution:
 
     def test_three_way_split(self, device, opgraph_tensors):
         """Stem (1 RMS on 6 cores) -> 3 branches of 2 cores each."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4274,7 +4274,7 @@ class TestOpGraphExecution:
                                                   -> Leaf A2 (2 cores)
                            -> Branch B (4 cores)
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4332,7 +4332,7 @@ class TestOpGraphExecution:
 
     def test_op_graph_plus_independent_chain(self, device, opgraph_tensors):
         """OpGraph on 4 cores + independent RMS chain on 2 separate cores."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4400,7 +4400,7 @@ class TestOpGraphExecution:
         Tests barrier with single-core branches (no NOC multicast needed
         within the branch segment).
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4445,7 +4445,7 @@ class TestOpGraphExecution:
 
         Tests many stem barriers before the split point.
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4499,7 +4499,7 @@ class TestOpGraphExecution:
         Tests that fp32_dest_acc_en is consistent when mixing LN (fp32=True)
         and RMS (fp32=False default) by passing LN compute config to RMS.
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4562,7 +4562,7 @@ class TestOpGraphExecution:
         which is outside the parent range.  _validate_topology rejects
         this because child cores must be a subset of parent cores.
         """
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
 
         t = opgraph_tensors
@@ -4592,7 +4592,7 @@ class TestOpGraphExecution:
 
     def test_invalid_topology_overlapping_branches(self, device, opgraph_tensors):
         """Overlapping branch core ranges should raise ValueError before touching device."""
-        from models.experimental.ops.descriptors.sequential import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
 
         t = opgraph_tensors
@@ -4625,7 +4625,7 @@ class TestSequentialParallelAPI:
 
     def test_sequential_api_linear_chain(self, device, test_tensors):
         """Sequential(rms, rms) produces same result as build_op_graph linear chain."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4657,7 +4657,7 @@ class TestSequentialParallelAPI:
 
     def test_sequential_api_branching(self, device, opgraph_tensors):
         """Sequential(stem, Parallel(branch_a, branch_b)) matches build_op_graph."""
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4702,7 +4702,7 @@ class TestSequentialParallelAPI:
           - Single RMS:        (4,6)-(7,7)  4x2 = 8 cores
         Total: 64 cores = full 8x8 grid
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -4891,7 +4891,7 @@ class TestSequentialParallelAPI:
 
     def test_sequential_api_add_method(self, device, test_tensors):
         """Incremental .add() produces same result as inline construction."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -4963,7 +4963,7 @@ class TestMatmulFusionChains:
 
     def test_matmul_then_rms(self, device):
         """2-phase chain: Matmul → RMSNorm."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5001,7 +5001,7 @@ class TestMatmulFusionChains:
 
     def test_rms_then_matmul(self, device):
         """2-phase chain: RMSNorm → Matmul."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5038,7 +5038,7 @@ class TestMatmulFusionChains:
 
     def test_rms_matmul_rms(self, device):
         """3-phase chain: RMS → Matmul → RMS."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5082,7 +5082,7 @@ class TestMatmulFusionChains:
 
     def test_matmul_then_ln(self, device):
         """2-phase chain: Matmul → LayerNorm."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5122,7 +5122,7 @@ class TestMatmulFusionChains:
 
     def test_ln_then_matmul(self, device):
         """2-phase chain: LayerNorm → Matmul."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5162,7 +5162,7 @@ class TestMatmulFusionChains:
 
     def test_ln_matmul_rms(self, device):
         """3-phase chain: LN → Matmul → RMS (mixed norm types)."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5210,7 +5210,7 @@ class TestMatmulFusionChains:
 
     def test_matmul_rms_matmul(self, device):
         """3-phase chain: Matmul → RMS → Matmul."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5257,7 +5257,7 @@ class TestMatmulFusionChains:
     @pytest.mark.skip(reason="OpGraph core_range_override doesn't handle matmul's per-core runtime arg layout yet")
     def test_stem_rms_branch_matmuls(self, device):
         """Branching: stem RMS → Parallel(matmul_a, matmul_b) on disjoint cores."""
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5317,7 +5317,7 @@ class TestMatmulFusionChains:
 
     def test_multicore_rms_matmul_rms(self, device):
         """Multi-core 3-phase: RMS → Matmul → RMS on 4x2 grid (8 cores)."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5362,7 +5362,7 @@ class TestMatmulFusionChains:
 
     def test_parallel_matmul_chains_vs_standalone(self, device):
         """Two independent matmul→RMS chains on disjoint cores, launched in parallel."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5421,7 +5421,7 @@ class TestMatmulFusionChains:
 
     def test_matmul_chain_plus_norm_chain_parallel(self, device):
         """Matmul→RMS chain in parallel with LN→RMS norm chain."""
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5521,7 +5521,7 @@ class TestMatmulFusionStress:
         Exercises: deep chain, LN bias code path with non-trivial values,
         mixed norm types, matmul bookending norms.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5584,7 +5584,7 @@ class TestMatmulFusionStress:
         Exercises: runtime arg offsets for 2 matmuls in one fused kernel,
         CB remapping for repeated matmul op, 4 phases.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5644,7 +5644,7 @@ class TestMatmulFusionStress:
         Exercises: LN bias ifdef path with real values (not zeros),
         verifies bias actually affects output.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5688,7 +5688,7 @@ class TestMatmulFusionStress:
         Exercises: RMS bias code path (rarely tested), CB allocation for
         bias tensor in RMS.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5734,7 +5734,7 @@ class TestMatmulFusionStress:
         Exercises: residual input tensor in non-sharded DRAM mode,
         extra CB allocation for residual.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -5784,7 +5784,7 @@ class TestMatmulFusionStress:
         Exercises: max depth chain, all three op types, 2 matmuls with
         different weight matrices, LN bias in middle of chain.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5861,7 +5861,7 @@ class TestMatmulFusionStress:
         Exercises: CB page size changes between matmul output and norm input,
         different in0_block_w and per_core_N.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5901,7 +5901,7 @@ class TestMatmulFusionStress:
 
         Exercises: CB page size adapts between phases, norm width changes.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -5958,7 +5958,7 @@ class TestMatmulFusionStress:
         Exercises: multi-core runtime arg distribution for 4-phase chain,
         per-core tile partitioning across 2 matmuls.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -6015,7 +6015,7 @@ class TestMatmulFusionStress:
         Exercises: multi-core chain with all three op types, fp32=True
         across 4 cores.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -6076,7 +6076,7 @@ class TestMatmulFusionStress:
 
         Exercises: independent fused chains with different fp32 settings.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -6142,7 +6142,7 @@ class TestMatmulFusionStress:
 
         Exercises: 3-way parallel dispatch, each chain has different structure.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -6231,7 +6231,7 @@ class TestMatmulFusionStress:
 
         Exercises: fp32_dest_acc_en consistency validation.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
@@ -6272,7 +6272,7 @@ class TestMatmulFusionStress:
         Exercises: 3 matmuls with different weight matrices, runtime arg
         offsets for 3 readers each with different DRAM addresses.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -6338,7 +6338,7 @@ class TestMatmulFusionStress:
         Exercises: many phases with identical op type, CB reuse across
         repeated norm phases, define/undef for N+1 phases.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
@@ -6416,7 +6416,7 @@ class TestNestedParallelStress:
         3 norm-compute phases per path (max before SFPI compiler ICE).
         Exercises: mixed LN/RMS per branch, different op ordering per branch.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -6510,7 +6510,7 @@ class TestNestedParallelStress:
 
         3 leaf paths. Exercises: nested Parallel inside Sequential inside Parallel.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -6595,7 +6595,7 @@ class TestNestedParallelStress:
         Exercises: 3-level nesting depth, mixed path lengths, CB state
         save/restore across nested splits.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -6656,7 +6656,7 @@ class TestNestedParallelStress:
 
         Exercises: 3-way split, different op mix per branch.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -6764,7 +6764,7 @@ class TestNestedParallelStress:
         3 norm phases per path (max before SFPI compiler ICE).
         Exercises: multi-phase stem with branching, mixed op types.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -6844,7 +6844,7 @@ class TestNestedParallelStress:
 
         4 leaf paths. Exercises: fully symmetric tree, every internal node splits.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -6908,7 +6908,7 @@ class TestNestedParallelStress:
         Left-most path: 5 phases. Right path: 2 phases.
         Exercises: asymmetric depth, different phase counts per path.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -6973,7 +6973,7 @@ class TestNestedParallelStress:
         Exercises: LN bias ifdef + RMS bias ifdef in nested branches,
         different CB layouts per path.
         """
-        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
