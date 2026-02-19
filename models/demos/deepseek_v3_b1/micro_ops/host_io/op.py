@@ -119,13 +119,6 @@ class SocketInterface:
         upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
         downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
 
-        fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-        num_whole_fabric_packets = self.page_size // fabric_max_payload_size
-        partial_packet_size = self.page_size % fabric_max_payload_size
-
-        num_fwd_links = 2
-        num_bwd_links = 1
-
         my_upstream_sender_device_coord = my_upstream_socket.get_connection_config()[0].sender_core.device_coord
         my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
 
@@ -137,6 +130,21 @@ class SocketInterface:
             ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
         )
 
+        use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
+        use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
+
+        if use_fabric_on_receiver or use_fabric_on_sender:
+            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+            num_whole_fabric_packets = self.page_size // fabric_max_payload_size
+            partial_packet_size = self.page_size % fabric_max_payload_size
+        else:
+            num_whole_fabric_packets = 0
+            partial_packet_size = 0
+            fabric_max_payload_size = 0
+
+        num_fwd_links = 2
+        num_bwd_links = 1
+
         if num_whole_fabric_packets > 0:
             num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // num_fwd_links) + int(partial_packet_size > 0)
             num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
@@ -145,24 +153,22 @@ class SocketInterface:
             num_whole_fabric_packets_link_0 = 0
             num_whole_fabric_packets_link_1 = 0
 
-        packet_header_cb_num_pages = num_fwd_links + num_bwd_links
-        packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
         packet_header_cb_index = 0
+        if use_fabric_on_receiver or use_fabric_on_sender:
+            packet_header_cb_num_pages = num_fwd_links + num_bwd_links
+            packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
-        packet_header_cb_desc = ttnn.CBDescriptor(
-            total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
-            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=packet_header_cb_index,
-                    data_format=ttnn.uint32,
-                    page_size=packet_header_cb_page_size,
-                )
-            ],
-        )
-
-        use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
-        use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
+            packet_header_cb_desc = ttnn.CBDescriptor(
+                total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
+                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=packet_header_cb_index,
+                        data_format=ttnn.uint32,
+                        page_size=packet_header_cb_page_size,
+                    )
+                ],
+            )
 
         kernel_ct_args = [
             downstream_socket_config_addr,
@@ -189,7 +195,7 @@ class SocketInterface:
         program = ttnn.ProgramDescriptor(
             kernels=[exchange_kernel],
             semaphores=[],
-            cbs=[packet_header_cb_desc],
+            cbs=[packet_header_cb_desc] if (use_fabric_on_receiver or use_fabric_on_sender) else [],
         )
 
         program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
@@ -373,26 +379,37 @@ class HostInterface:
         self.num_bwd_links = 1
 
     def _create_h2d_kernel(self):
-        fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-        num_whole_fabric_packets = self.h2d_page_size // fabric_max_payload_size
-        partial_packet_size = self.h2d_page_size % fabric_max_payload_size
+        use_fabric = (not self.loopback_mode) and (
+            self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
+        )
 
-        if num_whole_fabric_packets > 0:
-            num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // self.num_fwd_links) + int(
-                partial_packet_size > 0
-            )
-            num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
-            num_whole_fabric_packets_link_1 = num_whole_fabric_packets - num_whole_fabric_packets_link_0
+        if use_fabric:
+            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+            if self.has_embedding:
+                num_whole_fabric_packets = self.embedding_page_size // fabric_max_payload_size
+                partial_packet_size = self.embedding_page_size % fabric_max_payload_size
+            else:
+                num_whole_fabric_packets = self.h2d_page_size // fabric_max_payload_size
+                partial_packet_size = self.h2d_page_size % fabric_max_payload_size
+
+            if num_whole_fabric_packets > 0:
+                num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // self.num_fwd_links) + int(
+                    partial_packet_size > 0
+                )
+                num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
+                num_whole_fabric_packets_link_1 = num_whole_fabric_packets - num_whole_fabric_packets_link_0
+            else:
+                num_whole_fabric_packets_link_0 = 0
+                num_whole_fabric_packets_link_1 = 0
         else:
+            fabric_max_payload_size = 0
             num_whole_fabric_packets_link_0 = 0
             num_whole_fabric_packets_link_1 = 0
+            partial_packet_size = 0
 
         # H2D Receiver Core will forward data to downstream core via fabric if:
         # 1. Not in loopback mode (i.e. real workload)
         # 2. Downstream core is not on the same device as the H2D receiver core
-        use_fabric = (not self.loopback_mode) and (
-            self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
-        )
         h2d_socket_kernel_ct_args = [
             self.h2d_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
@@ -461,7 +478,7 @@ class HostInterface:
         )
         return d2h_kernel
 
-    def _create_cb_descriptors(self, mesh_core_coord):
+    def _create_cb_descriptors(self, mesh_core_coord, use_fabric):
         cb_descriptors = []
         if self.loopback_mode:
             intermed_cb_desc = ttnn.CBDescriptor(
@@ -493,21 +510,22 @@ class HostInterface:
             )
             cb_descriptors.append(embedding_cb_desc)
 
-        packet_header_cb_num_pages = self.num_fwd_links + self.num_bwd_links
-        packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+        if use_fabric:
+            packet_header_cb_num_pages = self.num_fwd_links + self.num_bwd_links
+            packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
-        packet_header_cb_desc = ttnn.CBDescriptor(
-            total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
-            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=self.fabric_packet_header_cb_index,
-                    data_format=ttnn.uint32,
-                    page_size=packet_header_cb_page_size,
-                )
-            ],
-        )
-        cb_descriptors.append(packet_header_cb_desc)
+            packet_header_cb_desc = ttnn.CBDescriptor(
+                total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
+                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=self.fabric_packet_header_cb_index,
+                        data_format=ttnn.uint32,
+                        page_size=packet_header_cb_page_size,
+                    )
+                ],
+            )
+            cb_descriptors.append(packet_header_cb_desc)
         return cb_descriptors
 
     def run(self):
@@ -523,14 +541,43 @@ class HostInterface:
 
         h2d_kernel = self._create_h2d_kernel()
         d2h_kernel = self._create_d2h_kernel()
-        h2d_cb_descriptors = self._create_cb_descriptors(self.h2d_mesh_core_coord)
-        d2h_cb_descriptors = self._create_cb_descriptors(self.d2h_mesh_core_coord)
-
-        h2d_program = ttnn.ProgramDescriptor(
-            kernels=[h2d_kernel],
-            semaphores=[],
-            cbs=h2d_cb_descriptors,
+        h2d_cb_descriptors = self._create_cb_descriptors(
+            self.h2d_mesh_core_coord, h2d_fabric_node_id != my_downstream_fabric_node_id
         )
+        d2h_cb_descriptors = self._create_cb_descriptors(
+            self.d2h_mesh_core_coord, d2h_fabric_node_id != my_upstream_fabric_node_id
+        )
+
+        same_device = self.h2d_mesh_core_coord.device_coord == self.d2h_mesh_core_coord.device_coord
+
+        if same_device:
+            # Place both kernels in a single program when on the same device
+            h2d_cb_ids = {fd.buffer_index for cb in h2d_cb_descriptors for fd in cb.format_descriptors}
+            combined_cbs = h2d_cb_descriptors + [
+                cb
+                for cb in d2h_cb_descriptors
+                if not any(fd.buffer_index in h2d_cb_ids for fd in cb.format_descriptors)
+            ]
+            print(f"Combined CB descriptors: {combined_cbs}")
+            h2d_program = ttnn.ProgramDescriptor(
+                kernels=[h2d_kernel, d2h_kernel],
+                semaphores=[],
+                cbs=combined_cbs,
+            )
+            d2h_program = h2d_program  # alias so d2h references point to the same program
+        else:
+            h2d_program = ttnn.ProgramDescriptor(
+                kernels=[h2d_kernel],
+                semaphores=[],
+                cbs=h2d_cb_descriptors,
+            )
+            d2h_program = ttnn.ProgramDescriptor(
+                kernels=[d2h_kernel],
+                semaphores=[],
+                cbs=d2h_cb_descriptors,
+            )
+
+        # h2d kernel is always kernels[0]
         h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
             self.h2d_mesh_core_coord.core_coord.y
         ] = []
@@ -548,16 +595,12 @@ class HostInterface:
                 )
                 h2d_rt_args_ref.extend(fwd_fabric_args)
 
-        d2h_program = ttnn.ProgramDescriptor(
-            kernels=[d2h_kernel],
-            semaphores=[],
-            cbs=d2h_cb_descriptors,
-        )
-
-        d2h_program.kernels[0].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+        # d2h kernel is kernels[1] when combined, kernels[0] when separate
+        d2h_kernel_idx = 1 if same_device else 0
+        d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
             self.d2h_mesh_core_coord.core_coord.y
         ] = []
-        d2h_rt_args_ref = d2h_program.kernels[0].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+        d2h_rt_args_ref = d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
             self.d2h_mesh_core_coord.core_coord.y
         ]
 
@@ -577,9 +620,10 @@ class HostInterface:
             ttnn.MeshCoordinateRange(self.h2d_mesh_core_coord.device_coord, self.h2d_mesh_core_coord.device_coord)
         ] = h2d_program
 
-        mesh_program_descriptor[
-            ttnn.MeshCoordinateRange(self.d2h_mesh_core_coord.device_coord, self.d2h_mesh_core_coord.device_coord)
-        ] = d2h_program
+        if not same_device:
+            mesh_program_descriptor[
+                ttnn.MeshCoordinateRange(self.d2h_mesh_core_coord.device_coord, self.d2h_mesh_core_coord.device_coord)
+            ] = d2h_program
 
         io_tensors = [
             dummy_tensor,
@@ -594,8 +638,9 @@ class HostInterface:
     def get_upstream_socket(self):
         return self.upstream_socket_pair[0]
 
-    def terminate(self):
+    def terminate(self, sync_devices):
         self.h2d_socket.barrier()
         self.d2h_socket.barrier()
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
-        # ttnn.synchronize_device(self.mesh_device)
+        if sync_devices:
+            ttnn.synchronize_device(self.mesh_device)
