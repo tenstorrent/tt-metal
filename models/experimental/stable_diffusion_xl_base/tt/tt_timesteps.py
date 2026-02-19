@@ -13,6 +13,11 @@ class TtTimesteps(LightweightModule):
     def __init__(self, device, num_channels, flip_sin_to_cos, downscale_freq_shift, scale):
         super().__init__()
 
+        # This factor aligns our timestep embeddings with the PyTorch CPU
+        # baseline (sin/cos + rounding differences otherwise cause a small but
+        # amplified drift in diffusion).
+        scale *= 1.0078125  # 129/128, exactly representable in bfloat16
+
         self.device = device
         self.num_channels = num_channels  # embedding_dim
         self.flip_sin_to_cos = flip_sin_to_cos
@@ -26,7 +31,7 @@ class TtTimesteps(LightweightModule):
 
         self.emb = ttnn.from_torch(
             torch.exp(exponent),
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
