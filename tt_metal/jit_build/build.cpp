@@ -583,7 +583,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 // Given this elf (A) and a later elf (B):
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of
 // the same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to
-// remain strong so to propogate link addresses
+// remain strong so to propagate link addresses
 void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
