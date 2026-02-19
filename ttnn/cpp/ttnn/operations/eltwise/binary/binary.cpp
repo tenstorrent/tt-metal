@@ -222,7 +222,7 @@ bool is_legacy_only(
         //     "there may be issues");
         // return true;
     }
-    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return true now
+    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return false now
     return false;
 }
 
