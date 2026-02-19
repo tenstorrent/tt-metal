@@ -151,9 +151,10 @@ void assign_corner_orientations_to_grouping(GroupingInfo& info, const std::vecto
             if (total_items == static_cast<size_t>(rows * cols)) {
                 // Multiple items: assign corners to specific items based on position
                 size_t nw_idx = 0;
-                size_t ne_idx = static_cast<size_t>(cols - 1);
-                size_t sw_idx = static_cast<size_t>((rows - 1) * cols);
-                size_t se_idx = static_cast<size_t>(((rows - 1) * cols) + (cols - 1));
+                size_t ne_idx = static_cast<size_t>(cols) - 1;
+                size_t sw_idx = (static_cast<size_t>(rows) - 1) * static_cast<size_t>(cols);
+                size_t se_idx =
+                    ((static_cast<size_t>(rows) - 1) * static_cast<size_t>(cols)) + (static_cast<size_t>(cols) - 1);
 
                 // Set corner orientations based on row-major mesh position
                 if (nw_idx < total_items) {
@@ -1206,7 +1207,7 @@ AdjacencyGraph<uint32_t> build_mgd_graph_instance_adjacency(
             uint32_t dst = conn.nodes[1];
 
             // Only add edges if both nodes are sub-instances of this graph
-            if (graph_instance.sub_instances.count(src) && graph_instance.sub_instances.count(dst)) {
+            if (graph_instance.sub_instances.contains(src) && graph_instance.sub_instances.contains(dst)) {
                 // Skip self-loops
                 if (src == dst) {
                     continue;
@@ -1299,7 +1300,7 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
     for (GlobalNodeId graph_id : mesh_graph_descriptor.all_graphs()) {
         const auto& graph_instance = mesh_graph_descriptor.get_instance(graph_id);
         auto type_it = required_asics_map.find(graph_instance.type);
-        if (type_it == required_asics_map.end() || type_it->second.find(graph_instance.name) == type_it->second.end()) {
+        if (type_it == required_asics_map.end() || !type_it->second.contains(graph_instance.name)) {
             TT_THROW(
                 "Failed to calculate required ASIC count for graph instance '{}' (type '{}'). "
                 "This may indicate a circular dependency in the MGD.",
@@ -1319,7 +1320,7 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
         const std::string& mesh_name = mesh_instance.name;
 
         // Skip if we've already processed this mesh definition
-        if (processed_mesh_definitions.count(mesh_name) > 0) {
+        if (processed_mesh_definitions.contains(mesh_name)) {
             continue;
         }
         processed_mesh_definitions.insert(mesh_name);
@@ -1405,7 +1406,7 @@ bool is_mgd_graph_ready(
     const auto& graph_instance = mesh_graph_descriptor.get_instance(instance_ids[0]);
     for (GlobalNodeId sub_id : graph_instance.sub_instances) {
         const auto& sub_instance = mesh_graph_descriptor.get_instance(sub_id);
-        if (result.count(sub_instance.type) == 0 && known_mappings.count(sub_instance.type) == 0) {
+        if (!result.contains(sub_instance.type) && !known_mappings.contains(sub_instance.type)) {
             return false;
         }
     }
@@ -1445,7 +1446,7 @@ void process_higher_layer_and_recurse(
     std::unordered_map<std::string, std::string>& known_mappings,
     const std::string& mgd_type,
     const std::string& graph_name) {
-    if (result.count(mgd_type) > 0 && result.at(mgd_type).count(graph_name) > 0) {
+    if (result.contains(mgd_type) && result.at(mgd_type).contains(graph_name)) {
         return;
     }
 
@@ -1509,7 +1510,7 @@ void process_higher_layer_and_recurse(
     }
 
     if (!matches.empty()) {
-        const GroupingInfo* best = &matches[0];
+        const GroupingInfo* best = matches.data();
         for (const auto& m : matches) {
             if (m.adjacency_graph.get_nodes().size() == mgd_nodes) {
                 best = &m;
@@ -1540,7 +1541,7 @@ void process_higher_layer_and_recurse(
             if (!is_mgd_graph_ready(mesh_graph_descriptor, dep_graph_name, result, known_mappings)) {
                 continue;
             }
-            if (result.count(dep_mgd_type) > 0 && result.at(dep_mgd_type).count(dep_graph_name) > 0) {
+            if (result.contains(dep_mgd_type) && result.at(dep_mgd_type).contains(dep_graph_name)) {
                 continue;
             }
             process_higher_layer_and_recurse(
@@ -1682,7 +1683,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     for (const auto& [mgd_type, mgd_instances] : mgd_grouping_infos) {
         for (const auto& [instance_name, mgd_grouping_info] : mgd_instances) {
             // If not already present, use the MGD grouping info
-            if (result[mgd_type].count(instance_name) == 0) {
+            if (!result[mgd_type].contains(instance_name)) {
                 result[mgd_type][instance_name].push_back(mgd_grouping_info);
             }
         }
@@ -2005,7 +2006,7 @@ AdjacencyGraph<FlattenedMeshNodeInfo> join_mesh_level(
     // Step 2: Connect adjacent meshes along their boundaries
     for (int32_t row = 0; row < rows; ++row) {
         for (int32_t col = 0; col < cols; ++col) {
-            const size_t mesh_idx = static_cast<size_t>((row * cols) + col);
+            const size_t mesh_idx = static_cast<size_t>(row) * static_cast<size_t>(cols) + static_cast<size_t>(col);
             const bool has_right_neighbor = (col + 1 < cols);
             const bool has_bottom_neighbor = (row + 1 < rows);
 
@@ -2018,7 +2019,8 @@ AdjacencyGraph<FlattenedMeshNodeInfo> join_mesh_level(
 
             // Connect to bottom neighbor (vertical connection)
             if (has_bottom_neighbor) {
-                const size_t bottom_mesh_idx = static_cast<size_t>(((row + 1) * cols) + col);
+                const size_t bottom_mesh_idx =
+                    static_cast<size_t>(row + 1) * static_cast<size_t>(cols) + static_cast<size_t>(col);
                 join_two_adjacent_meshes(
                     adj_set, meshes[mesh_idx], meshes[bottom_mesh_idx], AdjacencyDirection::A_ABOVE_B);
             }
