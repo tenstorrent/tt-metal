@@ -27,11 +27,11 @@ Two-level barrier synchronization between phases:
     serves as the phase release signal for compute/writer.
 
 Usage (linear chain):
-    >>> fused = Sequential(op0, op1, op2).build(device)
+    >>> fused = Sequential(op0, op1, op2).build()
     >>> composite.launch([fused])
 
 Usage (branching tree):
-    >>> fused = Sequential(stem, Parallel(branch_a, branch_b)).build(device)
+    >>> fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
     >>> composite.launch([fused])
 """
 
@@ -44,7 +44,7 @@ import os
 import ttnn
 from ttnn._ttnn.program_descriptor import UnpackToDestMode
 
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors.op_descriptor import FusedOp, OpDescriptor
 from models.experimental.ops.descriptors import cpp_parser
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,27 @@ class OpNode:
 
 
 # =============================================================================
+# Internal intermediate result (not part of public API)
+# =============================================================================
+
+
+class _BuildResult:
+    """Internal intermediate result from building a fused descriptor.
+
+    NOT part of the public API.  Only converted to ``FusedOp`` at the
+    outermost ``build()`` call.
+    """
+
+    __slots__ = ("descriptor", "input_tensors", "output_tensors", "semaphores")
+
+    def __init__(self, descriptor, input_tensors, output_tensors, semaphores=()):
+        self.descriptor = descriptor
+        self.input_tensors = input_tensors
+        self.output_tensors = output_tensors
+        self.semaphores = semaphores
+
+
+# =============================================================================
 # High-Level API: Sequential / Parallel
 # =============================================================================
 
@@ -150,16 +171,16 @@ class Sequential:
     Usage::
 
         # Inline
-        fused = Sequential(op0, op1, op2).build(device)
+        fused = Sequential(op0, op1, op2).build()
 
         # Incremental
         s = Sequential(op0)
         s.add(op1).add(op2)
-        fused = s.build(device)
+        fused = s.build()
 
         # Composition
         stem = Sequential(op0, op1)
-        full = Sequential(stem, op2).build(device)  # flattened
+        full = Sequential(stem, op2).build()  # flattened
     """
 
     def __init__(self, *items):
@@ -172,12 +193,22 @@ class Sequential:
         self._items.append(item)
         return self
 
-    def build(self, device):
-        """Build the fused OpDescriptor."""
+    def build(self, device=None) -> FusedOp:
+        """Build the fused op.  Device is auto-extracted from tensors if not provided."""
+        r = self._build_internal(device)
+        return FusedOp(
+            op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
+            semaphores=r.semaphores,
+        )
+
+    def _build_internal(self, device=None) -> _BuildResult:
+        """Internal build returning intermediate _BuildResult."""
+        if device is None:
+            device = _extract_device(self._items)
         nodes = _resolve(self)
         if len(nodes) != 1:
             raise ValueError("Sequential must resolve to a single root node")
-        return OpGraphBuilder(nodes[0]).build(device)
+        return OpGraphBuilder(nodes[0])._build_internal(device)
 
 
 class Parallel:
@@ -189,11 +220,11 @@ class Parallel:
     Usage::
 
         # Inline
-        fused = Parallel(op_a, op_b).build(device)
+        fused = Parallel(op_a, op_b).build()
         composite.launch([fused])
 
         # As part of a Sequential
-        fused = Sequential(stem, Parallel(branch_a, branch_b)).build(device)
+        fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
     """
 
     def __init__(self, *items):
@@ -206,10 +237,20 @@ class Parallel:
         self._items.append(item)
         return self
 
-    def build(self, device):
-        """Build each item independently and merge into one OpDescriptor."""
+    def build(self, device=None) -> FusedOp:
+        """Build each item independently and merge into one FusedOp."""
+        r = self._build_internal(device)
+        return FusedOp(
+            op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
+            semaphores=r.semaphores,
+        )
+
+    def _build_internal(self, device=None) -> _BuildResult:
+        """Internal build returning intermediate _BuildResult."""
+        if device is None:
+            device = _extract_device(self._items)
         built = [_build_item(item, device) for item in self._items]
-        return _merge_op_descriptors(built)
+        return _merge_build_results(built)
 
 
 def _resolve(item) -> List[OpNode]:
@@ -259,7 +300,44 @@ def _resolve(item) -> List[OpNode]:
 
         return tail
 
+    if isinstance(item, FusedOp):
+        raise TypeError(
+            "FusedOp cannot be nested in Sequential/Parallel — "
+            "it is the result of build() and has already been fused."
+        )
+
     raise TypeError(f"Unsupported item type: {type(item).__name__}")
+
+
+def _extract_device(items):
+    """Walk item tree, return device from first tensor found."""
+    for item in items:
+        if isinstance(item, OpDescriptor):
+            for t in item.input_tensors:
+                return t.device()
+            for t in item.output_tensors:
+                return t.device()
+        elif isinstance(item, (Sequential, Parallel)):
+            dev = _extract_device(item._items)
+            if dev is not None:
+                return dev
+    raise ValueError(
+        "Cannot auto-extract device: no items contain device-backed tensors. "
+        "Pass device explicitly to build(device=...)."
+    )
+
+
+def _extract_device_from_tree(node: OpNode):
+    """Walk an OpNode tree, return device from first tensor found."""
+    for t in node.op.input_tensors:
+        return t.device()
+    for t in node.op.output_tensors:
+        return t.device()
+    for child in node.children:
+        dev = _extract_device_from_tree(child)
+        if dev is not None:
+            return dev
+    return None
 
 
 def _set_leaf_children(node: OpNode, children: List[OpNode]):
@@ -272,47 +350,51 @@ def _set_leaf_children(node: OpNode, children: List[OpNode]):
     current.children = list(children)
 
 
-def _build_item(item, device) -> OpDescriptor:
-    """Build a single item into an OpDescriptor."""
+def _build_item(item, device) -> _BuildResult:
+    """Build a single item into a _BuildResult."""
     if isinstance(item, OpDescriptor):
-        return item
+        return _BuildResult(
+            descriptor=item.descriptor,
+            input_tensors=item.input_tensors,
+            output_tensors=item.output_tensors,
+        )
     if isinstance(item, (Sequential, Parallel)):
-        return item.build(device)
+        return item._build_internal(device)
     raise TypeError(f"Unsupported item type: {type(item).__name__}")
 
 
-def _merge_op_descriptors(ops: List[OpDescriptor]) -> OpDescriptor:
-    """Merge multiple OpDescriptors into one.
+def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
+    """Merge multiple _BuildResults into one.
 
     Combines ProgramDescriptors, deduplicates input tensors (by identity),
-    concatenates output tensors, and unions keepalive refs.
+    concatenates output tensors, and unions semaphore refs.
     """
-    if len(ops) == 1:
-        return ops[0]
+    if len(results) == 1:
+        return results[0]
 
-    merged_desc = ttnn.merge_program_descriptors([op.descriptor for op in ops])
+    merged_desc = ttnn.merge_program_descriptors([r.descriptor for r in results])
 
     # Deduplicate input tensors (shared inputs appear in multiple ops)
     all_inputs: List = []
     seen_ids: Set[int] = set()
-    for op in ops:
-        for t in op.input_tensors:
+    for r in results:
+        for t in r.input_tensors:
             tid = id(t)
             if tid not in seen_ids:
                 all_inputs.append(t)
                 seen_ids.add(tid)
 
-    # Output tensors: one per op, in order
-    all_outputs = [t for op in ops for t in op.output_tensors]
+    # Output tensors: one per result, in order
+    all_outputs = [t for r in results for t in r.output_tensors]
 
-    # Union keepalive refs (semaphores, etc.)
-    all_keepalive = tuple(ref for op in ops for ref in op.keepalive)
+    # Union semaphore refs
+    all_semaphores = tuple(ref for r in results for ref in r.semaphores)
 
-    return OpDescriptor(
+    return _BuildResult(
         descriptor=merged_desc,
         input_tensors=all_inputs,
         output_tensors=all_outputs,
-        keepalive=all_keepalive,
+        semaphores=all_semaphores,
     )
 
 
@@ -2486,7 +2568,7 @@ def _build_fused_descriptor(
     device: Any,
     core_range_override: Optional[Any] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
-) -> OpDescriptor:
+) -> _BuildResult:
     """Build a fused ProgramDescriptor with multi-segment barrier sync.
 
     Dynamically discovers kernel roles from the ProgramDescriptor using
@@ -2722,14 +2804,14 @@ def _build_fused_descriptor(
     merged_descriptor.cbs = merged_cbs
     merged_descriptor.semaphores = all_semaphores
 
-    # Collect keepalive references to prevent GC of GlobalSemaphores
-    keepalive_refs = tuple(multi_barrier._sem_refs) if multi_barrier is not None else ()
+    # Collect semaphore references to prevent GC of GlobalSemaphores
+    sem_refs = tuple(multi_barrier._sem_refs) if multi_barrier is not None else ()
 
-    return OpDescriptor(
+    return _BuildResult(
         descriptor=merged_descriptor,
         input_tensors=all_input_tensors,
         output_tensors=[output_tensor] if output_tensor else [],
-        keepalive=keepalive_refs,
+        semaphores=sem_refs,
     )
 
 
@@ -2750,33 +2832,57 @@ class OpGraphBuilder:
     Usage::
 
         root = OpNode(ln_op, children=[OpNode(rms_op_A), OpNode(rms_op_B)])
-        fused_ops = OpGraphBuilder(root).build(device)
-        # Returns 2 OpDescriptors, suitable for composite.launch()
+        fused = OpGraphBuilder(root).build()
+        # Returns a single FusedOp, suitable for composite.launch()
     """
 
     def __init__(self, root: OpNode):
         self._root = root
         self._built = False
 
-    def build(self, device: Any) -> OpDescriptor:
+    def build(self, device: Any = None) -> FusedOp:
         """Build a fused descriptor from the tree.
 
-        Returns a single self-contained OpDescriptor.  For branching trees,
+        Returns a single self-contained FusedOp.  For branching trees,
         path ProgramDescriptors are merged internally so the result can be
         dispatched as one unit via ``composite.launch([result])``.
 
         Output tensors are ordered by leaf in left-to-right DFS order.
+
+        Args:
+            device: Optional device for GlobalSemaphore allocation.
+                If *None*, auto-extracted from the first tensor found
+                in the tree's OpDescriptors.
         """
+        r = self._build_internal(device)
+        return FusedOp(
+            op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
+            semaphores=r.semaphores,
+        )
+
+    def _build_internal(self, device: Any = None) -> _BuildResult:
+        """Internal build returning intermediate _BuildResult."""
         if self._built:
             raise ValueError("Already built")
         self._built = True
 
         # Single node with no children = nothing to fuse
         if not self._root.children:
-            return self._root.op
+            op = self._root.op
+            return _BuildResult(
+                descriptor=op.descriptor,
+                input_tensors=op.input_tensors,
+                output_tensors=op.output_tensors,
+            )
 
         # Validate tree topology before doing any device allocation
         self._validate_topology()
+
+        # Auto-extract device from tensors if not provided
+        if device is None:
+            device = _extract_device_from_tree(self._root)
+            if device is None:
+                raise ValueError("Cannot auto-extract device: no tensors found in tree. " "Pass device explicitly.")
 
         # Trace all root-to-leaf paths
         paths = self._trace_paths()
@@ -2803,7 +2909,7 @@ class OpGraphBuilder:
                     segment_cache[key] = _create_barrier_segment_config(device, core_range)
                     all_sem_refs.extend(segment_cache[key]._sem_refs)
 
-        fused_ops = []
+        results = []
         for path in paths:
             # Save CB descriptor state before building each path.
             # _build_fused_descriptor mutates buffer_index, total_size, and
@@ -2813,7 +2919,7 @@ class OpGraphBuilder:
             path_prog_descs = [op.descriptor for _, phases in path for op in phases]
             saved_cb_state = _save_cb_state(path_prog_descs)
 
-            fused = self._build_path(
+            result = self._build_path(
                 device,
                 path,
                 compute_done_addr,
@@ -2821,13 +2927,13 @@ class OpGraphBuilder:
                 all_sem_refs,
                 segment_cache,
             )
-            fused_ops.append(fused)
+            results.append(result)
 
             # Restore original state so the next path sees uncorrupted indices
             _restore_cb_state(saved_cb_state)
             _verify_cb_restore(saved_cb_state)
 
-        return _merge_op_descriptors(fused_ops)
+        return _merge_build_results(results)
 
     def _trace_paths(self) -> List[List[Tuple[Any, List[OpDescriptor]]]]:
         """Trace all root-to-leaf paths through the tree.
@@ -2957,8 +3063,8 @@ class OpGraphBuilder:
         writer_done_addr: int,
         shared_sem_refs: List[Any],
         segment_cache: Dict[frozenset, BarrierConfig],
-    ) -> OpDescriptor:
-        """Build a fused OpDescriptor for one root-to-leaf path."""
+    ) -> _BuildResult:
+        """Build a fused _BuildResult for one root-to-leaf path."""
         # Flatten phases and determine leaf core range
         all_phases: List[OpDescriptor] = []
         for _, phases in path:
@@ -3077,8 +3183,8 @@ class OpGraphBuilder:
 def build_op_graph(
     root_phases: List[OpDescriptor],
     children: List[OpNode],
-    device: Any,
-) -> OpDescriptor:
+    device: Any = None,
+) -> FusedOp:
     """Build a fused descriptor for a tree topology.
 
     Convenience wrapper around :class:`OpGraphBuilder`.  Converts
@@ -3089,10 +3195,12 @@ def build_op_graph(
         root_phases: Phases that run before the tree splits.  Converted
             into a chain of OpNode objects.
         children: Subtrees to attach to the last root-phase node.
-        device: The device for GlobalSemaphore allocation.
+        device: Optional device for GlobalSemaphore allocation.
+            If *None*, auto-extracted from the first tensor found
+            in the tree's OpDescriptors.
 
     Returns:
-        A single self-contained OpDescriptor suitable for
+        A single self-contained FusedOp suitable for
         ``composite.launch([result])``.
     """
     if not root_phases:
