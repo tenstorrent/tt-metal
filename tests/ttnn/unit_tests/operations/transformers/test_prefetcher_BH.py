@@ -161,8 +161,12 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
     """
     ring_size = prefetcher.ring_size
     num_receiver_cores = prefetcher.num_receiver_cores
+    num_dram_banks = len(prefetcher.dram_banks())
+    assert (
+        num_receiver_cores % num_dram_banks == 0
+    ), f"num_receiver_cores {num_receiver_cores} must be divisible by num_dram_banks {num_dram_banks}"
 
-    def create_ring_config(M, K, N_padded, num_cores, num_global_cb_receivers, untilize_out=False):
+    def create_ring_config(M, K, N_padded, num_cores, num_global_cb_receivers, num_dram_banks, untilize_out=False):
         """Create ring matmul config
         K: original weight K dimension
         N_padded: padded output N dimension
@@ -180,8 +184,7 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
         # Calculate grid size from num_cores
-        if num_cores % 8 == 0:
-            grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
+        grid = ttnn.CoreGrid(y=num_cores // num_dram_banks, x=num_dram_banks)
         hop_grid = []
         hop_core_range_set = ttnn.CoreRangeSet(
             {
@@ -218,7 +221,7 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
         n_padded = meta["n_per_device"]  # Already padded N per device
         untilize = name == "qkv"
         configs[name] = create_ring_config(
-            M, k_original, n_padded, ring_size, num_receiver_cores, untilize_out=untilize
+            M, k_original, n_padded, ring_size, num_receiver_cores, num_dram_banks, untilize_out=untilize
         )
         logger.info(f"Config {name}: K={k_original}, N_pad={n_padded}, ring_size={ring_size}")
 
@@ -629,7 +632,7 @@ def test_prefetcher_BH(
     """
     Test prefetcher with tensor-parallelized weights on Blackhole.
     Automatically detects the mesh shape and uses corresponding model dimensions.
-    Supported mesh shapes: 1x1 (P150), 1x2 (P300), 1x4 (P150x4 or P300x2)
+    Supported mesh shapes: 1x1 (P150), 1x2 (P300), 1x4 (P150x4 or P300x2), 1x8 (P150x8)
     Parameters:
         use_custom_mapping: If False, uses default prefetcher (column 0/7 senders, 2 receivers each).
                            If True, uses custom 64 or 80-core mapping (8 senders, 8 or 10 receivers each).

@@ -54,17 +54,13 @@ VERIFIED_MODEL_CONFIGS = {
 
 def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:
     """
-    Check if given model dimensions are supported to use the DRAM prefetcher on given device configuration:
-    1. Max 65535 pages (tiles) per CB
-    2. CB size must fit in L1 bank with room for input shards and prefetcher CBs
-    3. kv heads must be divisible by num_devices
-    The largest weight is FF1/FF3: [dim, hidden_dim/num_devices] (N-sharded).
+    Check if model can use DRAM prefetcher: CB pages <= 65535, L1 size fits, kv_heads % num_devices == 0.
     Args:
-        model_name: Name of the model (key in VERIFIED_MODEL_CONFIGS)
-        num_devices: number of devices for tensor parallelism
-        ring_size: total receiver cores (16 for default, 80 for custom mapping)
+        model_name (str): Model name (must contain a key from VERIFIED_MODEL_CONFIGS)
+        num_devices (int): Number of devices for tensor parallelism
+        ring_size (int): Total receiver cores (default 16, custom mapping uses 64/80)
     Returns:
-        True if weights fit in global CB, False otherwise
+        bool: True if supported on Blackhole with given config, False otherwise
     """
     verified_model_name = next((m for m in VERIFIED_MODEL_CONFIGS if m in model_name), None)
     if not is_blackhole() or verified_model_name is None:
