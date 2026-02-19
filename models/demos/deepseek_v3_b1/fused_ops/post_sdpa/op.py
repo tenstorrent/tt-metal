@@ -599,12 +599,6 @@ class PostSDPA:
                         page_size=tile_1x32_size,
                         tile=matmul1_out_tile_descriptor,
                     )
-                    # ccl_sender_in_cb_descriptor = ttnn.CBDescriptor(
-                    #     total_size=ccl_num_pages * tile_1x32_size,
-                    #     core_ranges=ccl_sender_core_grid,
-                    #     format_descriptors=[ccl_sender_in_cb_format],
-                    # )
-                    # TODO: Re-enable kv_cache overlap for CB 8 after hang is triaged
                     ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         ccl_sender_in_cb,
                         sdpa_kv_cache_buffer_device,
@@ -642,19 +636,6 @@ class PostSDPA:
                         cb_list.append(ccl_residual_cb_descriptor)
 
                         # CB 11: CCL temp scratch buffer (not backed by tensor)
-                        # ccl_temp_cb_descriptor = ttnn.CBDescriptor(
-                        #     total_size=ccl_num_tiles * tile_1x32_size,
-                        #     core_ranges=gather_core_grid,
-                        #     format_descriptors=[
-                        #         ttnn.CBFormatDescriptor(
-                        #             buffer_index=ccl_temp_cb,
-                        #             data_format=data_format,
-                        #             page_size=tile_1x32_size,
-                        #             tile=matmul1_out_tile_descriptor,  # 1x32 tiles to match gather2
-                        #         )
-                        #     ],
-                        # )
-                        # TODO: Re-enable kv_cache overlap for CB 11 after hang is triaged
                         ccl_temp_cb_format = ttnn.CBFormatDescriptor(
                             buffer_index=ccl_temp_cb,
                             data_format=data_format,
