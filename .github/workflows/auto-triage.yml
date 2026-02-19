@@ -26,11 +26,6 @@ on:
         required: false
         default: ''
         type: string
-      testing_branch:
-        description: "Branch to test the auto-triage workflow (default main)"
-        required: false
-        default: "main"
-        type: string
 
 
 jobs:
@@ -48,7 +43,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@${{ github.event.inputs.testing_branch || 'main' }}
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@port-refactoring-5
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
