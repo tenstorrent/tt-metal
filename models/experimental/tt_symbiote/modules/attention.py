@@ -17,8 +17,16 @@ except ImportError:
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
-from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
+from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinear,
+    TTNNLinearIColShardedWRowSharded,
+    TTNNLinearIReplicatedWColSharded,
+)
+from models.experimental.tt_symbiote.modules.rope import (
+    TTNNRotaryPositionEmbedding,
+    TTNNDistributedRotaryPositionEmbedding,
+)
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
 class TorchSDPAAttention(torch.nn.Module):
@@ -719,3 +727,322 @@ class LlamaAttention(TTNNModule):
             attn_out = attn_out[:, -original_q_len:, :]
 
         return self.o_proj(attn_out), None
+
+
+class TTNNGlm4MoeLiteAttention(TTNNModule):
+    """TTNN-accelerated Multi-Latent Attention for Glm4MoeLite.
+
+    This implements the same MLA architecture as DeepSeek V3 but for Glm4MoeLite,
+    with latent compression for memory-efficient KV cache.
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Will be set in from_torch
+        self.q_lora_rank = None
+        self.kv_lora_rank = None
+        self.qk_nope_head_dim = None
+        self.qk_rope_head_dim = None
+        self.qk_head_dim = None
+        self.v_head_dim = None
+        self.num_heads = None
+        self.scaling = None
+        self.is_causal = True
+
+        # Submodules (set in from_torch)
+        self.q_a_proj = None
+        self.q_a_layernorm = None
+        self.q_b_proj = None
+        self.kv_a_proj_with_mqa = None
+        self.kv_a_layernorm = None
+        self.kv_b_proj = None
+        self.o_proj = None
+        self.rope = None
+        self.sdpa = None
+
+    @classmethod
+    def from_torch(cls, torch_attn: "Glm4MoeLiteAttention"):
+        """Create TTNNGlm4MoeLiteAttention from PyTorch Glm4MoeLiteAttention.
+
+        Args:
+            torch_attn: PyTorch Glm4MoeLiteAttention module
+
+        Returns:
+            TTNNGlm4MoeLiteAttention instance
+        """
+        new_attn = cls()
+        new_attn._fallback_torch_layer = torch_attn
+
+        # Copy config parameters
+        new_attn.q_lora_rank = torch_attn.q_lora_rank
+        new_attn.kv_lora_rank = torch_attn.kv_lora_rank
+        new_attn.qk_nope_head_dim = torch_attn.qk_nope_head_dim
+        new_attn.qk_rope_head_dim = torch_attn.qk_rope_head_dim
+        new_attn.qk_head_dim = torch_attn.qk_head_dim
+        new_attn.v_head_dim = torch_attn.v_head_dim
+        new_attn.num_heads = torch_attn.num_heads
+        new_attn.scaling = torch_attn.scaling
+
+        # Convert Q projection path (if using LoRA)
+        if torch_attn.q_lora_rank is not None:
+            new_attn.q_a_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_a_proj)
+            new_attn.q_a_layernorm = TTNNDistributedRMSNorm.from_torch(torch_attn.q_a_layernorm)
+            new_attn.q_b_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_b_proj)
+        else:
+            # Direct Q projection (no LoRA)
+            new_attn.q_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_proj)
+
+        # Convert KV projection path (always uses MQA + LoRA)
+        new_attn.kv_a_proj_with_mqa = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.kv_a_proj_with_mqa)
+        new_attn.kv_a_layernorm = TTNNDistributedRMSNorm.from_torch(torch_attn.kv_a_layernorm)
+        new_attn.kv_b_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.kv_b_proj)
+
+        # Convert output projection
+        new_attn.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.o_proj)
+
+        # Initialize RoPE module
+        new_attn.rope = TTNNDistributedRotaryPositionEmbedding()
+
+        # Initialize SDPA module
+        new_attn.sdpa = TTNNSDPAAttention()
+        new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
+        new_attn.sdpa.program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(new_attn.core_grid.x, new_attn.core_grid.y),
+            q_chunk_size=256,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+        new_attn.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        return new_attn
+
+    def _forward_prefill(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[ttnn.Tensor],
+        past_key_values: Optional["Cache"],
+        cache_position: Optional[torch.LongTensor],
+    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
+        """Forward pass for prefill mode (seq_len>1).
+
+        Args:
+            hidden_states: Input tensor [batch_size, seq_len, hidden_size]
+            position_embeddings: (cos, sin) tensors for RoPE
+            attention_mask: Optional attention mask
+            past_key_values: KV cache
+            cache_position: Cache position indices
+
+        Returns:
+            Tuple of (output_tensor, attention_weights)
+        """
+        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+
+        # Ensure TILE layout
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Q projection path
+        if self.q_lora_rank is not None:
+            q_latent = self.q_a_proj(hidden_states)
+            q_latent = self.q_a_layernorm(q_latent)
+            q_states = self.q_b_proj(q_latent)
+        else:
+            q_states = self.q_proj(hidden_states)
+
+        q_states = ttnn.experimental.all_gather_async(
+            q_states.to_ttnn,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+        # Reshape Q
+        q_states = ttnn.reshape(q_states, (batch_size, seq_length, self.num_heads, -1))
+        q_states = ttnn.permute(q_states, (0, 2, 1, 3))
+
+        # Split Q into nope and rope parts
+        q_pass = ttnn.slice(q_states, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
+        q_rot = ttnn.slice(
+            q_states,
+            (0, 0, 0, self.qk_nope_head_dim),
+            (batch_size, self.num_heads, seq_length, self.qk_head_dim),
+        )
+
+        # KV projection path
+        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
+
+        compressed_kv = ttnn.experimental.all_gather_async(
+            compressed_kv.to_ttnn,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+        # Split compressed KV
+        k_pass = ttnn.slice(compressed_kv, (0, 0, 0), (batch_size, seq_length, self.kv_lora_rank))
+        k_rot = ttnn.slice(
+            compressed_kv,
+            (0, 0, self.kv_lora_rank),
+            (batch_size, seq_length, self.kv_lora_rank + self.qk_rope_head_dim),
+        )
+
+        # Process k_pass
+        k_pass = ttnn.rms_norm(k_pass)
+        k_pass = self.kv_b_proj(k_pass)
+        k_pass = ttnn.experimental.all_gather_async(
+            k_pass.to_ttnn,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+        k_pass = ttnn.reshape(k_pass, (batch_size, seq_length, self.num_heads, self.qk_nope_head_dim + self.v_head_dim))
+        k_pass = ttnn.permute(k_pass, (0, 2, 1, 3))
+
+        # Split into key and value
+        key_nope = ttnn.slice(k_pass, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
+        value_states = ttnn.slice(
+            k_pass,
+            (0, 0, 0, self.qk_nope_head_dim),
+            (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim + self.v_head_dim),
+        )
+
+        # Reshape k_rot for RoPE
+        k_rot = ttnn.reshape(k_rot, (batch_size, 1, seq_length, self.qk_rope_head_dim))
+
+        # Apply RoPE
+        cos, sin = position_embeddings
+        if len(cos.shape) == 3:
+            cos = ttnn.unsqueeze(cos, 1)
+        cos = ttnn.experimental.all_gather_async(
+            cos,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+        if len(sin.shape) == 3:
+            sin = ttnn.unsqueeze(sin, 1)
+        sin = ttnn.experimental.all_gather_async(
+            sin,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+        q_rot, k_rot = self.rope(q_rot, k_rot, cos, sin)
+
+        # Expand k_rot to match heads
+        k_rot = ttnn.repeat(k_rot.to_ttnn, (1, self.num_heads, 1, 1))
+
+        # Concatenate nope and rope parts
+        query_states = ttnn.concat([q_pass, q_rot.to_ttnn], dim=-1)
+        key_states = ttnn.concat([key_nope, k_rot], dim=-1)
+
+        # Update KV cache if provided
+        if past_key_values is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            torch_tensors = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
+            orig_shapes = [key_states.shape, value_states.shape]
+            torch_tensors = [
+                torch_tensor.to_torch[: orig_shape[0], : orig_shape[1], : orig_shape[2], : orig_shape[3]]
+                for orig_shape, torch_tensor in zip(orig_shapes, torch_tensors)
+            ]
+            key_states, value_states = past_key_values.update(
+                *torch_tensors,
+                self._fallback_torch_layer.layer_idx,
+                cache_kwargs,
+            )
+            key_states, value_states = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
+            key_states = ttnn.to_device(key_states.to_ttnn, self.device)
+            value_states = ttnn.to_device(value_states.to_ttnn, self.device)
+            key_states = ttnn.experimental.all_gather_async(
+                key_states,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+            value_states = ttnn.experimental.all_gather_async(
+                value_states,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+
+        # Pad value_states if needed
+        if self.qk_head_dim != self.v_head_dim:
+            pad_size = self.qk_head_dim - self.v_head_dim
+            value_states = ttnn.pad(value_states, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+
+        # Scaled dot-product attention (causal for prefill)
+        attn_output = self.sdpa(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0,
+            scaling=self.scaling,
+            is_causal=self.is_causal,
+            transpose_output=True,
+        ).to_ttnn
+
+        # Remove padding
+        if self.qk_head_dim != self.v_head_dim:
+            attn_output = attn_output[:, :, :, : self.v_head_dim]
+
+        # Reshape and output projection
+        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[ttnn.Tensor] = None,
+        past_key_values: Optional["Cache"] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
+        """Forward pass with automatic decode/prefill dispatch.
+
+        Args:
+            hidden_states: Input tensor [batch_size, seq_len, hidden_size]
+            position_embeddings: (cos, sin) tensors for RoPE
+            attention_mask: Optional attention mask
+            past_key_values: KV cache
+            cache_position: Cache position indices
+            **kwargs: Additional arguments
+
+        Returns:
+            Tuple of (output_tensor, attention_weights)
+        """
+
+        return self._forward_prefill(
+            hidden_states,
+            position_embeddings,
+            attention_mask,
+            past_key_values,
+            cache_position,
+        )
