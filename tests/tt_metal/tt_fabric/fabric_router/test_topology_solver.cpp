@@ -2523,4 +2523,156 @@ TEST_F(TopologySolverTest, MappingConstraintsOneToManyIntersection) {
     constraints3.add_required_constraint(1, global_nodes3);
     EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 1u);  // Intersection: {10}
 }
+
+// Helper function to create one large adjacency graph with multiple meshes connected all-to-all
+// Returns a single graph containing all meshes with intra-mesh and inter-mesh connections
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_unified_meshes_all_to_all(size_t num_meshes, size_t mesh_rows, size_t mesh_cols) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap global_adj_map;
+
+    const size_t nodes_per_mesh = mesh_rows * mesh_cols;
+    auto get_mesh_node_id = [nodes_per_mesh](size_t mesh_id, size_t local_node_id) -> size_t {
+        return mesh_id * nodes_per_mesh + local_node_id;
+    };
+    auto get_local_node_id = [mesh_cols](size_t row, size_t col) -> size_t { return (row * mesh_cols) + col; };
+
+    // Build the unified graph with all meshes
+    for (size_t mesh_id = 0; mesh_id < num_meshes; ++mesh_id) {
+        // Build intra-mesh connections (2D mesh topology)
+        for (size_t row = 0; row < mesh_rows; ++row) {
+            for (size_t col = 0; col < mesh_cols; ++col) {
+                size_t local_node_id = get_local_node_id(row, col);
+                size_t global_node_id = get_mesh_node_id(mesh_id, local_node_id);
+                std::vector<NodeId> neighbors;
+
+                // Add left neighbor (no wrap-around)
+                if (col > 0) {
+                    size_t left_local = get_local_node_id(row, col - 1);
+                    neighbors.push_back(static_cast<NodeId>(get_mesh_node_id(mesh_id, left_local)));
+                }
+                // Add right neighbor (no wrap-around)
+                if (col < mesh_cols - 1) {
+                    size_t right_local = get_local_node_id(row, col + 1);
+                    neighbors.push_back(static_cast<NodeId>(get_mesh_node_id(mesh_id, right_local)));
+                }
+                // Add top neighbor (no wrap-around)
+                if (row > 0) {
+                    size_t top_local = get_local_node_id(row - 1, col);
+                    neighbors.push_back(static_cast<NodeId>(get_mesh_node_id(mesh_id, top_local)));
+                }
+                // Add bottom neighbor (no wrap-around)
+                if (row < mesh_rows - 1) {
+                    size_t bottom_local = get_local_node_id(row + 1, col);
+                    neighbors.push_back(static_cast<NodeId>(get_mesh_node_id(mesh_id, bottom_local)));
+                }
+
+                // Add all-to-all inter-mesh connections
+                // Connect each node to the corresponding node in all other meshes
+                for (size_t other_mesh_id = 0; other_mesh_id < num_meshes; ++other_mesh_id) {
+                    if (other_mesh_id != mesh_id) {
+                        size_t other_node_id = get_mesh_node_id(other_mesh_id, local_node_id);
+                        neighbors.push_back(static_cast<NodeId>(other_node_id));
+                    }
+                }
+
+                global_adj_map[static_cast<NodeId>(global_node_id)] = neighbors;
+            }
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(global_adj_map);
+}
+
+// Helper function to create a disconnected graph with multiple 2x4 blocks
+// Each block is a 2x4 2D mesh (8 nodes), and blocks are disconnected from each other
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_disconnected_2x4_blocks(size_t num_blocks) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap target_adj_map;
+
+    constexpr size_t nodes_per_block = 2 * 4;  // 8 nodes per block
+    auto get_block_node_id = [](size_t block_id, size_t local_node_id) -> size_t {
+        return block_id * nodes_per_block + local_node_id;
+    };
+    auto get_local_node_id = [](size_t row, size_t col) -> size_t {
+        return (row * 4) + col;  // 2 rows, 4 cols
+    };
+
+    // Create each 2x4 block as a disconnected component
+    for (size_t block_id = 0; block_id < num_blocks; ++block_id) {
+        // Build intra-block connections (2x4 2D mesh topology, no wrap)
+        for (size_t row = 0; row < 2; ++row) {
+            for (size_t col = 0; col < 4; ++col) {
+                size_t local_node_id = get_local_node_id(row, col);
+                size_t global_node_id = get_block_node_id(block_id, local_node_id);
+                std::vector<NodeId> neighbors;
+
+                // Add left neighbor (no wrap-around)
+                if (col > 0) {
+                    size_t left_local = get_local_node_id(row, col - 1);
+                    neighbors.push_back(static_cast<NodeId>(get_block_node_id(block_id, left_local)));
+                }
+                // Add right neighbor (no wrap-around)
+                if (col < 4 - 1) {
+                    size_t right_local = get_local_node_id(row, col + 1);
+                    neighbors.push_back(static_cast<NodeId>(get_block_node_id(block_id, right_local)));
+                }
+                // Add top neighbor (no wrap-around)
+                if (row > 0) {
+                    size_t top_local = get_local_node_id(row - 1, col);
+                    neighbors.push_back(static_cast<NodeId>(get_block_node_id(block_id, top_local)));
+                }
+                // Add bottom neighbor (no wrap-around)
+                if (row < 2 - 1) {
+                    size_t bottom_local = get_local_node_id(row + 1, col);
+                    neighbors.push_back(static_cast<NodeId>(get_block_node_id(block_id, bottom_local)));
+                }
+
+                target_adj_map[static_cast<NodeId>(global_node_id)] = neighbors;
+            }
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(target_adj_map);
+}
+
+// Test: 6 meshes of 4x32 connected all-to-all, fit as many 2x4 blocks as possible
+// Each 4x32 mesh has 128 chips; a 2x4 block has 8 chips; max 16 blocks per mesh
+// Total max: 6 * 16 = 96 blocks
+// This test solves everything in one go: one global graph (all meshes) and one target graph (all blocks)
+TEST_F(TopologySolverTest, Six4x32AllToAll_FitMax2x4Blocks) {
+    constexpr size_t num_meshes = 6u;
+    constexpr size_t mesh_rows = 4u;
+    constexpr size_t mesh_cols = 32u;
+    constexpr size_t nodes_per_mesh = mesh_rows * mesh_cols;  // 128
+    constexpr size_t nodes_per_block = 2 * 4;                 // 8
+
+    // Create one unified global graph with all 6 meshes connected all-to-all
+    auto global_graph = create_unified_meshes_all_to_all<TestGlobalNode>(num_meshes, mesh_rows, mesh_cols);
+    EXPECT_EQ(global_graph.get_nodes().size(), num_meshes * nodes_per_mesh) << "Should have 768 total nodes";
+
+    // Create disconnected target graph with 10 blocks (for experimentation)
+    constexpr size_t num_blocks = 10u;
+    auto target_graph = create_disconnected_2x4_blocks<TestTargetNode>(num_blocks);
+    EXPECT_EQ(target_graph.get_nodes().size(), num_blocks * nodes_per_block)
+        << "Target graph should have " << (num_blocks * nodes_per_block) << " nodes";
+
+    // Solve: place all blocks at once
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Should be able to place " << num_blocks << " blocks";
+
+    // Verify all target nodes are mapped
+    EXPECT_EQ(result.target_to_global.size(), num_blocks * nodes_per_block)
+        << "All " << (num_blocks * nodes_per_block) << " target nodes should be mapped";
+
+    // Verify no duplicate mappings (one-to-one constraint)
+    std::set<TestGlobalNode> mapped_globals;
+    for (const auto& [_, global_node] : result.target_to_global) {
+        EXPECT_TRUE(mapped_globals.insert(global_node).second)
+            << "Duplicate mapping detected: global node " << global_node << " mapped multiple times";
+    }
+}
 }  // namespace tt::tt_fabric
