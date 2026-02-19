@@ -59,6 +59,11 @@ struct GroupingInfo {
     AdjacencyGraph<uint32_t> adjacency_graph;
 };
 
+// Type aliases for valid groupings map structure
+using InstanceType = std::string;  // Type of instance (e.g., "MESH", "FABRIC", "SUPER_FABRIC")
+using InstanceName = std::string;  // Name of instance (e.g., "M0", "M1", "G0", "G1")
+using ValidGroupingsMap = std::unordered_map<InstanceType, std::unordered_map<InstanceName, std::vector<GroupingInfo>>>;
+
 // PhysicalGroupingDescriptor - Interpreter class for physical grouping descriptor files
 // Similar to MeshGraphDescriptor, provides validation and access to grouping definitions
 class PhysicalGroupingDescriptor {
@@ -96,8 +101,7 @@ public:
     // There can be multiple valid groupings for each MGD instance
     // If physical_system_descriptor is provided, Phase 2 (MESH) results are filtered to only include
     // groupings that validate successfully against the PSD
-    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
-    get_valid_groupings_for_mgd(
+    ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr) const;
 
