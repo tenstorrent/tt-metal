@@ -19,6 +19,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -68,6 +69,10 @@ static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {64 * MB};
 
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
+
+// For sharded benchmarks: fixed page size and contiguity control
+static constexpr int64_t FIXED_PAGE_SIZE = 1024;
+static const std::vector<int64_t> CONTIGUITY_ARGS = {1, 2, 4, 8, 16, 32, 64, 128};
 
 static void BM_write(
     benchmark::State& state,
@@ -158,6 +163,175 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
+}
+
+// Helper: create a WIDTH_SHARDED MeshBuffer with controlled contiguity.
+// Returns {device_buffer, actual_buf_size}, or {nullptr, 0} on skip.
+//
+// WIDTH_SHARDED: each core owns a vertical strip of width = contiguity pages.
+//
+// tensor2d = {rows, cols} where host_page = row * cols + col
+//   rows  = pages_per_core / c        (number of contiguous chunks per core)
+//   cols  = num_cores * c              (total width)
+//
+// shard_in_pages = shard_shape / page_shape = {rows, c}
+//   -> core k gets columns [k*c, (k+1)*c) across all rows
+//   -> each row contributes c contiguous host pages to that core
+//   -> c * page_size contiguous bytes per chunk
+//
+static std::pair<std::shared_ptr<MeshBuffer>, uint64_t> create_sharded_buffer(
+    benchmark::State& state,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    int64_t transfer_size,
+    int64_t contiguity_factor,
+    BufferType buffer_type) {
+    auto page_size = FIXED_PAGE_SIZE;
+
+    CoreCoord core_grid_size = (buffer_type == BufferType::DRAM) ? mesh_device->dram_grid_size()
+                                                                 : mesh_device->compute_with_storage_grid_size();
+    uint64_t total_pages = transfer_size / page_size;
+    uint64_t num_cores = core_grid_size.x * core_grid_size.y;
+    uint64_t pages_per_core = total_pages / num_cores;
+
+    if (pages_per_core == 0) {
+        state.SkipWithError("Transfer size too small for the core grid");
+        return {nullptr, 0};
+    }
+
+    if (contiguity_factor <= 0) {
+        state.SkipWithError("Contiguity factor must be positive");
+        return {nullptr, 0};
+    }
+
+    uint64_t effective_contiguity = std::min(static_cast<uint64_t>(contiguity_factor), pages_per_core);
+
+    // Round pages_per_core down so it's divisible by effective_contiguity
+    pages_per_core = (pages_per_core / effective_contiguity) * effective_contiguity;
+    if (pages_per_core == 0) {
+        state.SkipWithError("Contiguity factor too large for available pages per core");
+        return {nullptr, 0};
+    }
+
+    uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
+
+    uint32_t shard_height = pages_per_core / effective_contiguity;
+    uint32_t tensor_width = num_cores * effective_contiguity;
+
+    CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
+    std::array<uint32_t, 2> shard_shape = {shard_height, static_cast<uint32_t>(effective_contiguity * page_size)};
+    std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {shard_height, tensor_width};
+
+    log_debug(
+        tt::LogTest,
+        "Sharded buffer parameters: shard_shape=[{}, {}], tensor2d_shape_in_pages=[{}, {}], "
+        "page_size={}, pages_per_core={}, num_cores={}, actual_buf_size={}, "
+        "contiguity_factor={}, effective_contiguity={}",
+        shard_shape[0],
+        shard_shape[1],
+        tensor2d_shape_in_pages[0],
+        tensor2d_shape_in_pages[1],
+        page_size,
+        pages_per_core,
+        num_cores,
+        actual_buf_size,
+        contiguity_factor,
+        effective_contiguity);
+
+    ShardSpecBuffer shard_spec(
+        core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = page_size,
+        .buffer_type = buffer_type,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED),
+        .bottom_up = false};
+
+    ReplicatedBufferConfig global_buffer_config{.size = actual_buf_size};
+
+    auto device_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+    return {device_buffer, actual_buf_size};
+}
+
+static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto transfer_size = state.range(0);
+    auto contiguity_factor = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+
+    auto [device_buffer, actual_buf_size] =
+        create_sharded_buffer(state, mesh_device, transfer_size, contiguity_factor, buffer_type);
+    if (!device_buffer) {
+        return;
+    }
+
+    std::vector<uint8_t> host_buffer(static_cast<std::size_t>(actual_buf_size));
+
+    auto write_transfer = distributed::ShardDataTransfer(MeshCoordinate(0, 0))
+                              .host_data(host_buffer.data())
+                              .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
+
+    for (auto _ : state) {
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/true);
+    }
+
+    state.SetBytesProcessed(actual_buf_size * state.iterations());
+}
+
+static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto transfer_size = state.range(0);
+    auto contiguity_factor = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+
+    if (!experimental::GetMemoryPinningParameters(*mesh_device).can_map_to_noc) {
+        state.SkipWithError("Memory pinning with NOC mapping is not supported on this device");
+        return;
+    }
+
+    auto [device_buffer, actual_buf_size] =
+        create_sharded_buffer(state, mesh_device, transfer_size, contiguity_factor, buffer_type);
+    if (!device_buffer) {
+        return;
+    }
+
+    // Allocate source host buffer with 64-byte alignment
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    TT_ASSERT(
+        device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0,
+        "Source vector alignment {} must be divisible by PCIE read alignment {}",
+        device_read_align,
+        hal.get_read_alignment(HalMemType::HOST));
+
+    auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
+        static_cast<std::size_t>(actual_buf_size));
+    void* aligned_ptr = reinterpret_cast<void*>(src_storage->data());
+
+    // Create HostBuffer on top of aligned memory
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(actual_buf_size)),
+        MemoryPin(src_storage));
+
+    // Pin the aligned host memory region
+    auto coord = MeshCoordinate(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_mem =
+        experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+
+    auto write_transfer = distributed::ShardDataTransfer(coord)
+                              .host_data(aligned_ptr)
+                              .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
+    experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
+
+    bool used_pinned_memory = false;
+    for (auto _ : state) {
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/false);
+        used_pinned_memory = pinned_mem->lock_may_block();
+        mesh_device->mesh_command_queue().finish();
+    }
+
+    state.SetLabel(used_pinned_memory ? "PinnedMemory" : "NoPinnedMemory");
+
+    state.SetBytesProcessed(actual_buf_size * state.iterations());
 }
 
 static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -256,12 +430,16 @@ int main(int argc, char** argv) {
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        auto sharded_benchmark_args = {TRANSFER_SIZE_ARGS, CONTIGUITY_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        std::vector<std::string> benchmark_arg_names = {"page_size", "size", "type", "device"};
+        std::vector<std::string> sharded_benchmark_arg_names = {"size", "contiguity", "type", "device"};
         auto compute_min = [](const std::vector<double>& v) -> double { return *std::min_element(v.begin(), v.end()); };
         auto compute_max = [](const std::vector<double>& v) -> double { return *std::max_element(v.begin(), v.end()); };
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
         benchmark::RegisterBenchmark("Write", BM_write, device, host_buffer_max)
             ->ArgsProduct(benchmark_args)
+            ->ArgNames(benchmark_arg_names)
             ->UseRealTime()
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
@@ -269,6 +447,14 @@ int main(int argc, char** argv) {
 
         benchmark::RegisterBenchmark("Read", BM_read, device)
             ->ArgsProduct(benchmark_args)
+            ->ArgNames(benchmark_arg_names)
+            ->UseRealTime()
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
+        benchmark::RegisterBenchmark("WriteSharded", BM_write_sharded, device)
+            ->ArgsProduct(sharded_benchmark_args)
+            ->ArgNames(sharded_benchmark_arg_names)
             ->UseRealTime()
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
@@ -278,12 +464,21 @@ int main(int argc, char** argv) {
         if (can_map_to_noc) {
             benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
                 ->ArgsProduct(benchmark_args)
+                ->ArgNames(benchmark_arg_names)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
                 ->ComputeStatistics("max", compute_max);
             benchmark::RegisterBenchmark("WritePinnedMemory", BM_write_pinned_memory, device)
                 ->ArgsProduct(benchmark_args)
+                ->ArgNames(benchmark_arg_names)
+                ->UseRealTime()
+                ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+                ->ComputeStatistics("min", compute_min)
+                ->ComputeStatistics("max", compute_max);
+            benchmark::RegisterBenchmark("WritePinnedMemorySharded", BM_write_pinned_memory_sharded, device)
+                ->ArgsProduct(sharded_benchmark_args)
+                ->ArgNames(sharded_benchmark_arg_names)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
