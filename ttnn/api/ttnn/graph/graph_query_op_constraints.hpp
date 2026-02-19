@@ -17,6 +17,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/tensor/spec/distributed_tensor_spec.hpp>
 
 namespace ttnn::graph {
 
@@ -118,16 +119,28 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     {
         auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
 
-        // helper lambda to transform TensorSpec to DeviceTensor
+        // helper lambda to transform TensorSpec/DistributedTensorSpec to DeviceTensor
         auto transform_arg = [device](auto&& arg) {
-            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
+            using ArgType = std::decay_t<decltype(arg)>;
+
+            if constexpr (std::is_same_v<ArgType, TensorSpec>) {
                 return create_device_tensor(arg, device);
-            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
+            } else if constexpr (std::is_same_v<ArgType, std::optional<TensorSpec>>) {
                 return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
-            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
+            } else if constexpr (std::is_same_v<ArgType, std::vector<TensorSpec>>) {
                 std::vector<Tensor> result(arg.size());
                 std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
                     return create_device_tensor(item, device);
+                });
+                return result;
+            } else if constexpr (std::is_same_v<ArgType, tt::tt_metal::DistributedTensorSpec>) {
+                return allocate_distributed_device_tensor(arg, device);
+            } else if constexpr (std::is_same_v<ArgType, std::optional<tt::tt_metal::DistributedTensorSpec>>) {
+                return arg ? std::optional<Tensor>(allocate_distributed_device_tensor(*arg, device)) : std::nullopt;
+            } else if constexpr (std::is_same_v<ArgType, std::vector<tt::tt_metal::DistributedTensorSpec>>) {
+                std::vector<Tensor> result(arg.size());
+                std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
+                    return allocate_distributed_device_tensor(item, device);
                 });
                 return result;
             } else {

@@ -17,11 +17,18 @@ namespace tt::tt_metal {
 class Tensor;
 class MemoryConfig;
 class TensorSpec;
+class DistributedTensorSpec;
 
 // Allocates a tensor on host.
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
+
+// Allocates a distributed device tensor with specified mesh distribution.
+// Unlike create_device_tensor which defaults to full replication, this function respects
+// the MeshMapperConfig placements in the DistributedTensorSpec for proper sharding/replication.
+Tensor allocate_distributed_device_tensor(
+    const DistributedTensorSpec& distributed_spec, distributed::MeshDevice* mesh_device);
 
 tt::tt_metal::Tensor to_device(
     const tt::tt_metal::Tensor& input_tensor,

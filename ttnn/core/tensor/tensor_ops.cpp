@@ -18,6 +18,7 @@
 #include <tt-metalium/math.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/experimental/tensor/spec/distributed_tensor_spec.hpp>
 
 namespace {
 
@@ -75,6 +76,47 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
     output = tt::tt_metal::set_tensor_id(output);
+
+    GraphTracker::instance().track_function_end(output);
+
+    return output;
+}
+
+Tensor allocate_distributed_device_tensor(
+    const DistributedTensorSpec& distributed_spec, distributed::MeshDevice* mesh_device) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::allocate_distributed_device_tensor",
+        distributed_spec.tensor_spec().logical_shape(),
+        distributed_spec.tensor_spec().tensor_layout().get_data_type(),
+        distributed_spec.tensor_spec().tensor_layout().get_layout(),
+        mesh_device,
+        distributed_spec.tensor_spec().tensor_layout().get_memory_config());
+
+    const auto& tensor_spec = distributed_spec.tensor_spec();
+    const auto& mapper_config = distributed_spec.mapper_config();
+
+    // Allocate device buffer using existing infrastructure
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(mesh_device, tensor_spec);
+
+    // Build coordinate list for all devices in mesh
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(mesh_device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        coords.push_back(coord);
+    }
+
+    DeviceStorage device_storage(std::move(mesh_buffer), coords);
+
+    // Use placements from MeshMapperConfig instead of hardcoded Replicate
+    TT_FATAL(
+        mapper_config.placements.size() == mesh_device->shape().dims(),
+        "MeshMapperConfig placements size ({}) must match mesh device dimensions ({})",
+        mapper_config.placements.size(),
+        mesh_device->shape().dims());
+
+    auto tensor_topology = TensorTopology{mesh_device->shape(), mapper_config.placements, coords};
+    Tensor output(std::move(device_storage), tensor_spec, tensor_topology);
+    output = set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
 
