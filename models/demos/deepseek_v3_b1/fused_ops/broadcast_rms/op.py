@@ -196,16 +196,6 @@ class BroadcastRMSNorm:
 
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    # CCL broadcast reader args (dummy values when skip_ccl)
-                    ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
-                    ("is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
-                    ("rmsnorm_num_tiles", num_tiles),
-                ]
-
-                brisc_named_compile_time_args = [
-                    ("skip_ccl", 1 if skip_ccl else 0),
                     # CCL broadcast writer args (dummy values when skip_ccl)
                     ("cb0_id", pkt_cb if not skip_ccl else 0),
                     ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
@@ -221,12 +211,17 @@ class BroadcastRMSNorm:
                     ("range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("range_hops_backward", range_hops_backward if not skip_ccl else 0),
-                    # RMSNorm/common args (always valid)
-                    # In multi-device mode, intermediate_cb = input_cb (CB 0) because broadcast
-                    # writes to CB 0 which is backed by intermediate_tensor_mesh
+                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
+                    ("rmsnorm_num_tiles", num_tiles),
                     ("intermediate_cb", input_cb if not skip_ccl else pkt_cb),
                     ("gamma_cb", gamma_cb),
-                    ("num_tiles", num_tiles),
+                ]
+
+                brisc_named_compile_time_args = [
+                    ("skip_ccl", 1 if skip_ccl else 0),
+                    ("cb0_id", pkt_cb if not skip_ccl else 0),
+                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
+                    ("is_sender", int(is_sender) if not skip_ccl else 0),
                 ]
 
                 # Named compile-time args for TRISC (rmsnorm compute)
@@ -317,7 +312,7 @@ class BroadcastRMSNorm:
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
-                    brisc_common_runtime_args=writer_common_rt_args,
+                    ncrisc_common_runtime_args=writer_common_rt_args,
                     trisc_common_runtime_args=[epsilon_packed, scalar_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
@@ -328,7 +323,7 @@ class BroadcastRMSNorm:
                     defines=kernel_defines,
                     # Per-core runtime args: empty for BRISC (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
                 )
 
@@ -344,13 +339,13 @@ class BroadcastRMSNorm:
                     semaphores=[],
                 )
 
-                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
+                # Append fabric connection args to NCRISC kernel if needed (CCL mode only)
                 # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if not skip_ccl and num_connections > 0:
-                    # writer kernel is index 1 in the unified kernel descriptor list
-                    writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
+                    # NCRISC writer kernel is index 0 in the unified kernel descriptor list
+                    writer_rt_args_ref = program.kernels[0].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id, dst_nodes, [0], program, 1, worker_core  # kernel_idx (writer kernel)
+                        fabric_node_id, dst_nodes, [0], program, 0, worker_core
                     )
                     writer_rt_args_ref.extend(fabric_args)
 

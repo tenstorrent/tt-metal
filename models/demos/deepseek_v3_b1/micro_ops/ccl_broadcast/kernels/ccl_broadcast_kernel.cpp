@@ -14,16 +14,6 @@ void kernel_main() {
     using Broadcast = deepseek_b1_ops::Broadcast;
 
 #if defined(COMPILE_FOR_NCRISC)
-    // Reader CTArgs
-    using BcastCTArgs = Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("cb0_id"),
-        get_named_compile_time_arg_val("num_pages_to_read"),
-        get_named_compile_time_arg_val("is_sender")>;
-
-    // Runtime args:
-    Broadcast::ReaderArgs bcast_args{};
-
-#elif defined(COMPILE_FOR_BRISC)
     // Writer CTArgs
     using BcastCTArgs = Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
@@ -57,6 +47,16 @@ void kernel_main() {
         get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
         get_common_arg_val<uint32_t>(12),  // num_connections
     };
+
+#elif defined(COMPILE_FOR_BRISC)
+    // Reader CTArgs
+    using BcastCTArgs = Broadcast::ReaderCTArgs<
+        get_named_compile_time_arg_val("cb0_id"),
+        get_named_compile_time_arg_val("num_pages_to_read"),
+        get_named_compile_time_arg_val("is_sender")>;
+
+    // Runtime args:
+    Broadcast::ReaderArgs bcast_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
     // TRISC: Compute args unused for broadcast

@@ -6,7 +6,7 @@
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -24,7 +24,7 @@
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
 
-#elif defined(COMPILE_FOR_NCRISC)
+#elif defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 #include <utility>
@@ -101,7 +101,7 @@ struct Broadcast {
     struct ComputeArgs {};
     struct ComputeCTArgs {};
 
-    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
+    using RTArgs = unified_kernels::SelectByRISCV<WriterArgs, ReaderArgs, ComputeArgs>;
 
     template <typename CTArgs, bool IsWorkerCore>
     class Op {
@@ -114,9 +114,9 @@ struct Broadcast {
 
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
             // ================================================================
-            // NRISC - bcast reader
+            // BRISC - bcast reader
             // ================================================================
             if constexpr (IsWorkerCore) {
                 if (CTArgs::is_sender) {
@@ -124,9 +124,10 @@ struct Broadcast {
                     cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 }
             }
-#elif defined(COMPILE_FOR_BRISC)
+
+#elif defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // BRISC - Bcast writer
+            // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +

@@ -232,10 +232,10 @@ class DeepseekMinimalBroadcast:
                     core_ranges=worker_core_set,
                     ncrisc_named_compile_time_args=union_named_compile_time_args,
                     brisc_named_compile_time_args=union_named_compile_time_args,
-                    brisc_common_runtime_args=writer_common_rt_args,
-                    # Per-core runtime args: empty for BRISC (fabric args appended later)
+                    ncrisc_common_runtime_args=writer_common_rt_args,
+                    # Per-core runtime args: empty for NCRISC (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
                 )
 
@@ -246,16 +246,16 @@ class DeepseekMinimalBroadcast:
                     cbs=[cb_desc],
                 )
 
-                # Append fabric connection args to BRISC kernel if needed
+                # Append fabric connection args to NCRISC kernel if needed
                 # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if num_connections > 0:
-                    writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
+                    writer_rt_args_ref = program.kernels[0].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
                         fabric_node_id,
                         dst_nodes,
                         [0],
                         program,
-                        1,  # kernel_idx (writer kernel)
+                        0,  # kernel_idx (writer kernel)
                         worker_core,
                     )
                     writer_rt_args_ref.extend(fabric_args)

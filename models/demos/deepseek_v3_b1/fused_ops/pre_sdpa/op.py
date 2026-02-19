@@ -1119,14 +1119,14 @@ class PreSDPA:
                 # ================================================================
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
-                bcast_ncrisc_named_compile_time_args = [
+                bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
                     ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
                 ]
 
-                bcast_brisc_named_compile_time_args = [
+                bcast_ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
@@ -1726,7 +1726,7 @@ class PreSDPA:
 
                     num_connections = len(dst_nodes)
 
-                    brisc_bcast_common_args = [
+                    ncrisc_bcast_common_args = [
                         int(intermediate_tensor_device.buffer_address()),  # tensor_address0
                         int(out_ready_sem_addr),  # out_ready_sem_bank_addr
                         int(wait_output_semaphore),
@@ -1776,7 +1776,6 @@ class PreSDPA:
                     + krope_ncrisc_named_compile_time_args,
                     # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + create_q_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
                     brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
-                    + rmsnorm_reader_named_compile_time_args
                     + mcast_sender_named_compile_time_args
                     + matmul_brisc_named_compile_time_args
                     + gather_reduce_receiver_named_compile_time_args
@@ -1789,8 +1788,8 @@ class PreSDPA:
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + kv_cache_brisc_named_compile_time_args,
                     # BRISC common runtime args: bcast args
-                    brisc_common_runtime_args=brisc_bcast_common_args
-                    + [int(kv_cache_tensor_device.buffer_address()), position_id],
+                    brisc_common_runtime_args=[int(kv_cache_tensor_device.buffer_address()), position_id],
+                    ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + qrope + create_q_heads + dkv_matmul + kv_rmsnorm + krope
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
@@ -1884,7 +1883,7 @@ class PreSDPA:
                     # Per-core runtime args for fabric (BRISC only, on worker_core)
                     # Initialize empty args that will be populated by setup_routing_plane_connection
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
                     noc_mode=noc_mode,
                 )
@@ -1948,12 +1947,11 @@ class PreSDPA:
                 if not skip_ccl and num_connections > 0:
                     # Find the BRISC (writer) kernel whose core_ranges includes worker_core
                     for idx, kernel in enumerate(program.kernels):
-                        if kernel.core_ranges.contains(worker_core) and (
-                            isinstance(kernel.config, ttnn.WriterConfigDescriptor)
+                        if kernel.core_ranges.contains(worker_core) and isinstance(
+                            kernel.config, ttnn.ReaderConfigDescriptor)
                             or (
                                 isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
-                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_0
-                            )
+                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
                         ):
                             writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
                             fabric_args = ttnn.setup_routing_plane_connection(
