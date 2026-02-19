@@ -3136,7 +3136,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
     }
 }
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_DualGalaxy4x8) {
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_DualGalaxy8x8) {
     // Test matching a dual galaxy MGD with meshes
     // Using dual_galaxy_mesh_graph_descriptor which has 8x8 (64 ASICs) - different from 4x8 but testing dual mesh
     // matching

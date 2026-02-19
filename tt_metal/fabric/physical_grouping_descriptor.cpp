@@ -1719,18 +1719,6 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
 }
 
 // =============================================================================
-// generate_grouping_info_for_mgd_group – Generate GroupingInfo when no match is found
-// =============================================================================
-
-GroupingInfo PhysicalGroupingDescriptor::generate_grouping_info_for_mgd_group(
-    const std::string& instance_name, const std::string& instance_type, const GroupingInfo& mgd_grouping_info) const {
-    (void)instance_name;
-    (void)instance_type;
-    (void)mgd_grouping_info;
-    TT_FATAL(false, "generate_grouping_info_for_mgd_group is not implemented");
-}
-
-// =============================================================================
 // build_flattened_adjacency_mesh – flattened ASIC-level mesh from hierarchy
 // =============================================================================
 
