@@ -48,7 +48,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarBasicTrisc) {
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         core,
-        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1});
+        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

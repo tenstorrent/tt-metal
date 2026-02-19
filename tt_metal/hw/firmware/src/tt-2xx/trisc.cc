@@ -114,6 +114,7 @@ extern "C" uint32_t _start1() {
     }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    DPRINT << "trisc_run address: " << (uint32_t)trisc_run << ENDL();
     *trisc_run = RUN_SYNC_MSG_DONE;
 
     DeviceProfilerInit();
@@ -124,6 +125,7 @@ extern "C" uint32_t _start1() {
             if constexpr (COMPILE_FOR_TRISC == 0) {
                 if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
                     init_sync_registers();
+                    DPRINT << "trisc_run address: " << (uint32_t)trisc_run << ENDL();
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
@@ -172,6 +174,7 @@ extern "C" uint32_t _start1() {
         // Signal completion
         DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
         tensix_sync();
+        DPRINT << "trisc_run address: " << (uint32_t)trisc_run << ENDL();
         *trisc_run = RUN_SYNC_MSG_DONE;
         DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
     }
