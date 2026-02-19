@@ -7,6 +7,7 @@
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
+#include "api/debug/dprint.h"
 
 template <typename ReaderType, typename TensorAccessorType>
 void read_prev_output_and_lse(
@@ -180,13 +181,16 @@ void kernel_main() {
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
+        DPRINT << "global mask: " << (ring_iter_needs_global_n_mask ? "true" : "false")
+               << " local mask: " << (ring_iter_needs_local_n_mask ? "true" : "false") << ENDL();
+
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-            generate_mask<false, false, 0, true, cb_mask_in>(
+            generate_mask<false, false, 0, true, cb_mask_in>(  // ADD CAUSAL TRUE
                 Sq_chunk_t,
                 Sk_chunk_t,
                 q_chunk,

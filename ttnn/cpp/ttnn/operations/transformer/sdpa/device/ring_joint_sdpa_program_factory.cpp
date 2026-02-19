@@ -138,6 +138,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
     }
 
+    log_info(tt::LogOp, "device index: {}", device_index);
+    log_info(tt::LogOp, "is_causal: {}", args.is_causal);
+
     auto scale = args.scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));

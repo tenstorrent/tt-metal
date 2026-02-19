@@ -521,7 +521,7 @@ void generate_causal_sliding_window_mask(
             }
         }
         for (uint32_t k_tile = 0; k_tile < Sk_chunk_t; ++k_tile) {
-            uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;
+            uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;  // TODO: ADD RING OFFSET PER DEVICE
             uint32_t global_k_tile = Sk_chunk_t * k_chunk + k_tile;
 
             // Determine the masking pattern for this tile

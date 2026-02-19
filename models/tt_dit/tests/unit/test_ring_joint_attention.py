@@ -241,6 +241,7 @@ def run_ring_joint_sdpa(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
+                is_causal=True,
             )
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
@@ -545,7 +546,7 @@ model_input_shapes = [
     (1, 2, 3072, 0, 128),  # small head count, no joint
     (1, 2, 4000, 2, 128),  # tiny joint, near-multiple-of-chunk
     # additional stress cases
-    (1, 24, 8192, 0, 128),  # long sequence, no joint
+    (1, 128, 4 * 4096, 0, 128),  # long sequence, no joint
     (1, 24, 8200, 64, 128),  # long, non-multiple N, small joint
     (1, 16, 1024, 256, 128),  # mid length, significant joint
     (1, 16, 1056, 128, 64),  # mid length, smaller head dim
