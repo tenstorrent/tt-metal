@@ -304,6 +304,36 @@ public:
 };
 
 class DevicePrintFixture : public DebugToolsMeshFixture {
+protected:
+    void SetUp() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+            tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+            tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+        // Send output to a file so the test can check after program is run.
+        tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
+        watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(true);
+
+        // Parent class initializes devices and any necessary flags
+        DebugToolsMeshFixture::SetUp();
+    }
+
+    void TearDown() override {
+        // Parent class tears down devices
+        DebugToolsMeshFixture::TearDown();
+
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(false);
+    }
+
 public:
     std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device

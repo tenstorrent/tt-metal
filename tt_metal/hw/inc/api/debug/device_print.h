@@ -7,10 +7,15 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <tuple>
 #include <type_traits>
 
 #include "device_print_structures.h"
 #include "hostdevcommon/device_print_common.h"
+#include "waypoint.h"
+#include "internal/debug/dprint_buffer.h"
+#include "noc_overlay_parameters.h"
+#include "risc_common.h"
 #include "stream_io_map.h"
 
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
@@ -54,6 +59,7 @@
 #define DEVICE_PRINT_IS_KERNEL 0
 #endif
 
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
 #define DEVICE_PRINT_GET_STRING_INDEX(variable_name, updated_format)                                           \
     {                                                                                                          \
         static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
@@ -1118,3 +1124,10 @@ constexpr uint32_t get_total_message_size(Args&&...) {
 }  // namespace serialization
 
 }  // namespace device_print_detail
+
+#else
+
+#define DEVICE_PRINT(format, ...)
+#define DEVICE_PRINT_INITIALIZE_LOCK()
+
+#endif

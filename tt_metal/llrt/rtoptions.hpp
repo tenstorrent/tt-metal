@@ -698,6 +698,7 @@ public:
     bool get_dump_build_commands() const { return dump_build_commands; }
 
     bool get_use_device_print() const { return use_device_print; }
+    void set_use_device_print(bool use) { use_device_print = use; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
