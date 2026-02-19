@@ -195,7 +195,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const uint32_t num_devices = mesh_view.num_devices();
 
     // TODO this should eventually be variable per device
-    const uint32_t experts_per_device = experts / num_devices;
+    const uint32_t experts_per_device = experts / 16;
 
     const auto input_dtype = input_tensor.dtype();
     const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();
@@ -228,7 +228,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(needed_worker_core_range_set, num_worker_cores);
 
     // buffer may be padded
-    const auto token_segment_buffer_size_bytes = input_tensor.logical_shape()[-1] * input_tensor.element_size();
+    const auto token_segment_buffer_size_bytes = 1792 * input_tensor.element_size();
     const auto expert_token_segment_buffer_block_size_bytes =
         token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
     const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;

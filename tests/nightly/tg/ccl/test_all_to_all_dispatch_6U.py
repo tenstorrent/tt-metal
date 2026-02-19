@@ -234,7 +234,7 @@ def test_all_to_all_dispatch_8x8_dual_galaxy(
     ids=["fabric_1d_line"],
     indirect=True,
 )
-@pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [

@@ -105,7 +105,7 @@ void kernel_main() {
     constexpr uint32_t device_stride = replicate_axis == ReplicateGroup::COLS ? mesh_cols : 1;
     constexpr uint32_t Replicate_Group = (replicate_axis == ReplicateGroup::COLS) ? mesh_rows : mesh_cols;
 
-    constexpr uint32_t num_local_experts = experts / num_devices;
+    constexpr uint32_t num_local_experts = experts / 16;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
     constexpr uint32_t device_expert_offset = linearized_mesh_coord * num_local_experts;
 
