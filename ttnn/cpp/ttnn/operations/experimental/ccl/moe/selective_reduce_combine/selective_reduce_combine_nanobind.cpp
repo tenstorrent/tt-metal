@@ -116,7 +116,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &selective_reduce_combine,
+            &ttnn::experimental::selective_reduce_combine,
             nb::arg("dense_input_tensor").noconvert(),
             nb::arg("dense_metadata_tensor").noconvert(),
             nb::arg("dense_token_maps_tensor").noconvert(),

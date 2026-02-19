@@ -33,13 +33,13 @@ struct SelectiveReduceCombineDeviceOperation {
     // Mandatory methods
 
     // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    // static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // Validate the operation when it creates a program.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     // Empty as there doesn't seem to be any complicated hashing requirement
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    // static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output shapes based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -67,7 +67,7 @@ ttnn::Tensor selective_reduce_combine(
     const uint32_t num_data_parallel_cores,
     const std::vector<ttnn::CoreCoord>& worker_core_range_set,
     const CoreRangeSet& mux_core_range_set,
-    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);
 }  // namespace ttnn::prim

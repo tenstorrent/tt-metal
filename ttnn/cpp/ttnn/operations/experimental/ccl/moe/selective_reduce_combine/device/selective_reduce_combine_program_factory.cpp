@@ -189,12 +189,11 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    // const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
-
-    const uint32_t num_devices = mesh_view.num_devices();
+    const uint32_t num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t num_devices_total = mesh_view.num_devices();
 
     // this should eventually be variable per device
-    const uint32_t experts_per_device = experts / num_devices;
+    const uint32_t experts_per_device = experts / num_devices_cluster;
 
     const auto input_dtype = input_tensor.dtype();
     const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();
@@ -225,8 +224,9 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const std::vector<CoreCoord> sender_cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
     const ttnn::CoreRangeSet needed_worker_core_range_set(sender_cores);
 
-    // buffer may be padded
-    const auto token_segment_buffer_size_bytes = input_tensor.logical_shape()[-1] * input_tensor.element_size();
+    // buffer padding NOT supported because we don't rely on tensor shapes to represent the data layout
+    const auto token_segment_buffer_size_bytes =
+        *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
     const auto expert_token_segment_buffer_block_size_bytes =
         token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
     const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
@@ -342,7 +342,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
         {"token_size_bytes", token_size_bytes},
         {"alignment", l1_alignment},
-        {"num_devices", num_devices},
+        {"num_devices", num_devices_total},
         {"src_chip_id", src_chip_id},
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},

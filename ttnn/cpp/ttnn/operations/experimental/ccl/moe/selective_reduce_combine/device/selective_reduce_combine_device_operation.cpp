@@ -13,21 +13,11 @@
 
 namespace ttnn::experimental::prim {
 
-SelectiveReduceCombineDeviceOperation::program_factory_t SelectiveReduceCombineDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return UnifiedSelectReduce{};
-}
-
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(
         operation_attributes.axis.has_value() && operation_attributes.axis.value() == 1,
         "Only cluster axis==1 is supported");
-}
-
-void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
@@ -87,10 +77,11 @@ ttnn::Tensor selective_reduce_combine(
     const uint32_t num_data_parallel_cores,
     const std::vector<ttnn::CoreCoord>& worker_cores,
     const CoreRangeSet& mux_core_range_set,
-    const ttnn::MemoryConfig& output_memory_config,
+    const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
     using OperationType = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation;
+    auto memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .hidden_size = hidden_size,
@@ -105,7 +96,7 @@ ttnn::Tensor selective_reduce_combine(
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_cores = worker_cores,
             .mux_core_range_set = mux_core_range_set,
-            .output_memory_config = output_memory_config,
+            .output_memory_config = memory_config,
             .optional_cross_device_semaphore = optional_cross_device_semaphore},
         OperationType::tensor_args_t{
             .dense_input_tensor = dense_input_tensor,
