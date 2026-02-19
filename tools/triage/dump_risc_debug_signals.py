@@ -18,7 +18,7 @@ Owner:
 
 import json
 import os
-from triage import ScriptConfig, log_warning, run_script, log_check_location
+from triage import ScriptConfig, log_warning, run_script, log_check_location, ScriptPriority
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -30,6 +30,7 @@ from ttexalens.hardware.risc_debug import RiscHaltError
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
     disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None,
+    priority=ScriptPriority.LOW,
 )
 
 # RISC cores to check for each block type
@@ -74,8 +75,6 @@ def collect_debug_bus_signals(
             continue
 
         try:
-            if risc_name == "brisc":
-                raise RiscHaltError(risc_name, location)
             with risc_debug.ensure_halted():
                 pass
         except RiscHaltError:

@@ -98,7 +98,7 @@ jobs:
           reporter: jest-junit
           working-directory: /work
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
