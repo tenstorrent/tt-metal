@@ -16,13 +16,13 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     ./build/tools/watcher_dump -d=0 -w &> tmp.log || { echo "Above failure is expected."; }
 
     # Verify the error we expect showed up in the program output.
-    grep "brisc tripped an assert" tmp.log > /dev/null || { echo "Error: couldn't find expected string in command output:" ; cat tmp.log; exit 1; }
+    grep "BRISC tripped an assert" tmp.log > /dev/null || { echo "Error: couldn't find expected string in command output:" ; cat tmp.log; exit 1; }
     echo "Watcher dump all data test - Pass"
 
     # Check that stack dumping is working
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*TestWatcherRingBufferBrisc
     ./build/tools/watcher_dump -d=0 -w
-    grep "brisc highest stack usage:" generated/watcher/watcher.log > /dev/null || { echo "Error: couldn't find stack usage in watcher log after dump." ; exit 1; }
+    grep "BRISC highest stack usage:" generated/watcher/watcher.log > /dev/null || { echo "Error: couldn't find stack usage in watcher log after dump." ; exit 1; }
     echo "Watcher stack usage test - Pass"
 
     # Remove created files.
