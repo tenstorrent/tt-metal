@@ -23,7 +23,8 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* read_value_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(intermediate_l1_addr);
-        *read_value_ptr = *read_value_ptr + 1;
+        uint32_t read_val = *read_value_ptr;
+        *read_value_ptr = read_val + 1;
 
         noc_async_write(intermediate_l1_addr, noc_addr, size_bytes);
         noc_async_write_barrier();
