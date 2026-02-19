@@ -27,7 +27,7 @@ public:
     template <typename ForwardIterator>
     void update(ForwardIterator begin, ForwardIterator end) {
         for (auto it = begin; it != end; ++it) {
-            update(static_cast<uint64_t>(static_cast<unsigned char>(*it)));
+            update(static_cast<uint64_t>(*it));
         }
     }
 
