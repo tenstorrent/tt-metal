@@ -82,7 +82,7 @@ python -m models.experimental.maskformer_swin.demo.runner \
 ## PCC test (vs Torch reference)
 
 ```bash
-python -m pytest models/experimental/maskformer_swin/tests/pcc/test_maskformer_swin.py -q
+PYTHONPATH=$(pwd) pytest models/experimental/maskformer_swin/tests/pcc/test_maskformer_swin.py -q
 ```
 
 ## Generate perf sheet (device ops CSV)
@@ -112,6 +112,18 @@ TT_METAL_PROFILER_MID_RUN_DUMP=1 \
 
 The extracted CSV is written to:
 - `generated/maskformer_swin/stage3_opt/perf_sheet/Ops_Perf.csv`
+
+## Measured performance (N300)
+
+Measured on **N300** with a single 320x320 image (`models/sample_data/demo.jpeg`). See the raw runner dumps under:
+- `generated/maskformer_swin/stage1_baseline/perf.json`
+- `generated/maskformer_swin/stage2_opt/perf.json`
+- `generated/maskformer_swin/stage3_opt/perf.json`
+
+Summary (mean latency over 5 runs; includes device synchronize and host<->device transfers for inputs/outputs):
+- Stage 1: `1244.78 ms` (`generated/maskformer_swin/stage1_baseline/metrics.json`)
+- Stage 2: `1126.97 ms` (`generated/maskformer_swin/stage2_opt/metrics.json`)
+- Stage 3: `1038.47 ms` (`generated/maskformer_swin/stage3_opt/metrics.json`)
 
 ## COCO evaluation (accuracy)
 
@@ -160,7 +172,14 @@ Outputs:
 ## Tuning / known issues
 
 - Program cache: disabled by default for N300 stability (`MASKFORMER_TT_DISABLE_PROGRAM_CACHE=1`). Set `MASKFORMER_TT_DISABLE_PROGRAM_CACHE=0` to override.
-- SDPA gating in transformer decoder (stage3):
+- Stage 3 backbone attention optimizations (enabled by `--optimization-stage stage3`):
+  - `MASKFORMER_TT_BACKBONE_TILE_MASK_ADD=1`: add shifted-window attention mask in TILE layout (B=1 path) to avoid ROW_MAJOR<->TILE conversions.
+  - `MASKFORMER_TT_BACKBONE_INPLACE_ADDS=1`: use inplace elementwise ops (`add_`, `multiply_`) where supported to reduce allocations.
+  - `MASKFORMER_TT_BACKBONE_REUSE_ATTN_MASK_CACHE=1`: reuse cached attention masks without cloning (reduces per-forward allocations).
+- Fused mask+softmax (`MASKFORMER_TT_BACKBONE_FUSED_MASK_SOFTMAX=1`): available on some builds, but currently **not PCC-safe** for this model (kept disabled in tests and stage configs).
+- Backbone L1 activations (`MASKFORMER_TT_BACKBONE_L1_ACT=1`): known to be unstable on N300 for this model; keep disabled.
+- SDPA (experimental, transformer decoder):
+  - `MASKFORMER_TT_ENABLE_SDPA=1` enables SDPA paths (currently disabled in the stage configs because it regressed on N300 in local tuning).
   - `MASKFORMER_TT_SDPA_MIN_SEQ` (default `192`) avoids SDPA on small sequences where it can regress.
   - `MASKFORMER_TT_FORCE_SDPA=1` forces SDPA regardless of sequence lengths (debug/tuning).
 - Matmul/core-grid knobs:

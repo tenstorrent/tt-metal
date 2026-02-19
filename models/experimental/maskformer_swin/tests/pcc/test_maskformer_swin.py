@@ -6,7 +6,9 @@ import pytest
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_maskformer_swin_b_pcc(device, reset_seeds, monkeypatch):
+@pytest.mark.parametrize("backbone_tile_mask_add", ["0", "1"])
+@pytest.mark.parametrize("enable_fused_qkv", ["0", "1"])
+def test_maskformer_swin_b_pcc(device, reset_seeds, monkeypatch, backbone_tile_mask_add, enable_fused_qkv):
     # Workaround for hangs seen on repeated inference with program cache enabled.
     if hasattr(device, "disable_and_clear_program_cache"):
         device.disable_and_clear_program_cache()
@@ -16,8 +18,12 @@ def test_maskformer_swin_b_pcc(device, reset_seeds, monkeypatch):
     monkeypatch.setenv("MASKFORMER_TT_FUSE_LINEAR_ACT", "1")
     monkeypatch.setenv("MASKFORMER_TT_USE_LINEAR", "1")
     monkeypatch.setenv("MASKFORMER_TT_ENABLE_SDPA", "0")
-    monkeypatch.setenv("MASKFORMER_TT_ENABLE_FUSED_QKV", "0")
+    monkeypatch.setenv("MASKFORMER_TT_ENABLE_FUSED_QKV", enable_fused_qkv)
     monkeypatch.setenv("MASKFORMER_TT_ENABLE_L1_SEQ", "1")
+    monkeypatch.setenv("MASKFORMER_TT_BACKBONE_TILE_MASK_ADD", backbone_tile_mask_add)
+    monkeypatch.setenv("MASKFORMER_TT_BACKBONE_FUSED_MASK_SOFTMAX", "0")
+    monkeypatch.setenv("MASKFORMER_TT_BACKBONE_INPLACE_ADDS", "1")
+    monkeypatch.setenv("MASKFORMER_TT_BACKBONE_REUSE_ATTN_MASK_CACHE", "1")
     monkeypatch.setenv("MASKFORMER_TT_DISABLE_CORE_GRID", "0")
     monkeypatch.setenv("MASKFORMER_TT_DISABLE_MATMUL_PC", "0")
     monkeypatch.setenv("MASKFORMER_TT_DISABLE_DECODER_TT_CACHE", "0")
