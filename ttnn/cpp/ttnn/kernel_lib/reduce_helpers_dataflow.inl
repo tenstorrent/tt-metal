@@ -41,22 +41,6 @@ FORCE_INLINE uint32_t float_to_scaler_bits(float value) {
 }
 
 // =============================================================================
-// Legacy fill_row0 (bfloat16 only)
-// =============================================================================
-
-template <bool half_tile>
-FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
-    constexpr uint32_t num_faces = half_tile ? 2 : 4;
-
-    for (uint32_t face = 0; face < num_faces; ++face) {
-        uint32_t face_offset = face * FACE_SIZE_U32;
-        for (uint32_t column = 0; column < ROW_SIZE_U32; ++column) {
-            ptr[face_offset + column] = scaler;
-        }
-    }
-}
-
-// =============================================================================
 // Format-aware fill_row0
 // =============================================================================
 
@@ -78,28 +62,6 @@ FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
             ptr[face_offset + column] = scaler;
         }
     }
-}
-
-// =============================================================================
-// Legacy calculate_and_prepare_reduce_scaler (pre-computed scaler)
-// =============================================================================
-
-template <bool half_tile>
-FORCE_INLINE void calculate_and_prepare_reduce_scaler_legacy(const uint32_t cb_id, const uint32_t scaler) {
-    ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
-    // Verify scaler is properly packed: high 16 bits must equal low 16 bits
-    ASSERT((scaler >> 16) == (scaler & 0xFFFF));
-
-    cb_reserve_back(cb_id, 1);
-    uint32_t write_addr = get_write_ptr(cb_id);
-
-    zero_faces<half_tile>(write_addr);
-
-    if (scaler != 0) {
-        fill_row0<half_tile>(addr_to_l1_ptr(write_addr), scaler);
-    }
-
-    cb_push_back(cb_id, 1);
 }
 
 // =============================================================================
@@ -140,7 +102,7 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t reduce_volume>
-FORCE_INLINE void calculate_and_prepare_reduce_scaler(const float input_scaler) {
+FORCE_INLINE void calculate_and_prepare_reduce_scaler() {
 
     // -------------------------------------------------------------------------
     // 1. Compute scaler value
@@ -163,12 +125,6 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(const float input_scaler) 
     } else {
         scaler_f = 1.0f;
     }
-
-    // -------------------------------------------------------------------------
-    // 1b. Apply input_scaler multiplier
-    //     For REDUCE_SCALAR, sqrt the input_scaler since the LLK squares it
-    // -------------------------------------------------------------------------
-    scaler_f *= input_scaler;
 
     // -------------------------------------------------------------------------
     // 2. Fill the CB with the computed scaler

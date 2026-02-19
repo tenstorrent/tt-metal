@@ -28,8 +28,7 @@ void kernel_main() {
 
 #ifdef USE_FPU
     constexpr uint32_t cb_id_in1 = 1;
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_in1, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(0.0f);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in1>(0.0f);
 #endif
 
     uint32_t l1_write_addr_in0;

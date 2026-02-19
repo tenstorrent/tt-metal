@@ -13,20 +13,6 @@ namespace dataflow_kernel_lib {
 using ckernel::PoolType;
 using ckernel::ReduceDim;
 
-/**
- * @brief Generate a reduce scaler tile (legacy, bfloat16 only)
- *
- * Creates a tile in the specified circular buffer with the scaler value
- * placed in row 0 of each face. The scaler is typically 1.0 for SUM/MAX
- * reductions, and 1/N for AVG reductions.
- *
- * @tparam half_tile If true, only fill faces 0-1 (half tile mode)
- * @param cb_id Circular buffer ID to write the tile to
- * @param scaler Packed bf16 value (bf16 << 16 | bf16)
- */
-template <bool half_tile = false>
-FORCE_INLINE void calculate_and_prepare_reduce_scaler_legacy(const uint32_t cb_id, const uint32_t scaler);
-
 // =============================================================================
 // Reduce scaler helpers API
 //
@@ -67,10 +53,9 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
  * @tparam reduce_volume Number of elements being reduced (N). Must be non-zero for AVG.
- * @param input_scaler Multiplicative scaler applied to the computed value (default 1.0f)
  */
 template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_volume = 1>
-FORCE_INLINE void calculate_and_prepare_reduce_scaler(float input_scaler = 1.0f);
+FORCE_INLINE void calculate_and_prepare_reduce_scaler();
 
 }  // namespace dataflow_kernel_lib
 
