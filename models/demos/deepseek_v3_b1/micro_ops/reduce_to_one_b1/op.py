@@ -541,10 +541,6 @@ class ReduceToOneB1:
                             program,
                             fc,
                         )
-                        print(f"[Fabric] coord={coord}, fc={fc}, fabric_conn_args={fabric_conn_args}")
-                        print(
-                            f"  eth_channel={fabric_conn_args[0]}, teardown_sem_id={fabric_conn_args[1]}, buffer_index_sem_id={fabric_conn_args[2]}"
-                        )
                         fabric_rt_args_ref.extend(fabric_conn_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program

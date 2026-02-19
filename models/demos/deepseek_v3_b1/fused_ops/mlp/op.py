@@ -143,6 +143,7 @@ class _MlpRoutedExpertContext:
     reduce_output_cb: int = 0
     reduce_scratch_cb: int = 0
     reduce_packet_cb: int = 0
+    reduce_packet_header_cb: int = 0
     reduce_params: dict = None
 
 
@@ -301,6 +302,7 @@ class MlpRoutedExpertOp:
         reduce_output_cb = 42  # Final reduced output
         reduce_scratch_cb = 43  # Scratch for compute
         reduce_packet_cb = 44  # Scratch for sending packets
+        reduce_packet_header_cb = 45  # Packet header (persistent)
         # Shared expert CBs (defined in MoeSharedExpertOp)
         residual_mcast_src_cb = MoeSharedExpertOp.RESIDUAL_MCAST_SRC_CB
         residual_mcast_dst_cb = MoeSharedExpertOp.RESIDUAL_MCAST_DST_CB
@@ -719,6 +721,7 @@ class MlpRoutedExpertOp:
             reduce_output_cb=reduce_output_cb,
             reduce_scratch_cb=reduce_scratch_cb,
             reduce_packet_cb=reduce_packet_cb,
+            reduce_packet_header_cb=reduce_packet_header_cb,
             reduce_params=reduce_params,
         )
 
@@ -1536,6 +1539,21 @@ class MlpOp:
                     )
                     device_cb_descriptors.append(reduce_cb_packet_desc)
 
+                    # reduce_packet_header_cb: persistent packet header storage
+                    reduce_packet_header_size = 96  # Standard packet header size
+                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
+                        total_size=reduce_packet_header_size,
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=routed_ctx.reduce_packet_header_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=reduce_packet_header_size,
+                            )
+                        ],
+                    )
+                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
+
                     # Destination L1 address depends on role
                     if device_role == MESH_LEAF:
                         dst_l1_addr = r1_tensor.buffer_address()
@@ -1574,6 +1592,7 @@ class MlpOp:
                             ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                             ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                             ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
+                            ("reduce_packet_header_cb", routed_ctx.reduce_packet_header_cb),
                         ]
                     )
 
@@ -1713,6 +1732,10 @@ class MlpOp:
                             link_idx,
                             program,
                             fc,
+                        )
+                        print(
+                            f"[Fabric] coord={coord}, fc={fc}, eth_channel={fabric_conn_args[0]}, "
+                            f"teardown_sem_id={fabric_conn_args[1]}, buffer_index_sem_id={fabric_conn_args[2]}"
                         )
                         fabric_rt_args_ref.extend(fabric_conn_args)
 
