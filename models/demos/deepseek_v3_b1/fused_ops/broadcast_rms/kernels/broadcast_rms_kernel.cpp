@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused Broadcast + RMSNorm unified kernel
-// - NCRISC: Broadcast writer + RMSNorm setup
+// - NCRISC: Broadcast writer + RMSNorm reader
 // - BRISC: Broadcast reader
 // - TRISC: RMSNorm compute
 
