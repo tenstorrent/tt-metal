@@ -9,7 +9,7 @@
 #include "autograd/tensor.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/llama.hpp"
-#include "modules/llama_block.hpp"
+#include "modules/distributed/llama_block.hpp"
 #include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
@@ -23,7 +23,7 @@ class DistributedLlama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
-    std::vector<std::shared_ptr<ModuleBase>> blocks;
+    std::vector<std::shared_ptr<ttml::modules::distributed::DistributedLlamaBlock>> blocks;
     std::shared_ptr<ModuleBase> ln_fc;
     std::shared_ptr<ttml::modules::ModuleBase> fc;
     ops::RotaryEmbeddingParams m_rope_params;

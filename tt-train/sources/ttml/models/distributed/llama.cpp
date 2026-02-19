@@ -8,7 +8,6 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/distributed/linear.hpp"
-#include "modules/distributed/llama_block.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"

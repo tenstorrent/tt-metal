@@ -28,7 +28,7 @@ private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
     std::shared_ptr<ttml::modules::ModuleBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::modules::ModuleBase>> blocks;
+    std::vector<std::shared_ptr<ttml::modules::distributed::DistributedGPTBlock>> blocks;
     std::shared_ptr<ttml::modules::ModuleBase> ln_fc;
     std::shared_ptr<ttml::modules::ModuleBase> fc;
 
