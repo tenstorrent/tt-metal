@@ -9,12 +9,11 @@ from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_t
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8), (8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape, dtype, mem_config",
     [
         ([1, 1, 4096, 64], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 4096, 64], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
         ([1, 1, 129280, 224], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 1, 32, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
         ([1, 8, 128, 7168], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
@@ -47,7 +46,7 @@ def test_untilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
     run_test(mesh_device, run_op, check_op, enable_trace)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8), (8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "in_shape, out_shape, dtype, mem_config",
     [
