@@ -228,6 +228,9 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
+        if (rtoptions.get_use_device_print()) {
+            this->defines_ += "-DUSE_DEVICE_PRINT ";
+        }
     }
 
     if (rtoptions.get_record_noc_transfers()) {
