@@ -205,7 +205,7 @@ public:
 
     /////////////////////////////////////////////////////////////////////////////
     // Internal-only APIs! These should not be part of the public API surface
-    // TODO: Move these to impl
+    // TODO: Move these to impl (#34104)
 
     // Convert logical coordinates to virtual coordinates for ethernet coordinates
     virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(

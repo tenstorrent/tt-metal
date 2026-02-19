@@ -8,7 +8,7 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
     set(TEST_TARGET profiler_${TEST_NAME})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
-    target_link_libraries(${TEST_TARGET} PUBLIC tt_metal)
+    target_link_libraries(${TEST_TARGET} PRIVATE tt_metal)
 
     target_include_directories(
         ${TEST_TARGET}
