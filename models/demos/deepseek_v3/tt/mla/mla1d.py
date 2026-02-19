@@ -266,7 +266,7 @@ class MLA1D(AbstractModule):
                     (0, -1),
                     mesh_device,
                     wo_dram_memory_config,
-                    (0, 0, 256),  # Pad n from 896 to 1152 (multiple of 384)
+                    (0, 0, 0),  # Pad n from 896 to 1152 (multiple of 384)
                 ),
             },
         }
@@ -1788,7 +1788,24 @@ class MLA1D(AbstractModule):
         # TODO remove padding, we don't care about the extra shape
         if num_heads_local_padded != num_heads_local:
             pad_heads = num_heads_local_padded - num_heads_local
-            tt_q_nope = ttnn.pad(tt_q_nope, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
+            pad_shape = list(tt_q_nope.shape)
+            pad_shape[1] = pad_heads
+
+            tt_q_nope = ttnn.concat(
+                [
+                    tt_q_nope,
+                    ttnn.empty(
+                        pad_shape,
+                        dtype=tt_q_nope.dtype,
+                        layout=tt_q_nope.layout,
+                        device=cfg["mesh_device"],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    ),
+                ],
+                dim=1,
+            )  # [1, num_heads_padded, bsz, kv_lora_rank]
+
+            # tt_q_nope = ttnn.pad(tt_q_nope, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
 
         # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
         tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=cfg["wkv_b1_in0_memory_config"])
