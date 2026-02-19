@@ -39,10 +39,4 @@ private:
     uint64_t hash_;
 };
 
-inline uint64_t stable_hash_string(const std::string& s) {
-    FNV1a hasher;
-    hasher.update(s);
-    return hasher.digest();
-}
-
 }  // namespace tt

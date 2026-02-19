@@ -26,6 +26,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
+#include "common/stable_hash.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -298,7 +299,7 @@ void JitBuildEnv::init(
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
-    FNV1a hasher;
+    tt::FNV1a hasher;
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
     hasher.update(cflags_.begin(), cflags_.end());

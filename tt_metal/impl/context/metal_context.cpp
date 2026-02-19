@@ -268,7 +268,9 @@ void MetalContext::initialize(
 
                 // Skip firmware building for mock devices
                 if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-                    // Create build env for this device, and build FW if it's not built already
+                    // Create build env for this device, and build FW if it's not built already.
+                    // build_firmware ensures that the FW is built only once for a given build key
+                    // (which captures the fw_compile_hash).
                     BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                     BuildEnvManager::get_instance().build_firmware(device_id);
 

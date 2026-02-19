@@ -364,21 +364,24 @@ std::string ComputeKernel::config_hash() const {
 
 uint64_t Kernel::compute_hash() const {
     tt::FNV1a hasher;
-    // defines_ is std::map so iteration order is deterministic (by key).
     for (const auto& [define, value] : this->defines_) {
         hasher.update(define);
         hasher.update(value);
     }
+
     // named_compile_time_args_ is unordered_map; sort by key for consistent hash.
-    std::vector<std::string> named_keys;
-    named_keys.reserve(this->named_compile_time_args_.size());
-    for (const auto& [k, v] : this->named_compile_time_args_) {
-        named_keys.push_back(k);
-    }
-    std::ranges::sort(named_keys);
-    for (const auto& key : named_keys) {
-        hasher.update(key);
-        hasher.update(static_cast<uint64_t>(this->named_compile_time_args_.at(key)));
+    auto sorted_iters = []<typename T>(const T& umap) {
+        std::vector<typename T::const_iterator> iters;
+        iters.reserve(umap.size());
+        for (auto it = umap.begin(); it != umap.end(); ++it) {
+            iters.push_back(it);
+        }
+        std::ranges::sort(iters, [](const auto& a, const auto& b) { return a->first < b->first; });
+        return iters;
+    };
+    for (const auto& it : sorted_iters(this->named_compile_time_args_)) {
+        hasher.update(it->first);
+        hasher.update(static_cast<uint64_t>(it->second));
     }
     hasher.update(this->kernel_src_.source_);
     for (uint32_t v : this->compile_time_args_) {

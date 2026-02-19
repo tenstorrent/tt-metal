@@ -8,8 +8,6 @@
 #include <filesystem>
 #include <string>
 
-#include "common/stable_hash.hpp"
-
 namespace tt::jit_build::utils {
 
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose);
