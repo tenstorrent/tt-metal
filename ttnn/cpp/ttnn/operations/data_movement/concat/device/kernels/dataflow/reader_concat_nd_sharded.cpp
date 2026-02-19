@@ -5,8 +5,8 @@
 /*
  * ND sharded concat reader: runs on each core, copies this core's input shards
  * (in concat order) into this core's output shard. Uses TensorAccessor for each
- * tensor; reads each input shard page-by-page into a scratch CB and writes to
- * the output shard sequentially.
+ * tensor; reads each input shard page-by-page into a host-allocated L1 scratch
+ * buffer and writes to the output shard sequentially.
  */
 
 #include <cstdint>
@@ -20,7 +20,7 @@ namespace {
 
 constexpr uint32_t CONCAT_ND_SHARDED_MAX_NUM_INPUTS = ttnn::kernel::CONCAT_ND_SHARDED_MAX_NUM_INPUTS;
 
-// Scratch L1 address for copy_tensor_data (set by kernel before first call, e.g. from scratch CB).
+// Scratch L1 address for copy_tensor_data (set from runtime arg: host-allocated L1 buffer).
 uint32_t g_copy_scratch_l1_addr = 0;
 
 inline void set_copy_tensor_data_scratch(uint32_t l1_addr) { g_copy_scratch_l1_addr = l1_addr; }
@@ -58,6 +58,9 @@ void kernel_main() {
     constexpr uint32_t output_page_size = get_compile_time_arg_val(CT_OUTPUT_PAGE_SIZE);
 
     uint32_t argidx = 0;
+    const uint32_t scratch_l1_addr = get_arg_val<uint32_t>(argidx++);
+    set_copy_tensor_data_scratch(scratch_l1_addr);
+
     const uint32_t output_addr = get_arg_val<uint32_t>(argidx++);
     uint32_t input_addrs[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
@@ -85,11 +88,6 @@ void kernel_main() {
     constexpr auto in15_args = TensorAccessorArgs<in14_args.next_compile_time_args_offset()>();
 
     const auto output_accessor = TensorAccessor(out_args, output_addr, output_page_size);
-
-    // Scratch CB for copy_tensor_data (page-sized).
-    constexpr uint32_t cb_scratch_id = 0;
-    cb_reserve_back(cb_scratch_id, 1);
-    set_copy_tensor_data_scratch(get_write_ptr(cb_scratch_id));
 
     // Copy each input to output sequentially; initial offset 0, then use offset returned from previous copy.
 #define CONCAT_ND_DPRINT_INPUT(n)                                                                      \

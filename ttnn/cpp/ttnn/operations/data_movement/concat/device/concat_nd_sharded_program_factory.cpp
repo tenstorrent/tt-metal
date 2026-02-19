@@ -11,6 +11,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
@@ -68,13 +69,21 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         input_page_sizes[i] = buf->aligned_page_size();
     }
 
-    // Scratch CB (index 0) for copy_tensor_data: one page, size = max of all page sizes.
+    // Host-allocated L1 scratch buffer (one page, max page size across all tensors) for copy_tensor_data.
     const uint32_t scratch_page_size =
         std::max(output_page_size, *std::max_element(input_page_sizes.begin(), input_page_sizes.end()));
-    constexpr uint8_t cb_scratch_id = 0;
-    auto scratch_cb_config = CircularBufferConfig(scratch_page_size, {{cb_scratch_id, tt::DataFormat::RawUInt32}})
-                                 .set_page_size(cb_scratch_id, scratch_page_size);
-    CreateCircularBuffer(program, single_core_set, scratch_cb_config);
+    ShardSpecBuffer scratch_shard_spec(single_core_set, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    ShardedBufferConfig scratch_l1_config{
+        .device = output.device(),
+        .size = scratch_page_size,
+        .page_size = scratch_page_size,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = std::move(scratch_shard_spec),
+    };
+    std::shared_ptr<Buffer> scratch_l1_buffer = CreateBuffer(scratch_l1_config);
+    AssignGlobalBufferToProgram(scratch_l1_buffer, program);
+    const uint32_t scratch_l1_addr = static_cast<uint32_t>(scratch_l1_buffer->page_address(0, 0));
 
     // Compile-time args: num_input_tensors, output_page_size, input_page_sizes[0..15],
     // then output TensorAccessorArgs, then 16 input TensorAccessorArgs (absent filled from first input).
@@ -99,9 +108,10 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         single_core_set,
         ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Runtime args for the single core: 17 buffer addresses (output, in0..in15), then shard_id
+    // Runtime args for the single core: scratch_l1_addr, then 17 buffer addresses (output, in0..in15), then shard_id
     {
         std::vector<uint32_t> runtime_args;
+        runtime_args.push_back(scratch_l1_addr);
         runtime_args.push_back(output.buffer()->address());
         for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
             const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
@@ -119,7 +129,8 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
          .reader_kernel_id = reader_kernel_id,
          .writer_kernel_id = 0,
          .all_cores = single_core_set,
-         .cores = {max_core}}};
+         .cores = {max_core},
+         .scratch_l1_buffer = std::move(scratch_l1_buffer)}};
 }
 
 // Updates buffer addresses in the cached program when the same program is reused with
@@ -145,7 +156,11 @@ void ConcatNDShardedProgramFactory::override_runtime_arguments(
     TT_FATAL(shard_id_it != all_cores_list.end(), "Single core must be in grid");
     const uint32_t shard_id = static_cast<uint32_t>(std::distance(all_cores_list.begin(), shard_id_it));
 
+    TT_FATAL(shared_vars.scratch_l1_buffer, "Scratch L1 buffer must be set");
+    const uint32_t scratch_l1_addr = static_cast<uint32_t>(shared_vars.scratch_l1_buffer->page_address(0, 0));
+
     std::vector<uint32_t> runtime_args;
+    runtime_args.push_back(scratch_l1_addr);
     runtime_args.push_back(output.buffer()->address());
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
         const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();

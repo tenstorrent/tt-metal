@@ -7,6 +7,12 @@
 #include "concat_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <memory>
+
+namespace tt::tt_metal {
+class Buffer;
+}
+
 namespace ttnn::prim {
 
 // Shared variables for ND sharded concat (inputs and output are block-sharded with NdShardSpec).
@@ -19,6 +25,7 @@ struct ConcatNDShardedSharedVariables {
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     CoreRangeSet all_cores;
     std::vector<CoreCoord> cores;
+    std::shared_ptr<tt::tt_metal::Buffer> scratch_l1_buffer;
 };
 
 // Program factory for concat when all input tensors and the output tensor are ND sharded
