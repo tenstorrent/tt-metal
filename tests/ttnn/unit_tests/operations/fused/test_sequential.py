@@ -954,8 +954,9 @@ class TestParallelChains:
         assert num_kernels >= 3, "Should have kernels from fused ops"
 
     def test_chain_single_op(self, device, test_tensors):
-        """Test that chaining a single op returns it unchanged."""
+        """Test that chaining a single op returns FusedOp wrapping the original."""
         from models.experimental.ops.descriptors.sequential import OpGraphBuilder, OpNode
+        from models.experimental.ops.descriptors.op_descriptor import FusedOp
         from models.experimental.ops.descriptors.normalization import layer_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -969,8 +970,11 @@ class TestParallelChains:
 
         fused = OpGraphBuilder(OpNode(ln)).build(device)
 
-        # Should return the same descriptor
-        assert fused is ln
+        # Should return a FusedOp wrapping the original descriptor
+        assert isinstance(fused, FusedOp)
+        assert fused.descriptor is ln.descriptor
+        assert fused.input_tensors is ln.input_tensors
+        assert fused.output_tensors is ln.output_tensors
 
     def test_dump_fused_kernel_files(self, device, test_tensors, tmp_path):
         """Build a fused 3-phase chain and dump all generated kernel files for inspection."""

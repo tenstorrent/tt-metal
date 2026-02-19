@@ -196,15 +196,19 @@ class TestOpGraphBuilderBasic:
         builder = OpGraphBuilder(OpNode(mock_desc))
         assert builder._built is False
 
-    def test_single_node_returns_original(self):
-        """Test that single-node build returns original descriptor."""
+    def test_single_node_returns_fused_op(self):
+        """Test that single-node build returns FusedOp wrapping the original."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
         OpNode = _mock_sequential.OpNode
+        FusedOp = _mock_sequential.FusedOp
 
         mock_desc = self._make_mock_op()
         result = OpGraphBuilder(OpNode(mock_desc)).build(device=MagicMock())
 
-        assert result is mock_desc
+        assert isinstance(result, FusedOp)
+        assert result.descriptor is mock_desc.descriptor
+        assert result.input_tensors is mock_desc.input_tensors
+        assert result.output_tensors is mock_desc.output_tensors
 
     def test_build_twice_raises(self):
         """Test that building twice raises ValueError."""
@@ -2969,7 +2973,6 @@ def _make_mock_op(name="op"):
         descriptor=MagicMock(name=f"{name}_desc"),
         input_tensors=[MagicMock(name=f"{name}_in")],
         output_tensors=[MagicMock(name=f"{name}_out")],
-        keepalive=(),
     )
 
 
@@ -3166,33 +3169,33 @@ class TestSequentialParallelAPI:
         assert branch1.op is e
         assert branch1.children == []
 
-    def test_merge_op_descriptors(self):
-        """_merge_op_descriptors deduplicates inputs, concatenates outputs."""
-        _merge = _mock_sequential._merge_op_descriptors
-        OpDescriptor = _mock_sequential.OpDescriptor
+    def test_merge_build_results(self):
+        """_merge_build_results deduplicates inputs, concatenates outputs, unions semaphores."""
+        _merge = _mock_sequential._merge_build_results
+        _BuildResult = _mock_sequential._BuildResult
 
         shared_input = MagicMock(name="shared_in")
         in_a = MagicMock(name="in_a")
         in_b = MagicMock(name="in_b")
         out_a = MagicMock(name="out_a")
         out_b = MagicMock(name="out_b")
-        keep_a = MagicMock(name="keep_a")
-        keep_b = MagicMock(name="keep_b")
+        sem_a = MagicMock(name="sem_a")
+        sem_b = MagicMock(name="sem_b")
 
-        op_a = OpDescriptor(
+        r_a = _BuildResult(
             descriptor=MagicMock(name="desc_a"),
             input_tensors=[shared_input, in_a],
             output_tensors=[out_a],
-            keepalive=(keep_a,),
+            semaphores=(sem_a,),
         )
-        op_b = OpDescriptor(
+        r_b = _BuildResult(
             descriptor=MagicMock(name="desc_b"),
             input_tensors=[shared_input, in_b],
             output_tensors=[out_b],
-            keepalive=(keep_b,),
+            semaphores=(sem_b,),
         )
 
-        merged = _merge([op_a, op_b])
+        merged = _merge([r_a, r_b])
 
         # shared_input deduped — only 3 unique inputs
         assert len(merged.input_tensors) == 3
@@ -3205,16 +3208,21 @@ class TestSequentialParallelAPI:
         assert merged.output_tensors[0] is out_a
         assert merged.output_tensors[1] is out_b
 
-        # Keepalive unioned
-        assert len(merged.keepalive) == 2
-        assert merged.keepalive[0] is keep_a
-        assert merged.keepalive[1] is keep_b
+        # Semaphores unioned
+        assert len(merged.semaphores) == 2
+        assert merged.semaphores[0] is sem_a
+        assert merged.semaphores[1] is sem_b
 
-    def test_merge_op_descriptors_single(self):
-        """_merge_op_descriptors with single op returns it directly."""
-        _merge = _mock_sequential._merge_op_descriptors
-        op = _make_mock_op("solo")
-        assert _merge([op]) is op
+    def test_merge_build_results_single(self):
+        """_merge_build_results with single result returns it directly."""
+        _merge = _mock_sequential._merge_build_results
+        _BuildResult = _mock_sequential._BuildResult
+        r = _BuildResult(
+            descriptor=MagicMock(name="desc"),
+            input_tensors=[MagicMock(name="in")],
+            output_tensors=[MagicMock(name="out")],
+        )
+        assert _merge([r]) is r
 
     def test_resolve_raw_op_descriptor(self):
         """_resolve(OpDescriptor) returns [OpNode(op)]."""
@@ -3241,6 +3249,21 @@ class TestSequentialParallelAPI:
         _resolve = _mock_sequential._resolve
         with pytest.raises(TypeError, match="Unsupported"):
             _resolve(42)
+
+    def test_resolve_rejects_fused_op(self):
+        """_resolve(FusedOp) raises TypeError — prevents nesting."""
+        _resolve = _mock_sequential._resolve
+        FusedOp = _mock_sequential.FusedOp
+        OpDescriptor = _mock_sequential.OpDescriptor
+        fused = FusedOp(
+            op=OpDescriptor(
+                descriptor=MagicMock(name="desc"),
+                input_tensors=[],
+                output_tensors=[],
+            ),
+        )
+        with pytest.raises(TypeError, match="FusedOp cannot be nested"):
+            _resolve(fused)
 
     def test_multi_level_sequential_flattening(self):
         """Sequential(Sequential(a, Sequential(b, c)), d) deeply flattens."""
