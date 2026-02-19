@@ -498,9 +498,10 @@ void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
 }
 
 const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_cores(ChipId dev_id) const {
-    TT_ASSERT(
-        initializers_.contains(DispatchKernelInitializer::key),
-        "Dispatch firmware not initialized yet. Call initialize_dispatch_firmware() first.");
+    if (!initializers_.contains(DispatchKernelInitializer::key)) {
+        // Dispatch firmware is not initialized in minimal mode
+        return this->empty_container_;
+    }
     auto* dispatch_kernel_initializer =
         dynamic_cast<DispatchKernelInitializer*>(initializers_.at(DispatchKernelInitializer::key).get());
     TT_ASSERT(
@@ -510,9 +511,10 @@ const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_cores(C
 }
 
 const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_routing_cores(ChipId dev_id) const {
-    TT_ASSERT(
-        initializers_.contains(DispatchKernelInitializer::key),
-        "Dispatch firmware not initialized yet. Call initialize_dispatch_firmware() first.");
+    if (!initializers_.contains(DispatchKernelInitializer::key)) {
+        // Dispatch firmware is not initialized in minimal mode
+        return this->empty_container_;
+    }
     auto* dispatch_kernel_initializer =
         dynamic_cast<DispatchKernelInitializer*>(initializers_.at(DispatchKernelInitializer::key).get());
     TT_ASSERT(

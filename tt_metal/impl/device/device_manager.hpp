@@ -74,6 +74,7 @@ private:
     std::vector<std::unique_ptr<Device>> devices_;
 
     bool skip_remote_devices_{};
+    const std::unordered_set<CoreCoord> empty_container_;
 
     std::shared_ptr<ContextDescriptor> descriptor_;
     std::map<InitializerKey, std::unique_ptr<FirmwareInitializer>> initializers_;
