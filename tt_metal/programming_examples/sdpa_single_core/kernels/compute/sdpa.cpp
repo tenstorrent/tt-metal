@@ -1090,8 +1090,7 @@ void sdpa_inner_loop(
         } else {
             cb_pop_front(alias_cur_max, Sq_chunk_t);
             cb_pop_front(alias_cur_sum, Sq_chunk_t);
-            cb_wait_front(alias_cur_out, Sq_chunk_t * head_dim_t);
-            cb_pop_front(alias_cur_out, Sq_chunk_t * head_dim_t);
+            // alias_cur_out left in CB for the writer kernel to consume and write to DRAM.
         }
         MATH(DPRINT << "Finished iteration " << iter << ENDL());
     }  // end for (iter)

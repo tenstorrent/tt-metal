@@ -256,6 +256,11 @@ void sdpa_single_core(
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    // Read final SDPA output back from DRAM (blocking call waits for workload to finish).
+    std::vector<bfloat16> result(out_num_tiles * TILE_HEIGHT * TILE_WIDTH);
+    distributed::EnqueueReadMeshBuffer(cq, result, out_dram_buffer, true);
+    fmt::print("Output read from DRAM successfully ({} tiles, {} elements)\n", out_num_tiles, result.size());
 }
 
 ///////////////////////////////////////

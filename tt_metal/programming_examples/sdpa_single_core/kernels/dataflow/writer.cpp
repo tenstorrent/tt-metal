@@ -29,4 +29,24 @@ void kernel_main() {
         }
     }
     cb_push_back(cb_neginf, 1);
+
+    // Write final SDPA output from L1 to DRAM.
+    // The compute kernel leaves the final output in one of the ping-pong output CBs.
+    // Which one depends on num_iter parity (see compute kernel's alias_cur_out tracing).
+    constexpr uint32_t cb_out_A = tt::CBIndex::c_25;
+    constexpr uint32_t cb_out_B = tt::CBIndex::c_26;
+    constexpr uint32_t cb_final_out = (num_iter % 2 == 0) ? cb_out_A : cb_out_B;
+    constexpr uint32_t out_num_tiles = Sq_chunk_t * head_dim_t;
+
+    uint32_t out_addr = get_arg_val<uint32_t>(0);
+    constexpr auto out_accessor_args = TensorAccessorArgs<6>();
+    const auto out_accessor = TensorAccessor(out_accessor_args, out_addr, get_tile_size(cb_final_out));
+
+    for (uint32_t tile_idx = 0; tile_idx < out_num_tiles; ++tile_idx) {
+        cb_wait_front(cb_final_out, 1);
+        uint32_t l1_read_addr = get_read_ptr(cb_final_out);
+        noc_async_write_tile(tile_idx, out_accessor, l1_read_addr);
+        noc_async_write_barrier();
+        cb_pop_front(cb_final_out, 1);
+    }
 }
