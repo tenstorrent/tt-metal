@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -144,7 +145,7 @@ class RopeSingleCore:
         # CB 0: Input (sharded tensor)
         input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, input_tensor)
 
-        # CB 1: Cos (sharded tensor)
+        # CB 1: Cos (same tile format as input for broadcast compatibility)
         cos_format = ttnn.CBFormatDescriptor(
             buffer_index=cos_cb,
             data_format=data_format,
@@ -157,7 +158,7 @@ class RopeSingleCore:
             format_descriptors=[cos_format],
         )
 
-        # CB 2: Sin (sharded tensor)
+        # CB 2: Sin (same tile format as input for broadcast compatibility)
         sin_format = ttnn.CBFormatDescriptor(
             buffer_index=sin_cb,
             data_format=data_format,
@@ -219,9 +220,6 @@ class RopeSingleCore:
         # Unified Kernel Descriptor (handles NCRISC, BRISC, TRISC)
         # ========================================================================
 
-        # Grid bounds for per-core page offset computation
-        bbox = core_grid.bounding_box()
-
         # Named compile-time args for NCRISC
         ncrisc_named_compile_time_args = [
             ("in_cb", input_cb),
@@ -234,11 +232,11 @@ class RopeSingleCore:
             ("cos_sin_page_size", tile_size),
             ("Wt", head_dim_per_core_t),
             ("Ht", 1),
-            ("grid_start_x", bbox.start.x),
-            ("grid_start_y", bbox.start.y),
-            ("grid_end_x", bbox.end.x),
-            ("grid_end_y", bbox.end.y),
         ]
+
+        # Per-core bank_id: each compute core reads from its assigned DRAM bank
+        all_cores = ttnn.corerange_to_cores(core_grid)
+        bank_id_core_values = [(core, idx) for idx, core in enumerate(all_cores)]
 
         # Named compile-time args for BRISC (empty - no-op)
         brisc_named_compile_time_args = []
@@ -275,6 +273,13 @@ class RopeSingleCore:
                     named_compile_time_arg="is_active_core",
                     core_range=core_grid,
                     value=1,
+                    other_value=0,
+                ),
+            ],
+            per_core_compile_time_descriptors=[
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="bank_id",
+                    core_values=bank_id_core_values,
                     other_value=0,
                 ),
             ],
