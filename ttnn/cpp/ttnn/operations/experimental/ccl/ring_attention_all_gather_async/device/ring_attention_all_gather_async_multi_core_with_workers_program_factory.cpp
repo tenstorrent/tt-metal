@@ -183,8 +183,14 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Get worker cores
     // 2 sender (forward/backward, each with a reader/writer)
     uint32_t num_senders_per_link = 2;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        ttnn::ccl::choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
+    const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+        num_links,
+        num_senders_per_link,
+        mesh_device,
+        sub_device_id,
+        core_grid_offset,
+        std::nullopt,
+        ttnn::ccl::CoreAllocationStrategy::COL_MAJOR);
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
