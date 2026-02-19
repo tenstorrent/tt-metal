@@ -15,9 +15,9 @@ inline void llk_math_eltwise_unary_sfpu_init() {
 }
 
 template <SfpuType sfpu_op, bool APPROXIMATE, class F, class... ARGS>
-inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
+inline auto llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
     _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
-    init_func(static_cast<ARGS&&>(args)...);
+    return init_func(static_cast<ARGS&&>(args)...);
 }
 
 }  // namespace ckernel

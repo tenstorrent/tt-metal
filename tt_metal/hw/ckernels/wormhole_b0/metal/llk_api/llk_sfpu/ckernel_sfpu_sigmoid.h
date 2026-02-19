@@ -8,11 +8,12 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_recip.h"
+#include "vconst_verifier.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool is_fp32_acc_to_dest_mode = true>
+template <bool is_fp32_acc_to_dest_mode = true, typename vConstVerifier = vconst_verifier::disable>
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // Compute sigmoid as:
     // sigmoid(x) = 1 / (1 + exp(-x))
@@ -30,9 +31,9 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 
     sfpi::vFloat result;
     if constexpr (is_fp32_acc_to_dest_mode) {
-        result = _sfpu_reciprocal_<2>(denominator);
+        result = _sfpu_reciprocal_<2, vConstVerifier>(denominator);
     } else {
-        result = _sfpu_reciprocal_<1>(denominator);
+        result = _sfpu_reciprocal_<1, vConstVerifier>(denominator);
     }
 
     return result;
@@ -76,12 +77,13 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void sigmoid_init() {
+template <bool APPROXIMATION_MODE, typename vConstVerifier = vconst_verifier::disable>
+inline auto sigmoid_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        _init_reciprocal_<false, false>();
+        return _init_reciprocal_<false, false, false, vConstVerifier>();
     } else {
         sigmoid_appx_init();
+        return vconst_verifier::unhandled();
     }
 }
 
