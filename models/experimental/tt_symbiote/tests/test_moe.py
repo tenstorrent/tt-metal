@@ -8,30 +8,12 @@ import pytest
 import torch
 
 from models.experimental.tt_symbiote.modules.moe import (
-    Glm4MoeConfig,
     Glm4MoeMoE,
     TTNNMoE,
 )
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.core.utils import compare_fn_outputs
 import ttnn
-
-
-@pytest.fixture
-def default_moe_config():
-    """Default MoE configuration for testing."""
-    return Glm4MoeConfig(
-        hidden_size=2048,
-        intermediate_size=10240,
-        moe_intermediate_size=1536,
-        num_local_experts=64,
-        num_experts_per_tok=4,
-        n_shared_experts=1,
-        routed_scaling_factor=1.8,
-        n_group=1,
-        topk_group=1,
-        norm_topk_prob=True,
-    )
 
 
 @pytest.mark.parametrize(
@@ -44,19 +26,19 @@ def default_moe_config():
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 245760, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
-def test_glm4_moe_full(mesh_device, default_moe_config, real_weights):
+def test_glm4_moe_full(mesh_device, default_glm_config, real_weights):
     """Test full Glm4MoeMoE module with TTNN acceleration."""
     if real_weights:
         from transformers import AutoModelForCausalLM
 
         model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash").model.layers[1].mlp
     else:
-        model = Glm4MoeMoE(default_moe_config).to(dtype=torch.bfloat16)
+        model = Glm4MoeMoE(default_glm_config).to(dtype=torch.bfloat16)
     model.eval()
     torch.set_grad_enabled(False)
 
     batch_size, seq_len = 1, 115
-    inputs = torch.randn((batch_size, seq_len, default_moe_config.hidden_size), dtype=torch.bfloat16)
+    inputs = torch.randn((batch_size, seq_len, default_glm_config.hidden_size), dtype=torch.bfloat16)
     outputs_torch = model(inputs)
     ttnn_model = TTNNMoE.from_torch(model)
     set_device(ttnn_model, mesh_device)
