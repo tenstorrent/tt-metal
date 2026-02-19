@@ -494,6 +494,7 @@ jobs:
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
+          ls -l build/
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}

@@ -98,10 +98,22 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          cd /work/build/tt-train
-          mkdir -p generated/test_reports
-          ldd tests/ttml_tests || true
-          ${{ matrix.test-group.cmd }}
+          # cd /work/build/tt-train
+          # mkdir -p generated/test_reports
+          # ldd tests/ttml_tests || true
+          # ${{ matrix.test-group.cmd }}
+          which python
+          which pytest
+          export -p
+          pip list
+          uv pip list
+          export CC=clang-20 CXX=clang++-20
+          export PYTHONPATH=/work
+          cd /work/tt-train
+          uv pip install .
+          export TT_METAL_HOME=/work
+          export TT_METAL_RUNTIME_ROOT=/work
+          pytest tests/python
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
