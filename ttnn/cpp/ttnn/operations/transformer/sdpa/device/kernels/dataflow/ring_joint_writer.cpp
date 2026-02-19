@@ -88,8 +88,9 @@ void kernel_main() {
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(17);
     constexpr uint32_t scale_val = get_compile_time_arg_val(18);
     constexpr uint32_t ring_size = get_compile_time_arg_val(19);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(20) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<21>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -132,6 +133,7 @@ void kernel_main() {
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
+    uint32_t rind_index = fused_op_receiver.ring_index;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -141,8 +143,10 @@ void kernel_main() {
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+        const bool ring_iter_does_work =
+            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
         if (!ring_iter_does_work) {
+            DPRINT << "SKIPPING WRITE" << ENDL();
             continue;
         }
 
@@ -181,16 +185,17 @@ void kernel_main() {
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
-        DPRINT << "global mask: " << (ring_iter_needs_global_n_mask ? "true" : "false")
-               << " local mask: " << (ring_iter_needs_local_n_mask ? "true" : "false") << ENDL();
+        // DPRINT << "global mask: " << (ring_iter_needs_global_n_mask ? "true" : "false")
+        //        << " local mask: " << (ring_iter_needs_local_n_mask ? "true" : "false") << ENDL();
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+            bool causality = (ring_iter == 0 ? is_causal : false);
 
-            generate_mask<false, false, 0, true, cb_mask_in>(  // ADD CAUSAL TRUE
+            generate_mask<false, 0, true, cb_mask_in>(  // ADD CAUSAL TRUE
                 Sq_chunk_t,
                 Sk_chunk_t,
                 q_chunk,
@@ -198,7 +203,8 @@ void kernel_main() {
                 ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
                 ring_iter_needs_joint_n_mask,
                 ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
-                L);
+                L,
+                causality);
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;
@@ -266,4 +272,5 @@ void kernel_main() {
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
+    DPRINT << "WRITER EXIT" << ENDL();
 }
