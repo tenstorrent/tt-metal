@@ -1405,11 +1405,12 @@ class MoeRoutedExpertOp:
             ("down_proj_index_offset", mesh_chip_id),
             # Testing flag
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
-            # ReduceToOne reader args (CB indices)
+            # ReduceToOne reader args (CB indices + common RT arg base)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_received_cb_r1", ctx.reduce_received_cb_r1),
             ("reduce_received_cb_r2", ctx.reduce_received_cb_r2),
             ("reduce_received_cb_r3", ctx.reduce_received_cb_r3),
+            ("reduce_ncrisc_common_rt_arg_base", 0),
         ]
 
         brisc_named_compile_time_args = [
@@ -1491,9 +1492,11 @@ class MoeRoutedExpertOp:
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Eltwise add CB (needed by output mcast sender for get_write_ptr)
             ("add_cb_in1", ctx.add_cb_in1),
-            # ReduceToOne writer args (CB indices)
+            # ReduceToOne writer args (CB indices + RT arg bases)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
+            ("reduce_brisc_rt_arg_base", 0),
+            ("reduce_brisc_fabric_rt_arg_base", 0),
         ]
 
         trisc_named_compile_time_args = [
@@ -1504,6 +1507,7 @@ class MoeRoutedExpertOp:
             ("rmsnorm_fp32_acc", 0),
             ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
             ("rmsnorm_rsqrt_fast_approx", 0),
+            ("rmsnorm_trisc_common_rt_arg_base", 0),
             # Gate matmul compute
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"]),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"]),
