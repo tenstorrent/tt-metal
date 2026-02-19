@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -134,8 +135,8 @@ class KVCacheBranch:
         # CONSOLIDATE!!!!!!!!!
         # Tile sizes: 1x32 = 64 bytes (BF16), 16x32 = 1024 bytes (BF16), 32x32 = 2048 bytes (BF16)
 
-        cos_cb = 0  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
-        sin_cb = 1  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
+        cos_cb = 0  # tile (NCRISC reads from DRAM)
+        sin_cb = 1  # tile (NCRISC reads from DRAM)
         trans_mat_cb = 2  # 1x32 tile, 64 bytes (sharded, 1 tile per core) - actually 32x32 for matmul
         rotated_input_interm_cb = 3  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
         cos_interm_cb = 4  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
@@ -200,7 +201,8 @@ class KVCacheBranch:
         # Sender runs on NCRISC (NOC_0 default), Receiver runs on BRISC (NOC_1 default)
         # ========================================================================
         dkv_gather_receiver_core = gamma_tensor.memory_config().shard_spec.grid.ranges()[0].start
-        dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(cos_tensor.memory_config().shard_spec.grid)
+        krope_core_grid = trans_mat_tensor.memory_config().shard_spec.grid
+        dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(krope_core_grid)
 
         # Get NOC coordinates for gather destination (receiver core)
         dkv_gather_dest_noc_core = device.worker_core_from_logical_core(dkv_gather_receiver_core)
@@ -256,6 +258,14 @@ class KVCacheBranch:
         ]
 
         # ROPE
+        rope_tile = cos_tensor.get_tile()
+        rope_tile_size = rope_tile.get_tile_size(data_format)
+        cos_tensor_address = cos_tensor.buffer_address()
+        sin_tensor_address = sin_tensor.buffer_address()
+
+        rope_cores = ttnn.corerange_to_cores(krope_core_grid)
+        bank_id_core_values = [(core, idx) for idx, core in enumerate(rope_cores)]
+
         krope_brisc_named_compile_time_args = [
             ("k_rope_output_cb", k_rope_output_cb),
             ("Wt", 1),  # Needed for KV Cache update
@@ -265,9 +275,13 @@ class KVCacheBranch:
             ("in_cb", dkv_matmul_output_cb),
             ("cos_cb", cos_cb),
             ("sin_cb", sin_cb),
+            ("cos_tensor_address", cos_tensor_address),
+            ("sin_tensor_address", sin_tensor_address),
+            ("position_ids_tensor_address", position_ids_tensor_addr),
             ("trans_mat_cb", trans_mat_cb),
             ("Wt", 1),
             ("Ht", 1),
+            ("cos_sin_page_size", rope_tile_size),
         ]
         krope_trisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
@@ -346,11 +360,30 @@ class KVCacheBranch:
 
         krope_tile_size = TILE_1x32.get_tile_size(data_format)
         krope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        krope_core_grid = cos_tensor.memory_config().shard_spec.grid
-        # CB X: Cos (sharded tensor)
-        cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cos_cb, cos_tensor)
-        # CB X: Sin (sharded tensor)
-        sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sin_cb, sin_tensor)
+
+        rope_tile_descriptor = ttnn.TileDescriptor(rope_tile)
+        cos_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_cb,
+            data_format=data_format,
+            page_size=rope_tile_size,
+            tile=rope_tile_descriptor,
+        )
+        cos_cb_descriptor = ttnn.CBDescriptor(
+            total_size=1 * rope_tile_size,
+            core_ranges=krope_core_grid,
+            format_descriptors=[cos_cb_format],
+        )
+        sin_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=sin_cb,
+            data_format=data_format,
+            page_size=rope_tile_size,
+            tile=rope_tile_descriptor,
+        )
+        sin_cb_descriptor = ttnn.CBDescriptor(
+            total_size=1 * rope_tile_size,
+            core_ranges=krope_core_grid,
+            format_descriptors=[sin_cb_format],
+        )
         # CB X: Trans_mat (sharded tensor)
         trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(trans_mat_cb, trans_mat_tensor)
 
@@ -480,8 +513,15 @@ class KVCacheBranch:
                 ),
                 UnifiedCompileTimeCoreDescriptor(
                     named_compile_time_arg="is_krope_core",
-                    core_range=krope_core_grid,  # TODO: could be wrong if shared cos tensor with q rope
+                    core_range=krope_core_grid,
                     value=1,
+                    other_value=0,
+                ),
+            ],
+            per_core_compile_time_descriptors=[
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="bank_id",
+                    core_values=bank_id_core_values,
                     other_value=0,
                 ),
             ],
@@ -512,12 +552,11 @@ class KVCacheBranch:
         )
 
         # Execute generic op
+        # cos_tensor and sin_tensor are accessed by DRAM address, not as io tensors
         io_tensors = [
             input_tensor,
             dkv_matmul_weights_tensor,
             gamma_tensor,
-            cos_tensor,
-            sin_tensor,
             trans_mat_tensor,
             kv_cache_tensor,
             output_tensor,

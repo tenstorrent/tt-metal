@@ -172,25 +172,30 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     )
 
     # ROPE
-    # Cos/sin indexed by position: [1, batch, 1, head_dim]
-    # Shape stays [1, 1, 1, head_dim] - broadcast multiply will use row 0
     rope_tile = ttnn.Tile((rope_num_heads, ttnn.TILE_SIZE))
     trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
-    cos_selected = torch_cos[position_ids].unsqueeze(0).unsqueeze(2)
-    sin_selected = torch_sin[position_ids].unsqueeze(0).unsqueeze(2)
 
-    # Use same tiny tile as input - data in row 0, rows 1+ are padding
+    # Full cos/sin cache in DRAM WIDTH_SHARDED: [1, 1, max_seq_len * rope_num_heads, rope_head_dim]
+    # Each position's cos/sin row is repeated rope_num_heads times to match tile height.
+    # Kernel indexes by position_id at runtime.
+    num_rope_cores = rope_crs.num_cores()
+    cos_repeated = torch_cos.unsqueeze(1).expand(-1, rope_num_heads, -1).reshape(-1, rope_head_dim)
+    sin_repeated = torch_sin.unsqueeze(1).expand(-1, rope_num_heads, -1).reshape(-1, rope_head_dim)
+    cos_full = cos_repeated.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len * rope_num_heads, rope_head_dim]
+    sin_full = sin_repeated.unsqueeze(0).unsqueeze(0)
+
+    dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_rope_cores - 1, 0))})
     cos_sin_shard_spec = ttnn.ShardSpec(
-        rope_crs,
-        (rope_num_heads, rope_head_dim // 2),
+        dram_shard_grid,
+        (max_seq_len * rope_num_heads, rope_head_dim // num_rope_cores),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, cos_sin_shard_spec
     )
 
     tt_cos = ttnn.from_torch(
-        cos_selected,
+        cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -198,7 +203,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tile=rope_tile,
     )
     tt_sin = ttnn.from_torch(
-        sin_selected,
+        sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
