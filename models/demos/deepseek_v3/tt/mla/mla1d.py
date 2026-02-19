@@ -440,7 +440,6 @@ class MLA1D(AbstractModule):
         grid_size = mesh_device.compute_with_storage_grid_size()
 
         # Extract dimensions from HF config
-        dim = hf_config.hidden_size
         num_heads = hf_config.num_attention_heads
         q_lora_rank = hf_config.q_lora_rank
         kv_lora_rank = hf_config.kv_lora_rank
@@ -701,13 +700,10 @@ class MLA1D(AbstractModule):
         # wq_b: m=32, k=1536, n=3072 (already aligned)
         # in0_core_grid=(8,2), out_core_grid=(8,2), WIDTH sharding
         # =====================================================================
-        wq_b_k = q_lora_rank  # 1536
         wq_b_n = num_heads_local * qk_head_dim  # 16 * 192 = 3072
         wq_b_n_padded = pad_n_to_dram_banks(wq_b_n)  # 3072 (already aligned)
         wq_b_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
         wq_b_out_core_grid = ttnn.CoreGrid(y=2, x=8)
-        wq_b_num_in0_cores = 16
-        wq_b_num_out_cores = 16
 
         # Program config for wq_b
         wq_b_in0_block_w = 3  # 1536 // 16 // 32 = 3
