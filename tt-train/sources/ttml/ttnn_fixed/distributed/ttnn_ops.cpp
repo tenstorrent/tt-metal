@@ -46,17 +46,23 @@ bool is_cluster_axis_ring(uint32_t cluster_axis) {
 
 // Get the appropriate CCL topology based on cluster axis ring status
 ttnn::ccl::Topology get_topology_for_cluster_axis(const std::optional<uint32_t>& cluster_axis) {
-    auto fabric_config = tt::tt_fabric::GetFabricConfig();
-
     if (!cluster_axis.has_value()) {
-        // No cluster_axis specified - check fabric config
-        if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
-            return ttnn::ccl::Topology::Ring;
+        auto* mesh_device = &ttml::autograd::ctx().get_device();
+        const auto& mesh_shape = mesh_device->shape();
+
+        TT_FATAL(
+            mesh_shape.is_line_topology(),
+            "cluster_axis must be specified for non-line mesh topologies. "
+            "Mesh shape {} has multiple non-trivial dimensions.",
+            mesh_shape);
+
+        // Find the only non-trivial axis (dimension > 1)
+        for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+            if (mesh_shape[i] > 1) {
+                return is_cluster_axis_ring(i) ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
+            }
         }
-        // For 2D fabrics without cluster_axis, we must use Linear topology
-        // because Ring/Torus requires knowing which axis to wrap around
-        // Note: 2D TORUS configs (FABRIC_2D_TORUS_X/Y/XY) should specify cluster_axis
-        // to get Ring topology on that axis
+        // All dimensions are 1 (single device case) - use Linear
         return ttnn::ccl::Topology::Linear;
     }
 

@@ -48,8 +48,7 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
         key_with_heads = (*m_embedding)(key_with_heads);
     }
 
-    auto attention =
-        ttml::ops::scaled_dot_product_attention_fused(query_with_heads, key_with_heads, value_with_heads, mask);
+    auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     attention = ops::heads_fusion(attention);
 
     auto out = (*m_out_linear)(attention);

@@ -121,10 +121,8 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
         tt::tt_metal::DeviceStorage grad_query_storage(grad_query_mesh_buffer, single_coord_vec);
 
         // Create TensorTopology
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(mesh_shape.dims());
-        for (size_t i = 0; i < mesh_shape.dims(); i++) {
-            placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
+        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
+            mesh_shape.dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
         tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
 
         // Create single-device tensors
