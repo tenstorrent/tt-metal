@@ -167,6 +167,16 @@ jobs:
           else
             echo "Found PR #$PR_NUMBER"
             echo "issue=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+            # Check if author is a first-time contributor
+            AUTHOR_ASSOCIATION=$(echo "$PR_JSON" | jq -r '.[0].author_association // "UNKNOWN"')
+            echo "Author association: $AUTHOR_ASSOCIATION"
+
+            if [ "$AUTHOR_ASSOCIATION" = "FIRST_TIME_CONTRIBUTOR" ]; then
+              echo "⚠️  Note: This is a first-time contributor"
+              echo "   GitHub applies extra security validation for first-time contributors,"
+              echo "   which may cause workflow validation timeouts even when no workflows are modified."
+            fi
           fi
 
       - name: Post comment on PR
