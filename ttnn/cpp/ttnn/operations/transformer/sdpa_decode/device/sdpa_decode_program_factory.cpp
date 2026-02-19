@@ -1041,8 +1041,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             reduction_group_base_idx,
         };
         // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
-        for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
-            writer_rt_args.push_back(tree_params.children_per_round[r]);
+        for (unsigned int children : tree_params.children_per_round) {
+            writer_rt_args.push_back(children);
         }
         // Add reduction group physical core coordinates (for tree communication)
         // First add the x coordinates for all cores in this reduction group
@@ -1075,8 +1075,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             tree_params.my_active_rounds,
         };
         // Add children_per_round array for compute
-        for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
-            compute_rt_args.push_back(tree_params.children_per_round[r]);
+        for (unsigned int children : tree_params.children_per_round) {
+            compute_rt_args.push_back(children);
         }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
