@@ -122,11 +122,13 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
 
 Tensor::Tensor(const Tensor& other) = default;
 
-Tensor::~Tensor() { this->deallocate_impl(/*force=*/false); }
+Tensor::~Tensor() { this->deallocate(/*force=*/false); }
 
-void Tensor::deallocate(bool force) { deallocate_impl(force); }
+void Tensor::deallocate(bool force) {
+    if (backing_tensor == nullptr) {
+        return;
+    }
 
-void Tensor::deallocate_impl(bool force) {
     auto can_deallocate = []<typename T>(const std::shared_ptr<T>& shared_resource, bool force) {
         // It is safe to deallocate a shared resource, if either it is not shared or `force` is set.
         return shared_resource.use_count() == 1 ||  //
