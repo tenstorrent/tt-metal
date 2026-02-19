@@ -71,21 +71,13 @@ void kernel_main() {
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
-        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_core_noc_x"),
-        get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender")>;
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_is_sender")>;
 
     // CCL Broadcast reader runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
     if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_common_arg_val<uint32_t>(0),  // tensor_address0
-            get_common_arg_val<uint32_t>(1),  // tile_id_start
-            get_common_arg_val<uint32_t>(2),  // tile_id_end
-        };
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
     }
 
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -229,7 +221,7 @@ void kernel_main() {
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
         get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
         get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
@@ -249,19 +241,17 @@ void kernel_main() {
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
             get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(2),   // tile_id_start
-            get_common_arg_val<uint32_t>(3),   // tile_id_end
-            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
-            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
-            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(9),   // barrier_sem
-            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(12),  // ring_index
-            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
+            get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(7),   // barrier_sem
+            get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(10),  // ring_index
+            get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
         };
     }
     // CTArgs type aliases (required for Op templates)

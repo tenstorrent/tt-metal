@@ -192,17 +192,14 @@ class BroadcastRMSNorm:
                 range_hops_backward = num_targets_backward
 
                 rmsnorm_input_source_cb = input_cb
+                num_pages_to_read = input_num_pages
 
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     # CCL broadcast reader args (dummy values when skip_ccl)
                     ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
-                    ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
+                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
                     ("is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
                     ("rmsnorm_input_cb", rmsnorm_input_source_cb),
                     ("rmsnorm_num_tiles", num_tiles),
                 ]
@@ -211,7 +208,7 @@ class BroadcastRMSNorm:
                     ("skip_ccl", 1 if skip_ccl else 0),
                     # CCL broadcast writer args (dummy values when skip_ccl)
                     ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
+                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
                     ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
                     ("num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
                     ("num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
@@ -264,13 +261,6 @@ class BroadcastRMSNorm:
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
                     num_connections = len(dst_nodes)
 
-                # Common runtime args for reader (broadcast args shared across cores)
-                reader_common_rt_args = [
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
-                    tile_id_start,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                ]
-
                 # Common runtime args for writer (broadcast args shared across cores)
                 writer_common_rt_args = []
                 if not skip_ccl:
@@ -282,8 +272,6 @@ class BroadcastRMSNorm:
                     writer_common_rt_args = [
                         int(intermediate_tensor_device.buffer_address()),  # tensor_address0
                         int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        tile_id_start,  # tile_id_start
-                        input_num_pages,  # tile_id_end
                         int(wait_output_semaphore),  # wait_output_semaphore
                         int(reset_global_semaphore),  # reset_global_semaphore
                         core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
@@ -308,18 +296,8 @@ class BroadcastRMSNorm:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB 2: packet buffer
-                pkt_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=pkt_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-                pkt_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=num_tiles * cb_page_size,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[pkt_cb_format],
-                )
+                # CB 2: ccl buffer
+                pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(pkt_cb, input_tensor_mesh)
 
                 # CB 3: Gamma (created from sharded gamma tensor)
                 gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor)
@@ -339,7 +317,6 @@ class BroadcastRMSNorm:
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
-                    ncrisc_common_runtime_args=reader_common_rt_args,
                     brisc_common_runtime_args=writer_common_rt_args,
                     trisc_common_runtime_args=[epsilon_packed, scalar_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
