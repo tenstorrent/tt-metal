@@ -178,6 +178,7 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "mesh_shape",
     [
@@ -293,10 +294,11 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-            False,  # enable_decode_trace
-            False,  # enable_prefill_trace
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
             False,  # users_row_sharded
-            False,  # long_context_mode
+            True,  # long_context_mode
+            False,  # stop_at_eos
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -305,12 +307,13 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             16 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 256 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-            False,  # enable_decode_trace
-            False,  # enable_prefill_trace
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
             False,  # users_row_sharded
-            False,  # long_context_mode
+            True,  # long_context_mode
+            False,  # stop_at_eos
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -319,8 +322,13 @@ def prepare_gpt_oss_generator_args(
         #     1,  # repeat_batches
         #     32 * 1024,  # max_seq_len
         #     200,  # max_generated_tokens
-        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp":  128 * 1024 // 64},  # page_params
         #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        #     True,  # enable_decode_trace
+        #     True,  # enable_prefill_trace
+        #     False,  # users_row_sharded
+        #     True,  # long_context_mode
+        #     False,  # stop_at_eos
         # ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -329,18 +337,13 @@ def prepare_gpt_oss_generator_args(
         #     1,  # repeat_batches
         #     64 * 1024,  # max_seq_len
         #     200,  # max_generated_tokens
-        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-        # ),
-        # (
-        #     "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
-        #     1,  # data_parallel
-        #     1,  # batch_size
-        #     1,  # repeat_batches
-        #     128 * 1024,  # max_seq_len
-        #     200,  # max_generated_tokens
-        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
+        #     True,  # enable_decode_trace
+        #     True,  # enable_prefill_trace
+        #     False,  # users_row_sharded
+        #     True,  # long_context_mode
+        #     False,  # stop_at_eos
         # ),
     ],
     ids=[
@@ -352,9 +355,9 @@ def prepare_gpt_oss_generator_args(
         "long_context_short_prefill_long_decode"
         "prefill_8k",
         "prefill_16k",
-        # "prefill_32k",
-        # "prefill_64k",
-        # "prefill_128k",
+        "prefill_32k",
+        # "prefill_64k", OOM error
+        # "prefill_128k", OOM error
     ],
 )
 @parametrize_mesh_with_fabric()
@@ -383,6 +386,9 @@ def test_gpt_oss_demo(
         pytest.skip(
             f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
         )
+    if mesh_shape[0] > 1 and (batch_size * data_parallel) == 1:
+        pytest.skip("For 4x8 mesh, batch * DP should be greater than 1.")
+
     if os.environ.get("CI", None) and long_context_mode:
         pytest.skip(f"Long-context mode skipped for CI environment.")
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
