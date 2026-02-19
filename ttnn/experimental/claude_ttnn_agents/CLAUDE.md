@@ -120,12 +120,16 @@ Pipeline: analyzer → planner → scaffolder → factory-builder → kernel-des
 For rapid prototyping using `ttnn.generic_op()` and ProgramDescriptor APIs.
 Invoke with `/create-op` — the skill encodes the full pipeline:
 
-Pipeline: analyzer → planner → (generic_op_builder || kernel-designer) → TDD kernel-writer
+Pipeline: analyzer → planner → kernel-designer → generic_op_builder → TDD kernel-writer
 
 Key features:
-- `generic_op_builder` and `kernel-designer` run in **parallel**
-- Kernel implementation uses stage-gated TDD (see `/tdd-kernels` skill)
+- `kernel-designer` runs first (determines TDD stages via H1/H2 heuristics, registers them in `.tdd_state.json`), then `generic_op_builder` runs (reads `.tdd_state.json` to discover stages)
+- Kernel implementation uses stage-gated TDD (see `/tdd-kernels` skill) — kernel-writer implements one stage at a time, forbidden from implementing future stages
 - Supports interactive (default) and fully automated modes
 
+Operation code: `ttnn/ttnn/operations/{op_name}/`
+Tests: `tests/ttnn/unit_tests/operations/{op_name}/`
+
 ### Additional Resources
-- `ttnn/experimental/claude_ttnn_agents/subagent_breakdown.md` - Detailed agent breakdown
+- `ttnn/experimental/claude_ttnn_agents/QUICK_START.md` - End-to-end workflow example
+- `ttnn/experimental/claude_ttnn_agents/subagent_breakdown.md` - Detailed agent breakdown (Standard C++ workflow)

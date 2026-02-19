@@ -3,7 +3,7 @@ name: ttnn-kernel-designer
 description: Use this agent to design kernel implementation strategy before writing code. Given an operation spec and kernel helper library headers, this agent produces a Kernel Design Document that maps computation phases to helper functions (priority) or raw calls (when no helper exists). The output is consumed by ttnn-kernel-writer.\n\n**Usage Patterns**:\n\n1. **Full pipeline usage**: Run after ttnn-factory-builder completes Stages 4-6. Uses the functional spec and CB configuration to design how kernels should implement the computation phases.\n\n2. **Standalone usage**: Run independently when you need kernel design guidance for an existing operation or when exploring implementation strategies before committing to full implementation.\n\n3. **Design iteration**: Run multiple times with different helper library combinations to explore alternative kernel implementations before passing to ttnn-kernel-writer.\n\nExamples:\n\n<example>\nContext: User needs kernel design for a new operation before implementation.\nuser: "Design the kernels for reduce_avg_w_rm. Spec: ttnn/cpp/ttnn/operations/reduction/reduce_avg_w_rm/reduce_avg_w_rm_spec.md"\nassistant: "I'll design the kernel implementation strategy, mapping each phase to appropriate helpers."\n<Task tool call to ttnn-kernel-designer with spec path>\n</example>\n\n<example>\nContext: User wants to understand which helpers to use for a composite operation.\nuser: "What helpers should the tilize-reduce-untilize kernels use? Spec path: .../my_op_spec.md"\nassistant: "Let me analyze the helpers available and create a design document."\n<Task tool call to ttnn-kernel-designer with spec path>\n</example>
 model: opus
 color: cyan
-tools: Read, Glob, Grep, Write, Bash, TodoWrite, mcp__deepwiki__ask_question
+tools: Read, Glob, Grep, Write, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
 hooks:
   Stop:
     - hooks:
@@ -65,115 +65,94 @@ You MUST produce a **concise, focused** Kernel Design Document saved to:
 
 ### Document Structure
 
+The design document has **two parts**:
+- **Part 1** (top): TDD Stage Plan — stages, scope, references, tolerances, bypass paths
+- **Part 2** (bottom): Per-stage implementation details — CB allocation, reader/writer/compute, organized as stage deltas
+
 ```markdown
 # Kernel Design: {operation_name}
 
 ## Critical Spec Issues
 
-{ONLY include ACTUAL problems that require design corrections. Omit confirmations like "spec is correct" or "no issue found"}
-{Keep each issue to 2-3 sentences: what's wrong + how to fix it}
+{ONLY include ACTUAL problems that require design corrections. Omit if none.}
 
 ### Issue: {brief title}
 - **Problem**: {1 sentence}
 - **Fix**: {1 sentence}
 
-## CB Allocation
+---
 
-{Single concise table - don't repeat information in prose}
+## Part 1: TDD Stage Plan
+
+### Stage Summary
+
+| Stage | Name | What's Added | CB Bypass Path | Expected Output |
+|-------|------|-------------|----------------|-----------------|
+| 1 | {name} | {description} | {how inactive phases are bypassed} | {what test verifies} |
+| 2 | {name} | {description} | {bypass path or "None — full pipeline"} | {what test verifies} |
+
+### Stage 1: {stage_name}
+- **Scope**: {which kernel files are modified, which phases are implemented}
+- **Reference**: `{PyTorch expression for expected output}`
+- **Shapes**: {list of test shapes}
+- **Tolerances**: rtol={X}, atol={Y}
+- **CB bypass**: {describe how data flows from last active phase to output, skipping unimplemented phases}
+- **Delta from previous**: N/A (first stage)
+
+### Stage 2: {stage_name}
+- **Scope**: {which kernel files, which NEW phases}
+- **Reference**: `{PyTorch expression}`
+- **Shapes**: {list}
+- **Tolerances**: rtol={X}, atol={Y}
+- **CB bypass**: {updated bypass or "None — full pipeline"}
+- **Delta from previous**: {what changes from Stage 1}
+
+{Continue for all stages}
+
+---
+
+## Part 2: Implementation Details
+
+### CB Allocation
 
 | CB | Pages | Layout | Valid Region | Lifetime |
 |----|-------|--------|--------------|----------|
 | c_X (cb_input) | N | TILE/RM | All/Row0/Col0 | {when released} |
-| c_Y (cb_intermediate) | M | TILE | Row0/Col0 | Persistent across phases |
-| ... | ... | ... | ... | ... |
 
-**Examples of valid regions:**
-- `All` - 2D tensor, all elements valid
-- `Row0` - 1D tensor or REDUCE_COL output
-- `Col0` - REDUCE_ROW output
-- `[0,0]` - REDUCE_SCALAR output
+### Binary Op Broadcast Verification
 
-## Binary Op Broadcast Verification
-
-{ONLY if operation has binary ops - verify broadcast matches valid regions}
+{ONLY if operation has binary ops}
 
 | Phase | Op | CB_A Valid | CB_B Valid | Broadcast |
 |-------|-----|------------|------------|-----------|
 | X | OP_NAME | All | Col0 | COL |
-| Y | OP_NAME | All | Row0 | ROW |
 
-**Broadcast rules:**
-- All + Col0 → `COL`
-- All + Row0 → `ROW`
-- All + [0,0] → `SCALAR`
-- All + All → `NONE`
-
-## Reader Kernel
-
+### Reader Kernel
 {Brief - kernel writer knows dataflow patterns}
 
-**One-time setup** (if needed):
-- Generate constant tiles using dataflow helpers
-- Example: `generate_reduce_scaler(cb_scaler, scaler_packed)`
-- Example: `generate_bcast_scalar_bfloat16(cb_scalar, scalar_packed)`
-
-**Per-iteration**:
-- Reserve N → read N tiles via NOC → barrier → push N
-
-## Compute Kernel
+### Compute Kernel
 
 **Startup**: `compute_kernel_hw_startup(cb_input, cb_output, ...)`
-
-**Main loop** (describe iteration pattern):
 
 ### Phase X: {operation description}
 ```cpp
 compute_kernel_lib::{helper_name}<{template_params}>(
     cb_in, cb_out, {shape_params});
 ```
-{Add notes ONLY for non-obvious patterns: manual pops, read-modify-write CBs, etc.}
 
-### Phase Y: {operation description}
-```cpp
-compute_kernel_lib::{helper_name}<{template_params}>(
-    cb_in, cb_intermediate, cb_out, {shape_params});
-```
+{Continue for each phase. Add notes ONLY for non-obvious patterns.}
 
-{Continue for each phase}
-
-**Examples of helper patterns:**
-```cpp
-// Reduce operation
-compute_kernel_lib::reduce<SUM, REDUCE_ROW, WaitUpfrontNoPop>(
-    cb_in, cb_scaler, cb_out, ReduceInputBlockShape::row(W));
-
-// Binary operation with manual pop
-compute_kernel_lib::sub<COL, NoWaitNoPop, WaitAndPopPerTile>(
-    cb_a, cb_b, cb_out, BinaryInputBlockShape::of(1, W));
-cb_pop_front(cb_a, W);  // NoWaitNoPop requires manual pop
-```
-
-## Writer Kernel
-
+### Writer Kernel
 **Per-iteration**: Wait N → write N tiles via NOC → barrier → pop N
 
-## Critical Notes
-
+### Critical Notes
 {ONLY include non-obvious patterns that could cause bugs}
 
-**Common gotchas:**
-- **NoWaitNoPop manual pops**: Helpers with NoWaitNoPop policy don't pop inputs automatically
-- **Read-modify-write CBs**: Verify helper pops input before pushing to same CB
-- **Scaler packing**: Runtime args must be `(bf16 << 16 | bf16)` format, NOT IEEE float32
-- **Persistent CBs**: List which CBs are never popped and why
-
-## Implementation Checklist
-
-- [ ] Reader: {brief description of setup and data loading}
+### Implementation Checklist
+- [ ] Reader: {brief description}
 - [ ] Compute: {N} phases using helpers: {list}
-- [ ] Compute: Manual pops needed after which phases
-- [ ] Writer: {brief description of output pattern}
-- [ ] Verify: CB push/pop balance across all phases
+- [ ] Writer: {brief description}
+- [ ] CB push/pop balance verified
 ```
 
 ### Conciseness Guidelines
@@ -201,7 +180,15 @@ cb_pop_front(cb_a, W);  // NoWaitNoPop requires manual pop
 
 ## Design Process
 
-### Step 0: Validate Spec (Quick Check)
+### Step 0: Initialize TDD Pipeline
+
+If `.tdd_state.json` does not exist in the operation directory, initialize it:
+
+```bash
+python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init {spec_path} --op-path {op_path}
+```
+
+### Step 0.5: Validate Spec (Quick Check)
 
 **Check for critical errors ONLY:**
 
@@ -253,6 +240,97 @@ cb_pop_front(cb_a, W);  // NoWaitNoPop requires manual pop
 - Don't repeat full helper signatures (they're in headers)
 - Don't create tables where every row says the same thing
 - Don't document "non-issues" or spec confirmations
+
+### Step 3: Determine TDD Stages
+
+Read the spec and your design, then apply two complementary heuristics to break the operation into ordered, testable stages.
+
+#### Heuristic 1: Kernel Complexity Ordering (H1)
+
+**Purpose**: Decides which kernel to finalize first.
+
+1. Assess each kernel's complexity:
+   - Count distinct operations, phases, or data movement patterns
+   - Note dependencies: does it generate special tiles? use complex addressing? coordinate with other cores?
+   - Rank: simplest → most complex
+
+2. Plan kernel finalization order:
+   - **Meta-stage 1**: Bring the simplest kernel(s) to their FINAL implementation. Keep others at MINIMUM VIABLE state.
+   - **Meta-stage 2**: Bring the next kernel to final. Others remain at current state.
+   - **Meta-stage 3**: Build up the most complex kernel incrementally.
+
+3. Each meta-stage is NOT necessarily a single TDD stage. A complex kernel may require multiple stages within its meta-stage (guided by H2).
+
+#### Heuristic 2: Semantic Goal Progression (H2)
+
+**Purpose**: Decides how to break a kernel's development into stages.
+
+1. Identify testable intermediate results — functional milestones with a meaningful output verifiable against PyTorch.
+2. Group operations that form a logical unit (e.g., mean reduction + subtraction = "centralize").
+3. Each stage's output must be independently verifiable from the original input, not from a previous stage's output.
+
+#### Combining H1 + H2
+
+H1 determines the **order** (which kernel to work on). H2 determines the **granularity** (how many stages for that kernel).
+
+The first stage almost always establishes the data pipeline: simplest kernels at full implementation, bookend operations (tilize/untilize for RM I/O) if applicable, and the complex kernel at minimum viable.
+
+#### Illustrative Patterns
+
+**Pattern A — Single-core, compute-dominant** (most common for generic_op):
+Reader and writer are typically simple. H1 finalizes reader+writer in stage 1 with minimal compute (identity or passthrough). H2 then slices the compute kernel into incremental stages based on semantic milestones.
+
+**Pattern B — Multi-core with multicast coordination**:
+Reader and writer may be complex (semaphore-based synchronization, multi-phase data movement). H1 might identify the writer as simplest, then compute, then reader (with mcast) as most complex. Some stages will modify MULTIPLE kernels simultaneously.
+
+**Pattern C — Operations with complex output patterns**:
+When the writer has complex addressing (scatter writes, transposed output), H1 may identify the writer as the complex kernel. Reader and compute are finalized first.
+
+### Step 4: Verify Include Paths
+
+Before finalizing, glob-check that all referenced helper headers exist:
+
+```bash
+ls ttnn/cpp/ttnn/kernel_lib/{helper_name}.hpp
+```
+
+Use fully qualified namespaces for all code examples: `compute_kernel_lib::helper_name`.
+
+### Step 5: Register ALL TDD Stages
+
+**CRITICAL**: Register ALL stages with the TDD orchestrator BEFORE writing the design document. This ensures the builder agent can discover stages from `.tdd_state.json`.
+
+For each stage determined in Step 3:
+
+```bash
+python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py add-stage '<json>' --op-path {op_path}
+```
+
+Register stages in order. The JSON payload follows this schema:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | snake_case stage name |
+| `description` | string | Yes | Human-readable — what this stage adds |
+| `reference_body` | string | Yes | Python expression for expected output |
+| `tolerance` | object | Yes | `{"rtol": float, "atol": float}` |
+| `shapes` | list | Yes | Shape strings like `"(1, 1, 32, 64)"` |
+| `kernel_files` | list | No | Kernel files this stage modifies |
+| `extra_imports` | string | No | Additional import lines |
+| `extra_args` | string | No | Appended to op call |
+| `extra_setup` | string | No | Python code for extra tensor setup |
+| `extra_ttnn_setup` | string | No | Python code for extra TTNN setup |
+| `output_shape_expr` | string | No | Output shape if different from input |
+| `dtype_parametrize` | string | No | List of dtype names for multi-dtype testing |
+
+#### Tolerance Guidelines
+
+| Stage Type | rtol | atol |
+|------------|------|------|
+| Identity/passthrough | 0.01 | 0.01 |
+| Simple compute (add, sub, mul) | 0.01 | 0.05 |
+| Reductions (mean, sum, max) | 0.02 | 0.1 |
+| Multi-step compute (normalize) | 0.05 | 0.2 |
 
 ## Key Principles
 

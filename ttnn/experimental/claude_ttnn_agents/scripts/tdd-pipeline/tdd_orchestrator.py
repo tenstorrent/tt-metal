@@ -133,6 +133,7 @@ def _render_template(state: dict, stage: dict, op_path: Path) -> str:
             extra_ttnn_setup=stage.get("extra_ttnn_setup", ""),
             extra_args=stage.get("extra_args", ""),
             output_shape_expr=stage.get("output_shape_expr", ""),
+            dtype_parametrize=stage.get("dtype_parametrize", ""),
             tolerance_rtol=stage["tolerance"]["rtol"],
             tolerance_atol=stage["tolerance"]["atol"],
         )
@@ -349,6 +350,7 @@ def cmd_add_stage(args):
         "extra_setup": stage_def.get("extra_setup", ""),
         "extra_ttnn_setup": stage_def.get("extra_ttnn_setup", ""),
         "output_shape_expr": stage_def.get("output_shape_expr", ""),
+        "dtype_parametrize": stage_def.get("dtype_parametrize", ""),
         "status": STATUS_PENDING,
         "commit": None,
         "attempts": 0,
@@ -357,9 +359,11 @@ def cmd_add_stage(args):
         "failure_history": [],
     }
 
-    # Render test file
+    # Render test file — write to tests/ttnn/unit_tests/operations/{op_name}/
     test_content = _render_template(state, stage, op_path)
-    test_path = op_path / test_filename
+    test_dir = REPO_ROOT / "tests" / "ttnn" / "unit_tests" / "operations" / state["op_name"]
+    os.makedirs(test_dir, exist_ok=True)
+    test_path = test_dir / test_filename
     with open(test_path, "w") as f:
         f.write(test_content)
 
@@ -367,7 +371,7 @@ def cmd_add_stage(args):
     state["stages"].append(stage)
     _save_state(op_path, state)
 
-    print(f"Stage '{stage_def['name']}' registered. Test file: {test_path}")
+    print(f"Stage '{stage_def['name']}' registered. Test: {test_path}")
 
 
 def cmd_test(args):
@@ -405,8 +409,12 @@ def cmd_test(args):
     if stage_idx == state["current_stage_index"] and stage["status"] == STATUS_PENDING:
         stage["status"] = STATUS_IN_PROGRESS
 
-    # Build test path
-    test_path = op_path / stage["test_file"]
+    # Build test path — tests live at tests/ttnn/unit_tests/operations/{op_name}/
+    test_dir = REPO_ROOT / "tests" / "ttnn" / "unit_tests" / "operations" / state["op_name"]
+    test_path = test_dir / stage["test_file"]
+    if not test_path.exists():
+        # Fallback to legacy colocated path for backward compatibility
+        test_path = op_path / stage["test_file"]
     if not test_path.exists():
         print(f"ERROR: Test file not found: {test_path}", file=sys.stderr)
         sys.exit(1)

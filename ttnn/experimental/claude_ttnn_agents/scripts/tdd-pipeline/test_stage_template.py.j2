@@ -18,6 +18,15 @@ def pytorch_reference(input_tensor{{ extra_ref_params }}):
     {{ reference_body }}
 
 
+{%- if dtype_parametrize %}
+
+DTYPE_MAP = {
+    "bfloat16": (torch.bfloat16, ttnn.bfloat16),
+    "float32": (torch.float32, ttnn.float32),
+}
+{%- endif %}
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -26,17 +35,30 @@ def pytorch_reference(input_tensor{{ extra_ref_params }}):
 {%- endfor %}
     ],
 )
+{%- if dtype_parametrize %}
+@pytest.mark.parametrize("dtype_name", {{ dtype_parametrize }})
+def test_{{ stage_name }}(device, shape, dtype_name):
+    """Verify {{ stage_description }}."""
+    torch_dtype, ttnn_dtype = DTYPE_MAP[dtype_name]
+    torch.manual_seed(42)
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+{%- else %}
 def test_{{ stage_name }}(device, shape):
     """Verify {{ stage_description }}."""
     torch.manual_seed(42)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
+{%- endif %}
     {{ extra_setup }}
 
     expected = pytorch_reference(torch_input{{ extra_ref_args }})
 
     ttnn_input = ttnn.from_torch(
         torch_input,
+{%- if dtype_parametrize %}
+        dtype=ttnn_dtype,
+{%- else %}
         dtype=ttnn.bfloat16,
+{%- endif %}
         layout=ttnn.{{ layout }},
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

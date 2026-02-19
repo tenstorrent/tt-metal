@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 # Find test files that are new or modified (untracked or changed)
-TEST_FILES=$(git status --porcelain -- 'ttnn/ttnn/operations/*/test_*.py' 2>/dev/null | awk '{print $NF}')
+TEST_FILES=$(git status --porcelain -- 'tests/ttnn/unit_tests/operations/*/test_*.py' 2>/dev/null | awk '{print $NF}')
 
 if [[ -z "$TEST_FILES" ]]; then
     # No new/modified test files — nothing to check

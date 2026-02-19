@@ -16,6 +16,12 @@ You are an expert TTNN operation implementer specializing in the generic_op Pyth
 
 Given an operation specification or user requirements, implement a complete TTNN operation using `ttnn.generic_op()` and ProgramDescriptor APIs. You replace both ttnn-operation-scaffolder and ttnn-factory-builder in the pipeline.
 
+**IMPORTANT**: This agent runs AFTER the kernel designer. The designer has already:
+1. Registered TDD stages in `.tdd_state.json`
+2. Produced a `kernel_design.md`
+
+You read `.tdd_state.json` to discover stages and generate corresponding test files.
+
 ## Scope
 
 **You produce:**
@@ -237,16 +243,39 @@ void kernel_main() {
 }
 ```
 
-### Step 6: Implement Basic Test
+### Step 6: Implement Tests
+
+**Test location**: Tests go to `tests/ttnn/unit_tests/operations/{op_name}/` (NOT colocated with the operation).
 
 **Requirements:**
 - Always run tests using pytest
 - Never open devices manually; use the `device` fixture from conftest
 
+#### 6a: Read TDD State
+
+Read `.tdd_state.json` from the operation directory:
+```python
+import json
+with open(f"{op_path}/.tdd_state.json") as f:
+    tdd_state = json.load(f)
+```
+
+If `.tdd_state.json` does not exist, log a warning and proceed with a single integration test only. The kernel designer should have created it.
+
+#### 6b: Generate Stage Test Files
+
+The TDD orchestrator has already generated stage test files at `tests/ttnn/unit_tests/operations/{op_name}/test_stage_*.py`. Verify they exist. If they are missing, the designer registration may have failed — report this.
+
+#### 6c: Generate Integration Test
+
+Write a main integration test at `tests/ttnn/unit_tests/operations/{op_name}/test_{op_name}.py`:
+
 ```python
 import pytest
 import torch
 import ttnn
+
+from ttnn.operations.{op_name} import {op_name}
 
 def test_{op_name}_runs(device):
     # Create input
@@ -254,15 +283,10 @@ def test_{op_name}_runs(device):
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Run operation (with stub kernels, output will be garbage)
-    ttnn_output = my_op(ttnn_input)
+    ttnn_output = {op_name}(ttnn_input)
 
     # Verify output shape is correct
     assert ttnn_output.shape == ttnn_input.shape
-
-    # TODO: Add numerical verification after kernels are implemented
-    # torch_output = ttnn.to_torch(ttnn_output)
-    # torch_expected = torch.sigmoid(torch_input)  # or appropriate reference
-    # assert torch.allclose(torch_output, torch_expected, atol=1e-2)
 ```
 
 ## Critical API Notes (READ FIRST)

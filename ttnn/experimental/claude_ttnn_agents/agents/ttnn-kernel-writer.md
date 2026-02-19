@@ -126,29 +126,20 @@ Verify CB configuration matches design expectations:
 - Page sizes
 - Capacities
 
-### Step 3: Plan TDD Stages
+### Step 3: Implement the Current Stage
 
-Read the design document and plan ordered implementation stages. Each stage adds one logical piece and is tested before proceeding.
+**TDD stages are pre-determined by the kernel designer.** You implement the current stage only. Do NOT plan or determine stages yourself.
 
-**Ordering heuristic:**
-- **Stage 1 (data pipeline):** Final reader + final writer + passthrough compute (copy cb_in tiles to cb_out). Validates data movement, work distribution, and multi-core correctness.
-- **Bookend phases together:** If the op has tilize + untilize, add both in one stage (roundtrip = identity check).
-- **Compute phases in pipeline order**, one per stage. Each stage's reference evolves to include the new phase.
-- **Stable parts first:** Reader/writer get validated in Stage 1 and are never revisited.
+#### Strict Scoping Rules
 
-Example stage plan for an op with tilize → reduce → untilize:
+- **Implement ONLY phases assigned to the current stage.** The design document's TDD Stage Plan specifies exactly which phases belong to each stage.
+- **EXPLICITLY FORBIDDEN from implementing future stage phases.** Even if you can see what comes next in the design, do not implement it.
+- **For intermediate stages**: Implement bypass paths that route data from the last active phase directly to output. Do NOT implement future phases and test with identity parameters — instead, skip them entirely and connect the pipeline to the output CB.
+- **CB configuration modifications are allowed** for TDD fixes (e.g., adjusting page counts or buffer sizes), but CB indices and semantics must remain stable.
 
-| Stage | What's added | Compute behavior | Expected output |
-|-------|-------------|-----------------|----------------|
-| 1 | Reader + Writer + passthrough | copy_tile cb_in→cb_out | output ≈ input |
-| 2 | Tilize + Untilize | tilize then untilize | output ≈ input (identity roundtrip) |
-| 3 | Reduce | full pipeline | output matches PyTorch reference |
+### Step 4: Implement & Test
 
-**For shape-changing ops** (e.g., reduce changes output shape): in passthrough stages, temporarily adjust the ProgramDescriptor/test to use input shape as output shape.
-
-### Step 4: Implement & Test Each Stage
-
-For each stage in order: **implement → test → pass → commit → next stage. Do NOT proceed to the next stage until the current stage passes.**
+**Implement the assigned stage → test → pass → done.** The orchestrator handles stage advancement and the next stage invocation.
 
 Use the **full parametrized shapes from the spec** at every stage, not just a minimal shape. Shape-related bugs (work distribution, multi-core edge cases) must surface at the earliest stage where they're relevant. If Stage 1 (passthrough) fails on `(2, 64, 128)` but passes on `(32, 32)`, fix it immediately while only reader/writer code is in play.
 
@@ -317,10 +308,11 @@ Reference: `.claude/references/tdd-kernel-pipeline.md`
 
 ## What You DON'T Do
 
-- Change CB configuration (that's the program factory's job)
+- Change CB indices or semantics (that's the program factory's job)
 - Change kernel file paths (that's the program factory's job)
 - Redesign the implementation approach (that's ttnn-kernel-designer's job)
 - Add CB operations that helpers already handle
+- Implement phases assigned to future TDD stages
 
 If the design seems wrong, report back - don't silently deviate.
 

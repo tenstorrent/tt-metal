@@ -14,58 +14,73 @@ This workflow uses the **generic_op** infrastructure which bypasses C++ TTNN sca
 All generic_op operations MUST be created at:
 
 ```
-ttnn/experimental/{operation_name}/
+ttnn/ttnn/operations/{operation_name}/
 ```
 
 This is the **single source of truth** for operation location. All agents in this pipeline read this path from here.
 
-**Directory structure**:
+This places operations within the `ttnn` package, enabling direct imports:
+```python
+from ttnn.operations.<op_name> import <op_name>
 ```
-ttnn/experimental/{operation_name}/
-├── op/
-│   ├── __init__.py                         # Re-export main function
-│   ├── {operation_name}.py                 # Entry point with output allocation
-│   ├── {operation_name}_program_descriptor.py  # CB config, work distribution, kernel setup
-│   └── kernels/
-│       ├── {operation_name}_reader.cpp     # Data movement: DRAM → L1
-│       ├── {operation_name}_compute.cpp    # FPU/SFPU operations
-│       └── {operation_name}_writer.cpp     # Data movement: L1 → DRAM
-├── tests/
-│   └── test_{operation_name}.py            # PyTorch reference comparison
+
+**Operation directory**:
+```
+ttnn/ttnn/operations/{operation_name}/
+├── __init__.py                             # Re-export main function
+├── {operation_name}.py                     # Entry point with output allocation
+├── {operation_name}_program_descriptor.py  # CB config, work distribution, kernel setup
+├── kernels/
+│   ├── {operation_name}_reader.cpp         # Data movement: DRAM → L1
+│   ├── {operation_name}_compute.cpp        # FPU/SFPU operations
+│   └── {operation_name}_writer.cpp         # Data movement: L1 → DRAM
 ├── agent_logs/                             # Execution logs (if logging enabled)
 │   ├── {agent_name}_breadcrumbs.jsonl
 │   └── {agent_name}_execution_log.md
 ├── {operation_name}_spec.md                # Functional spec (from planner)
-└── kernel_design.md                        # Kernel design doc (from designer)
+├── kernel_design.md                        # Kernel design doc (from designer)
+└── .tdd_state.json                         # TDD pipeline state
+```
+
+**Test directory**:
+```
+tests/ttnn/unit_tests/operations/{operation_name}/
+├── test_{operation_name}.py                # Integration test
+└── test_stage_*.py                         # TDD stage tests
 ```
 
 **Example**: For an operation named `row_centralize`:
 ```
-ttnn/experimental/row_centralize/
-├── op/
-│   ├── __init__.py
-│   ├── row_centralize.py
-│   ├── row_centralize_program_descriptor.py
-│   └── kernels/
-│       ├── row_centralize_reader.cpp
-│       ├── row_centralize_compute.cpp
-│       └── row_centralize_writer.cpp
-├── tests/
-│   └── test_row_centralize.py
+ttnn/ttnn/operations/row_centralize/
+├── __init__.py
+├── row_centralize.py
+├── row_centralize_program_descriptor.py
+├── kernels/
+│   ├── row_centralize_reader.cpp
+│   ├── row_centralize_compute.cpp
+│   └── row_centralize_writer.cpp
 ├── row_centralize_spec.md
-└── kernel_design.md
+├── kernel_design.md
+└── .tdd_state.json
+
+tests/ttnn/unit_tests/operations/row_centralize/
+├── test_row_centralize.py
+└── test_stage_*.py
+```
+
+**Running tests**:
+```bash
+pytest tests/ttnn/unit_tests/operations/row_centralize/test_row_centralize.py -v
 ```
 
 ## Pipeline Structure
 
 ```
-analyzer → planner → ┬─ generic_op_builder ─┬─→ kernel_writer
-                     └─ kernel_designer ────┘
-
-                     (parallel)              (waits for both)
+analyzer → planner → kernel_designer → generic_op_builder → kernel_writer
+                     (+ TDD stages)    (reads .tdd_state)   (per stage)
 ```
 
-**Key difference from standard workflow**: The `generic_op_builder` and `kernel_designer` agents run **in parallel** after the planner completes. The `kernel_writer` agent only starts after **both** have finished.
+**Key difference from standard workflow**: The `kernel_designer` runs first (determines TDD stages and registers them), then `generic_op_builder` runs (reads `.tdd_state.json` to discover stages). The `kernel_writer` is invoked per TDD stage after both are complete.
 
 ---
 
@@ -80,9 +95,26 @@ When user requests a new TTNN operation via generic_op, STOP and answer these qu
 
 ### Step 2: Discovery Checklist (if references not specified)
 
+**⚠️ CRITICAL: COMPUTE REQUIRES TILES**
+All compute operations (FPU/SFPU) require tilized data. Even if BOTH input AND output are row-major:
+- Row-major input → MUST tilize before compute
+- Compute operates on 32×32 tiles ONLY
+- Row-major output → MUST untilize after compute
+
+Pattern: `RM input → read sticks → tilize → compute (tiles) → untilize → write sticks → RM output`
+
+□ **First: Determine if operation has compute**:
+  - ANY math operation (reduction, eltwise, matrix ops) → REQUIRES tilized data
+  - Row-major input + compute → MUST include tilize reference (Hybrid Mode)
+  - Compute + row-major output → MUST include untilize reference (Hybrid Mode)
+  - Row-major input + compute + row-major output → Hybrid Mode with 3 references:
+    1. tilize (input_stage)
+    2. compute operation (compute_core)
+    3. untilize (output_stage)
+
 □ Parse for format keywords:
-  - "row-major input" + "tilize" → need tilize reference
-  - "untilize" + "row-major output" → need untilize reference
+  - "row-major input" + ANY compute → need tilize reference
+  - ANY compute + "row-major output" → need untilize reference
   - "sharded" → need sharded-input reference (layernorm, etc.)
 
 □ Select appropriate variant:
@@ -137,22 +169,20 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
    - User approves → proceed to Phase 3
    - User requests changes → refine spec, re-present for approval
    - Do NOT proceed without explicit user approval
-4. **Phase 3** (PARALLEL EXECUTION):
-   - Launch `ttnn-generic-op-builder` with the spec
-   - Launch `ttnn-kernel-designer` with the spec
-   - **Both agents run concurrently** - do NOT wait for one to start the other
-5. **Phase 3 Sync Point**: Wait for BOTH agents to complete before proceeding
-   - `ttnn-generic-op-builder` produces: Python orchestration, ProgramDescriptor, stub kernels
-   - `ttnn-kernel-designer` produces: `kernel_design.md` (helper vs raw call decisions)
+4. **Phase 3a** — Run `ttnn-kernel-designer` with the spec:
+   - Produces: `kernel_design.md` (helper vs raw call decisions)
+   - Registers TDD stages in `.tdd_state.json` via `tdd_orchestrator.py add-stage`
+   - **Wait for designer to complete** before launching builder
+5. **Phase 3b** — Run `ttnn-generic-op-builder` with the spec:
+   - Reads `.tdd_state.json` to discover registered stages
+   - Produces: Python orchestration, ProgramDescriptor, stub kernels
+   - Writes tests to `tests/ttnn/unit_tests/operations/{op_name}/`
 6. **USER REVIEW**: Present outputs from both agents:
+   - Kernel design summary (stages, helper vs raw decisions, CB flow)
    - Generic op structure (CBs, runtime args, kernel paths)
-   - Kernel design summary (helper vs raw decisions, CB flow)
    - User approves → proceed to Phase 4
    - User requests changes → refine, re-present
-7. **Phase 4**: Run `ttnn-kernel-writer` with:
-   - Kernel Design Document from `ttnn-kernel-designer`
-   - Stub kernels from `ttnn-generic-op-builder`
-   - Functional spec from planner
+7. **Phase 4**: Run `ttnn-kernel-writer` per TDD stage (stages are pre-registered)
 
 ---
 
@@ -196,36 +226,32 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
                                          ▼ [USER REVIEW SPEC]
                                                    │
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Phase 3: Parallel Execution                                                  │
+│ Phase 3a: Kernel Designer                                                    │
+│ (Opus)                                                                       │
 │                                                                              │
-│  ┌───────────────────────────┐     ┌───────────────────────────┐            │
-│  │ ttnn-generic-op-builder   │     │ ttnn-kernel-designer      │            │
-│  │ (Opus)                    │     │ (Opus)                    │            │
-│  │                           │     │                           │            │
-│  │ Input: spec.md            │     │ Input: spec.md            │            │
-│  │                           │     │        helper headers     │            │
-│  │ Output:                   │     │                           │            │
-│  │ - Python orchestration    │     │ Output:                   │            │
-│  │ - ProgramDescriptor       │     │ - kernel_design.md        │            │
-│  │ - Stub kernel files       │     │   (USE HELPER / NO HELPER │            │
-│  │ - CB configuration        │     │    for each phase)        │            │
-│  └─────────────┬─────────────┘     └─────────────┬─────────────┘            │
-│                │                                 │                           │
-│                └────────────┬────────────────────┘                           │
-│                             │                                                │
-│                             ▼ SYNC POINT: Wait for BOTH                      │
-└─────────────────────────────┬───────────────────────────────────────────────┘
+│  Input: spec.md + helper headers                                             │
+│  Output: kernel_design.md + .tdd_state.json (with registered stages)         │
+└──────────────────────────────────────────────────┬──────────────────────────┘
+                                                   │
+                                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Phase 3b: Generic Op Builder                                                 │
+│ (Opus)                                                                       │
+│                                                                              │
+│  Input: spec.md + .tdd_state.json                                            │
+│  Output: Python orchestration, ProgramDescriptor, stub kernels, tests        │
+└──────────────────────────────────────────────────┬──────────────────────────┘
                               │
                     ▼ [USER REVIEW BOTH OUTPUTS]
                               │
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Phase 4: Kernel Writer                                                       │
+│ Phase 4: Kernel Writer (per TDD stage)                                       │
 │ (Opus)                                                                       │
 │                                                                              │
 │  Input:                                                                      │
-│  - kernel_design.md (from designer)                                          │
+│  - kernel_design.md (from designer, with TDD Stage Plan)                     │
 │  - Stub kernels (from generic_op_builder)                                    │
-│  - spec.md (from planner)                                                    │
+│  - Pre-registered stages in .tdd_state.json                                  │
 │                                                                              │
 │  Output:                                                                     │
 │  - Working reader, compute, writer kernels                                   │
@@ -313,34 +339,29 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
 
 ---
 
-## Parallel Execution Requirements
+## Sequential Execution Requirements
 
 ### Phase 3 Orchestration
 
-When launching Phase 3, the orchestrator MUST:
+Phase 3 is **sequential** (designer → builder):
 
-1. **Launch both agents in a single message** with multiple Task tool calls:
-   ```
-   [Task: ttnn-generic-op-builder with spec path]
-   [Task: ttnn-kernel-designer with spec path]
-   ```
-
-2. **Do NOT** launch sequentially - both agents are independent and can run concurrently.
-
-3. **Wait for both** to complete before presenting results to user or proceeding to Phase 4.
+1. **Launch `ttnn-kernel-designer` first** with the spec. Wait for it to complete.
+   - Designer produces `kernel_design.md` and registers TDD stages in `.tdd_state.json`
+2. **Then launch `ttnn-generic-op-builder`** with the spec.
+   - Builder reads `.tdd_state.json` to discover stages
+   - Produces Python infrastructure, stub kernels, and tests
 
 ### Dependency Graph
 
 ```
 analyzer_1 ─┐
-analyzer_2 ─┼──► planner ──► spec.md ──┬──► generic_op_builder ──► stubs + Python
-analyzer_n ─┘                          │
-                                       └──► kernel_designer ──────► kernel_design.md
-                                                                          │
-                    ┌─────────────────────────────────────────────────────┘
-                    │
-                    ▼
-              kernel_writer (requires BOTH outputs)
+analyzer_2 ─┼──► planner ──► spec.md ──► kernel_designer ──► kernel_design.md + .tdd_state.json
+analyzer_n ─┘                                                        │
+                                                                     ▼
+                                              generic_op_builder ──► stubs + Python + tests
+                                                                     │
+                                                                     ▼
+                                              kernel_writer (invoked per TDD stage)
 ```
 
 ---
@@ -395,6 +416,6 @@ Invoke `ttnn-riscv-debugger` with:
 
 ## Additional Resources
 
-- `ttnn/experimental/claude_ttnn_agents/subagent_breakdown.md` - Detailed workflow breakdown
-- `ttnn/experimental/claude_ttnn_agents/references/ttnn-operation-workflow.md` - Standard C++ workflow
+- `.claude/subagent_breakdown.md` - Detailed workflow breakdown
+- `.claude/references/ttnn-operation-workflow.md` - Standard C++ workflow
 - https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html - Official docs

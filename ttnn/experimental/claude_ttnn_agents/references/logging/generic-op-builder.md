@@ -97,7 +97,7 @@ Include after Section 2 in your execution log:
 | op/kernels/{op_name}_reader.cpp | Kernel stub | Data movement DRAM → L1 |
 | op/kernels/{op_name}_compute.cpp | Kernel stub | FPU/SFPU operations |
 | op/kernels/{op_name}_writer.cpp | Kernel stub | Data movement L1 → DRAM |
-| tests/test_{op_name}.py | Test | PyTorch reference comparison |
+| tests/ttnn/unit_tests/operations/{op_name}/test_{op_name}.py | Test | PyTorch reference comparison |
 
 ### Test Results
 
