@@ -34,7 +34,7 @@ void kernel_main() {
     const uint32_t input_storage_noc_y = get_arg_val<uint32_t>(2);
     const uint32_t input_shard_l1_addr = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     // Build NOC address for the remote input storage core
     uint64_t remote_shard_base_noc_addr = get_noc_addr(input_storage_noc_x, input_storage_noc_y, input_shard_l1_addr);
