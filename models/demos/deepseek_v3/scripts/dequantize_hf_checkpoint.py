@@ -20,6 +20,8 @@ from loguru import logger
 from safetensors import safe_open
 from safetensors.torch import save_file
 
+from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
+
 FP8_DTYPES: tuple[torch.dtype, ...] = (torch.float8_e4m3fn,)
 if hasattr(torch, "float8_e5m2"):
     FP8_DTYPES = FP8_DTYPES + (torch.float8_e5m2,)
@@ -315,28 +317,6 @@ class ShardTensorReader:
             if callable(close_fn):
                 close_fn()
         self._handles.clear()
-
-
-def dequantize_tensor(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: tuple[int, ...]) -> torch.Tensor:
-    # Keep this equivalent to DeepSeek helper logic while avoiding ttnn imports.
-    if tensor.ndim != inv_scale.ndim:
-        raise ValueError(f"Tensor and inverse scale must have same ndim, got {tensor.ndim} and {inv_scale.ndim}")
-    if len(block_shape) != tensor.ndim:
-        raise ValueError(
-            f"Block shape rank mismatch, got len(block_shape)={len(block_shape)} and tensor.ndim={tensor.ndim}"
-        )
-    if any(inv_scale.shape[i] * block_shape[i] < tensor.shape[i] for i in range(tensor.ndim)):
-        raise ValueError(
-            "Inverse scale shape does not cover tensor shape: "
-            f"tensor={tuple(tensor.shape)}, inv_scale={tuple(inv_scale.shape)}, block_shape={block_shape}"
-        )
-
-    expanded = inv_scale
-    for i, block_dim in enumerate(block_shape):
-        expanded = expanded.repeat_interleave(block_dim, dim=i)
-
-    slices = tuple(slice(0, size) for size in tensor.shape)
-    return tensor.float() * expanded[slices].float()
 
 
 def copy_auxiliary_files(input_dir: Path, output_dir: Path) -> None:

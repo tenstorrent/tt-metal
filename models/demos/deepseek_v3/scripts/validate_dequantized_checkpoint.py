@@ -15,12 +15,8 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
-from models.demos.deepseek_v3.scripts.dequantize_hf_checkpoint import (
-    build_keys_by_file,
-    dequantize_tensor,
-    load_block_shape,
-    load_index,
-)
+from models.demos.deepseek_v3.scripts.dequantize_hf_checkpoint import build_keys_by_file, load_block_shape, load_index
+from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 
 
 def _safetensors_dtype_to_torch(dtype_str: str) -> torch.dtype:
