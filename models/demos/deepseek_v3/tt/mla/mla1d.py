@@ -204,7 +204,6 @@ class MLA1D(AbstractModule):
 
         # DRAM sharding configuration
         num_dram_banks = 12
-        tile_size = 32
 
         # Create DRAM WIDTH sharded memory config for wq_b
         # wq_b: k=q_lora_rank, n=num_heads*q_head_dim (sharded by TP)
