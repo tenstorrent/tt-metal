@@ -24,6 +24,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
         is_qwen=False,
+        use_prefetcher=True,
     ):
         """
         - sub devices
@@ -85,17 +86,35 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # )
             # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
-            self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
-            self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
-            self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
-            self.worker_sub_device_id = ttnn.SubDeviceId(1)
+
+            if use_prefetcher:
+                self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
+                self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
+                self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
+                self.worker_sub_device_id = ttnn.SubDeviceId(1)
+                sub_devices = [self.prefetcher_sub_device, self.worker_sub_device]
+            else:
+                # When prefetcher is disabled, merge sender cores into worker sub-device
+                # so the 12 freed sender cores can be used for compute (e.g. paged-SDPA)
+                combined_worker_ranges = [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ] + [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.active_sender_cores]
+                merged_worker_cores_range_set = ttnn.CoreRangeSet(combined_worker_ranges)
+                self.worker_sub_device = ttnn.SubDevice([merged_worker_cores_range_set])
+                self.worker_sub_device_id = ttnn.SubDeviceId(0)
+                self.prefetcher_sub_device_id = self.worker_sub_device_id
+                self.prefetcher_sub_device = self.worker_sub_device
+                sub_devices = [self.worker_sub_device]
+
             if mesh_sub_device_manager_id_decode is None:
-                mesh_sub_device_manager_id_decode = mesh_device.create_sub_device_manager(
-                    [self.prefetcher_sub_device, self.worker_sub_device], 0
-                )
+                mesh_sub_device_manager_id_decode = mesh_device.create_sub_device_manager(sub_devices, 0)
             self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id_decode)
-            mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
+            if use_prefetcher:
+                mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
+            else:
+                mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses

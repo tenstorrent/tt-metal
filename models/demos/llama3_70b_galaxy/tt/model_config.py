@@ -469,18 +469,37 @@ class TtModelArgs:
         self.is_qwen = False
         self.unfuse_res_add = False
 
-        if self.num_devices == 32:
-            self.use_prefetcher = True
+        # if self.num_devices == 32:
+        #     self.use_prefetcher = True
 
         # Set up prefetcher stuff
-        _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
+        (
+            active_sender_cores,
+            _,
+            _,
+            self.pf_receiver_cores_list,
+            _,
+            _,
+            _,
+            _,
+        ) = get_core_ranges(12, 2, False)
 
-        self.sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
+        if self.use_prefetcher:
+            self.sub_core_grids = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+            )
+        else:
+            # When prefetcher is disabled, include sender cores for use by paged-SDPA
+            self.sub_core_grids = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+                + [ttnn.CoreRange(core_coord, core_coord) for core_coord in active_sender_cores]
+            )
         self.sub_core_grid_topk = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
@@ -1172,10 +1191,16 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            if self.use_prefetcher:
+                paged_sdpa_num_cores = 16
+                paged_sdpa_grid_size = (8, 2)
+            else:
+                paged_sdpa_num_cores = 60
+                paged_sdpa_grid_size = (10, 6)
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 6),
+                compute_with_storage_grid_size=paged_sdpa_grid_size,
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core, 48, self.sub_core_grids, row_wise=True
+                    self.start_core, paged_sdpa_num_cores, self.sub_core_grids, row_wise=True
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,
@@ -1360,6 +1385,7 @@ class TtModelArgs:
                 12288 // 8,  # Use padded N
                 RING_SIZE,
                 untilize_out=True,
+                prefetch=False,
             )
             RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [
@@ -1405,6 +1431,7 @@ class TtModelArgs:
                 10240 // 8,
                 9216 // 4,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             # Use padded K and N
@@ -1425,6 +1452,7 @@ class TtModelArgs:
                 8192 // 4,
                 3840,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
@@ -1433,6 +1461,7 @@ class TtModelArgs:
                 3584,
                 9216 // 4,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
