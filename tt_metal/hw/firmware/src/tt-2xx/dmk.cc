@@ -75,6 +75,11 @@ uint32_t _start() {
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
+
+        // Setup after the go signal so the previous kernel has completed.
+        num_kernel_threads = launch_msg->kernel_config.num_kernel_threads[hartid];
+        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
