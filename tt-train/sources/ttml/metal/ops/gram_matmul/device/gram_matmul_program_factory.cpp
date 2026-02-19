@@ -18,7 +18,7 @@ namespace ttml::metal::ops::gram_matmul::device {
 namespace {
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(bool fp32_dest_acc_en) {
-    uint32_t M_block_tiles = 8;
+    uint32_t M_block_tiles = 4;
     uint32_t K_block_tiles = 8;
     uint32_t N_block_tiles = 8;
 
