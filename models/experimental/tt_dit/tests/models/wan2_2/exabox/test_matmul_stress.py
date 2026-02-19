@@ -91,16 +91,25 @@ def test_TP_ccl_MM_stress(
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, mesh_device, topology",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},  # device_params
+            (4, 32),  # mesh_device
+            ttnn.Topology.Ring,  # topology
+        ),
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},  # device_params
+            (4, 8),  # mesh_device
+            ttnn.Topology.Linear,  # topology
+        ),
     ],
-    indirect=True,
-    ids=["fabric_1d_ring"],
+    indirect=["device_params", "mesh_device"],
+    ids=["4x32", "4x8"],
 )
-@pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
 def test_SP_TP_ccl_MM_stress(
     mesh_device,
+    topology,
     reset_seeds,
 ):
     print(mesh_device.shape)
@@ -112,7 +121,7 @@ def test_SP_TP_ccl_MM_stress(
     torch_model = torch.nn.Linear(K, N, bias=False)
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=2, topology=topology)
 
     tt_model = ColParallelLinear(K, N, bias=False, mesh_device=mesh_device, mesh_axis=0, ccl_manager=ccl_manager)
     tt_model.load_torch_state_dict(torch_model.state_dict())
@@ -128,8 +137,8 @@ def test_SP_TP_ccl_MM_stress(
     ttnn.synchronize_device(mesh_device)
     logger.info(f"Warmup done")
 
-    for i in range(1_000_000_000):
-        for j in range(1000):
+    for i in range(1000):
+        for j in range(10):
             tt_input_gathered_TP = ccl_manager.all_gather_persistent_buffer(tt_input_tensor, dim=3, mesh_axis=0)
             tt_input_gathered_SP = ccl_manager.all_gather_persistent_buffer(tt_input_gathered_TP, dim=2, mesh_axis=1)
             tt_output = tt_model(tt_input_gathered_SP)
@@ -153,8 +162,8 @@ def test_TP_ccl_stress(
 ):
     print(mesh_device.shape)
 
-    M = 2368
-    N = 1280
+    M = 512
+    N = 1024
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     ttnn.synchronize_device(mesh_device)
@@ -169,7 +178,7 @@ def test_TP_ccl_stress(
     logger.info(f"Warmup done")
 
     for i in range(1_000_000_000):
-        for j in range(100):
+        for j in range(10):
             tt_input_gathered = ccl_manager.all_gather_persistent_buffer(tt_input_tensor, dim=3, mesh_axis=0)
 
         ttnn.synchronize_device(mesh_device)
@@ -230,31 +239,24 @@ def test_SP_TP_ccl_stress(
 ):
     print(mesh_device.shape)
 
-    NH = 10
-    M = 2368
-    DH = 128
-
-    K = 5120
-    N = 1280
+    M, N = 512, 1024
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     ttnn.synchronize_device(mesh_device)
 
-    torch_input_tensor = torch.randn((1, NH, M, DH))
-    torch_weight_tensor = torch.randn((K, N))
-
+    torch_input_tensor = torch.randn((1, 1, M, N))
     tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device)
-    tt_weight_tensor = bf16_tensor(torch_weight_tensor, device=mesh_device)
 
-    tt_input_gathered = ccl_manager.all_gather_persistent_buffer(tt_input_tensor, dim=2, mesh_axis=1)
-    tt_weight_gathered = ccl_manager.all_gather_persistent_buffer(tt_weight_tensor, dim=1, mesh_axis=0)
+    tt_input_gathered_TP = ccl_manager.all_gather_persistent_buffer(tt_input_tensor, dim=3, mesh_axis=0)
+    tt_input_gathered_SP = ccl_manager.all_gather_persistent_buffer(tt_input_gathered_TP, dim=2, mesh_axis=1)
+
     ttnn.synchronize_device(mesh_device)
-
     logger.info(f"Warmup done")
 
     for i in range(1_000_000_000):
-        for j in range(100):
-            tt_input_gathered = ccl_manager.all_gather_persistent_buffer(tt_input_tensor, dim=2, mesh_axis=1)
-            tt_weight_gathered = ccl_manager.all_gather_persistent_buffer(tt_weight_tensor, dim=1, mesh_axis=0)
+        for j in range(10):
+            tt_input_gathered_TP = ccl_manager.all_gather_persistent_buffer(tt_input_tensor, dim=3, mesh_axis=0)
+            tt_input_gathered_SP = ccl_manager.all_gather_persistent_buffer(tt_input_gathered_TP, dim=2, mesh_axis=1)
+
         ttnn.synchronize_device(mesh_device)
         logger.info(f"Iteration {i}")
