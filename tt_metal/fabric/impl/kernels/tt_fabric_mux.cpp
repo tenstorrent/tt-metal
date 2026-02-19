@@ -16,8 +16,6 @@
 #include <array>
 // clang-format on
 
-//#include "debug/ring_buffer.h"
-
 constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
 constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
 constexpr size_t BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL = get_compile_time_arg_val(2);
