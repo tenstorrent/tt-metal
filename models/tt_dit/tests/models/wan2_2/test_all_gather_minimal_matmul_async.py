@@ -118,40 +118,27 @@ def run_test_linear_impl(
         packer_l1_acc=True,
     )
 
-    if use_non_fused:
-        matmul_config = ttnn.MinimalMatmulConfig(
-            M_block_size=M_block_size,
-            K_block_size=K_block_size,
-            N_block_size=N_block_size,
-            subblock_h=subblock_h,
-            subblock_w=subblock_w,
-            compute_with_storage_grid_size=core_grid,
-        )
-    else:
-        matmul_config = ttnn.AllGatherMinimalMatmulAsyncConfig(
-            M_block_size=M_block_size,
-            K_block_size=K_block_size,
-            N_block_size=N_block_size,
-            subblock_h=subblock_h,
-            subblock_w=subblock_w,
-            compute_with_storage_grid_size=core_grid,
-        )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=core_grid,
+    )
 
     if use_non_fused:
-        tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
+        tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
             tt_input,
             persistent_output_buffer=persistent_output_buffers[0],
             dim=3,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
             num_links=num_links,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=topology,
             cluster_axis=cluster_axis,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=48,
-            mm_cores_y=core_grid.y,
-            mm_block_ht=8,
-            mm_block_wt=8,
+            chunks_per_sync=16,
+            num_workers_per_link=3,
+            num_buffers_per_channel=2,
         )
 
         tt_output = ttnn.experimental.minimal_matmul(
@@ -234,8 +221,8 @@ def run_test_linear(
     core_grid,
     num_workers_per_link,
     num_links,
-    use_bias=False,
-    activation=None,
+    use_bias=True,
+    activation="gelu",
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     dtype=ttnn.bfloat16,
@@ -404,10 +391,10 @@ def run_test_linear(
             1,
             12,
             9,
-            10,
+            16,
             8,
-            8,
-            2,
+            4,
+            1,
             2,
         ],
     ],
