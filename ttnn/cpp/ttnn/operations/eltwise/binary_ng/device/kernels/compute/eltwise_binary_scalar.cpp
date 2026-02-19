@@ -47,6 +47,8 @@ void kernel_main() {
         PROCESS_POST_ACTIVATIONS(0);
         tile_regs_commit();
 
+        asm volatile("ebreak");
+
         tile_regs_wait();
         pack_tile(0, cb_out);
         tile_regs_release();
