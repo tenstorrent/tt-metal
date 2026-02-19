@@ -225,12 +225,10 @@ class TTSampling(LightweightModule):
         )
         # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
         padded_per_device = self.padded_vocab_size // num_devices_in_mesh
-        # actual_per_device: unpadded vocab per device (for correct global token ID offsets)
-        actual_per_device = (self.vocab_size + num_devices_in_mesh - 1) // num_devices_in_mesh
 
         for device_id in range(num_devices_in_mesh):
             indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
-                device_id * actual_per_device
+                device_id * padded_per_device
             )
         self.tt_indices_device_offsets = ttnn.from_torch(
             indices_device_offsets,
