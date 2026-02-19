@@ -10,16 +10,31 @@
 
 namespace tt::tt_fabric {
 
-// 1D routing specialization
+// 1D uncompressed routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     const FabricNodeId& /*src_fabric_node_id*/, uint16_t num_chips) {
-    uint64_t* route_ptr = reinterpret_cast<uint64_t*>(&paths);
-    route_ptr[0] = 0;
-    for (uint16_t hops = 1; hops < num_chips; ++hops) {
-        const uint64_t shift_amount = static_cast<uint64_t>(hops - 1) * static_cast<uint64_t>(FIELD_WIDTH);
-        route_ptr[hops] =
-            (FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) | (static_cast<uint64_t>(WRITE_ONLY) << shift_amount);
+    // Zero-initialize entire 256-byte buffer
+    std::memset(&paths, 0, sizeof(paths));
+
+    // Query FabricContext to determine routing mode (16-hop vs 32-hop)
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& fabric_context = control_plane.get_fabric_context();
+    uint32_t extension_words = fabric_context.get_1d_pkt_hdr_extension_words();
+
+    // Calculate words per entry and populate table
+    // 16-hop mode: 1 word (4 bytes), 32-hop mode: 2 words (8 bytes)
+    uint32_t words_per_entry = 1 + extension_words;
+    uint32_t* buffer = reinterpret_cast<uint32_t*>(&paths);
+
+    // Generate routing pattern for each chip
+    for (uint16_t hops = 0; hops < num_chips; ++hops) {
+        // Use canonical encoder with correct stride
+        routing_encoding::encode_1d_unicast(
+            hops,
+            &buffer[hops * words_per_entry],  // Offset to this entry's location
+            words_per_entry                   // Number of words to generate
+        );
     }
 }
 

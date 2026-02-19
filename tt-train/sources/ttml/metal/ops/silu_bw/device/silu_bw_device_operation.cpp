@@ -7,18 +7,9 @@
 #include <enchantum/enchantum.hpp>
 
 #include "silu_bw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::silu_bw::device {
-
-SiLUBackwardDeviceOperation::program_factory_t SiLUBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SiLUBackwardProgramFactory{};
-}
-
-void SiLUBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -97,25 +88,30 @@ ttsl::hash::hash_t SiLUBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SiLUBackwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }
 
-std::tuple<SiLUBackwardDeviceOperation::operation_attributes_t, SiLUBackwardDeviceOperation::tensor_args_t>
-SiLUBackwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::silu_bw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::silu_bw::device::SiLUBackwardDeviceOperation::tensor_return_value_t ttml_silu_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& dL_dout_tensor,
     const std::optional<ttnn::Tensor>& preallocated_da) {
-    return {
-        operation_attributes_t{},
-        tensor_args_t{
-            .input = input_tensor,
-            .dL_dout = dL_dout_tensor,
-            .preallocated_da = preallocated_da,
-        }};
+    using OperationType = ttml::metal::ops::silu_bw::device::SiLUBackwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .dL_dout = dL_dout_tensor,
+        .preallocated_da = preallocated_da,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::silu_bw::device
+}  // namespace ttnn::prim

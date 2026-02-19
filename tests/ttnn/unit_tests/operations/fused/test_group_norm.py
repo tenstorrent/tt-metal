@@ -435,7 +435,7 @@ def generate_sdxl_test_inputs():
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_sdxl_base_group_norm(device, input_shape, use_welford):
+def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)
@@ -447,9 +447,10 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford):
     # Generate torch tensor
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
 
-    # Execute torch group_norm
-    torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
-    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    if not perf_test_mode:
+        # Execute torch group_norm
+        torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+        torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Generate ttnn tensor
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
@@ -485,11 +486,13 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford):
         inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
         use_welford=use_welford,
     )
+    ttnn.synchronize_device(device)
 
-    tt_output_tensor = ttnn.from_device(tt_output_tensor)
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    if not perf_test_mode:
+        tt_output_tensor = ttnn.from_device(tt_output_tensor)
+        tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
+        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 
 
 def generate_sdxl_test_inputs_neg_mask():
@@ -502,7 +505,7 @@ def generate_sdxl_test_inputs_neg_mask():
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs_neg_mask())
-def test_sdxl_base_group_norm_negative_mask(device, input_shape):
+def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)
@@ -518,11 +521,12 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape):
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
 
-    # Execute torch group_norm
-    torch_output_tensor = torch.nn.functional.group_norm(
-        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
-    )
-    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    if not perf_test_mode:
+        # Execute torch group_norm
+        torch_output_tensor = torch.nn.functional.group_norm(
+            torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+        )
+        torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Generate ttnn tensor
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
@@ -580,11 +584,13 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape):
         weight=gamma_t,
         bias=beta_t,
     )
+    ttnn.synchronize_device(device)
 
-    tt_output_tensor = ttnn.from_device(tt_output_tensor)
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    if not perf_test_mode:
+        tt_output_tensor = ttnn.from_device(tt_output_tensor)
+        tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
+        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)

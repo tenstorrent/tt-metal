@@ -20,7 +20,6 @@
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
-#include "api/dataflow/dataflow_api.h"
 
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
@@ -37,6 +36,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -55,8 +59,19 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 // c_tensix_core core;
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_IERISC_MAILBOX_BASE);
+tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
+    // Posting heartbeat at this address is only needed for Wormhole
+#if !defined(ARCH_BLACKHOLE)
+    invalidate_l1_cache();
+    volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
+    heartbeat++;
+    ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
+#endif
+}
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -81,14 +96,14 @@ void set_deassert_addresses() {
 inline void run_subordinate_eriscs(uint32_t enables) {
 #if defined(ARCH_BLACKHOLE)
     if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
 
 inline void wait_subordinate_eriscs(uint32_t& heartbeat) {
     WAYPOINT("SEW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    while (subordinate_sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
         RISC_POST_HEARTBEAT(heartbeat);
     }
@@ -108,9 +123,9 @@ int main() {
 
     risc_init();
 
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    subordinate_sync->all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
 #ifdef ARCH_BLACKHOLE
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+    subordinate_sync->dm1 = RUN_SYNC_MSG_INIT;
 #endif
     set_deassert_addresses();
     // device_setup();

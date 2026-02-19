@@ -87,9 +87,10 @@ def build_duration_per_instance_dict(input_dict, num_layers):
         num_ops_with_op_code = len(input_dict[op_code])
         num_instances = num_ops_with_op_code // num_layers
         if num_ops_with_op_code % num_layers != 0:
-            logger.warning(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
-            print_dict(input_dict, "input_dict")
-            assert num_ops_with_op_code % num_layers == 0
+            logger.warning(
+                f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers. Skipping per-instance analysis for this op."
+            )
+            continue  # Skip this op_code instead of asserting
         for iteration_id in range(num_layers):
             for instance_id in range(num_instances):
                 op_code_with_id = f"{op_code}_{instance_id}"

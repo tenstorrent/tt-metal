@@ -21,6 +21,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch DeepSeek model."""
+"""
+Original (?) link - https://huggingface.co/deepseek-ai/DeepSeek-R1-0528/blob/main/modeling_deepseek.py
+Changes:
+- added meta_style parameter for meta-style RoPE
+- added bitonic sort to MoEGate and force topk(sorted=True)
+- big changes in Attention
+--- <yalrawwash@tenstorrent.com>: main difference is that K and V are independent in huggingface implementation, but in TT implementation KV is a shared tensor.
+                                  Q is also no longer independent of KV in TT implementation. Leads to fewer matrix multiplications.
+--- send empty value_cache to DynamicCache.update
+- DeepseekV3PreTrainedModel now inherits GenerationMixin
+- removed weights initialization in DeepseekV3ForCausalLM
+- RMSNorm initialized with randn (vs ones)
+- small transformers version compatibility fixes
+"""
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
@@ -780,7 +794,7 @@ class DeepseekV3Attention(nn.Module):
                     "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
                     "with a layer index."
                 )
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+            kv_seq_len += past_key_value.get_seq_length(self.layer_idx)
         cos, sin = self.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
 
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
@@ -907,7 +921,7 @@ class DeepseekV3FlashAttention2(DeepseekV3Attention):
 
         kv_seq_len = value_states.shape[-2]
         if past_key_value is not None:
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+            kv_seq_len += past_key_value.get_seq_length(self.layer_idx)
 
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
@@ -1367,7 +1381,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
             use_legacy_cache = not isinstance(past_key_values, Cache)
             if use_legacy_cache:
                 past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            past_key_values_length = past_key_values.get_usable_length(seq_length)
+            past_key_values_length = past_key_values.get_seq_length()
 
         if position_ids is None:
             device = input_ids.device if input_ids is not None else inputs_embeds.device
@@ -1385,14 +1399,16 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
         if self._use_flash_attention_2:
             # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        # else: # NOTE: in testing, both for the full model and for separate modules, we use the -inf mask format, not the ones with 1s and 0s
-        #     # 4d mask is passed through the layers
-        #     attention_mask = _prepare_4d_causal_attention_mask(
-        #         attention_mask,
-        #         (batch_size, seq_length),
-        #         inputs_embeds,
-        #         past_key_values_length,
-        #     )
+        else:
+            # hotfix: since in test_utils.py we pass 4d mask, then we skip it
+            if (attention_mask is None) or (len(attention_mask.shape) == 2):
+                # 4d mask is passed through the layers
+                attention_mask = _prepare_4d_causal_attention_mask(
+                    attention_mask,
+                    (batch_size, seq_length),
+                    inputs_embeds,
+                    past_key_values_length,
+                )
 
         # embed positions
         hidden_states = inputs_embeds

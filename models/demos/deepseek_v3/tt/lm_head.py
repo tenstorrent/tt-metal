@@ -192,7 +192,6 @@ class LMHead(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
             ),
             "input_memory_config": input_memory_config,
             "output_memory_config": output_memory_config,
@@ -245,7 +244,6 @@ class LMHead(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
             ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -306,11 +304,14 @@ class LMHead(AbstractModule):
 
         _, _, seq_len, _ = x.shape
 
+        # Use effective sequence length (chunk size) for program config to avoid L1 overflow
+        effective_seq_len = min(seq_len, cfg["max_rows"])
+
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
             x = ttnn.reshape(x, [1, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
 
         output = ttnn.linear(
-            x, program_config=cls._get_prefill_pc(seq_len=seq_len, **cfg["linear_pc_gen"]), **cfg["linear"]
+            x, program_config=cls._get_prefill_pc(seq_len=effective_seq_len, **cfg["linear_pc_gen"]), **cfg["linear"]
         )
         ttnn.deallocate(x)
 

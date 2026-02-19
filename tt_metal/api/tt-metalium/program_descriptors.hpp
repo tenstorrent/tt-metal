@@ -14,7 +14,9 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
+#include <bitset>
 #include <optional>
+#include <vector>
 
 /**
  * TODO (#34009): Move to experimental namespace
@@ -63,6 +65,7 @@ struct CBDescriptor {
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
+    uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
 
@@ -104,7 +107,7 @@ struct KernelDescriptor {
     using Defines = std::vector<std::pair<std::string, std::string>>;
     using CoreRuntimeArgs = std::vector<uint32_t>;
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
-    using CommonRuntimeArgs = std::vector<uint32_t>;
+    using CommonRuntimeArgs = CoreRuntimeArgs;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
         WriterConfigDescriptor,
@@ -140,7 +143,18 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<ttsl::hash::hash_t> custom_program_hash;
+
+    std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
+
+/**
+ * Merge multiple ProgramDescriptors into a single one.
+ *
+ * @param descriptors Vector of ProgramDescriptors to merge.
+ * @return A new ProgramDescriptor containing all kernels, CBs, and semaphores.
+ * @throws TT_FATAL if any core ranges overlap between any of the descriptors.
+ */
+ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
 }  // namespace tt::tt_metal
 

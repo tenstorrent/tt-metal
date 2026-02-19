@@ -6,7 +6,7 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
-add_compile_options(-Wno-unused-variable)
+add_compile_options(-w)
 
 ############################################################################################################################
 # NUMA
@@ -105,12 +105,7 @@ set_target_properties(
 # Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
 # Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
 target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
-target_compile_options(
-    libprotobuf
-    PRIVATE
-        -fno-semantic-interposition
-        -Wno-deprecated-declarations
-)
+target_compile_options(libprotobuf PRIVATE -fno-semantic-interposition)
 
 ############################################################################################################################
 # yaml-cpp
@@ -141,10 +136,6 @@ CPMAddPackage(
         "INSTALL_GTEST OFF"
         "BUILD_SHARED_LIBS OFF"
 )
-
-if(googletest_ADDED)
-    target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
-endif()
 
 ############################################################################################################################
 # boost-ext reflect : https://github.com/boost-ext/reflect
@@ -329,12 +320,6 @@ CPMAddPackage(
         "FLATBUFFERS_STRICT_MODE OFF"
 )
 
-if(flatbuffers_ADDED)
-    # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    target_compile_options(flatc PRIVATE -Wno-restrict)
-    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
-endif()
-
 ############################################################################################################################
 # simd-everywhere/simde : https://github.com/simd-everywhere/simde
 ############################################################################################################################
@@ -368,7 +353,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.6
+    VERSION 1.1.7
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"

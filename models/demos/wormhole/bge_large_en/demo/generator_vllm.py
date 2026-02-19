@@ -128,6 +128,15 @@ class BGEForEmbedding:
 
         # When vLLM wraps the class, it requires vllm_config to be passed
         if vllm_config is not None:
+            # Mark this as an embedding model in override_tt_config for KV cache allocation
+            # This flag is used by get_num_available_blocks_tt to allocate sufficient blocks
+            if (
+                not hasattr(vllm_config.model_config, "override_tt_config")
+                or vllm_config.model_config.override_tt_config is None
+            ):
+                vllm_config.model_config.override_tt_config = {}
+            vllm_config.model_config.override_tt_config["is_embedding_model"] = True
+
             return cls(
                 device=mesh_device,
                 model_location_generator=model_location_generator,
@@ -168,6 +177,9 @@ class BGEForEmbedding:
         else:
             logger.info(f"BGE runner using {num_devices} devices (device IDs not available)")
 
+        # Deterministic inputs for reproducibility and consistent PCC validation
+        generator = torch.Generator().manual_seed(0)
+
         # Create inputs with total batch size (matching demo.py: inputs = inputs * device.get_num_devices())
         # Extended mask shape should be [total_batch_size, 1, 1, seq_len]
         input_ids = torch.randint(
@@ -175,6 +187,7 @@ class BGEForEmbedding:
             high=self.config.vocab_size - 1,
             size=[total_batch_size, sequence_length],
             dtype=torch.int64,
+            generator=generator,
         )
         attention_mask = torch.ones(total_batch_size, sequence_length)
         # custom_extended_mask creates [batch_size, 1, 1, seq_len] from [batch_size, seq_len]

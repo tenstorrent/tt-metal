@@ -4,9 +4,9 @@
 
 #include "ring_attention_all_gather_async.hpp"
 #include <utility>
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "device/ring_attention_all_gather_async_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -22,7 +22,7 @@ std::vector<ttnn::Tensor> ExecuteRingAttentionAllGatherAsync::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
-    return ttnn::operations::experimental::ccl::ring_attention_all_gather_async(
+    return ttnn::prim::ring_attention_all_gather_async(
         input_tensors,
         persistent_output_buffer,
         dim,

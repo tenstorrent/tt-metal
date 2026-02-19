@@ -57,6 +57,7 @@ enum watcher_features_t {
     SanitizeL1Overflow,
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
+    SanitizeNOCMulticastInvalidRange,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -76,22 +77,19 @@ uint32_t get_address_for_test(bool use_eth_core, tt::tt_metal::HalL1MemAddrType 
         const auto idle_eth_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, type);
         if (high_address) {
             return std::max(active_eth_addr, idle_eth_addr);
-        } else {
-            return std::min(active_eth_addr, idle_eth_addr);
         }
-    } else {
-        return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, type);
+        return std::min(active_eth_addr, idle_eth_addr);
     }
+    return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, type);
 }
 
 CoreCoord get_core_coord_for_test(const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     if (buffer->device_local_config().buffer_type == tt_metal::BufferType::L1) {
         return buffer->device()->worker_core_from_logical_core(
             buffer->get_backing_buffer()->allocator()->get_logical_core_from_bank_id(0));
-    } else {
-        auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
-        return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     }
+    auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
+    return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
 }
 
 void RunTestOnCore(
@@ -204,7 +202,10 @@ void RunTestOnCore(
     uint32_t l1_overflow_addr = 0;
     uint32_t eth_src_overflow_addr_words = 0;
     uint32_t eth_dest_overflow_addr_words = 0;
-    switch(feature) {
+    bool use_multicast_semaphore_inc = false;
+    uint32_t mcast_dst_end_x = 0;
+    uint32_t mcast_dst_end_y = 0;
+    switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
@@ -228,6 +229,14 @@ void RunTestOnCore(
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
+        case SanitizeNOCMulticastInvalidRange:
+            // Use invalid multicast range: start > end (for NOC0, this is invalid)
+            use_multicast_semaphore_inc = true;
+            output_buf_noc_xy.x = 5;  // start_x
+            output_buf_noc_xy.y = 5;  // start_y
+            mcast_dst_end_x = 2;      // end_x < start_x (invalid for NOC0)
+            mcast_dst_end_y = 2;      // end_y < start_y (invalid for NOC0)
+            break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -250,7 +259,10 @@ void RunTestOnCore(
          bad_linked_transaction,
          l1_overflow_addr,
          eth_src_overflow_addr_words,
-         eth_dest_overflow_addr_words});
+         eth_dest_overflow_addr_words,
+         use_multicast_semaphore_inc,
+         mcast_dst_end_x,
+         mcast_dst_end_y});
 
     // Run the kernel, expect an exception here
     try {
@@ -268,11 +280,11 @@ void RunTestOnCore(
     std::string expected;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
+    std::string risc_name = (is_eth_core) ? "erisc" : "BRISC";
     if (use_ncrisc) {
-        risc_name = "ncrisc";
+        risc_name = "NCRISC";
     }
-    switch(feature) {
+    switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
@@ -435,6 +447,28 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 (eth_dest_overflow_addr_words << 4));
+        } break;
+        case SanitizeNOCMulticastInvalidRange: {
+            // For multicast, the error message format is different - it shows a range
+            // The start coords are output_buf_noc_xy (5,5), end coords are mcast_dst_end (2,2)
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
+                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "DRAM[addr=0x{:08x}] (multicast invalid range).",
+                device->id(),
+                (is_eth_core) ? "acteth" : "worker",
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                0,  // l1_addr is 0 for address-only sanitization
+                output_buf_noc_xy.x,
+                output_buf_noc_xy.y,
+                mcast_dst_end_x,
+                mcast_dst_end_y,
+                output_buffer_addr);
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -655,6 +689,15 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthDestL1Overflow) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeEthDestL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSemaphoreInc) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMulticastInvalidRange);
         },
         this->devices_[0]);
 }

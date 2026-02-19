@@ -5,11 +5,10 @@
 #include "swiglu_fw.hpp"
 
 #include "device/swiglu_fw_device_operation.hpp"
-#include "metal/ops/swiglu_fw/swiglu_fw.hpp"
 
-namespace ttml::metal::ops::swiglu_fw {
+namespace ttml::metal {
 
-ttnn::Tensor SwiGLUForwardOperation::invoke(
+ttnn::Tensor swiglu_fw(
     const ttnn::Tensor& input_tensor, const ttnn::Tensor& w1, const ttnn::Tensor& w2, const ttnn::Tensor& w3) {
     return ttnn::prim::ttml_swiglu_fw(
         input_tensor,  // [B, 1, S, C]
@@ -19,4 +18,4 @@ ttnn::Tensor SwiGLUForwardOperation::invoke(
     );
 }
 
-}  // namespace ttml::metal::ops::swiglu_fw
+}  // namespace ttml::metal

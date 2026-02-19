@@ -2,11 +2,42 @@
 
 #############################################################
 
-# Accept an argument to specify the Ubuntu version
+# Global build arguments (defined before FROM to be available in all stages)
 ARG UBUNTU_VERSION=22.04
+# PYTHON_VERSION can be explicitly set or auto-detected from UBUNTU_VERSION:
+# Ubuntu 22.04 -> Python 3.10
+# Ubuntu 24.04 -> Python 3.12
+ARG PYTHON_VERSION=""
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
+ARG UBUNTU_VERSION
+ARG PYTHON_VERSION
+
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/usr/local/bin:$PATH"
+
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an accessible
+# shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
+# must be reachable from all nodes. See scripts/install-uv.sh post-install message.
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+
+# Auto-detect Python version from Ubuntu version if not explicitly provided
+RUN set -e; \
+    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    fi; \
+    echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
+    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
@@ -14,9 +45,12 @@ COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
+
 #############################################################
 
 FROM base AS ci-build
+
+ARG PYTHON_VERSION
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
@@ -40,15 +74,15 @@ RUN mkdir -p /tmp/cba \
     && rm -rf /tmp/cba
 
 # Install extra ci apt requirements
+# Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
-    libclang-17-dev \
     libclang-20-dev \
     libclang-rt-20-dev \
-    clang-tidy-17 \
     clang-tidy-20 \
     clang-20 \
+    llvm-20 \
     curl \
     dialog \
     file \
@@ -61,9 +95,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set up virtual environment
+# Install yq (YAML processor) for CI workflows
+# Note: mikefarah/yq is not available in apt, download binary from GitHub releases
+ARG YQ_VERSION=v4.44.6
+RUN wget -q "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq && \
+    chmod +x /usr/local/bin/yq
+
+# Set up virtual environment using uv
+
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
+RUN umask 000 && \
+    uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
+
+# Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh; activate uses $BASH_SOURCE otherwise)
+COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
+RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -73,17 +123,30 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN python3 -m pip install --no-cache-dir build numpy setuptools
+# bundle uv with the venv for portable usage
+RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80
 
 RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
 
+# Install mold linker for faster linking
+ARG MOLD_VERSION=2.40.4
+ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
+RUN wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz && \
+    echo "${MOLD_SHA256}  /tmp/mold.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/mold.tar.gz -C /usr/local --strip-components=1 && \
+    rm /tmp/mold.tar.gz && \
+    mold --version
+
+# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
+ENV PATH="/usr/local/bin:$PATH"
+
 #############################################################
 
 FROM ci-build AS ci-test
 
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra
@@ -97,14 +160,22 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-RUN umask 000 && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+# Configure PyTorch CPU index and install Python packages using uv
+# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
+# that are not explicitly listed in the requirements.txt files
+# no-build-isolation is for pulling in pkg_resources from the system package
+# which setuptools removed in version 82. The old setuptools wheels apparently
+# do not automatically pull in pkg_resources
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
-RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
+RUN umask 000 && \
+    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
     echo "Installing debugger for Ubuntu 22.04..." && \
     ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
     echo "Debugger installation completed" && \
@@ -115,8 +186,7 @@ RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
 
 FROM ci-test AS dev
 
-
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
@@ -139,7 +209,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # RUN mkdir -p /tmp/iwyu \
 #     && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
 #     && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
 #     && cmake --build /tmp/iwyu/build --parallel \
 #     && cmake --install /tmp/iwyu/build \
 #     && rm -rf /tmp/iwyu
@@ -164,15 +234,33 @@ RUN if [ "$UBUNTU_VERSION" != "24.04" ]; then \
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Configure SSH for MPI multihost jobs readiness
+RUN adduser --uid 1001 --shell /bin/bash user
+RUN usermod -aG sudo user
+RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
+
+RUN mkdir -p /run/sshd
+RUN echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################
 
 FROM base AS release
 
+ARG PYTHON_VERSION
+
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN python3 -m venv $PYTHON_ENV_DIR
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
+
+# Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh)
+COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
+RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -186,11 +274,13 @@ RUN mkdir -p /etc && \
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN pip3 install $WHEEL_FILENAME
+RUN umask 000 && uv pip install $WHEEL_FILENAME
 
 #############################################################
 
 FROM base AS release-models
+
+ARG PYTHON_VERSION
 
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -210,9 +300,13 @@ RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
 WORKDIR /tt-metal
 
 # Build tt-metal and venv, then clear cache
-RUN /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh \
-    && source $PYTHON_ENV_DIR/bin/activate \
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
+RUN umask 000 && /bin/bash -c "./build_metal.sh \
+    && ./create_venv.sh --bundle-python --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
+    && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands

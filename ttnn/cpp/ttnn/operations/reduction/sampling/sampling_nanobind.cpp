@@ -12,7 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
 
 namespace ttnn::operations::reduction::detail {
@@ -36,19 +36,6 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
         The op finally returns input_indices_tensor[final_index]  where final_index is the index of the largest cumulative probability > random number found in the multinomial sampling.
 
         Currently, this operation supports inputs and outputs with specific memory layout and data type constraints.
-
-        Equivalent PyTorch code:
-            .. code-block:: python
-
-               return torch.sampling(
-                      input_values_tensor,
-                      input_indices_tensor,
-                      k=k,
-                      p=p,
-                      temp=temp,
-                      seed=seed,
-                      optional_output_tensor=optional_output_tensor,
-                  )
 
         Args:
             input_values_tensor (ttnn.Tensor): The input tensor containing values to sample from.
@@ -130,37 +117,13 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                 - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
                 - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.
                 - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
-
-        Example:
-            .. code-block:: python
-
-                input_tensor = ttnn.rand([1, 1, 32, 64], layout=ttnn.TILE_LAYOUT, device=device)
-                input_indices_tensor = ttnn.rand([1, 1, 32, 64], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                k_tensor = ttnn.rand([32], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                p_tensor = ttnn.rand([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                temp_tensor = ttnn.rand([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-                output = ttnn.sampling(input_tensor, input_indices_tensor, k=k_tensor, p=p_tensor, temp=temp_tensor)
-
         )doc";
 
-    using OperationType = decltype(ttnn::sampling);
-    bind_registered_operation(
+    ttnn::bind_function<"sampling">(
         mod,
-        ttnn::sampling,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_values_tensor,
-               const Tensor& input_indices_tensor,
-               const Tensor& k,
-               const Tensor& p,
-               const Tensor& temp,
-               const std::optional<uint32_t>& seed,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::sampling,
             nb::arg("input_values_tensor").noconvert(),
             nb::arg("input_indices_tensor").noconvert(),
             nb::arg("k").noconvert(),
@@ -169,7 +132,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("seed") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail

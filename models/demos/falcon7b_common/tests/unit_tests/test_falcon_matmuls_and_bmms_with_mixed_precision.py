@@ -213,11 +213,6 @@ def test_falcon_matmul(
     request,
     device,
 ):
-    compute_grid_size = device.compute_with_storage_grid_size()
-    is_e75_grid_size = (compute_grid_size.x * compute_grid_size.y) == 88
-    if is_e75_grid_size and (seq_len == 512) and (falcon_op == MatmulOpEnum.FALCON_LM_HEAD_MATMUL):
-        pytest.skip(f"LM Head does not work on E75 grid size {compute_grid_size}")
-
     run_falcon_matmul_test(
         falcon_op,
         seq_len,

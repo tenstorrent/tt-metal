@@ -36,6 +36,7 @@ void HostBuffer::swap(HostBuffer& other) noexcept {
     swap(pin_, other.pin_);
     swap(view_, other.view_);
     swap(type_info_, other.type_info_);
+    swap(pinned_memory_, other.pinned_memory_);
 }
 
 tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }

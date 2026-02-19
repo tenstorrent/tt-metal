@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
-namespace NAMESPACE {
-void MAIN {
+#include "ttnn/kernel/compute/moreh_common.hpp"
+void kernel_main() {
     constexpr int onetile = 1;
     ArgFetcher arg_fetcher;
     const uint32_t batch_num = arg_fetcher.get_next_arg_val<uint32_t>();
@@ -137,4 +136,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

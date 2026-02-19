@@ -72,7 +72,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -122,7 +122,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -163,6 +163,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             [](const MLAOperationType& self,
                const ttnn::Tensor& input_tensor_q,
                const ttnn::Tensor& input_tensor_k,
+               const std::optional<const Tensor>& input_tensor_v,
                const uint32_t head_dim_v,
                const bool is_causal,
                const std::optional<const Tensor>& attn_mask,
@@ -172,11 +173,12 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
+                    input_tensor_v,
                     head_dim_v,
                     is_causal,
                     attn_mask,
@@ -191,6 +193,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             },
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
+            nb::arg("input_tensor_v") = nb::none(),
             nb::arg("head_dim_v").noconvert(),
             nb::kw_only(),
             nb::arg("is_causal").noconvert() = true,
@@ -213,6 +216,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             [](const PagedMLAOperationType& self,
                const ttnn::Tensor& input_tensor_q,
                const ttnn::Tensor& input_tensor_k,
+               const std::optional<const Tensor>& input_tensor_v,
                const uint32_t head_dim_v,
                const ttnn::Tensor& page_table_tensor,
                const bool is_causal,
@@ -222,11 +226,12 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
+                    input_tensor_v,
                     head_dim_v,
                     page_table_tensor,
                     is_causal,
@@ -241,6 +246,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             },
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
+            nb::arg("input_tensor_v") = nb::none(),
             nb::arg("head_dim_v").noconvert(),
             nb::arg("page_table_tensor").noconvert(),
             nb::kw_only(),

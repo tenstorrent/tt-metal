@@ -4,22 +4,20 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api.h"
-
-namespace NAMESPACE {
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
 #include "llk_math_unary_datacopy_api.h"
 
-void math_main() {
+void core_agnostic_main() {
     int __outer_loop_iter;
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0)));
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
-    llk_math_hw_configure(0, 0);
+    llk_math_hw_configure<DST_ACCUM_MODE>(0, 0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_math_wait_for_dest_available();
@@ -33,10 +31,10 @@ void math_main() {
 #include "llk_pack_common.h"
 #include "llk_pack.h"
 
-void pack_main() {
+void core_agnostic_main() {
     int __outer_loop_iter;
     llk_pack_init();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -50,7 +48,7 @@ void pack_main() {
 #endif
 
 #ifdef TRISC_UNPACK
-void unpack_main() {
+void core_agnostic_main() {
     int __outer_loop_iter;
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()));
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(0)));
@@ -63,4 +61,8 @@ void unpack_main() {
 }
 #endif
 
-}  // namespace NAMESPACE
+void kernel_main() {
+#if defined(TRISC_MATH) || defined(TRISC_PACK) || defined(TRISC_UNPACK)
+    core_agnostic_main();
+#endif
+}

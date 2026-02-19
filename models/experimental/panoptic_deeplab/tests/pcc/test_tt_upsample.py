@@ -5,6 +5,7 @@ import torch
 import pytest
 import ttnn
 
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ...tt.tt_upsample import BilinearUpsampleMatmulTTNN
 from ...tt.tt_upsample import BilinearUpsampleTorch
@@ -47,7 +48,7 @@ def test_bilinear_upsample_matmul_vs_torch(b, h, w, c, scale, input_channels_fir
     out_torch = upsampler.forward(img_torch)
 
     # Torch bilinear upsampling (always works with channels-first)
-    out_t = torch.nn.functional.interpolate(img_nchw, scale_factor=scale, mode="bilinear", align_corners=True)
+    out_t = torch.nn.functional.interpolate(img_nchw, scale_factor=scale, mode="bilinear", align_corners=False)
 
     if output_channels_first:
         # Keep channels-first format
@@ -144,9 +145,9 @@ def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
     output_matmul = upsampler(ttnn_input_tensor)
     output_matmul_torch = ttnn.to_torch(output_matmul)
 
-    # Method 2: PyTorch reference with align_corners=True
+    # Method 2: PyTorch reference with align_corners=False
     torch_result_nchw = torch.nn.functional.interpolate(
-        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=True
+        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=False
     )
 
     if output_channels_first:
@@ -212,42 +213,14 @@ def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=memory_config,
     )
-
-    # First config
-    config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(5, 4),
-        in0_block_w=2,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        out_block_h=4,
-        out_block_w=2,
-        per_core_M=4,
-        per_core_N=2,
-        fuse_batch=False,
-        fused_activation=None,
-        mcast_in0=True,
-        gather_in0=False,
-        num_global_cb_receivers=0,
-        untilize_out=False,
+    # Create centralized configuration
+    model_configs = ModelOptimisations(
+        device=device,
+        conv_act_dtype=ttnn.bfloat8_b,
+        conv_w_dtype=ttnn.bfloat8_b,
     )
-
-    # Second config
-    config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(5, 4),
-        in0_block_w=2,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        out_block_h=16,
-        out_block_w=2,
-        per_core_M=16,
-        per_core_N=2,
-        fuse_batch=False,
-        fused_activation=None,
-        mcast_in0=True,
-        gather_in0=False,
-        num_global_cb_receivers=0,
-        untilize_out=False,
-    )
+    config1 = model_configs.get_matmul_config("final_upsample_mm_config1")
+    config2 = model_configs.get_matmul_config("final_upsample_mm_config2")
 
     # Method 1: Custom matrix multiplication implementation
     upsampler = BilinearUpsampleMatmulTTNN(
@@ -267,9 +240,9 @@ def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
     output_matmul = upsampler(ttnn_input_tensor)
     output_matmul_torch = ttnn.to_torch(output_matmul)
 
-    # Method 2: PyTorch reference with align_corners=True
+    # Method 2: PyTorch reference with align_corners=False
     torch_result_nchw = torch.nn.functional.interpolate(
-        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=True
+        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=False
     )
 
     if output_channels_first:

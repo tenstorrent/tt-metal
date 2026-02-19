@@ -2,24 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ema_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt_stl/assert.hpp>
 
 #include <cmath>
 
-namespace ttnn::operations::reduction::ema {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-
-EmaDeviceOperation::program_factory_t EmaDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return program::EmaProgramFactory{};
-}
-
-void EmaDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
 
 void EmaDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -69,7 +61,7 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!std::isnan(operation_attributes.alpha), "EMA alpha must be a valid number, got NaN");
 }
 
-spec_return_value_t EmaDeviceOperation::compute_output_specs(
+TensorSpec EmaDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
@@ -77,7 +69,7 @@ spec_return_value_t EmaDeviceOperation::compute_output_specs(
     return tensor_args.input.tensor_spec().with_memory_config(operation_attributes.output_mem_config);
 }
 
-tensor_return_value_t EmaDeviceOperation::create_output_tensors(
+Tensor EmaDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor.value();
@@ -85,24 +77,25 @@ tensor_return_value_t EmaDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<EmaDeviceOperation::operation_attributes_t, EmaDeviceOperation::tensor_args_t> EmaDeviceOperation::invoke(
+ttnn::Tensor ema_device(
     const Tensor& input,
     float alpha,
     CoreCoord grid_size,
-    const MemoryConfig& output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
-    return {
-        operation_attributes_t{
+    using OperationType = EmaDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .alpha = alpha,
             .grid_size = grid_size,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input = input,
             .optional_output_tensor = std::move(optional_output_tensor),
-        }};
+        });
 }
 
-}  // namespace ttnn::operations::reduction::ema
+}  // namespace ttnn::prim

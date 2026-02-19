@@ -19,6 +19,7 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "stream_io_map.h"
 #include "tensix.h"
 #include "hal_1xx_common.hpp"
 
@@ -182,7 +183,6 @@ public:
                                      params.processor_class == HalProcessorClassType::COMPUTE
                                  ? "-mcpu=tt-bh-tensix "
                                  : "-mcpu=tt-bh ";
-        cflags += "-mno-tt-tensix-optimize-replay ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -214,13 +214,13 @@ public:
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
                 if (params.processor_id < 2) {
-                    return fmt::format(
-                        "{}/{}_{}aerisc.ld",
-                        path,
-                        fork,
-                        params.processor_id    ? "subordinate_"
-                        : enable_2_erisc_mode_ ? "main_"
-                                               : "");
+                    const char* prefix = "";
+                    if (params.processor_id) {
+                        prefix = "subordinate_";
+                    } else if (enable_2_erisc_mode_) {
+                        prefix = "main_";
+                    }
+                    return fmt::format("{}/{}_{}aerisc.ld", path, fork, prefix);
                 }
                 break;
             case HalProgrammableCoreType::IDLE_ETH:
@@ -357,9 +357,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
-            case DispatchFeature::ETH_MAILBOX_API: return true;
-            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::ETH_MAILBOX_API:
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER:
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
         }
@@ -379,6 +379,8 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
+    this->operand_start_stream_ = OPERAND_START_STREAM;
+    this->has_stream_registers_ = true;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
@@ -418,22 +420,6 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(enable_2_erisc_mode);
-
-    this->verify_eth_fw_version_func_ = [=](tt::umd::semver_t fw_version) {
-        if (enable_2_erisc_mode) {
-            tt::umd::semver_t min_version(1, 7, 0);
-            if (!(fw_version >= min_version)) {
-                log_warning(
-                    tt::LogLLRuntime,
-                    "Blackhole multi erisc mode requires ethernet firmware version {} or higher, but detected version "
-                    "{}. Automatically falling back to single erisc mode for compatibility.",
-                    min_version.to_string(),
-                    fw_version.to_string());
-                return false;
-            }
-        }
-        return true;
-    };
 
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();

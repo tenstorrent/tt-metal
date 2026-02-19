@@ -28,13 +28,13 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::fused::normalization::program {
+namespace ttnn::experimental::prim {
 
 RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const RMSAllGatherParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RMSAllGatherInputs& tensor_args,
+    Tensor& tensor_return_value) {
     // Setup device information
     ttnn::MeshDevice* mesh_device = tensor_args.input.device();
     auto* const target_device = mesh_device->get_device(mesh_coord);
@@ -1225,10 +1225,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
 }
 
 RMSAllGatherMeshWorkloadFactory::cached_mesh_workload_t RMSAllGatherMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const RMSAllGatherParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RMSAllGatherInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -1247,9 +1247,9 @@ RMSAllGatherMeshWorkloadFactory::cached_mesh_workload_t RMSAllGatherMeshWorkload
 
 void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RMSAllGatherParams& operation_attributes,
+    const RMSAllGatherInputs& tensor_args,
+    Tensor& tensor_return_value) {
     // Update runtime arguments for each program in the workload using shared variables
     for (auto& [range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(range);
@@ -1305,4 +1305,4 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::fused::normalization::program
+}  // namespace ttnn::experimental::prim

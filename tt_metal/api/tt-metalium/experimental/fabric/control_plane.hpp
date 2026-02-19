@@ -19,7 +19,19 @@
 #include <memory>
 #include <vector>
 
+namespace tt {
+
+class Cluster;
+
+namespace llrt {
+class RunTimeOptions;
+}
+
+}  // namespace tt
+
 namespace tt::tt_metal {
+
+class Hal;
 
 class PhysicalSystemDescriptor;
 
@@ -75,11 +87,47 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
-    ControlPlane();
-    explicit ControlPlane(const std::string& mesh_graph_desc_file);
+    // Create control plane with auto-discovery
     explicit ControlPlane(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
+        FabricConfig fabric_config = FabricConfig::DISABLED,
+        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+
+    // Create control plane with custom mesh graph descriptor
+    explicit ControlPlane(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
-        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        FabricConfig fabric_config = FabricConfig::DISABLED,
+        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+
+    // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
+    explicit ControlPlane(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
+        const std::string& mesh_graph_desc_file,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+        FabricConfig fabric_config = FabricConfig::DISABLED,
+        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
 
     ~ControlPlane();
 
@@ -90,8 +138,7 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
-    void configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
+    void configure_routing_tables_for_fabric_ethernet_channels();
     void write_routing_tables_to_all_chips() const;
     void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
 
@@ -176,18 +223,17 @@ public:
     // TODO: remove this converter, we should consolidate the directions here
     eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
 
+    RoutingDirection eth_direction_to_routing_direction(eth_chan_directions direction) const;
+
     // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
     std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
     // Return ethernet channels on a chip that face other chips within the same mesh (intra-mesh)
     std::vector<chan_id_t> get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
 
-    // The following apis should probably be private, and exposed only to some Metal runtime objects
-    void set_routing_mode(uint16_t mode);
-    uint16_t get_routing_mode() const;
-
-    void initialize_fabric_context(tt_fabric::FabricConfig fabric_config);
-
     FabricContext& get_fabric_context() const;
+
+    // Get all fabric defines for kernel compilation (used by tt_metal.cpp)
+    std::map<std::string, std::string> get_fabric_kernel_defines() const;
 
     void clear_fabric_context();
 
@@ -228,6 +274,14 @@ public:
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
+    // Getters
+    FabricConfig get_fabric_config() const { return fabric_config_; }
+    FabricReliabilityMode get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
+    FabricTensixConfig get_fabric_tensix_config() const { return fabric_tensix_config_; }
+    FabricUDMMode get_fabric_udm_mode() const { return fabric_udm_mode_; }
+    FabricRouterConfig get_fabric_router_config() const { return fabric_router_config_; }
+    FabricManagerMode get_fabric_manager_mode() const { return fabric_manager_; }
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
@@ -239,7 +293,30 @@ private:
 
     void init_control_plane_auto_discovery();
 
-    uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
+    // Initialize fabric context if fabric is enabled
+    void initialize_fabric_context();
+
+    // Dependencies
+    std::reference_wrapper<const ::tt::Cluster> cluster_;
+    std::reference_wrapper<const ::tt::llrt::RunTimeOptions> rtoptions_;
+    std::reference_wrapper<const ::tt::tt_metal::Hal> hal_;
+    std::reference_wrapper<const tt_metal::distributed::multihost::DistributedContext> distributed_context_;
+
+    // Fabric Settings
+    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+
+    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
+    // is expected that any downed devices/links will result in some sort of error condition being
+    // reported. When set to false, the control plane is free to instantiate fewer routing planes
+    // according to which links are available.
+    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+
+    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
+    tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
+    tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
+
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;

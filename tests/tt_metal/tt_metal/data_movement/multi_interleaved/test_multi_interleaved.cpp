@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -43,16 +44,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         test_config.page_size_bytes);
 
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     // Program
     Program program = CreateProgram();
 
-    const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
+    const uint32_t num_cores = test_config.cores.num_cores();
+    const size_t per_core_size_bytes = test_config.num_pages * test_config.page_size_bytes;
+    const size_t total_buffer_size_bytes = num_cores * per_core_size_bytes;
 
     InterleavedBufferConfig interleaved_buffer_config{
         .device = device,
-        .size = total_size_bytes,
+        .size = total_buffer_size_bytes,
         .page_size = test_config.page_size_bytes,
         .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> input_buffer;
@@ -62,12 +65,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     auto output_buffer = CreateBuffer(interleaved_buffer_config);
     uint32_t output_buffer_address = output_buffer->address();
 
-    assert(input_buffer_address != output_buffer_address);
-    assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
+    TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
+    TT_FATAL(test_config.read_kernel || test_config.write_kernel, "At least one kernel must run");
 
-    // Input
+    // Input - generate data for all cores
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
+        -100.0f,
+        100.0f,
+        total_buffer_size_bytes / sizeof(bfloat16),
+        chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
@@ -94,19 +100,44 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         (uint32_t)sync};
 
     if (sync) {
-        // Create circular buffers
+        // Create circular buffers - each core only needs space for its own data
         CircularBufferConfig l1_cb_config =
-            CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
+            CircularBufferConfig(per_core_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
                 .set_page_size(l1_cb_index, test_config.page_size_bytes);
         CreateCircularBuffer(program, test_config.cores, l1_cb_config);
     }
 
     std::vector<uint32_t> l1_addrs;
     std::vector<CoreCoord> core_list = corerange_to_cores(test_config.cores);
+    constexpr uint32_t barrier_scratch_bytes = 2u * sizeof(uint32_t);
+    const uint32_t required_l1_bytes = per_core_size_bytes + barrier_scratch_bytes;
     for (auto& core : core_list) {
         auto [l1_addr, l1_size] = get_l1_address_and_size(mesh_device, core);
-        assert(l1_size >= total_size_bytes);
+        TT_FATAL(
+            l1_size >= required_l1_bytes,
+            "L1 size {} must be >= per_core_size_bytes {} + barrier scratch {} (total {})",
+            l1_size,
+            per_core_size_bytes,
+            barrier_scratch_bytes,
+            required_l1_bytes);
         l1_addrs.push_back(l1_addr);
+    }
+
+    // ===== Barrier synchronization setup =====
+    // CreateSemaphore allocates semaphores on all specified cores (same ID maps to same L1 offset).
+    // We only use the coordinator's semaphore - all cores increment it via NOC and poll until num_cores.
+    // Creating on all cores ensures get_semaphore(id) works correctly on every core.
+    CoreCoord coordinator_core = core_list[0];
+    CoreCoord coordinator_phys = device->worker_core_from_logical_core(coordinator_core);
+
+    uint32_t reader_barrier_sem_id = 0;
+    uint32_t writer_barrier_sem_id = 0;
+
+    if (test_config.read_kernel) {
+        reader_barrier_sem_id = CreateSemaphore(program, test_config.cores, 0);
+    }
+    if (test_config.write_kernel) {
+        writer_barrier_sem_id = CreateSemaphore(program, test_config.cores, 0);
     }
 
     // Kernels
@@ -121,8 +152,21 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
                 .noc = NOC::RISCV_0_default,  // NOC0 should be used when reading from DRAM into Tensix core L1
                 .compile_args = reader_compile_args});
 
-        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
-            std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addrs[i]};
+        for (size_t i = 0; i < num_cores; ++i) {
+            // Each core reads from different pages to distribute across DRAM banks
+            uint32_t page_offset = i * test_config.num_pages;
+            // Use the end of L1 data buffer as scratch space for polling
+            uint32_t local_barrier_addr = l1_addrs[i] + per_core_size_bytes;
+
+            std::vector<uint32_t> reader_run_time_args = {
+                input_buffer_address,
+                l1_addrs[i],
+                page_offset,
+                reader_barrier_sem_id,  // Semaphore ID, kernel will call get_semaphore() to get address
+                coordinator_phys.x,
+                coordinator_phys.y,
+                num_cores,
+                local_barrier_addr};
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core_list[i], reader_run_time_args);
         }
     }
@@ -138,8 +182,21 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
                 .noc = NOC::RISCV_1_default,  // NOC1 should be used when writing from Tensix core L1 into DRAM
                 .compile_args = writer_compile_args});
 
-        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
-            std::vector<uint32_t> writer_run_time_args = {output_buffer_address, l1_addrs[i]};
+        for (size_t i = 0; i < num_cores; ++i) {
+            // Each core writes to different pages to distribute across DRAM banks
+            uint32_t page_offset = i * test_config.num_pages;
+            // Use the end of L1 data buffer as scratch space for polling
+            uint32_t local_barrier_addr = l1_addrs[i] + per_core_size_bytes + sizeof(uint32_t);
+
+            std::vector<uint32_t> writer_run_time_args = {
+                output_buffer_address,
+                l1_addrs[i],
+                page_offset,
+                writer_barrier_sem_id,  // Semaphore ID, kernel will call get_semaphore() to get address
+                coordinator_phys.x,
+                coordinator_phys.y,
+                num_cores,
+                local_barrier_addr};
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core_list[i], writer_run_time_args);
         }
     }
@@ -154,9 +211,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         detail::WriteToBuffer(input_buffer, packed_input);
         MetalContext::instance().get_cluster().dram_barrier(device->id());
     } else {
-        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
-            // If not reading, write to L1 directly
-            detail::WriteToDeviceL1(device, core_list[i], l1_addrs[i], packed_input);
+        // If not reading, write each core's slice to L1 directly
+        const size_t per_core_words = per_core_size_bytes / sizeof(uint32_t);
+        for (size_t i = 0; i < num_cores; ++i) {
+            vector<uint32_t> core_input(
+                packed_input.begin() + i * per_core_words, packed_input.begin() + (i + 1) * per_core_words);
+            detail::WriteToDeviceL1(device, core_list[i], l1_addrs[i], core_input);
         }
         MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
@@ -172,35 +232,37 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     Finish(cq);
 
     vector<uint32_t> packed_output;
-    bool pcc = false;
+    bool is_equal = false;
 
     if (test_config.write_kernel) {
         detail::ReadFromBuffer(output_buffer, packed_output);
-        pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-        if (!pcc) {
-            log_error(tt::LogTest, "PCC Check failed");
+        is_equal = (packed_output == packed_golden);
+        if (!is_equal) {
+            log_error(tt::LogTest, "Equality Check failed");
             log_info(tt::LogTest, "Golden vector");
             print_vector<uint32_t>(packed_golden);
             log_info(tt::LogTest, "Output vector");
             print_vector<uint32_t>(packed_output);
         }
     } else {
-        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
-            detail::ReadFromDeviceL1(device, core_list[i], l1_addrs[i], total_size_bytes, packed_output);
-            pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-                packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-            if (!pcc) {
-                log_error(tt::LogTest, "PCC Check failed");
-                log_info(tt::LogTest, "Golden vector");
-                print_vector<uint32_t>(packed_golden);
+        // Each core reads different pages, verify each core's L1 against its slice
+        const size_t per_core_words = per_core_size_bytes / sizeof(uint32_t);
+        for (size_t i = 0; i < num_cores; ++i) {
+            detail::ReadFromDeviceL1(device, core_list[i], l1_addrs[i], per_core_size_bytes, packed_output);
+            vector<uint32_t> core_golden(
+                packed_golden.begin() + i * per_core_words, packed_golden.begin() + (i + 1) * per_core_words);
+            is_equal = (packed_output == core_golden);
+            if (!is_equal) {
+                log_error(tt::LogTest, "Equality Check failed for core {}", i);
+                log_info(tt::LogTest, "Golden vector for core {}", i);
+                print_vector<uint32_t>(core_golden);
                 log_info(tt::LogTest, "Output vector");
                 print_vector<uint32_t>(packed_output);
-                return pcc;
+                return is_equal;
             }
         }
     }
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -292,7 +354,7 @@ void packet_sizes_test(
 /* ========== Full grid directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 110;
     CoreCoord mst_start_coord = {0, 0};
@@ -304,7 +366,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal
 /* ========== Full grid packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 111;
     CoreCoord mst_start_coord = {0, 0};
@@ -316,7 +378,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
 /* ========== Full grid read kernel directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 112;
     CoreCoord mst_start_coord = {0, 0};
@@ -328,7 +390,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedI
 /* ========== Full grid read kernel packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 113;
     CoreCoord mst_start_coord = {0, 0};
@@ -340,7 +402,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
 /* ========== Full grid write kernel directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 114;
     CoreCoord mst_start_coord = {0, 0};
@@ -352,7 +414,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirected
 /* ========== Full grid write kernel packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 115;
     CoreCoord mst_start_coord = {0, 0};

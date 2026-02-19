@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -30,9 +29,6 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "input_b_dtype": [ttnn.bfloat16],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
@@ -48,13 +44,11 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    input_b_dtype,
-    input_b_layout,
-    input_b_memory_config,
     output_memory_config,
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept extra parameters like scalar, traced_source, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -137,16 +131,16 @@ def run(
     # Reshape weight for TILE layout: must match input's last dimension
     torch_weight_reshaped = (
         torch_weight.flatten()[: input_tensor_shape[-1]].reshape([1, 1, 1, input_tensor_shape[-1]])
-        if input_b_layout == ttnn.TILE_LAYOUT and len(weight_tensor_shape) == 4
+        if input_a_layout == ttnn.TILE_LAYOUT and len(weight_tensor_shape) == 4
         else torch_weight
     )
 
     weight_tensor = ttnn.from_torch(
         torch_weight_reshaped,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
         device=device,
-        memory_config=input_b_memory_config,
+        memory_config=input_a_memory_config,
     )
 
     start_time = start_measuring_time()

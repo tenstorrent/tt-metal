@@ -8,6 +8,14 @@ on:
         required: true
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -17,7 +25,8 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: false
   create-image-tag-name:
     runs-on: ubuntu-latest
     outputs:

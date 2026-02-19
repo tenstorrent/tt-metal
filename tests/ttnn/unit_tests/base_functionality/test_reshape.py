@@ -10,7 +10,8 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 @pytest.mark.parametrize(
@@ -20,6 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if not enable_cache:
         device.disable_program_cache()
@@ -47,8 +49,8 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
-    # respecting the parameters of the test, although cache should be active by default
     if not enable_cache:
         device.disable_and_clear_program_cache()
 
@@ -68,13 +70,93 @@ def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_sha
     assert torch.allclose(b, ttnn.to_torch(tt_b))
 
 
+@pytest.mark.parametrize("shape", [[1, 1, 1024, 1], [1, 1024, 1]])
+def test_reshape_block_shard(device, shape):
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    shard_shape = shape.copy()
+    shard_shape[-1] = 32
+
+    block_sharded_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(x=1, y=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=block_sharded_config,
+    )
+    output_tensor = ttnn.reshape(input_ttnn, [1, 1024])
+
+    expected_output = input_torch.reshape([1, 1024])
+    actual_output = ttnn.to_torch(output_tensor)
+    assert torch.allclose(expected_output, actual_output)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_reshape_height_shard(device, layout):
+    if is_watcher_enabled() and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Skipping test with watcher enabled due to hang, see github issue #37096")
+    input_shape = [1, 1, 256, 32]
+    output_shape = [1, 1, 32, 256]
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    height_sharded_config = ttnn.create_sharded_memory_config(
+        shape=input_shape,
+        core_grid=ttnn.CoreGrid(y=8, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        device=device,
+        memory_config=height_sharded_config,
+    )
+    output_tensor = ttnn.reshape(input_ttnn, output_shape)
+
+    expected_output = input_torch.reshape(output_shape)
+    actual_output = ttnn.to_torch(output_tensor)
+    assert torch.allclose(expected_output, actual_output)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_reshape_width_shard(device, layout):
+    if is_watcher_enabled() and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Skipping test with watcher enabled due to hang, see github issue #37096")
+    input_shape = [1, 1, 256, 256]
+    output_shape = [1, 1, 64, 1024]
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    width_sharded_config = ttnn.create_sharded_memory_config(
+        shape=input_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        device=device,
+        memory_config=width_sharded_config,
+    )
+    output_tensor = ttnn.reshape(input_ttnn, output_shape)
+
+    expected_output = input_torch.reshape(output_shape)
+    actual_output = ttnn.to_torch(output_tensor)
+    assert torch.allclose(expected_output, actual_output)
+
+
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [4])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [64])
 def test_reshape_sharded_rm(device, n, c, h, w):
-    pytest.skip("skipped to unblock P0 issue 16975 but needs to be fixed and removed for issue 17030")
-
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
 
@@ -107,7 +189,7 @@ def test_reshape_sharded_rm(device, n, c, h, w):
     tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -264,6 +346,7 @@ def test_reshape_in_4D(n, c, h, w):
 @pytest.mark.parametrize("c", [32, 64])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_reshape_in_4D_on_device(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(h, w, n, c)
@@ -278,6 +361,7 @@ def test_reshape_in_4D_on_device(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_permute_reshape(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, 64, 128)
@@ -646,6 +730,7 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
         assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_reshape_oob(device):
     """
     Test proves that this reshape op writes data out of bounds, corrupting
@@ -682,3 +767,47 @@ def test_reshape_oob(device):
         ttnn.deallocate(tt_output_tensor)
         ttnn.deallocate(pre_tensor)
         ttnn.deallocate(post_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape,shard_shape,output_shape",
+    [
+        # Batch sharding
+        # Batch dims are equal for shape and shard_shape, all other dims of shard shape are 1 (or tile size for the lower two dims, or other combinations)
+        ((10, 4, 32 * 17, 32 * 17), (10, 1, 32, 32), (10, 4 * 17 * 17, 32, 32)),
+        ((5, 7, 32 * 11, 32 * 11), (5, 1, 32, 32), (5, 7, 32 * 11 * 11, 32)),
+        ((10, 4, 32 * 16, 32 * 16), (5, 2, 32, 64), (10 * 16 * 16, 4, 32, 32)),  # half batch sharding
+        (
+            (10, 5, 32 * 11, 32 * 11),
+            (10, 2, 64, 64),
+            (10 * 11, 5 * 11, 32, 32),
+        ),  # tensor dimensions not evenly divided by shard dimensions
+    ],
+)
+@pytest.mark.parametrize("dim", [0, 1])
+@pytest.mark.parametrize("interleaved", [False])
+def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, device):
+    pytest.skip("skipped but must be resolved later - issue 36172")
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random(shape, -100, 100, dtype=torch.bfloat16)
+
+    grid_size = device.compute_with_storage_grid_size()
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+    grid = ttnn.CoreRangeSet([core_range])
+
+    torch_output_tensor = torch_input_tensor.reshape(output_shape)
+
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
+    output_shard_shape = list(shard_shape)
+    output_shard_shape[0] = 1
+    output_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid))
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+
+    output_tensor = ttnn.reshape(input_tensor, output_shape)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)

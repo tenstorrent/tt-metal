@@ -25,7 +25,6 @@ enum class IntImgCB : uint32_t {
     CUMSUM_STAGE_0,
     CUMSUM_STAGE_1,
     CUMSUM_STAGE_2,
-    CUMSUM_STAGE_3,
     OUTPUT,
     AXIS_2_BUFFER,  // memoizing last tile (for the "deeper" block) for propagation along axis 2
     AXIS_3_BUFFER,  // memoizing upper 32 tiles for propagation along axis 3
@@ -60,7 +59,7 @@ KernelHandle create_kernel(
 
 }  // namespace
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::prim {
 
 // it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
 // expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
@@ -68,13 +67,11 @@ constexpr uint32_t CORES_X = 2;
 constexpr uint32_t CORES_Y = 4;
 
 IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const IntImgParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& input_tensor{tensor_args.input_tensor};
+    const auto& input_tensor{tensor_args};
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.padded_shape()};
 
@@ -157,14 +154,14 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
 void IntImgProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const IntImgParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
 
-    auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
+    auto input_buffer_address = tensor_args.buffer()->address();
     auto output_buffer_address = tensor_return_value.buffer()->address();
     for (uint32_t x = 0; x < CORES_X; ++x) {
         for (uint32_t y = 0; y < CORES_Y; ++y) {
@@ -178,4 +175,4 @@ void IntImgProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::prim

@@ -4,7 +4,7 @@
 
 #include "common_tensor_test_utils.hpp"
 
-#include <stdint.h>
+#include <cstdint>
 #include <memory>
 #include <vector>
 

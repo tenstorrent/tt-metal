@@ -10,15 +10,15 @@
 
 #pragma once
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/reg_api.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/reg_api.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 namespace norm::kernel_util::compute {
 /**
@@ -61,6 +61,8 @@ inline void combine_welford_partials(
     constexpr uint32_t mean_cb_idx = 0;
     constexpr uint32_t var_cb_idx = 1;
 
+    reconfig_data_format(cb_partials, cb_partials);
+    pack_reconfig_data_format(cb_combined);
     tile_regs_acquire();
 
     // Make sure that the registers are zeroed out
@@ -69,7 +71,6 @@ inline void combine_welford_partials(
     fill_tile(tmp_dst1, 0.f);
     fill_tile(mean_acc_dst, 0.f);
     fill_tile(m2_acc_dst, 0.f);
-
     uint32_t acc_n = 0;
     for (uint32_t b = 0; b < num_sets; b++) {
         // Wait for 1 mean tile and 1 var tile
@@ -146,6 +147,7 @@ inline void combine_welford_partials(
 
     // Pack the results into the combined CB
     tile_regs_commit();
+    cb_reserve_back(cb_combined, 2);
     tile_regs_wait();
     pack_tile(mean_acc_dst, cb_combined);
     pack_tile(m2_acc_dst, cb_combined);

@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Constexpr
@@ -27,7 +30,6 @@ void kernel_main() {
 
     experimental::CircularBuffer cb(cb_id_out0);
     experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_dst;
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // We reserve back an entire tile row and issue a bunch of reads

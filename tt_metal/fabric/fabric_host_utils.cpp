@@ -11,13 +11,12 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "erisc_datamover_builder.hpp"
 #include <set>
 #include <vector>
 #include <algorithm>
-#include "fabric/hw/inc/fabric_routing_mode.h"
 #include "fabric_context.hpp"
 #include <queue>
 #include <unordered_map>
@@ -26,6 +25,7 @@
 #include <fstream>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 
@@ -33,14 +33,14 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
 }
 
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy) {
     switch (fabric_config) {
         // Issue: 32146, Special case for T3k WH devices to use Mesh fabric type instead of Torus_XY
         // WH T3K currently do not support Torus_XY fabric type, because they do not have wrapping connections.
         // If you want to use 1D Ring on t3k please use 1x8 MGD.
         case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE:
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+            if (is_ubb_galaxy) {
                 return FabricType::TORUS_XY;
             }
             return FabricType::MESH;
@@ -88,10 +88,47 @@ bool requires_more_connectivity(FabricType requested_type, FabricType available_
     return false;
 }
 
-std::vector<uint32_t> get_forwarding_link_indices_in_direction(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+uint32_t compute_max_1d_hops(const std::vector<MeshShape>& mesh_shapes) {
+    if (mesh_shapes.empty()) {
+        return 0;
+    }
 
+    uint32_t max_dimension = 0;
+    for (const auto& shape : mesh_shapes) {
+        // For 1D routing, find the maximum dimension (either rows or cols)
+        // Hops = max_dimension - 1 (e.g., 8 chips in a line = 7 hops)
+        uint32_t rows = shape[0];
+        uint32_t cols = shape[1];
+        uint32_t mesh_max_dim = std::max(rows, cols);
+        max_dimension = std::max(max_dimension, mesh_max_dim);
+    }
+
+    return (max_dimension > 0) ? (max_dimension - 1) : 0;
+}
+
+uint32_t compute_max_2d_hops(const std::vector<MeshShape>& mesh_shapes) {
+    if (mesh_shapes.empty()) {
+        return 0;
+    }
+
+    uint32_t max_hops = 0;
+    for (const auto& shape : mesh_shapes) {
+        // For 2D routing, compute Manhattan distance from corner to corner
+        // Hops = (rows - 1) + (cols - 1)
+        uint32_t rows = shape[0];
+        uint32_t cols = shape[1];
+        uint32_t mesh_hops = (rows - 1) + (cols - 1);
+        max_hops = std::max(max_hops, mesh_hops);
+    }
+
+    return max_hops;
+}
+
+std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    RoutingDirection direction) {
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
 
@@ -109,63 +146,6 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     }
 
     return link_indices;
-}
-
-void set_routing_mode(uint16_t routing_mode) {
-    // override for forced routing mode
-    if (routing_mode == ROUTING_MODE_UNDEFINED) {
-        return;
-    }
-
-    // Validate dimension flags are orthogonal (only one can be set)
-    TT_FATAL(
-        __builtin_popcount(routing_mode & (ROUTING_MODE_1D | ROUTING_MODE_2D | ROUTING_MODE_3D)) == 1,
-        "Only one dimension mode (1D, 2D, 3D) can be active at once");
-
-    // Validate topology flags are orthogonal
-    TT_FATAL(
-        __builtin_popcount(
-            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
-                            ROUTING_MODE_TORUS)) == 1,
-        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
-
-    // Validate 1D can't be used with MESH or TORUS
-    TT_FATAL(
-        !(routing_mode & ROUTING_MODE_1D) || !(routing_mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
-        "1D routing mode cannot be combined with MESH or TORUS topology");
-
-    // Validate 2D can't be used with LINE or RING
-    TT_FATAL(
-        !(routing_mode & ROUTING_MODE_2D) ||
-            !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING | ROUTING_MODE_NEIGHBOR_EXCHANGE)),
-        "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    control_plane.set_routing_mode(routing_mode);
-}
-
-void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
-    // TODO: take more parameters to set detail routing mode
-    TT_FATAL(
-        dimension == 1 || dimension == 2 || dimension == 3,
-        "Invalid dimension {}. Supported dimensions are 1, 2, or 3",
-        dimension);
-
-    uint16_t mode = (dimension == 3 ? ROUTING_MODE_3D : 0);
-    if (topology == Topology::Ring) {
-        mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
-    } else if (topology == Topology::Linear) {
-        mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
-    } else if (topology == Topology::NeighborExchange) {
-        mode |= (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE);
-    } else if (topology == Topology::Mesh) {
-        mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
-    } else if (topology == Topology::Torus) {
-        mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
-    }
-
-    mode |= ROUTING_MODE_LOW_LATENCY;
-    set_routing_mode(mode);
 }
 
 void serialize_mesh_coordinates_to_file(
@@ -206,6 +186,142 @@ void serialize_mesh_coordinates_to_file(
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized physical chip mesh coordinate mapping to file: {}", output_file_path.string());
+}
+
+void serialize_asic_to_fabric_node_mapping_to_file(
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
+    // Ensure output directory exists
+    std::filesystem::create_directories(output_file_path.parent_path());
+
+    const auto& mesh_graph = topology_mapper.get_mesh_graph();
+
+    // Structure: hostname -> mesh_id -> umd_chip_id -> {asic_position, fabric_node_id, asic_id}
+    struct AsicMapping {
+        tt::tt_metal::TrayID tray_id;
+        tt::tt_metal::ASICLocation asic_location;
+        FabricNodeId fabric_node_id;
+        tt::tt_metal::AsicID asic_id;
+    };
+    std::map<HostName, std::map<MeshId, std::map<ChipId, AsicMapping>>> mappings_by_host_mesh_and_chip;
+
+    // Iterate through all meshes
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        // Iterate through all fabric nodes in this mesh
+        for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+
+            try {
+                // Get ASIC ID for this fabric node
+                tt::tt_metal::AsicID asic_id = topology_mapper.get_asic_id_from_fabric_node_id(fabric_node_id);
+
+                // Get physical chip ID (UMD chip ID) for this fabric node
+                ChipId umd_chip_id = topology_mapper.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+
+                // Get ASIC position (tray_id and asic_location) from TopologyMapper's MappedChipInfo
+                tt::tt_metal::TrayID tray_id = topology_mapper.get_tray_id_for_fabric_node_id(fabric_node_id);
+                tt::tt_metal::ASICLocation asic_location =
+                    topology_mapper.get_asic_location_for_fabric_node_id(fabric_node_id);
+
+                // Get hostname for this fabric node
+                HostName hostname = topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id);
+
+                // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
+                AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
+                mappings_by_host_mesh_and_chip[hostname][mesh_id].emplace(umd_chip_id, mapping);
+            } catch (...) {
+                // Skip unmapped fabric nodes
+                continue;
+            }
+        }
+    }
+
+    // Write to file using YAML emitter
+    std::ofstream out_file(output_file_path);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file_path.string());
+    }
+
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "asic_to_fabric_node_mapping";
+    emitter << YAML::Value;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "hostnames";
+    emitter << YAML::Value << YAML::BeginSeq;
+
+    // Emit each hostname as a list item
+    for (const auto& [hostname, mesh_mappings] : mappings_by_host_mesh_and_chip) {
+        emitter << YAML::BeginMap;
+        emitter << YAML::Key << "hostname";
+        emitter << YAML::Value << hostname;
+
+        // Emit mesh as a key with a list value
+        emitter << YAML::Key << "mesh";
+        emitter << YAML::Value << YAML::BeginSeq;
+
+        // Emit each mesh within this hostname
+        for (const auto& [mesh_id, chip_mappings] : mesh_mappings) {
+            // First emit mesh entry
+            emitter << YAML::BeginMap;
+            emitter << YAML::Key << "mesh";
+            emitter << YAML::Value << *mesh_id;
+            emitter << YAML::EndMap;
+
+            // Then emit chips entry
+            emitter << YAML::BeginMap;
+            emitter << YAML::Key << "chips";
+            emitter << YAML::Value << YAML::BeginSeq;
+
+            // Emit each umd_chip_id mapping (physical chip ID)
+            for (const auto& [umd_chip_id, mapping] : chip_mappings) {
+                emitter << YAML::BeginMap;
+
+                // Emit umd_chip_id field
+                emitter << YAML::Key << "umd_chip_id";
+                emitter << YAML::Value << umd_chip_id;
+
+                // Emit asic_position
+                emitter << YAML::Key << "asic_position";
+                emitter << YAML::Value;
+                emitter << YAML::BeginMap;
+                emitter << YAML::Key << "tray_id";
+                emitter << YAML::Value << *mapping.tray_id;
+                emitter << YAML::Key << "asic_location";
+                emitter << YAML::Value << *mapping.asic_location;
+                emitter << YAML::EndMap;
+
+                // Emit fabric_node_id
+                emitter << YAML::Key << "fabric_node_id";
+                emitter << YAML::Value;
+                emitter << YAML::BeginMap;
+                emitter << YAML::Key << "mesh_id";
+                emitter << YAML::Value << *mapping.fabric_node_id.mesh_id;
+                emitter << YAML::Key << "chip_id";
+                emitter << YAML::Value << mapping.fabric_node_id.chip_id;
+                emitter << YAML::EndMap;
+
+                // Emit asic_id as the last field
+                emitter << YAML::Key << "asic_id";
+                emitter << YAML::Value << *mapping.asic_id;
+
+                emitter << YAML::EndMap;
+            }
+
+            emitter << YAML::EndSeq;
+            emitter << YAML::EndMap;
+        }
+
+        emitter << YAML::EndSeq;
+        emitter << YAML::EndMap;
+    }
+
+    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+    out_file << emitter.c_str();
+    out_file.close();
+
+    log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric

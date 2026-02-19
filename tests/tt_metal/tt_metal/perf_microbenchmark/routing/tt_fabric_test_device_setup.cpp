@@ -67,7 +67,7 @@ void FabricConnectionManager::process(
 
             // mux config shouldnt exist already (one config per connection/mux)
             TT_FATAL(
-                mux_configs_.find(mux_core.value()) == mux_configs_.end(),
+                !mux_configs_.contains(mux_core.value()),
                 "Mux config already exists for mux core {}",
                 mux_core.value());
 
@@ -162,7 +162,7 @@ uint32_t FabricConnectionManager::get_connection_array_index_for_key(
 }
 
 bool FabricConnectionManager::is_mux_client(const CoreCoord& core) const {
-    return all_mux_client_cores_.count(core) > 0;
+    return all_mux_client_cores_.contains(core);
 }
 
 std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_args_for_core(
@@ -335,14 +335,15 @@ void TestWorker::create_kernel(
     const std::vector<uint32_t>& rt_args,
     const std::vector<uint32_t>& local_args,
     uint32_t local_args_address,
-    const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const {
+    const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
+    tt::tt_metal::NOC noc_id) const {
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
         this->kernel_src_,
         {this->logical_core_},
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc = noc_id,
             .compile_args = ct_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
@@ -524,7 +525,7 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
 }
 
-bool TestSync::validate_results(std::vector<uint32_t>& data) const {
+bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
     // no-op for now
     return true;
 }
@@ -568,10 +569,10 @@ const FabricNodeId& TestDevice::get_node_id() const { return this->fabric_node_i
 void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) {
     auto core_already_occupied = [this](TestWorkerType worker_type, CoreCoord logical_core) {
         switch (worker_type) {
-            case TestWorkerType::SENDER: return senders_.count(logical_core) > 0;
-            case TestWorkerType::RECEIVER: return receivers_.count(logical_core) > 0;
-            case TestWorkerType::SYNC: return sync_workers_.count(logical_core) > 0;
-            case TestWorkerType::MUX: return muxes_.count(logical_core) > 0;
+            case TestWorkerType::SENDER: return senders_.contains(logical_core);
+            case TestWorkerType::RECEIVER: return receivers_.contains(logical_core);
+            case TestWorkerType::SYNC: return sync_workers_.contains(logical_core);
+            case TestWorkerType::MUX: return muxes_.contains(logical_core);
             default: TT_FATAL(false, "Invalid worker type: {}", static_cast<int>(worker_type));
         }
     };
@@ -647,7 +648,7 @@ ConnectionKey TestDevice::register_fabric_connection(
 }
 
 void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
-    if (this->senders_.find(logical_core) == this->senders_.end()) {
+    if (!this->senders_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SENDER, logical_core);
     }
 
@@ -655,7 +656,7 @@ void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSe
 }
 
 void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
-    if (this->sync_workers_.find(logical_core) == this->sync_workers_.end()) {
+    if (!this->sync_workers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SYNC, logical_core);
     }
 
@@ -663,7 +664,7 @@ void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncC
 }
 
 void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
-    if (this->receivers_.find(logical_core) == this->receivers_.end()) {
+    if (!this->receivers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
 
@@ -672,7 +673,7 @@ void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestT
 
 void TestDevice::add_mux_worker_config(
     CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key) {
-    if (this->muxes_.find(logical_core) == this->muxes_.end()) {
+    if (!this->muxes_.contains(logical_core)) {
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
 
@@ -956,13 +957,20 @@ void TestDevice::create_sender_kernels() {
                  sender_memory_map_->get_mux_termination_sync_size()});
         }
 
+        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default;
+        // Each sender will have the same NOC used for every pattern when parsing, take the one defined in the first config
+        if (sender.configs_[0].first.noc_id.has_value()) {
+            noc_id = sender.configs_[0].first.noc_id.value();
+        }
+
         sender.create_kernel(
             coord_,
             ct_args,
             rt_args,
             local_args,
             sender_memory_map_->get_local_args_address(),
-            addresses_and_size_to_clear);
+            addresses_and_size_to_clear,
+            noc_id);
 
         log_debug(tt::LogTest, "Created sender kernel on core {}", core);
     }

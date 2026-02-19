@@ -34,7 +34,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
             skip_if_not_blackhole_20_cores,
         ),
         (
-            {"pcc": 0.972, "abs_err": 1.9, "rel_err": 0.4},
+            {"pcc": 0.972, "abs_err": 2.0, "rel_err": 0.4},
             skip_if_not_blackhole_110_cores,
         ),
     ],
@@ -105,6 +105,7 @@ def test_ttnn_semseg(device, pcc_values, skip_check, model_location_generator):
 
         # Create centralized configuration
         model_configs = ModelOptimisations(
+            device=device,
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )

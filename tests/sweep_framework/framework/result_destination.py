@@ -107,6 +107,7 @@ def _collect_all_metrics(raw: dict[str, Any]) -> set[PerfMetric] | None:
     # Collect e2e and device metrics via helpers
     _add_e2e_metrics(metrics, raw)
     _add_device_metrics(metrics, raw)
+    _add_memory_metrics(metrics, raw)
 
     return metrics if metrics else None
 
@@ -138,6 +139,42 @@ def _coerce_to_optional_string(value: Any) -> str | None:
 
     # For any other type, convert to string
     return str(value)
+
+
+def _get_card_type_str(run_metadata: dict[str, Any] | None) -> str:
+    """
+    Build card_type string from run metadata with fallback to ttnn device query.
+
+    Priority:
+    1. runner_label from CI environment (e.g., N150, N300, BH-LLMBox)
+    2. ttnn device count query at runtime (for local runs without RUNNER_LABEL)
+    3. arch name only as final fallback
+    """
+    if not run_metadata:
+        return "n/a"
+
+    # Get architecture from run_metadata (always available via ARCH_NAME env var)
+    arch = run_metadata.get("device") or run_metadata.get("card_type") or "n/a"
+
+    # Priority 1: try to get runner_label from CI environment
+    runner_label = run_metadata.get("runner_label")
+    if runner_label:
+        return f"{arch} ({runner_label})"
+
+    # Priority 2 fallback: query ttnn for device count at runtime
+    try:
+        import ttnn
+
+        num_devices = ttnn.GetNumAvailableDevices()
+        if num_devices and num_devices > 0:
+            device_label = "device" if num_devices == 1 else "devices"
+            return f"{arch} ({num_devices} {device_label})"
+    except Exception:
+        # ttnn not available or query failed - fall through to arch-only
+        pass
+
+    # Final fallback: just the architecture name
+    return arch
 
 
 def _add_e2e_metrics(metrics: set, raw: dict[str, Any]) -> None:
@@ -180,6 +217,20 @@ def _add_device_metrics(metrics: set, raw: dict[str, Any]) -> None:
     device_perf_cached = raw.get("device_perf_cached")
     if isinstance(device_perf_cached, dict):
         _add_device_perf_from_dict(metrics, device_perf_cached, suffix="_cached")
+
+
+def _add_memory_metrics(metrics: set, raw: dict[str, Any]) -> None:
+    """Extract memory metrics from result dict and add to metrics set"""
+
+    # Per-core memory metrics from extract_resource_usage_per_core
+    _add_metric(metrics, "peak_l1_memory_per_core_bytes", raw.get("peak_l1_memory_per_core"))
+    _add_metric(metrics, "peak_cb_per_core_bytes", raw.get("peak_cb_per_core"))
+    _add_metric(metrics, "peak_l1_buffers_per_core_bytes", raw.get("peak_l1_buffers_per_core"))
+    _add_metric(metrics, "num_cores", raw.get("num_cores"))
+
+    # Aggregate and device-level metrics
+    _add_metric(metrics, "peak_l1_memory_aggregate_bytes", raw.get("peak_l1_memory_aggregate"))
+    _add_metric(metrics, "peak_l1_memory_device_bytes", raw.get("peak_l1_memory_device"))
 
 
 class ResultDestination(ABC):
@@ -324,22 +375,9 @@ class FileResultDestination(ResultDestination):
             exception = str(raw.get("exception", None))
             error_hash = generate_error_hash(exception)
 
-            # Extract machine info if available
-            machine_info = header.get("traced_machine_info")
-            card_type_str = "n/a"
-            if machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
-                # machine_info is a list of dicts, take the first one
-                first_machine = machine_info[0]
-                if isinstance(first_machine, dict):
-                    board_type = first_machine.get("board_type", "")
-                    device_series = first_machine.get("device_series", "")
-                    card_count = first_machine.get("card_count", "")
-                    # Format as "Wormhole n300 (1 card)" or similar
-                    if board_type and device_series:
-                        card_type_str = f"{board_type} {device_series}"
-                        if card_count:
-                            cards_label = "card" if card_count == 1 else "cards"
-                            card_type_str += f" ({card_count} {cards_label})"
+            # Build card_type_str from the running system's metadata
+            # Priority: 1) runner_label from CI env, 2) ttnn device query at runtime, 3) arch name only
+            card_type_str = _get_card_type_str(self._run_metadata)
 
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
@@ -354,7 +392,9 @@ class FileResultDestination(ResultDestination):
                 error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
-                model_name=header.get("traced_source", "n/a"),
+                model_name=header.get("traced_source", "n/a")
+                if isinstance(header.get("traced_source"), str)
+                else ", ".join(header.get("traced_source", ["n/a"])),
                 op_kind=_op_kind,
                 op_name=_op_name,
                 framework_op_name="sweep",

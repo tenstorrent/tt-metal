@@ -4,14 +4,29 @@ on:
   workflow_call:
     inputs:
       runner-label:
-          description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
-          required: false
-          type: string
-          default: '["P150"]'
+        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
+        required: false
+        type: string
+        default: '["P150"]'
       enable-watcher:
-          description: 'Enable watcher in BH Post commit'
-          default: false
-          type: boolean
+        description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_dispatch:
     inputs:
       runner-label:
@@ -19,6 +34,18 @@ on:
         required: false
         type: string
         default: '["P150"]'
+      enable-watcher:
+        description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       build-type:
         description: 'Build type for the workflow'
         required: false
@@ -30,10 +57,11 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      enable-watcher:
-        description: 'Enable watcher in BH Post commit'
+      enable-lto:
+        required: false
         default: false
         type: boolean
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -41,7 +69,12 @@ on:
   # push:
   #  branches: ["main"]
 
-run-name: ${{ inputs.runner-label == '["P100"]' && 'Blackhole post-commit tests (P100)' || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled)') || ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') && 'Blackhole post-commit tests (P100 nightly)') || 'Blackhole post-commit tests' }}
+run-name: >-
+  ${{ inputs.runner-label == '["P100"]' && 'Blackhole post-commit tests (P100)'
+  || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled)')
+  || ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *')
+  && 'Blackhole post-commit tests (P100 nightly)')
+  || 'Blackhole post-commit tests' }}
 
 permissions:
   actions: read
@@ -115,8 +148,9 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
+      enable-lto: ${{ inputs.enable-lto || false }}
   run-profiler-regression:
     needs: [build-artifact, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -128,6 +162,7 @@ jobs:
     with:
       arch: "blackhole"
       runner-label: ${{ matrix.test-group }}
+      post_commit_only: true
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -145,6 +180,7 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
@@ -160,20 +196,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-  blackhole-demo-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-
   ttnn-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
@@ -185,8 +207,25 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
+      timeout: ${{ (inputs.enable-watcher && 120) || 40 }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  ops-unit-tests:
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+    uses: ./.github/workflows/ops-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   metalium-smoke-tests:
     needs: [build-artifact, generate-matrix]
@@ -200,6 +239,7 @@ jobs:
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   ttnn-smoke-tests:
     needs: [build-artifact, generate-matrix]
     strategy:
@@ -212,6 +252,35 @@ jobs:
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  metalium-basic-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-metalium
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  ttnn-basic-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-nn
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
@@ -227,34 +296,22 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-
-  blackhole-20-cores-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-20-cores-tests.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # Multi-card post-commit tests
-  blackhole-multi-card-post-commit-tests:
-    needs: build-artifact
+  blackhole-multi-card-fast-unit-tests:
+    if: ${{ !contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') }}
+    needs: [build-artifact, generate-matrix]
     secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu", "BH-QB-GE" ]
+        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu"]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      fast-only: true

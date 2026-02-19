@@ -1,29 +1,22 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig
 from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
 
+from .utils import load_hf_mixtral_config
+
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
-
-
-def load_hf_mixtral_config():
-    hf_model = os.getenv("HF_MODEL")
-    assert hf_model is not None, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
-    config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true")
-    return config
 
 
 def convert2ref(state_dict):
@@ -38,14 +31,15 @@ def convert2ref(state_dict):
     return out
 
 
-@pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
-    t3k_mesh_device.disable_and_clear_program_cache()
-    model_args = ModelArgs(t3k_mesh_device)
+    mesh_device.disable_and_clear_program_cache()
+    model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
     model_args.n_layers = 1
     layer_num = 0
@@ -62,12 +56,12 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
 
     reference_model = MixtralSparseMoeBlock(hf_config)
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
-    tt_ccl = TT_CCL(t3k_mesh_device)
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtMoeLayer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         experts=TtMixtralMLP(
-            mesh_device=t3k_mesh_device,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             args=model_args,
             layer_num=layer_num,
@@ -93,7 +87,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
 
         pt_decode_input = (torch.rand(seqlen, batch, model_args.dim) * 2) - 1
 
-        if mode == "decode":
+        if mode == Mode.DECODE:
             memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
@@ -107,7 +101,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
                 pt_decode_input,
                 dtype=ttnn.bfloat16,  # or your desired dtype
                 layout=ttnn.TILE_LAYOUT,
-                device=t3k_mesh_device,
+                device=mesh_device,
                 memory_config=memory_config,
             )
 
@@ -116,7 +110,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
                 pt_decode_input,
                 dtype=ttnn.bfloat16,  # or your desired dtype
                 layout=ttnn.TILE_LAYOUT,
-                device=t3k_mesh_device,
+                device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -124,7 +118,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
         logger.info(f"Starting TT Mixtral MOE {mode}")
         tt_out = tt_model(tt_decode_input, mode)
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))[0]
             .squeeze(0)
             .view(seqlen, batch, -1)
         )

@@ -1,14 +1,22 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor_impl.hpp"
 #include <fmt/format.h>
 #include <optional>
 
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include <tt_stl/assert.hpp>
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/core.hpp"
+
+#include "tt-metalium/shape.hpp"
+#include "tt-metalium/math.hpp"
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/memory_pin.hpp"
@@ -16,16 +24,12 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
-#include "tt-metalium/shape.hpp"
-#include "ttnn/distributed/distributed_tensor.hpp"
-
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/distributed/api.hpp"
+#include <tt_stl/assert.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -48,20 +52,6 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
-}
-
-uint32_t element_size_bytes(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return sizeof(std::byte);
-        default: TT_THROW("Unsupported data type");
-    }
 }
 
 std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
@@ -285,7 +275,7 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
 
 template <typename T>
 inline void print_datum(std::ostream& ss, T datum, bool use_scientific = false) {
-    if (std::is_integral<T>::value) {
+    if (std::is_integral_v<T>) {
         ss << std::setw(5) << datum;
     } else {
         int precision = TTNN_PRINT_OPTIONS.precision;
@@ -451,11 +441,11 @@ std::string to_string_impl(const Tensor& tensor) {
     auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
-        } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout_impl<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
-        } else {
-            return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
         }
+        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
+            return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+        }
+        return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
     };
 
     auto get_device_buffers = [&](const HostStorage& storage) {
@@ -466,7 +456,7 @@ std::string to_string_impl(const Tensor& tensor) {
 
     return std::visit(
         tt::stl::overloaded{
-            [&](const HostStorage& storage) -> std::string {
+            [&](const HostStorage& /*storage*/) -> std::string {
                 const Tensor row_major_tensor = get_row_major_tensor(tensor);
                 const auto strides = row_major_tensor.tensor_spec().compute_strides();
                 const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
@@ -641,14 +631,13 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
                     return {
                         replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
                         TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
-                } else {
-                    TT_FATAL(
-                        host_storage_shape == mesh_device_shape,
-                        "Distributed host buffer has different shape {} than the mesh device {}",
-                        host_storage_shape,
-                        mesh_device_shape);
-                    return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
                 }
+                TT_FATAL(
+                    host_storage_shape == mesh_device_shape,
+                    "Distributed host buffer has different shape {} than the mesh device {}",
+                    host_storage_shape,
+                    mesh_device_shape);
+                return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
             },
             [](const auto& s) -> std::pair<DeviceStorage, TensorTopology> {
                 TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
@@ -737,6 +726,21 @@ void copy_to_host(
         device_tensor.tensor_topology());
 }
 
+void copy_to_host(
+    distributed::MeshCommandQueue& queue,
+    const Tensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region,
+    bool blocking) {
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_to_host: source tensor must be on device");
+    TT_FATAL(queue.device()->num_devices() == 1, "copy_to_host only supports single device mesh");
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(dst)
+            .region(region)};
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
+}
+
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
@@ -761,11 +765,48 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         std::move(mesh_storage), host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
 }
 
+void copy_to_device(
+    distributed::MeshCommandQueue& queue,
+    const std::byte* src,
+    Tensor& device_tensor,
+    const std::optional<BufferRegion>& region) {
+    TT_FATAL(is_device_tensor(device_tensor), "copy_to_device to non-device tensor is not supported!");
+    TT_FATAL(queue.device()->num_devices() == 1, "copy_to_device only supports single device mesh");
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(const_cast<std::byte*>(src))
+            .region(region)};
+    queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
+}
+
 // ======================================================================================
 //     Helpers for converting between logical <-> physical data with full tensor spec
 // ======================================================================================
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Useful information about how a shard_shape cuts a 2D shape
+// - num_shards_height: Number of shards along the height (including partial last shard, if any)
+// - last_shard_height: Height of last partial shard (if None, it will be same as full shard shape height)
+// - num_shards_width: Number of shards along the width (including partial last shard, if any)
+// - last_shard_width: Width of last partial shard (if None, it will be same as full shard shape width)
+struct ShardDivisionSpec {
+    size_t num_shards_height = 0;
+    size_t last_shard_height = 0;
+    size_t num_shards_width = 0;
+    size_t last_shard_width = 0;
+};
+
+ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
+    const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
+    const auto last_shard_height =
+        shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();
+    const auto num_shards_width = tt::div_up(shape.width(), shard_shape.width());
+    const auto last_shard_width =
+        shape.width() % shard_shape.width() > 0 ? shape.width() % shard_shape.width() : shard_shape.width();
+
+    return ShardDivisionSpec{num_shards_height, last_shard_height, num_shards_width, last_shard_width};
+};
 
 // TODO: Remove when we get rid of physical sharding and generalize interleaved and sharded; when we do, directly get
 // from TensorLayout
@@ -788,7 +829,7 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     const auto logical_stride = logical_2d_shape.width();
 
     const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
-        tt::tt_metal::compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
+        compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
 
     std::vector<LogicalPhysicalMapping> logical_physical_mapping{};
     logical_physical_mapping.reserve(num_shards_height * num_shards_width);
@@ -862,6 +903,36 @@ std::vector<T> convert_to_logical_data(tt::stl::Span<const T> row_major_physical
     return logical_data;
 }
 
+template <typename T>
+std::vector<T> convert_layout_row_major_to_tile(
+    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
+    if (shape.width() * shape.height() == 0) {
+        return std::vector<T>();
+    }
+    TT_FATAL(
+        (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
+        "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
+        "be a multiple of tile height ({}) and width ({}), but the provided shape is {}",
+        tile.get_tile_shape()[0],
+        tile.get_tile_shape()[1],
+        shape);
+
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
+    auto transpose_within_face = tile.get_transpose_within_face();
+    auto transpose_of_faces = tile.get_transpose_of_faces();
+
+    return convert_layout(
+        data_to_convert,
+        shape,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -900,15 +971,14 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
-        return tensor_impl::convert_layout_row_major_to_tile(
+        return CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(
             physical_shape, tensor_spec.tile(), row_major_physical_data_span);
-    } else if (!row_major_physical_data.empty()) {
+    }
+    if (!row_major_physical_data.empty()) {
         // If conversion to physical data was performed, return the row major physical data to avoid extra copy.
         return row_major_physical_data;
-    } else {
-        // Otherwise, copy the `row_major_physical_data_span`.
-        return std::vector<T>(row_major_physical_data_span.begin(), row_major_physical_data_span.end());
-    }
+    }  // Otherwise, copy the `row_major_physical_data_span`.
+    return std::vector<T>(row_major_physical_data_span.begin(), row_major_physical_data_span.end());
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
@@ -970,15 +1040,11 @@ std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const Te
     // Check if conversion to logical data was performed, to avoid extra copy upon return.
     if (!logical_data.empty()) {
         return logical_data;
-    } else if (!row_major_physical_data.empty()) {
-        return row_major_physical_data;
-    } else {
-        return std::vector<T>(logical_data_span.begin(), logical_data_span.end());
     }
-}
-
-bool logical_matches_physical(const TensorSpec& tensor_spec) {
-    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
+    if (!row_major_physical_data.empty()) {
+        return row_major_physical_data;
+    }
+    return std::vector<T>(logical_data_span.begin(), logical_data_span.end());
 }
 
 template std::vector<bfloat16> decode_tensor_data<bfloat16>(
@@ -1013,7 +1079,7 @@ Tensor to_layout_impl(const Tensor& tensor, Layout target_layout) {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 TT_FATAL(target_layout == Layout::TILE, "Unsupported layout conversion");
-                return convert_layout_row_major_to_tile(physical_shape, tile, input_data);
+                return CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(physical_shape, tile, input_data);
             case Layout::TILE:
                 TT_FATAL(target_layout == Layout::ROW_MAJOR, "Unsupported layout conversion");
                 return convert_layout_tile_to_row_major(physical_shape, tile, input_data);
@@ -1195,7 +1261,7 @@ Tensor unpad_impl(
     TT_FATAL(!is_device_tensor(tensor), "unpad only supports host tensors");
 
     const auto& input_shape = tensor.padded_shape();
-    const auto input_strides = tensor.strides();
+    const auto input_strides = compute_strides(input_shape);
 
     // Validate inputs and compute output shape
     ttsl::SmallVector<uint32_t> output_shape;
@@ -1221,7 +1287,7 @@ Tensor unpad_impl(
             for (auto i = output_tensor_start[dim]; i < output_tensor_end[dim]; i++) {
                 input_indices[dim] = i;
                 if (dim == input_shape.rank() - 1) {
-                    auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
+                    auto flat_input_index = compute_flat_indices(input_indices, input_strides);
                     output_buffer[flat_output_index++] = input_buffer[flat_input_index];
                 } else {
                     unpad_from_tile(dim + 1);
@@ -1324,15 +1390,15 @@ tt::tt_metal::HostStorage preprocess_storage(
             auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
-    } else if (input_dtype == DataType::BFLOAT4_B) {
+    }
+    if (input_dtype == DataType::BFLOAT4_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             tt::stl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
-    } else {
-        return input_storage;
     }
+    return input_storage;
 }
 
 template <typename SrcType, typename DstType>
@@ -1345,7 +1411,7 @@ tt::tt_metal::HostStorage transform_storage(
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                tilized_data = tt::tt_metal::tensor_impl::convert_layout_row_major_to_tile(
+                tilized_data = CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(
                     input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
                 data = ttsl::make_const_span(tilized_data);
             }

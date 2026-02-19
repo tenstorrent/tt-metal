@@ -5,26 +5,16 @@
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads {
+namespace ttnn::experimental::prim {
 
 constexpr int MAX_HEAD = 32;
-
-AllReduceCreateQkvHeadsDeviceOperation::program_factory_t
-AllReduceCreateQkvHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return program::AllReduceCreateQkvHeadsMeshWorkloadFactory{};
-}
-
-void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -289,9 +279,6 @@ tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_ha
     auto input_memory_layout = input_tensor.layout();
     auto input_dtype = input_tensor.dtype();
     auto input_memory_config = input_tensor.memory_config();
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     // Hash individual fields to avoid hashing non-hashable types like GlobalSemaphore
     return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeadsDeviceOperation>(
         operation_attributes.num_links,
@@ -299,17 +286,17 @@ tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_ha
         operation_attributes.all_reduce_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
-        program_factory.index(),
         input_shape,
         input_memory_layout,
         input_dtype,
         input_memory_config);
 }
 
-std::tuple<
-    AllReduceCreateQkvHeadsDeviceOperation::operation_attributes_t,
-    AllReduceCreateQkvHeadsDeviceOperation::tensor_args_t>
-AllReduceCreateQkvHeadsDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+ttnn::experimental::prim::AllReduceCreateQkvHeadsResult all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const Tensor& batch_offset_tensor,
@@ -328,28 +315,28 @@ AllReduceCreateQkvHeadsDeviceOperation::invoke(
     const MemoryConfig& final_mem_config,
     DataType dtype,
     uint32_t cluster_axis) {
-    return {
-        operation_attributes_t(
-            num_links,
-            ring_size,
-            all_reduce_mem_config,
-            topology,
-            semaphore,
-            sub_device_id,
-            head_dim,
-            use_noc1_only,
-            num_heads,
-            num_kv_heads,
-            input_on_subcoregrids,
-            slice_size,
-            final_mem_config,
-            dtype,
-            cluster_axis),
-        tensor_args_t{
-            .input_tensor = input_tensor,
-            .buffer_tensor = buffer_tensor,
-            .batch_offset_tensor = batch_offset_tensor,
-        }};
+    using OperationType = ttnn::experimental::prim::AllReduceCreateQkvHeadsDeviceOperation;
+
+    auto operation_attributes = ttnn::experimental::prim::AllReduceCreateQkvHeadsParams(
+        num_links,
+        ring_size,
+        all_reduce_mem_config,
+        topology,
+        semaphore,
+        sub_device_id,
+        head_dim,
+        use_noc1_only,
+        num_heads,
+        num_kv_heads,
+        input_on_subcoregrids,
+        slice_size,
+        final_mem_config,
+        dtype,
+        cluster_axis);
+    auto tensor_args = ttnn::experimental::prim::AllReduceCreateQkvHeadsInputs{
+        .input_tensor = input_tensor, .buffer_tensor = buffer_tensor, .batch_offset_tensor = batch_offset_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads
+}  // namespace ttnn::prim

@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <ctype.h>
-#include <errno.h>
+#include <cctype>
+#include <cerrno>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
-#include <stdlib.h>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -43,6 +43,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -303,8 +304,8 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Help: {}", ss.str().c_str());
             exit(0);
         }
-        for (uint32_t idx = 0; idx < operators.size(); idx++) {
-            pass &= run_unit_test(operators[idx], arg_tile_factor, arg_use_DRAM);
+        for (const auto& op_name : operators) {
+            pass &= run_unit_test(op_name, arg_tile_factor, arg_use_DRAM);
         }
     }
 

@@ -2,18 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/typecast.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/typecast.h"
 
-namespace NAMESPACE {
-void MAIN {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
-    uint32_t input_cb = get_compile_time_arg_val(2);
-    uint32_t output_cb = get_compile_time_arg_val(3);
+void kernel_main() {
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(3);
 
     init_sfpu(input_cb, output_cb);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
@@ -42,4 +40,3 @@ void MAIN {
         cb_push_back(output_cb, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

@@ -340,7 +340,7 @@ struct NocUnicastScatterWriteFields {
     static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
         uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t chunk_count = get_local_arg_val<uint32_t>(arg_idx++);
-        ASSERT(chunk_count == MAX_CHUNKS, "scatter chunk_count must be equal to 2 for tt_fabric perf microbenchmarks");
+        ASSERT(chunk_count == MAX_CHUNKS);
 
         std::array<uint32_t, MAX_CHUNKS> dst_addresses{};
         for (uint32_t i = 0; i < chunk_count; i++) {

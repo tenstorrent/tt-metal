@@ -9,7 +9,6 @@
 #include "hostdev/dev_msgs.h"
 #include "stream_io_map.h"
 #include "internal/firmware_common.h"
-#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -50,7 +49,7 @@ static_assert(
 #endif
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MAILBOX_ADDR);
-volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = &mailboxes->subordinate_sync.dm1;
+volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = mailboxes->subordinate_sync.map;
 
 // Note: This is just for the firmware
 // The kernel defines NOC_MODE and NOC_INDEX
@@ -81,6 +80,11 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {

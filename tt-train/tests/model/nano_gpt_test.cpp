@@ -127,6 +127,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_ddp = use_ddp, .enable_tp = use_tensor_parallel});
 
     std::string text;
     // reading training data from txt file
@@ -271,7 +272,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         // synchronize gradients for multi-device case, no-op if single device
         auto parameters = model->parameters();
         if (!use_tensor_parallel) {
-            ttml::core::distributed::synchronize_parameters(parameters);
+            ttml::core::distributed::synchronize_gradients(parameters);
         }
 
         optimizer->step();

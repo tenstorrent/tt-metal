@@ -15,6 +15,7 @@ def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, str
     """
     Validate indices using logic from test_mpwi.py
     Note input tensors should be in [N, H, W, C] format
+    Supports both uint16 and uint32 index tensors (indices should be converted to int64 before calling)
     Returns (indices_valid, tie_breaking_differences, actual_errors, value_differences, window_violations)
     """
     batch_size, input_h, input_w, channels = input_tensor.shape
@@ -129,6 +130,8 @@ def run_max_pool2d_with_indices(
     ceil_mode=False,
     memory_config=None,
     run_twice=False,
+    dram_slice_config=None,
+    config_tensor_in_dram=False,
 ):
     kernel_size = [kernel_h, kernel_w]
     stride = [stride_h, stride_w]
@@ -187,6 +190,8 @@ def run_max_pool2d_with_indices(
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=True,
+        dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=config_tensor_in_dram,
     )
 
     if run_twice:
@@ -207,13 +212,22 @@ def run_max_pool2d_with_indices(
             deallocate_input=False,
             reallocate_halo_output=True,
             return_indices=True,
+            config_tensor_in_dram=config_tensor_in_dram,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
-    # convert indexes to int64 for compatability with torch
+
+    # convert indexes to int64 for compatibility with torch
     ttnn_indices_torch = ttnn.to_torch(ttnn_indices, dtype=torch.int64)
-    # manually fix the wrapping since TTNN uint16 tensors get converted to int16 torch tensors, even when data type is specified as int64
-    ttnn_indices_torch = torch.where(ttnn_indices_torch < 0, ttnn_indices_torch + 65536, ttnn_indices_torch)
+
+    # manually fix the wrapping since TTNN uint16/uint32 tensors get converted to int16/int32 torch tensors
+    # even when data type is specified as int64
+    if ttnn_indices.dtype == ttnn.uint16:
+        # uint16: wraps at 65536 (2^16)
+        ttnn_indices_torch = torch.where(ttnn_indices_torch < 0, ttnn_indices_torch + 65536, ttnn_indices_torch)
+    elif ttnn_indices.dtype == ttnn.uint32:
+        # uint32: wraps at 4294967296 (2^32)
+        ttnn_indices_torch = torch.where(ttnn_indices_torch < 0, ttnn_indices_torch + 4294967296, ttnn_indices_torch)
 
     torch_output, torch_indices = torch.nn.functional.max_pool2d(
         torch_input,

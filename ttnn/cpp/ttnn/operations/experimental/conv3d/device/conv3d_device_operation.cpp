@@ -10,13 +10,14 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
@@ -33,16 +34,6 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }
 }  // namespace detail
 
-Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::Conv3dProgramFactory{};
-}
-
-void Conv3dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
@@ -51,10 +42,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.logical_shape().size() == 5,
         "Activation tensor must have 5 dimensions. got {}",
         input_tensor_a.logical_shape().size());
-    TT_FATAL(
-        input_tensor_a.logical_shape()[0] == 1,
-        "Activation tensor must have batch size 1. got {}",
-        input_tensor_a.logical_shape()[0]);
     // check row-major
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Activation tensor must be row-major.");
 
@@ -81,12 +68,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.groups == 1, "Groups must be 1. got {}", args.groups);
     // assert padding on T is zero
-    TT_FATAL(
-        args.padding[0] == 0,
-        "Padding must be (0,x,x). got ({}, {}, {})",
-        args.padding[0],
-        args.padding[1],
-        args.padding[2]);
     TT_FATAL(
         args.padding_mode == "zeros" || args.padding_mode == "replicate",
         "Padding mode must be zeros or replicate. got {}",
@@ -167,7 +148,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         total_cores);
 }
 
-spec_return_value_t Conv3dDeviceOperation::compute_output_specs(
+TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_tensor_a_shape = input_tensor_a.logical_shape();
@@ -188,7 +169,7 @@ spec_return_value_t Conv3dDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
 }
 
-tensor_return_value_t Conv3dDeviceOperation::create_output_tensors(
+Tensor Conv3dDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
@@ -197,19 +178,21 @@ tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.padded_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }
 
-std::tuple<Conv3dDeviceOperation::operation_attributes_t, Conv3dDeviceOperation::tensor_args_t>
-Conv3dDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
-    const Conv3dConfig& config,
+    const ttnn::experimental::prim::Conv3dConfig& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,
@@ -219,24 +202,28 @@ Conv3dDeviceOperation::invoke(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
+
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return {
-        operation_attributes_t{
-            .config = config,
-            .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-            .compute_kernel_config = kernel_config_val,
-            .dtype = dtype_,
-            .output_channels = output_channels_,
-            .kernel_size = kernel_size_,
-            .stride = stride_,
-            .padding = padding_,
-            .dilation = dilation_,
-            .padding_mode = padding_mode_,
-            .groups = groups_},
-        tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .config = config,
+        .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        .compute_kernel_config = kernel_config_val,
+        .dtype = dtype_,
+        .output_channels = output_channels_,
+        .kernel_size = kernel_size_,
+        .stride = stride_,
+        .padding = padding_,
+        .dilation = dilation_,
+        .padding_mode = padding_mode_,
+        .groups = groups_};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::prim

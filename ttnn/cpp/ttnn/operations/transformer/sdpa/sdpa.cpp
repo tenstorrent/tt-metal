@@ -10,8 +10,7 @@
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::operations::transformer {
@@ -45,6 +44,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         scale,
         sliding_window_size,
         std::nullopt,  // chunk_start_idx
+        std::nullopt,  // chunk_start_idx_tensor
         false,         // use_mla
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
@@ -52,6 +52,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         kernel_config_val);
 }
 
+// Legacy: chunk_start_idx as scalar (part of program cache key).
 ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -79,6 +80,43 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         chunk_start_idx,
+        std::nullopt,  // chunk_start_idx_tensor
+        false,         // use_mla
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
+}
+
+// Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
+ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
+    const ttnn::Tensor& chunk_start_idx_tensor,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        std::nullopt,       // attn_mask
+        page_table_tensor,  // page_table
+        std::nullopt,       // attention_sink
+        /*is_causal=*/true,
+        scale,
+        std::nullopt,  // sliding_window_size
+        std::nullopt,
+        chunk_start_idx_tensor,
         false,         // use_mla
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
@@ -162,6 +200,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
@@ -177,7 +216,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
-        std::nullopt,  // V is implied by K in MLA mode
+        input_tensor_v,
         attn_mask,
         std::nullopt,  // page_table
         std::nullopt,  // attention_sink
@@ -185,6 +224,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         std::nullopt,  // chunk_start_idx
+        std::nullopt,  // chunk_start_idx_tensor
         true,          // use_mla
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
@@ -219,7 +259,8 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         chunk_start_idx,
-        true,  // use_mla
+        std::nullopt,  // chunk_start_idx_tensor
+        true,          // use_mla
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
@@ -235,8 +276,10 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
         ring_id,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<SDPAProgramConfig>& program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& page_table,
+    std::optional<int64_t> chunk_start_idx) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -251,8 +294,10 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
         ring_id,  // Pass through the ring_id parameter (can be used or ignored)
         scale,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        std::move(program_config),
-        kernel_config_val);
+        program_config,
+        kernel_config_val,
+        page_table,
+        chunk_start_idx);
 }
 
 }  // namespace ttnn::operations::transformer

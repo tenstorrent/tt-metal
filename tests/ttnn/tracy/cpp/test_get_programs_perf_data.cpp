@@ -137,6 +137,10 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataBeforeReadMeshDevicePr
         experimental::GetLatestProgramsPerfData();
     const std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> all_programs_perf_data =
         experimental::GetAllProgramsPerfData();
+    const std::map<tt::ChipId, experimental::KernelDurationSummary> latest_kernel_duration_summary =
+        experimental::GetLatestKernelDurationSummary();
+    const std::map<tt::ChipId, experimental::KernelDurationSummary> all_kernel_duration_summary =
+        experimental::GetAllKernelDurationSummary();
 
     ReadMeshDeviceProfilerResults(*mesh_device_);
 
@@ -147,6 +151,20 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataBeforeReadMeshDevicePr
     EXPECT_EQ(all_programs_perf_data.size(), 1);
     EXPECT_TRUE(all_programs_perf_data.contains(0));
     EXPECT_TRUE(all_programs_perf_data.at(0).empty());
+
+    EXPECT_EQ(latest_kernel_duration_summary.size(), 1);
+    EXPECT_TRUE(latest_kernel_duration_summary.contains(0));
+    EXPECT_EQ(latest_kernel_duration_summary.at(0).count, 0);
+    EXPECT_EQ(latest_kernel_duration_summary.at(0).histogram.num_buckets, 10);
+    EXPECT_EQ(latest_kernel_duration_summary.at(0).histogram.bucket_edges_ns.size(), 11);
+    EXPECT_EQ(latest_kernel_duration_summary.at(0).histogram.bucket_counts.size(), 10);
+
+    EXPECT_EQ(all_kernel_duration_summary.size(), 1);
+    EXPECT_TRUE(all_kernel_duration_summary.contains(0));
+    EXPECT_EQ(all_kernel_duration_summary.at(0).count, 0);
+    EXPECT_EQ(all_kernel_duration_summary.at(0).histogram.num_buckets, 10);
+    EXPECT_EQ(all_kernel_duration_summary.at(0).histogram.bucket_edges_ns.size(), 11);
+    EXPECT_EQ(all_kernel_duration_summary.at(0).histogram.bucket_counts.size(), 10);
 
     WriteProgramsPerfDataToJson({latest_programs_perf_data}, "test_get_programs_perf_data_latest.json");
     WriteProgramsPerfDataToJson({all_programs_perf_data}, "test_get_programs_perf_data_all.json");
@@ -165,6 +183,10 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterSingleReadMeshDev
         experimental::GetLatestProgramsPerfData();
     const std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>> all_programs_perf_data =
         experimental::GetAllProgramsPerfData();
+    const std::map<tt::ChipId, experimental::KernelDurationSummary> latest_kernel_duration_summary =
+        experimental::GetLatestKernelDurationSummary();
+    const std::map<tt::ChipId, experimental::KernelDurationSummary> all_kernel_duration_summary =
+        experimental::GetAllKernelDurationSummary();
 
     EXPECT_EQ(latest_programs_perf_data.size(), 1);
     EXPECT_TRUE(latest_programs_perf_data.contains(0));
@@ -199,6 +221,19 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterSingleReadMeshDev
     }
 
     EXPECT_EQ(latest_programs_perf_data, all_programs_perf_data);
+
+    // Summary API should be available and return a populated histogram schema.
+    EXPECT_EQ(latest_kernel_duration_summary.size(), 1);
+    EXPECT_TRUE(latest_kernel_duration_summary.contains(0));
+    EXPECT_EQ(latest_kernel_duration_summary.at(0).histogram.num_buckets, 10);
+    EXPECT_EQ(latest_kernel_duration_summary.at(0).histogram.bucket_edges_ns.size(), 11);
+    EXPECT_EQ(latest_kernel_duration_summary.at(0).histogram.bucket_counts.size(), 10);
+
+    EXPECT_EQ(all_kernel_duration_summary.size(), 1);
+    EXPECT_TRUE(all_kernel_duration_summary.contains(0));
+    EXPECT_EQ(all_kernel_duration_summary.at(0).histogram.num_buckets, 10);
+    EXPECT_EQ(all_kernel_duration_summary.at(0).histogram.bucket_edges_ns.size(), 11);
+    EXPECT_EQ(all_kernel_duration_summary.at(0).histogram.bucket_counts.size(), 10);
 
     WriteProgramsPerfDataToJson({latest_programs_perf_data}, "test_get_programs_perf_data_latest.json");
     WriteProgramsPerfDataToJson({all_programs_perf_data}, "test_get_programs_perf_data_all.json");

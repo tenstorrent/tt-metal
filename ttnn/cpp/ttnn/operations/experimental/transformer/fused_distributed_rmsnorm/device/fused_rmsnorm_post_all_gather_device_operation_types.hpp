@@ -9,9 +9,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct FusedRmsnormPostAllGatherParams {
     float eps;
     uint32_t num_heads;
     tt::tt_metal::MemoryConfig memory_config;
@@ -19,7 +19,7 @@ struct operation_attributes_t {
     std::optional<tt::tt_metal::DataType> dtype;
 };
 
-struct tensor_args_t {
+struct FusedRmsnormPostAllGatherInputs {
     Tensor input_tensor;
     Tensor stats_tensor;
     std::optional<Tensor> weight;
@@ -28,8 +28,4 @@ struct tensor_args_t {
     std::optional<Tensor> rope_sin;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
+}  // namespace ttnn::experimental::prim

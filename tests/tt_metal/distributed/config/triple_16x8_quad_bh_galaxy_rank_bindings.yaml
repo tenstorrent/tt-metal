@@ -1,0 +1,50 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+
+  - rank: 2
+    mesh_id: 0
+    mesh_host_rank: 2
+
+  - rank: 3
+    mesh_id: 0
+    mesh_host_rank: 3
+
+  - rank: 4
+    mesh_id: 1
+    mesh_host_rank: 0
+
+  - rank: 5
+    mesh_id: 1
+    mesh_host_rank: 1
+
+  - rank: 6
+    mesh_id: 1
+    mesh_host_rank: 2
+
+  - rank: 7
+    mesh_id: 1
+    mesh_host_rank: 3
+
+  - rank: 8
+    mesh_id: 2
+    mesh_host_rank: 0
+
+  - rank: 9
+    mesh_id: 2
+    mesh_host_rank: 1
+
+  - rank: 10
+    mesh_id: 2
+    mesh_host_rank: 2
+
+  - rank: 11
+    mesh_id: 2
+    mesh_host_rank: 3
+
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/triple_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"

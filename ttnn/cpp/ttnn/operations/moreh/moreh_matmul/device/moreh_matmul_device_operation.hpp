@@ -58,20 +58,9 @@ struct MorehMatmulOperation {
     using program_factory_t = std::variant<MultiCoreProgramFactory>;
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const Tensor& other,
-        bool transpose_input,
-        bool transpose_other,
-        const std::optional<Tensor>& output,
-        const std::optional<const Tensor>& bias,
-        const std::optional<MemoryConfig>& output_memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
@@ -81,6 +70,13 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b);
 }  // namespace ttnn::operations::moreh::moreh_matmul
 
 namespace ttnn::prim {
-constexpr auto moreh_matmul =
-    ttnn::register_operation<"ttnn::prim::moreh_matmul", ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation>();
+ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation::tensor_return_value_t moreh_matmul(
+    const Tensor& input,
+    const Tensor& other,
+    bool transpose_input,
+    bool transpose_other,
+    const std::optional<Tensor>& output,
+    const std::optional<const Tensor>& bias,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }

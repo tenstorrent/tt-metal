@@ -107,49 +107,26 @@ struct ExampleDeviceOperation {
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;
 
-    // Mandatory methods
-
-    // Select the program factory based on the operation attributes and tensor args
+    // Required only when program_factory_t has more than one variant.
+    // For single-variant program_factory_t, the framework auto-selects it.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it creates a program. Usually will have more checks
+    // Validate the operation when it creates a program. Also called on cache hit by default.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it reuses a program. Usually will have less checks
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    // Optional: override to use lighter validation on cache hit.
+    // If not provided, the framework calls validate_on_program_cache_miss.
+    // static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output specs based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // API call to map user arguments to operation attributes and tensor args.
-    // This is the only method that is called by the user
-    // The user will be able to call the operation using `tensor_return_value_t output =
-    // ttnn::prim::example(input_tensor)` after the op is registered
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor);
-
-    // Optional methods
-
-    // In case the operation need a custom hash function, the following method can be implemented
-    /* static tt::stl::hash::hash_t compute_program_hash(
-        const operation_attributes_t&, const tensor_args_t&);
-    */
-
-    // In case the operation needs a custom create_op_performance_model, this method can be implemented
-    /*
-    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&);
-    */
 };
 
 }  // namespace ttnn::operations::examples
 
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
 namespace ttnn::prim {
-constexpr auto example =
-    ttnn::register_operation<"ttnn::prim::example", ttnn::operations::examples::ExampleDeviceOperation>();
+ttnn::operations::examples::ExampleDeviceOperation::tensor_return_value_t example(const Tensor& input_tensor);
 }  // namespace ttnn::prim

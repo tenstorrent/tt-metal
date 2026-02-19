@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -41,6 +41,7 @@
 #include <tt-metalium/vector_aligned.hpp>
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -323,7 +324,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
             .noc = NOC::RISCV_0_default,
             .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
     ChipId mmio_device_id =
@@ -490,7 +491,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     // Use first device from the mesh for this test
     MeshCoordinate target_coord(0, 0);
-    IDevice* device = mesh_device->get_device(target_coord);
+    IDevice* device = mesh_device->impl().get_device(target_coord);
     EXPECT_TRUE(device->is_mmio_capable());
 
     CoreCoord logical_core(0, 0);

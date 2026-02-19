@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {

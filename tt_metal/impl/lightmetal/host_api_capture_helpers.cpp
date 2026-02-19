@@ -4,7 +4,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <circular_buffer_config.hpp>
-#include "impl/dispatch/command_queue.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 
@@ -71,7 +71,7 @@ void CaptureReplayTrace(IDevice* /*device*/, uint8_t cq_id, uint32_t trace_id, b
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ReplayTraceCommand, cmd.Union());
 }
 
-void CaptureEnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
+void CaptureEnqueueTrace(HWCommandQueue& cq, uint32_t trace_id, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq.id(), trace_id, blocking);
     auto cmd = tt::tt_metal::flatbuffer::CreateEnqueueTraceCommand(ctx.get_builder(), cq.id(), trace_id, blocking);
@@ -197,7 +197,7 @@ void CaptureBufferDelete(const Buffer& buffer) {
 }
 
 void CaptureEnqueueWriteBuffer(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     bool blocking) {
@@ -239,7 +239,7 @@ void CaptureEnqueueWriteBuffer(
 }
 
 void CaptureEnqueueReadBuffer(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* /*dst*/,
     bool blocking) {
@@ -262,7 +262,7 @@ void CaptureEnqueueReadBuffer(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueReadBufferCommand, cmd.Union());
 }
 
-void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void CaptureFinish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto& ctx = LightMetalCaptureContext::get();
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
 
@@ -400,7 +400,7 @@ void CaptureCreateCircularBuffer(
 }
 
 void CaptureLightMetalCompare(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* golden_data,
     bool is_user_data) {

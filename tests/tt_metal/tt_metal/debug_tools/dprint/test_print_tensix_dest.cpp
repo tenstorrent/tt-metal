@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include <string.h>
+#include <cstdint>
+#include <cstring>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -454,10 +454,6 @@ protected:
     void TearDown() override { DPrintMeshFixture::TearDown(); }
 
     void RunDestPrintTest(const DestPrintTestConfig& config) {
-        if (config.data_format == tt::DataFormat::Float32 && this->arch_ == ARCH::GRAYSKULL) {
-            GTEST_SKIP() << "Float32 dest is not supported on grayskull.";
-        }
-
         if (config.data_format == tt::DataFormat::Int32 && this->arch_ != ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Int32 dest is not supported on non-blackhole.";
         }

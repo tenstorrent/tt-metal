@@ -319,7 +319,7 @@ nb::object make_numpy_tensor(
         const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
         const auto cpu_tensor_strides = cpu_tensor.strides();
 
-        if (tt::tt_metal::tensor_impl::logical_matches_physical(cpu_tensor_spec)) {
+        if (tt::tt_metal::logical_matches_physical(cpu_tensor_spec)) {
             return make_numpy_tensor_from_data.template operator()<NumpyType>(cpu_tensor_data, cpu_tensor_spec);
         }
 

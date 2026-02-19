@@ -16,7 +16,7 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -84,7 +84,7 @@ void issue_record_event_commands(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];
@@ -175,6 +175,13 @@ void read_events_from_completion_queue(
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager) {
+    // For mock devices, the sysmem_manager is a stubbed singleton
+    // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
+        return;
+    }
+
     uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
     thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
         (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));

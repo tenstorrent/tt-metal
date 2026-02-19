@@ -318,6 +318,12 @@ The test runner reads in test vectors from the test vector database and executes
     4. NOT RUN: The test was run with a vector that is marked as invalid. The invalid reason given from the op test file is stored with the result.
     5. FAIL_L1_OUT_OF_MEM: The test failed specifically due to an L1 Out of Memory error.
     6. FAIL_WATCHER: The test failed due to a Watcher raised exception. This only occurs if `--watcher` is passed in the run command.
+- Memory Profiling: Per-core and device-level memory usage can be captured using the `--measure-memory` flag. This uses graph trace in NO_DISPATCH mode to profile memory requirements without execution overhead. Memory data is stored in test results with multiple granular metrics and can be analyzed in downstream dashboards. This is useful for:
+    - Identifying memory-intensive operations and configurations per core
+    - Tracking memory usage trends and regressions across commits
+    - Understanding actual vs theoretical worst-case memory usage
+    - Optimizing memory layouts and detecting L1 memory limit violations
+    - Analyzing memory distribution patterns (sequential vs parallel execution)
 - Granularity of Testing: Tests can be run by all sweeps, individual sweep, or individual suite to allow for faster/slower test runs, spanning larger/smaller suites of tests.
 - Git Hash information is stored with each test run, so it is easy to see on which commit the test is breaking/passing.
 - Data Aggregation: Results are accumulated in a database that can be queried to see desired details of test runs.
@@ -329,9 +335,168 @@ The test runner reads in test vectors from the test vector database and executes
 
 Go to [`tests/README.md`](../README.md) for the latest information on how to run the sweeps_runner.
 
+#### Memory Profiling
+
+To capture per-core and device-level memory usage during sweep runs, add the `--measure-memory` flag:
+
+```bash
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name <module_name> \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --measure-memory \
+  --tag <your_tag>
+```
+
+**How it works:**
+- Uses ttnn graph trace with NO_DISPATCH mode (fast, no device execution overhead)
+- Captures both per-core and device-level memory metrics for each test vector
+- Uses `extract_resource_usage_per_core()` for worst-case per-core analysis
+- Uses `extract_peak_L1_memory_usage()` for actual observed device memory
+- Memory capture failures are non-fatal (returns null but test continues)
+
+**Memory metrics captured:**
+
+| Metric Name | Description | Use Case |
+|-------------|-------------|----------|
+| `peak_l1_memory_per_core_bytes` | Peak total (CB+L1) per core | Per-core memory budget validation |
+| `peak_cb_per_core_bytes` | Peak circular buffer per core | CB-specific analysis |
+| `peak_l1_buffers_per_core_bytes` | Peak L1 buffer per core | L1-specific analysis |
+| `num_cores` | Number of cores used | Context for other metrics |
+| `peak_l1_memory_aggregate_bytes` | Worst-case if all cores peak together | Conservative capacity planning |
+| `peak_l1_memory_device_bytes` | Actual observed peak across device | Realistic usage tracking |
+
+**Understanding the metrics:**
+
+- **Per-core metrics** (`peak_l1_memory_per_core_bytes`, etc.): Show worst-case memory per individual core
+- **Aggregate** (`peak_l1_memory_aggregate_bytes`): Theoretical maximum if all cores peak simultaneously (= `peak_l1_memory_per_core_bytes × num_cores`)
+- **Device** (`peak_l1_memory_device_bytes`): Actual peak observed during execution
+- **Key insight**: If `aggregate ≈ device`, cores peak together (parallel). If `aggregate >> device`, execution is sequential.
+
+**Example result with memory metrics:**
+```json
+{
+  "status": "pass",
+  "metrics": [
+    {
+      "metric_name": "peak_l1_memory_per_core_bytes",
+      "metric_value": 18432
+    },
+    {
+      "metric_name": "peak_cb_per_core_bytes",
+      "metric_value": 18432
+    },
+    {
+      "metric_name": "peak_l1_buffers_per_core_bytes",
+      "metric_value": 0
+    },
+    {
+      "metric_name": "num_cores",
+      "metric_value": 64
+    },
+    {
+      "metric_name": "peak_l1_memory_aggregate_bytes",
+      "metric_value": 1179648
+    },
+    {
+      "metric_name": "peak_l1_memory_device_bytes",
+      "metric_value": 18432
+    },
+    {
+      "metric_name": "e2e_perf_ms",
+      "metric_value": 2.5
+    }
+  ]
+}
+```
+
+**Interpreting results:**
+In the example above:
+- Each core uses at most 18KB (well within 256KB L1 limit ✓)
+- Circular buffers account for all memory (18KB), L1 buffers are 0
+- 64 cores are used
+- Aggregate (1.18MB) >> Device (18KB), indicating **sequential execution** (only ~1 core active at a time)
+- Low memory pressure, good efficiency
+
+**Use cases:**
+- Identify memory-intensive operation configurations
+- Track memory usage trends across commits
+- Detect memory regressions in CI
+- Optimize memory layouts before running on hardware
+
+## CI Execution
+
+The sweep framework runs automatically in CI via the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) workflow. There are four distinct run types:
+
+### Run Types
+
+| Run Type | Schedule | Suite | Description |
+|----------|----------|-------|-------------|
+| **Nightly** | Mon, Tue, Thu, Fri @ 4:30 AM UTC | `nightly` | Regular sweep testing with standard parameters |
+| **Comprehensive** | Wed, Sat @ 4:00 AM UTC | All suites | Exhaustive testing with all suite combinations |
+| **Model Traced** | Daily @ 4:00 AM UTC | `model_traced` | Tests with configurations traced from real models |
+| **Lead Models** | Daily @ 3:00 AM UTC | `model_traced` | Tests from prioritized lead models with multi-chip support |
+
+### Lead Models
+
+Lead models are prioritized models whose traced configurations receive special treatment in CI, including automatic routing to multi-chip runners.
+
+**Configuration:** Lead models are defined in `tests/sweep_framework/framework/constants.py`:
+
+```python
+LEAD_MODELS = [
+    "deepseek_v3",
+]
+```
+
+To add a new lead model, add its directory name pattern to this list. The pattern is matched against the `source` path in traced operations.
+
+**Generation:** To generate vectors for lead models only:
+
+```bash
+python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
+```
+
+### Multi-Chip Runner Assignment
+
+For lead model runs, the framework automatically routes operations to appropriate hardware based on their `mesh_device_shape`:
+
+| Mesh Shape | Description | Runner |
+|------------|-------------|--------|
+| `[1, 1]` | Single-chip | N150 |
+| `[1, 2]`, `[1, 4]`, `[2, 4]` | Small multi-chip | Galaxy |
+| `[4, 8]`, `[8, 4]` | 32-chip | Galaxy (topology-6u) |
+
+**How it works:**
+
+1. **Vector Generation:** The parameter generator reads `mesh_device_shape` from `traced_machine_info.tensor_placements` in the master JSON
+2. **File Routing:** Vectors are grouped by mesh shape and written to separate files (e.g., `op__mesh_4x8.json`)
+3. **Matrix Computation:** `framework/compute_sweep_matrix.py` creates a GitHub Actions matrix that maps mesh shapes to runners
+4. **Execution:** CI spawns parallel jobs on appropriate hardware based on the matrix
+
+**Runner Configuration:** The mesh-to-runner mapping is defined in `framework/compute_sweep_matrix.py`:
+
+```python
+def get_lead_models_mesh_runner_config():
+    return [
+        {
+            "mesh_shapes": ["1x1"],
+            "runs_on": "tt-ubuntu-2204-n150-stable",
+            ...
+        },
+        {
+            "mesh_shapes": ["1x2", "1x4", "2x4", "4x8", "8x4"],
+            "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+            ...
+        },
+    ]
+```
+
+For more details on the master JSON format and tensor placements, see the [Model Tracer README](../../model_tracer/README.md).
+
 ## FAQ / Troubleshooting
 
-- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `pip install beautifultable termcolor`:
+- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `uv pip install beautifultable termcolor`:
 ```
 Traceback (most recent call last):
   File "<stdin>", line 1, in <module>

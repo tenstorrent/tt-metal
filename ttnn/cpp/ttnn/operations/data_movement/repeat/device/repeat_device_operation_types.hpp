@@ -6,20 +6,16 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::repeat {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct RepeatParams {
     uint32_t m_num_repeats{};
     bool m_is_last_dim{};
     tt::tt_metal::MemoryConfig m_output_mem_config;
 };
 
-struct tensor_args_t {
+struct RepeatInputs {
     Tensor input;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::data_movement::repeat
+}  // namespace ttnn::prim

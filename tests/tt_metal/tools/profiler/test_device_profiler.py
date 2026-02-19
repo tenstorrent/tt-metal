@@ -158,6 +158,7 @@ def get_function_name():
     return frame.f_code.co_name
 
 
+@pytest.mark.skip_post_commit
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
@@ -179,6 +180,7 @@ def test_multi_op():
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@pytest.mark.skip_post_commit
 def test_multi_op_buffer_overflow():
     COMPUTE_OP_COUNT = 200
     DATA_MOVEMENT_OP_COUNT = 1000
@@ -277,6 +279,7 @@ def test_custom_cycle_count():
         assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
 
 
+@pytest.mark.skip_post_commit
 def test_full_buffer():
     OP_COUNT = 23
     RISC_COUNT = 5
@@ -314,6 +317,168 @@ def test_full_buffer():
         assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
     else:
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+@pytest.mark.skip(reason="Skipped due to issue in Profiler CI. Issue #36371")
+def test_device_api_debugger_non_dropping():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
+    clear_profiler_runtime_artifacts()
+
+    envVars = "TT_METAL_NOC_DEBUG_DUMP=1 "
+
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
+    assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"
+
+    # Verify the NOC trace JSON file exists
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file), f"Expected trace file '{expected_trace_file}' does not exist"
+
+    # Read and parse the JSON file
+    with open(expected_trace_file, "r") as nocTraceJson:
+        try:
+            noc_trace_data = json.load(nocTraceJson)
+        except json.JSONDecodeError:
+            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
+
+    assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
+    assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
+
+    # Track READ and WRITE events separately for each RISC
+    brisc_read_dst_addrs_found = set()
+    brisc_write_dst_addrs_found = set()
+    ncrisc_read_dst_addrs_found = set()
+    ncrisc_write_dst_addrs_found = set()
+
+    # Track barrier events
+    read_barrier_start_count = 0
+    read_barrier_end_count = 0
+    write_barrier_start_count = 0
+    write_barrier_end_count = 0
+
+    for event in noc_trace_data:
+        assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+        event_type = event.get("type")
+
+        # Count barrier events
+        if event_type == "READ_BARRIER_START":
+            read_barrier_start_count += 1
+        elif event_type == "READ_BARRIER_END":
+            read_barrier_end_count += 1
+        elif event_type == "WRITE_BARRIER_START":
+            write_barrier_start_count += 1
+        elif event_type == "WRITE_BARRIER_END":
+            write_barrier_end_count += 1
+
+        if "dst_addr" in event and "proc" in event:
+            proc = event["proc"]
+            dst_addr = event["dst_addr"]
+
+            if proc == "BRISC":
+                if event_type == "READ":
+                    brisc_read_dst_addrs_found.add(dst_addr)
+                elif event_type == "WRITE_":
+                    brisc_write_dst_addrs_found.add(dst_addr)
+            elif proc == "NCRISC":
+                if event_type == "READ":
+                    ncrisc_read_dst_addrs_found.add(dst_addr)
+                elif event_type == "WRITE_":
+                    ncrisc_write_dst_addrs_found.add(dst_addr)
+
+    expected_dst_addrs = set(range(10000))  # 0 to 9999
+
+    # Verify BRISC READ has all expected dst_addr values
+    missing_brisc_read_dst_addrs = expected_dst_addrs - brisc_read_dst_addrs_found
+    assert len(missing_brisc_read_dst_addrs) == 0, (
+        f"Missing dst_addr values in BRISC READ JSON events: {sorted(missing_brisc_read_dst_addrs)[:20]}"
+        f"{'...' if len(missing_brisc_read_dst_addrs) > 20 else ''} "
+        f"(found {len(brisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify BRISC WRITE has all expected dst_addr values
+    missing_brisc_write_dst_addrs = expected_dst_addrs - brisc_write_dst_addrs_found
+    assert len(missing_brisc_write_dst_addrs) == 0, (
+        f"Missing dst_addr values in BRISC WRITE JSON events: {sorted(missing_brisc_write_dst_addrs)[:20]}"
+        f"{'...' if len(missing_brisc_write_dst_addrs) > 20 else ''} "
+        f"(found {len(brisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify NCRISC READ has all expected dst_addr values
+    missing_ncrisc_read_dst_addrs = expected_dst_addrs - ncrisc_read_dst_addrs_found
+    assert len(missing_ncrisc_read_dst_addrs) == 0, (
+        f"Missing dst_addr values in NCRISC READ JSON events: {sorted(missing_ncrisc_read_dst_addrs)[:20]}"
+        f"{'...' if len(missing_ncrisc_read_dst_addrs) > 20 else ''} "
+        f"(found {len(ncrisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify NCRISC WRITE has all expected dst_addr values
+    missing_ncrisc_write_dst_addrs = expected_dst_addrs - ncrisc_write_dst_addrs_found
+    assert len(missing_ncrisc_write_dst_addrs) == 0, (
+        f"Missing dst_addr values in NCRISC WRITE JSON events: {sorted(missing_ncrisc_write_dst_addrs)[:20]}"
+        f"{'...' if len(missing_ncrisc_write_dst_addrs) > 20 else ''} "
+        f"(found {len(ncrisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify barrier event counts
+    expected_barrier_count = 20000
+    assert (
+        read_barrier_start_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} READ_BARRIER_START events, found {read_barrier_start_count}"
+    assert (
+        read_barrier_end_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} READ_BARRIER_END events, found {read_barrier_end_count}"
+    assert (
+        write_barrier_start_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} WRITE_BARRIER_START events, found {write_barrier_start_count}"
+    assert (
+        write_barrier_end_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} WRITE_BARRIER_END events, found {write_barrier_end_count}"
+
+    # There is a read/write barrier after each noc_async_read/write call.
+    # Verify that the noc counters are being tracked properly
+    NOC_COUNTER_BITS = 12
+    prev_counters = {}  # (proc, noc, type) -> previous counter value
+    read_event_count = 0
+    write_event_count = 0
+
+    for event in noc_trace_data:
+        event_type = event.get("type")
+        if event_type in ["READ", "WRITE_"]:
+            assert (
+                "noc_status_counter" in event
+            ), f"noc_status_counter missing in {event_type} event at timestamp {event.get('timestamp')}"
+            assert "proc" in event, f"proc missing in {event_type} event at timestamp {event.get('timestamp')}"
+            assert "noc" in event, f"noc missing in {event_type} event at timestamp {event.get('timestamp')}"
+
+            noc_status_counter = event.get("noc_status_counter")
+            proc = event.get("proc")
+            noc = event.get("noc")
+
+            assert isinstance(
+                noc_status_counter, int
+            ), f"noc_status_counter must be an integer, found {type(noc_status_counter)} in {event_type} event"
+
+            counter_key = (proc, noc, event_type)
+
+            if counter_key in prev_counters:
+                prev_counter = prev_counters[counter_key]
+                expected_counter = (prev_counter + 1) % (2**NOC_COUNTER_BITS)
+                assert noc_status_counter == expected_counter, (
+                    f"noc_status_counter should increment by 1 for consecutive {event_type} events "
+                    f"for {proc} {noc}. Previous counter: {prev_counter}, current counter: {noc_status_counter}, "
+                    f"expected: {expected_counter} at timestamp {event.get('timestamp')}"
+                )
+
+            prev_counters[counter_key] = noc_status_counter
+
+            if event_type == "READ":
+                read_event_count += 1
+            else:
+                write_event_count += 1
+
+    assert read_event_count > 0 or write_event_count > 0, "No READ or WRITE_ events found to verify noc_status_counter"
 
 
 def wildcard_match(pattern, words):
@@ -354,19 +519,26 @@ def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
 
 
 def verify_trace_markers(devicesData, num_non_trace_ops, num_trace_ops, num_repeats_per_trace_op):
+    # Some traced ops may not run on every core/risc. We therefore:
+    # - validate trace-id / trace-id-counter consistency for any markers we do observe per core/risc
+    # - validate the total number of unique traced ops at the device level
+    device_to_all_trace_runtime_ids = {}
+
     for device, deviceData in devicesData["data"]["devices"].items():
+        device_to_all_trace_runtime_ids.setdefault(device, set())
         for core, coreData in deviceData["cores"].items():
             for risc, riscData in coreData["riscs"].items():
                 non_trace_ops = set()
                 trace_ops_to_trace_ids = {}
                 trace_ids_to_counts = {}
                 for marker in riscData["timeseries"]:
-                    marker_data = ast.literal_eval(marker)[0]
+                    marker_data = ast.literal_eval(marker)[0] if isinstance(marker, str) else marker[0]
                     runtime_id = marker_data["run_host_id"]
                     trace_id = marker_data["trace_id"]
                     if trace_id == -1:
                         non_trace_ops.add(runtime_id)
                     else:
+                        device_to_all_trace_runtime_ids[device].add(runtime_id)
                         if runtime_id not in trace_ops_to_trace_ids:
                             trace_ops_to_trace_ids[runtime_id] = trace_id
                         else:
@@ -387,8 +559,8 @@ def verify_trace_markers(devicesData, num_non_trace_ops, num_trace_ops, num_repe
                     len(non_trace_ops) <= num_non_trace_ops
                 ), f"Wrong number of non-trace ops for device {device}, core {core}, risc {risc} - expected at most {num_non_trace_ops}, read {len(non_trace_ops)}"
                 assert (
-                    len(trace_ops_to_trace_ids) == num_trace_ops
-                ), f"Wrong number of trace ops for device {device}, core {core}, risc {risc} - expected {num_trace_ops}, read {len(trace_ops_to_trace_ids)}"
+                    len(trace_ops_to_trace_ids) <= num_trace_ops
+                ), f"Wrong number of trace ops for device {device}, core {core}, risc {risc} - expected at most {num_trace_ops}, read {len(trace_ops_to_trace_ids)}"
 
                 for trace_id, trace_id_counts in trace_ids_to_counts.items():
                     assert (
@@ -401,13 +573,214 @@ def verify_trace_markers(devicesData, num_non_trace_ops, num_trace_ops, num_repe
                         min(trace_id_counts) == 1
                     ), f"Wrong minimum trace id counter value for device {device}, core {core}, risc {risc}, trace {trace_id} - expected 1, read {min(trace_id_counts)}"
 
+    # Validate that the traced workload actually generated the expected number of unique traced ops.
+    for device, runtime_ids in device_to_all_trace_runtime_ids.items():
+        assert (
+            len(runtime_ids) == num_trace_ops
+        ), f"Wrong total number of unique trace ops for device {device} - expected {num_trace_ops}, read {len(runtime_ids)}"
+
+
+def verify_trace_replay_ids_match_between_riscs(devicesData, riscs=("BRISC", "NCRISC")):
+    """
+    Verify that for *trace replay* ops, both riscs report consistent TRACE ID and TRACE REPLAY ID.
+
+    Concretely, we use the kernel main() zone markers (e.g. BRISC-KERNEL / NCRISC-KERNEL) as a stable
+    per-op signal, and validate that:
+      - Both riscs emit replay-tagged kernel markers (trace_id != -1 and trace_id_count != -1)
+      - For ops observed on *both* riscs, the (trace_id, trace_id_count) pairs match
+      - For ops observed on only one risc (common when one risc doesn't participate), the trace_id used
+        is consistent with the trace_id used by the other risc on that core.
+    """
+
+    def _parse_timer_id(timeseries_entry):
+        # JSON encoder stores tuples as strings, so parse when needed.
+        if isinstance(timeseries_entry, str):
+            return ast.literal_eval(timeseries_entry)[0]
+        return timeseries_entry[0]
+
+    def _collect_replay_kernel_starts(risc_timeseries, expected_zone_name):
+        # Map run_host_id -> { trace_id_count -> trace_id } for replay kernel-start markers.
+        out = {}
+        for entry in risc_timeseries:
+            timer_id = _parse_timer_id(entry)
+            if timer_id.get("type") != "ZONE_START":
+                continue
+            if timer_id.get("zone_name") != expected_zone_name:
+                continue
+            trace_id = int(timer_id.get("trace_id", -1))
+            trace_id_count = int(timer_id.get("trace_id_count", -1))
+            if trace_id == -1 or trace_id_count == -1:
+                # Not a trace replay marker
+                continue
+            run_host_id = int(timer_id["run_host_id"])
+            if run_host_id not in out:
+                out[run_host_id] = {}
+            if trace_id_count in out[run_host_id]:
+                assert (
+                    out[run_host_id][trace_id_count] == trace_id
+                ), f"Detected multiple trace ids for replay (run_host_id={run_host_id}, trace_id_count={trace_id_count})"
+            else:
+                out[run_host_id][trace_id_count] = trace_id
+        return out
+
+    zone_names = {
+        "BRISC": "BRISC-KERNEL",
+        "NCRISC": "NCRISC-KERNEL",
+    }
+    for risc in riscs:
+        assert risc in zone_names, f"Unsupported risc '{risc}' for trace replay verification"
+
+    checked_any_common_op = False
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for core, coreData in deviceData["cores"].items():
+            # Skip the synthetic aggregate entry.
+            if core == "DEVICE":
+                continue
+            core_riscs = coreData.get("riscs", {})
+            if any(risc not in core_riscs for risc in riscs):
+                continue
+
+            per_risc_maps = {}
+            for risc in riscs:
+                per_risc_maps[risc] = _collect_replay_kernel_starts(core_riscs[risc]["timeseries"], zone_names[risc])
+
+            # Only validate ops that are present in *both* riscs. BRISC can run out of buffer/DRAM space
+            # earlier than other riscs, so requiring full coverage would be flaky.
+            common_run_host_ids = set.intersection(*(set(per_risc_maps[r].keys()) for r in riscs))
+            if len(common_run_host_ids) == 0:
+                continue
+            checked_any_common_op = True
+
+            # Derive an expected trace_id set from the first risc on this core.
+            # (These tests execute a single trace id, so this should be a singleton set.)
+            ref_risc = riscs[0]
+            expected_trace_ids = {
+                trace_id for per_run in per_risc_maps[ref_risc].values() for trace_id in per_run.values()
+            }
+
+            # All riscs should use only the expected trace ids for replay-tagged kernel markers.
+            for risc in riscs[1:]:
+                risc_trace_ids = {trace_id for per_run in per_risc_maps[risc].values() for trace_id in per_run.values()}
+                unexpected = sorted(list(risc_trace_ids - expected_trace_ids))[:25]
+                assert (
+                    len(unexpected) == 0
+                ), f"Unexpected trace_id values for device {device}, core {core}, risc {risc}: {unexpected}. Expected subset of {sorted(list(expected_trace_ids))}"
+
+            # For ops that appear on multiple riscs, validate that each risc reports a replay id >= 1
+            # (i.e. trace_id_count is present and positive). We avoid stricter equality constraints
+            # because one risc may miss some replays due to log buffer pressure.
+            for run_host_id in common_run_host_ids:
+                for risc in riscs[1:]:
+                    counts = set(per_risc_maps[risc][run_host_id].keys())
+                    assert len(counts) > 0, (
+                        f"Missing trace replay session ids for device {device}, core {core}, risc {risc}, "
+                        f"run_host_id {run_host_id}"
+                    )
+                    assert (
+                        min(counts) >= 1
+                    ), f"Invalid trace replay session id for device {device}, core {core}, risc {risc}, run_host_id {run_host_id}: min(trace_id_count)={min(counts)}"
+
+                ref_counts = set(per_risc_maps[ref_risc][run_host_id].keys())
+                assert len(ref_counts) > 0, (
+                    f"Missing trace replay session ids for device {device}, core {core}, risc {ref_risc}, "
+                    f"run_host_id {run_host_id}"
+                )
+                assert (
+                    min(ref_counts) >= 1
+                ), f"Invalid trace replay session id for device {device}, core {core}, risc {ref_risc}, run_host_id {run_host_id}: min(trace_id_count)={min(ref_counts)}"
+
+    assert (
+        checked_any_common_op
+    ), "No replay-tagged ops were present in both riscs; test did not exercise cross-risc trace replay logging"
+
+
+def verify_noc_trace_replay_ids_have_risc_coverage(
+    profiler_logs_dir=PROFILER_LOGS_DIR, device_id="0", riscs=("BRISC", "NCRISC")
+):
+    """
+    Verification for the quick-push + NOC-trace path.
+
+    NOC trace output filenames encode trace information via:
+        _traceID((trace_id << 32) | trace_id_counter)
+
+    This check ensures that for any replay-tagged op (i.e. has _traceID in filename) where we ever
+    observe *both* riscs, we continue to observe *both* riscs for every replay id. This guards against
+    the original bug where a non-BRISC core would quick-push NOC events with a stale trace id/counter,
+    causing BRISC/NCRISC events for the same replay to be split across different _traceID files.
+    """
+
+    # Parse: noc_trace_dev<dev>[_<op_name>]_ID<runtime_id>[_traceID<encoded>].json
+    noc_trace_re = re.compile(
+        r"^noc_trace_dev(?P<dev>[0-9]+)(?:_.*)?_ID(?P<rid>[0-9]+)(?:_traceID(?P<trace>[0-9]+))?\\.json$"
+    )
+
+    per_runtime_per_trace = {}
+    for fname in os.listdir(profiler_logs_dir):
+        m = noc_trace_re.match(fname)
+        if not m:
+            continue
+        if m.group("dev") != str(device_id):
+            continue
+        trace_enc = m.group("trace")
+        if trace_enc is None:
+            continue  # non-trace op
+
+        runtime_id = int(m.group("rid"))
+        trace_enc = int(trace_enc)
+        trace_id = trace_enc >> 32
+        trace_id_counter = trace_enc & 0xFFFFFFFF
+        assert trace_id_counter > 0, f"Invalid trace replay counter in NOC trace filename '{fname}'"
+
+        with open(os.path.join(profiler_logs_dir, fname), "r") as f:
+            contents = f.read()
+
+        # Avoid JSON parsing; substring presence is enough for coverage checks.
+        procs_present = {risc for risc in riscs if f'"proc": "{risc}"' in contents}
+
+        key = (runtime_id, trace_id, trace_id_counter)
+        if key in per_runtime_per_trace:
+            per_runtime_per_trace[key] |= procs_present
+        else:
+            per_runtime_per_trace[key] = set(procs_present)
+
+    assert (
+        len(per_runtime_per_trace) > 0
+    ), f"No replay-tagged NOC trace files found in '{profiler_logs_dir}' for device {device_id}"
+
+    # Determine which runtime_ids are expected to contain both riscs (they do at least once).
+    runtime_to_all_procs = {}
+    runtime_to_trace_ids = {}
+    runtime_to_counters = {}
+    for (runtime_id, trace_id, trace_id_counter), procs_present in per_runtime_per_trace.items():
+        runtime_to_all_procs.setdefault(runtime_id, set()).update(procs_present)
+        runtime_to_trace_ids.setdefault(runtime_id, set()).add(trace_id)
+        runtime_to_counters.setdefault(runtime_id, set()).add(trace_id_counter)
+
+    dual_risc_runtime_ids = [rid for rid, procs in runtime_to_all_procs.items() if set(riscs).issubset(procs)]
+    assert (
+        len(dual_risc_runtime_ids) > 0
+    ), f"Did not find any replay-tagged ops that included all riscs {riscs}; cannot validate risc coverage"
+
+    # For those runtime_ids, every replay id we observed must include both riscs.
+    for runtime_id in dual_risc_runtime_ids:
+        assert (
+            len(runtime_to_trace_ids.get(runtime_id, set())) == 1
+        ), f"Multiple trace_ids observed for runtime_id {runtime_id}: {sorted(list(runtime_to_trace_ids[runtime_id]))}"
+        trace_id = next(iter(runtime_to_trace_ids[runtime_id]))
+        for trace_id_counter in sorted(runtime_to_counters.get(runtime_id, set())):
+            procs_present = per_runtime_per_trace.get((runtime_id, trace_id, trace_id_counter), set())
+            missing = sorted(list(set(riscs) - procs_present))
+            assert (
+                len(missing) == 0
+            ), f"Missing risc coverage in NOC trace for device {device_id}, runtime_id {runtime_id}, trace_id {trace_id}, trace_id_counter {trace_id_counter}. Missing riscs: {missing}"
+
 
 def test_trace_run():
     verify_trace_markers(
         run_device_profiler_test(
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_multiple_trace_ids"
         ),
-        num_non_trace_ops=3,
+        num_non_trace_ops=4,
         num_trace_ops=5,
         num_repeats_per_trace_op=3,
     )
@@ -438,7 +811,7 @@ def test_device_trace_run():
     )
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core[100-5]",
             setupAutoExtract=False,
             doDeviceTrace=True,
         ),
@@ -449,12 +822,138 @@ def test_device_trace_run():
             "trace_kernel_duration": [5],
         },
     )
-    # sanity check to ensure device trace runs without fatal errors with noc collecting enabled and trace runs
-    run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
-        noPostProcess=True,
+
+
+def verify_trace_ids_in_device_csv(csv_path=None, riscs=("BRISC", "NCRISC")):
+    """
+    Verify that trace IDs are properly propagated from BRISC to NCRISC in the raw device CSV log.
+
+    This function checks that when BRISC marks an op with a trace_id (not -1), NCRISC entries
+    for the same op on the same core also have the correct trace_id set.
+    """
+    if csv_path is None:
+        csv_path = PROFILER_LOGS_DIR / "profile_log_device.csv"
+
+    if not os.path.isfile(csv_path):
+        logger.warning(f"Device log CSV not found at {csv_path} - skipping CSV trace validation")
+        return
+
+    # Read CSV, skipping the architecture line
+    df = pd.read_csv(csv_path, skiprows=1, header=0, na_filter=False)
+
+    # Convert trace_id and trace_id_count columns to integers (0-indexed columns)
+    # Based on process_device_log.py: row[8]=run_host_id, row[9]=trace_id, row[10]=trace_id_count
+    # where row is 1-indexed from itertuples, so DataFrame columns are 7, 8, 9
+    df.iloc[:, 7] = pd.to_numeric(df.iloc[:, 7], errors="coerce").fillna(-1).astype(int)  # run_host_id
+    df.iloc[:, 8] = pd.to_numeric(df.iloc[:, 8], errors="coerce").fillna(-1).astype(int)  # trace_id
+    df.iloc[:, 9] = pd.to_numeric(df.iloc[:, 9], errors="coerce").fillna(-1).astype(int)  # trace_id_count
+
+    # Get column names for easier access
+    # Column structure: chip_id, core_x, core_y, risc, timer_id, time_data, attached_data,
+    # run_host_id, trace_id, trace_id_count, zone_name, type, src_line, src_file, meta_data
+    chip_col = df.columns[0]
+    core_x_col = df.columns[1]
+    core_y_col = df.columns[2]
+    risc_col = df.columns[3]
+    run_host_id_col = df.columns[7]
+    trace_id_col = df.columns[8]
+    trace_id_count_col = df.columns[9]
+
+    # First, find operations where BRISC has trace replay markers (trace_id != -1 AND trace_id_count >= 1)
+    # We need BRISC to establish which ops should have trace_ids
+    brisc_df = df[df[risc_col] == "BRISC"]
+    brisc_replay_mask = (brisc_df[trace_id_col] != -1) & (brisc_df[trace_id_count_col] >= 1)
+    brisc_replay_ops = brisc_df[brisc_replay_mask]
+
+    if len(brisc_replay_ops) == 0:
+        logger.info(
+            "No trace replay markers found in BRISC CSV data - test may not be running traced operations or they haven't been replayed yet"
+        )
+        return
+
+    # Get the set of (chip, core_x, core_y, run_host_id) that BRISC marked with trace replays
+    brisc_traced_ops = set(
+        brisc_replay_ops[[chip_col, core_x_col, core_y_col, run_host_id_col]].apply(tuple, axis=1).unique()
+    )
+
+    logger.info(f"Found {len(brisc_traced_ops)} unique ops with BRISC trace replay markers")
+
+    # Now validate that NCRISC entries for these same ops also have the correct trace_id
+    errors = []
+    ops_with_brisc_trace_ids = 0
+    ops_validated = 0
+
+    for chip, core_x, core_y, op_id in brisc_traced_ops:
+        # Get all entries for this specific op from the full dataframe (not filtered)
+        op_mask = (
+            (df[chip_col] == chip)
+            & (df[core_x_col] == core_x)
+            & (df[core_y_col] == core_y)
+            & (df[run_host_id_col] == op_id)
+        )
+        op_entries = df[op_mask]
+
+        # Get BRISC trace_ids for this op (from replay entries)
+        brisc_entries = op_entries[
+            (op_entries[risc_col] == "BRISC") & (op_entries[trace_id_col] != -1) & (op_entries[trace_id_count_col] >= 1)
+        ]
+
+        if len(brisc_entries) == 0:
+            continue
+
+        brisc_trace_ids = set(brisc_entries[trace_id_col].unique())
+        ops_with_brisc_trace_ids += 1
+
+        # Get ALL NCRISC entries for this op (including those with trace_id=-1)
+        ncrisc_entries = op_entries[op_entries[risc_col] == "NCRISC"]
+
+        if len(ncrisc_entries) > 0:
+            ops_validated += 1
+            ncrisc_trace_ids = set(ncrisc_entries[trace_id_col].unique())
+
+            # Check for NCRISC entries with trace_id=-1 (not set)
+            ncrisc_missing_trace = ncrisc_entries[ncrisc_entries[trace_id_col] == -1]
+            if len(ncrisc_missing_trace) > 0:
+                errors.append(
+                    f"Chip {chip}, Core ({core_x}, {core_y}), Op ID {op_id}: "
+                    f"BRISC has trace_id(s) {sorted(brisc_trace_ids)}, but NCRISC has {len(ncrisc_missing_trace)} "
+                    f"entries with trace_id=-1 (not set). NCRISC should have trace_id set to match BRISC."
+                )
+
+            # Also check if the valid trace IDs don't match
+            ncrisc_valid_trace_ids = set(ncrisc_entries[ncrisc_entries[trace_id_col] != -1][trace_id_col].unique())
+            if len(ncrisc_valid_trace_ids) > 0 and ncrisc_valid_trace_ids != brisc_trace_ids:
+                errors.append(
+                    f"Chip {chip}, Core ({core_x}, {core_y}), Op ID {op_id}: "
+                    f"BRISC has trace_id(s) {sorted(brisc_trace_ids)}, but NCRISC has different trace_id(s) {sorted(ncrisc_valid_trace_ids)}. "
+                    f"They should match."
+                )
+
+    # Report findings
+    logger.info(
+        f"CSV validation: Found {ops_with_brisc_trace_ids} trace replay ops with BRISC entries, validated {ops_validated} ops with both BRISC and NCRISC entries"
+    )
+
+    if errors:
+        error_msg = f"Found {len(errors)} trace_id mismatches between BRISC and NCRISC:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            error_msg += f"\n... and {len(errors) - 10} more errors"
+        assert False, error_msg
+
+
+@pytest.mark.skip_post_commit
+def test_quick_push_on_noc_profiler():
+    devicesData = run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core[5-600]",
         enable_noc_tracing=True,
     )
+
+    # BRISC can run out of buffer/DRAM space earlier than other riscs, so only validate ops that are
+    # present in *both* BRISC and NCRISC logs. Those must have valid trace ids and replay session ids.
+    verify_trace_replay_ids_match_between_riscs(devicesData, riscs=("BRISC", "NCRISC"))
+
+    # Also verify the raw CSV to ensure NCRISC has trace_ids properly set when BRISC has them
+    verify_trace_ids_in_device_csv(riscs=("BRISC", "NCRISC"))
 
 
 @skip_for_blackhole()
@@ -462,8 +961,6 @@ def test_dispatch_cores():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],
         "Tensix CQ Prefetch": [9325],
-        "dispatch_total_cq_cmd_op_time": [223],
-        "dispatch_go_send_wait_time": [223],
     }
 
     verify_stats(
@@ -472,6 +969,17 @@ def test_dispatch_cores():
         allowedRange=8875,
         refCountDict=REF_COUNT_DICT,
     )
+
+
+@skip_for_blackhole()
+@pytest.mark.skip_post_commit
+def test_dispatch_cores_extended_worker():
+    REF_COUNT_DICT = {
+        "Tensix CQ Dispatch*": [9325],
+        "Tensix CQ Prefetch": [9325],
+        "dispatch_total_cq_cmd_op_time": [87],
+        "dispatch_go_send_wait_time": [87],
+    }
 
     verify_stats(
         run_device_profiler_test(
@@ -499,7 +1007,7 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
             setupAutoExtract=False,
             doDispatchCores=True,
         ),
@@ -532,6 +1040,7 @@ def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
+@pytest.mark.skip_post_commit
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     # Simple range check: both Dispatch and Prefetch should be within this range

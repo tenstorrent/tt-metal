@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "groupnorm.hpp"
 #include "groupnorm_input_mask.hpp"
 
@@ -17,10 +17,7 @@ namespace ttnn::operations::normalization::detail {
 
 namespace {
 void bind_normalization_group_norm_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::group_norm,
-        R"doc(
+    const auto* doc = R"doc(
                 Computes group_norm over :attr:`input_tensor`.
                 See `Group Normalization <https://arxiv.org/abs/1803.08494>`_ for more details.
 
@@ -101,15 +98,20 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
 
             Limitations:
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
-              - For the :attr:`input_tensor`, H*W must be a multiple of the tile size (32) and C must divide evenly into :attr:`num_groups`.
+              - For the :attr:`input_tensor`, H*W must be a multiple of the tile size (32) and C must be a multiple of the tile size and divide evenly into :attr:`num_groups`.
               - For the :attr:`input_mask`, C must match the number of groups, H must match a tile's height, and W must be a multiple of a tile's width.
               - :attr:`gamma` and :attr:`beta` must be provided
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.
               - Width-sharding is not supported
-        )doc",
-        ttnn::nanobind_arguments_t{
+        )doc";
+
+    ttnn::bind_function<"group_norm">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::group_norm,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("num_groups"),
@@ -126,7 +128,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
             nb::arg("num_out_blocks") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("negative_mask") = nb::none(),
-            nb::arg("use_welford") = false});
+            nb::arg("use_welford") = false));
     mod.def(
         "create_group_norm_input_mask",
         [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {

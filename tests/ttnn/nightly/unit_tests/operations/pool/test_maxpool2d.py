@@ -52,6 +52,8 @@ def run_max_pool2d(
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
     use_reshaped_tensor=True,
+    dram_slice_config=None,
+    config_tensor_in_dram=False,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -164,6 +166,8 @@ def run_max_pool2d(
         reallocate_halo_output=True,
         dtype=out_dtype,
         output_layout=output_layout,
+        dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=config_tensor_in_dram,
     )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -307,6 +311,7 @@ def test_run_max_pool_height_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -382,6 +387,7 @@ def test_run_max_pool_width_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -457,6 +463,7 @@ def test_run_max_pool_block_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -487,6 +494,7 @@ def test_run_max_pool_mem_config(
         tensor_map,
         ttnn.bfloat16,
         out_memory_config=out_memory_config,
+        config_tensor_in_dram=False,
     )
 
 
@@ -574,6 +582,7 @@ def test_run_max_pool_squeeze_net_model(
         tensor_map,
         in_dtype,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -646,6 +655,7 @@ def test_max_pool2d_output_formats_and_layouts(
         out_dtype=out_dtype,
         output_layout=output_layout,
         nightly_skips=False,
+        config_tensor_in_dram=False,
     )
 
 
@@ -811,3 +821,67 @@ def test_golden_maxpool2d_with_vovnet_params(device, padding):
     assert torch.equal(
         golden_torch, torch_output
     ), f"Golden function produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_torch.shape}"
+
+
+# quick test to verify the results of max pool are the same for tensors with the N or C dim squeezed
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("rank", [4, 3, 2])
+def test_run_max_pool_low_rank(rank, device):
+    """Test max_pool2d with different tensor ranks: [1,112,112,1], [112,112,1], [112,112]"""
+    kernel_size = (3, 3)
+    stride = (2, 2)
+    padding = (0, 0)
+
+    # Create torch input in NCHW format [1, 1, 112, 112]
+    torch.manual_seed(0)
+    torch_input_nchw = torch.randn(1, 1, 112, 112, dtype=torch.bfloat16)
+
+    # Permute to NHWC [1, 112, 112, 1]
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1)
+
+    # Create input tensor based on rank
+    if rank == 4:
+        torch_test_input = torch_input_nhwc
+    elif rank == 3:
+        torch_test_input = torch_input_nhwc.squeeze(0)  # Remove batch dim
+    else:  # rank == 2
+        torch_test_input = torch_input_nhwc.squeeze(0).squeeze(-1)  # Remove batch and channel dims
+
+    # Convert to ttnn tensor
+    ttnn_input = ttnn.from_torch(
+        torch_test_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    # Run ttnn max_pool2d
+    ttnn_output = ttnn.max_pool2d(
+        input_tensor=ttnn_input,
+        batch_size=1,
+        input_h=112,
+        input_w=112,
+        channels=1,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=(1, 1),
+    )
+
+    # Run torch reference
+    torch_output_nchw = torch.nn.functional.max_pool2d(
+        torch_input_nchw,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+    )
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1)
+
+    # Convert ttnn output to torch and compare
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    # ttnn output is always 4D [1, H, W, 1], reshape for comparison
+    out_h, out_w = torch_output_nchw.shape[2], torch_output_nchw.shape[3]
+    ttnn_output_torch = ttnn_output_torch.reshape(1, out_h, out_w, 1)
+
+    assert torch.equal(ttnn_output_torch, torch_output_nhwc)

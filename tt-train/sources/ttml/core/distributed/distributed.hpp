@@ -14,8 +14,8 @@ using Rank = tt::tt_metal::distributed::multihost::Rank;
 using Tag = tt::tt_metal::distributed::multihost::Tag;
 using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
+ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const std::optional<uint32_t> dp_dim = std::nullopt);
 
-void synchronize_parameters(const serialization::NamedParameters& parameters);
+void synchronize_gradients(const serialization::NamedParameters& parameters);
 
 }  // namespace ttml::core::distributed

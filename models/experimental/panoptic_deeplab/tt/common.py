@@ -470,6 +470,7 @@ def create_ttnn_model(
     # Create model configurations if not provided
     if model_configs is None:
         model_configs = ModelOptimisations(
+            device=device,
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )

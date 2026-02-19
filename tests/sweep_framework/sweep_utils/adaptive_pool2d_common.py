@@ -25,6 +25,7 @@ def run_adaptive_pool2d(
     output_size,
     dtype,
     pool_type="avg",
+    dram_slice_config=None,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     sharding=None,
 ):
@@ -65,6 +66,7 @@ def run_adaptive_pool2d(
             channels=in_c,
             output_size=[out_h, out_w],
             memory_config=memory_config,
+            dram_slice_config=dram_slice_config,
             applied_shard_scheme=sharding,
         )
         # PyTorch reference
@@ -78,6 +80,7 @@ def run_adaptive_pool2d(
             channels=in_c,
             output_size=[out_h, out_w],
             memory_config=memory_config,
+            dram_slice_config=dram_slice_config,
             applied_shard_scheme=sharding,
         )
         # PyTorch reference

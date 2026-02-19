@@ -8,6 +8,7 @@
 #include "risc_common.h"
 #include <tensix.h>
 #include "hostdev/dev_msgs.h"
+#include "hostdev/rta_constants.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -33,6 +34,11 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
@@ -62,10 +68,9 @@ uint32_t op_info_offset __attribute__((used)) = 0;
 
 const uint8_t thread_id = COMPILE_FOR_TRISC;
 
-#define GET_TRISC_RUN_EVAL(x, t) x##t
-#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
 volatile tt_l1_ptr uint8_t* const trisc_run =
-    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
+    &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
+         ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 }  // namespace ckernel
 
@@ -150,8 +155,17 @@ int main(int argc, char* argv[]) {
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0, local_cb_mask);
+        // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
+        // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
+        uint64_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write, false>(
+            cb_l1_base, 0, local_cb_mask_low);
+#ifdef ARCH_BLACKHOLE
+        uint32_t local_cb_mask_upper = static_cast<uint32_t>(local_cb_mask >> 32);
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write, false>(
+            cb_l1_base, 32, local_cb_mask_upper);
+#endif
 
         cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
         uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
@@ -163,6 +177,29 @@ int main(int argc, char* argv[]) {
                                             launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                              launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset);
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+        // Initialize RTA count from L1 memory
+        // Set to 0 if: 1. offset is sentinel (no args set)
+        //              2. memory contains known garbage pattern 0xBEEF#### (uninitialized slot)
+        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+            ((rta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
+            rta_count = 0;
+        } else {
+            rta_count = rta_l1_base[0];
+            rta_l1_base += 1;  // Skip count word
+        }
+
+        // Initialize CRTA count from L1 memory
+        // Set to 0 if: 1. offset is sentinel (no common args set)
+        //              2. memory contains known garbage pattern 0xBEEF#### (unicast mode, kernel has no CRTAs)
+        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+            ((crta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
+            crta_count = 0;
+        } else {
+            crta_count = crta_l1_base[0];
+            crta_l1_base += 1;  // Skip count word
+        }
+#endif
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 

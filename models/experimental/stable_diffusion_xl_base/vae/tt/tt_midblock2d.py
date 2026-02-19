@@ -18,7 +18,7 @@ class TtUNetMidBlock2D(LightweightModule):
 
         for i in range(num_layers_attn):
             self.attentions.append(
-                TtAttention(device, state_dict, f"{module_path}.attentions.{i}", 512, 1, 512, None, 512)
+                TtAttention(device, state_dict, f"{module_path}.attentions.{i}", model_config, 512, 1, 512, None, 512)
             )
 
         for i in range(num_layers_resn):

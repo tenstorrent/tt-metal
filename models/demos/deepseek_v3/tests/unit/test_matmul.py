@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_watcher_enabled
 from models.demos.deepseek_v3.tests.unit.utils import run_test
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
@@ -200,6 +201,7 @@ def run_test_matmul_dram_sharded(
     ],
     ids=["bf16_bf4b_bf16"],
 )
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_dram_sharded_single_device(
     device,
     M,
@@ -209,6 +211,8 @@ def test_matmul_dram_sharded_single_device(
     in1_dtype,
     out_dtype,
 ):
+    if is_watcher_enabled() and (M, K, N) == (32, 7168, 256):
+        pytest.skip("Fails with watcher enabled. See issue #36314")
     run_test_matmul_dram_sharded(
         device,
         M,
@@ -268,6 +272,8 @@ def test_matmul_dram_sharded_mesh_device(
     """
     Mesh device test for matmul with DRAM sharded weights.
     """
+    if is_watcher_enabled() and (M, K, N) == (32, 7168, 256):
+        pytest.skip("Fails with watcher enabled. See issue #36314")
     # Get device grid info from mesh_device
     grid = mesh_device.compute_with_storage_grid_size()
     max_num_cores = grid.x * grid.y
@@ -574,7 +580,6 @@ def test_matmul_interleaved_single_device(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "in0_shape, in1_shape, in0_dtype, in1_dtype, in0_mem_config, in1_mem_config, out_mem_config, compute_kernel_config",
     [
@@ -702,6 +707,7 @@ def test_matmul_interleaved_single_device(
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_interleaved_mesh_device(
     mesh_device,
     in0_shape,

@@ -4,16 +4,51 @@
 
 #include "fabric.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace ttnn::fabric {
 
 void bind_fabric_api(nb::module_& mod) {
+    nb::class_<tt::tt_fabric::MeshId>(mod, "MeshId", R"(
+        Mesh identifier wrapping a uint32_t value.
+        Used to identify different meshes in a multi-mesh fabric topology.
+    )")
+        .def(nb::init<uint32_t>(), nb::arg("value"), "Create a MeshId from an integer value.")
+        .def(
+            "__int__", [](const tt::tt_fabric::MeshId& id) { return *id; }, "Convert MeshId to integer.")
+        .def(
+            "__eq__",
+            [](const tt::tt_fabric::MeshId& lhs, const tt::tt_fabric::MeshId& rhs) { return lhs == rhs; },
+            nb::arg("other"))
+        .def("__repr__", [](const tt::tt_fabric::MeshId& id) { return fmt::format("MeshId({})", *id); });
+
+    nb::class_<tt::tt_fabric::FabricNodeId>(mod, "FabricNodeId", R"(
+        Identifies a node (chip) in the fabric topology.
+        Combines a mesh_id and chip_id to uniquely identify a device.
+    )")
+        .def(
+            nb::init<tt::tt_fabric::MeshId, uint32_t>(),
+            nb::arg("mesh_id"),
+            nb::arg("chip_id"),
+            "Create a FabricNodeId from mesh_id and chip_id.")
+        .def_ro("mesh_id", &tt::tt_fabric::FabricNodeId::mesh_id, "The mesh identifier.")
+        .def_ro("chip_id", &tt::tt_fabric::FabricNodeId::chip_id, "The chip identifier within the mesh.")
+        .def(
+            "__eq__",
+            [](const tt::tt_fabric::FabricNodeId& lhs, const tt::tt_fabric::FabricNodeId& rhs) { return lhs == rhs; },
+            nb::arg("other"))
+        .def("__repr__", [](const tt::tt_fabric::FabricNodeId& id) {
+            return fmt::format("FabricNodeId(M{}, D{})", *id.mesh_id, id.chip_id);
+        });
+
     // custom mapping here for interface stability
     nb::enum_<tt::tt_fabric::FabricConfig>(mod, "FabricConfig")
         .value("DISABLED", tt::tt_fabric::FabricConfig::DISABLED)
@@ -69,6 +104,17 @@ void bind_fabric_api(nb::module_& mod) {
         .value("INIT_FABRIC", tt::tt_fabric::FabricManagerMode::INIT_FABRIC)
         .value("TERMINATE_FABRIC", tt::tt_fabric::FabricManagerMode::TERMINATE_FABRIC);
 
+    nb::class_<tt::tt_fabric::FabricRouterConfig>(mod, "FabricRouterConfig", R"(
+        Configuration for router-level parameters.
+        Extensible for future router tuning (buffer counts, VC settings, etc.)
+        )")
+        .def(nb::init<>())
+        .def_rw(
+            "max_packet_payload_size_bytes",
+            &tt::tt_fabric::FabricRouterConfig::max_packet_payload_size_bytes,
+            "Optional override for maximum packet payload size (bytes). If not set, uses architecture and routing mode "
+            "defaults.");
+
     mod.def(
         "set_fabric_config",
         &tt::tt_fabric::SetFabricConfig,
@@ -77,7 +123,102 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("num_planes") = nb::none(),
         nb::arg("fabric_tensix_config") = nb::cast(tt::tt_fabric::FabricTensixConfig::DISABLED),
         nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
-        nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT));
+        nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
+        nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
+
+    mod.def(
+        "setup_fabric_connection",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+           uint32_t link_idx,
+           tt::tt_metal::ProgramDescriptor& program_descriptor,
+           tt::tt_metal::CoreCoord worker_core,
+           tt::CoreType core_type) {
+            std::vector<uint32_t> fabric_args;
+
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                src_fabric_node_id,
+                dst_fabric_node_id,
+                link_idx,
+                program_descriptor,
+                worker_core,
+                fabric_args,
+                core_type);
+
+            return fabric_args;
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        nb::arg("link_idx"),
+        nb::arg("program_descriptor"),
+        nb::arg("worker_core"),
+        nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),
+        R"(
+            Sets up fabric connection: returns necessary runtime args and appends SemaphoreDescriptors to
+            the given ProgramDescriptor
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_fabric_node_id: FabricNodeId of the destination chip
+                link_idx: Link index (0..n) to use between src and dst chips
+                program_descriptor: ProgramDescriptor to add semaphores to (mutated)
+                worker_core: Logical core coordinate of the worker
+                core_type: Core type (WORKER or ETH), defaults to WORKER
+        )");
+
+    mod.def(
+        "setup_routing_plane_connection",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+           const std::vector<uint32_t>& connection_link_indices,
+           tt::tt_metal::ProgramDescriptor& program_descriptor,
+           size_t kernel_idx,
+           tt::tt_metal::CoreCoord worker_core) {
+            std::vector<uint32_t> fabric_args;
+
+            tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+                src_fabric_node_id,
+                dst_nodes,
+                connection_link_indices,
+                program_descriptor,
+                kernel_id,
+                worker_core,
+                fabric_args);
+
+            return fabric_args;
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_nodes"),
+        nb::arg("connection_link_indices"),
+        nb::arg("program_descriptor"),
+        nb::arg("kernel_idx"),
+        nb::arg("worker_core"),
+        R"(
+            Sets up routing plane connection manager: returns necessary runtime args and appends
+            SemaphoreDescriptors and defines to the given ProgramDescriptor.
+            This API supports both 1D and 2D fabric routing.
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_nodes: List of FabricNodeIds of destination chips (one per route)
+                connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)
+                program_descriptor: ProgramDescriptor to add semaphores/defines to (mutated)
+                kernel_idx: Index of the kernel in the program descriptor
+                worker_core: Logical core coordinate of the worker
+        )");
+
+    mod.def(
+        "get_tt_fabric_packet_header_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
+        R"(
+            Returns the fabric packet header size in bytes.
+        )");
+
+    mod.def(
+        "get_tt_fabric_max_payload_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
+        R"(
+            Returns the maximum fabric packet payload size in bytes.
+        )");
 }
 
 }  // namespace ttnn::fabric

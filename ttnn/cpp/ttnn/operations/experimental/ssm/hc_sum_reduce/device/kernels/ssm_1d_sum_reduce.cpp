@@ -7,8 +7,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_wh.h"
 
 constexpr uint32_t ONE_TILE = 1;
 
@@ -51,8 +51,7 @@ FORCE_INLINE void reduce(uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out) {
     cb_pop_front(cb_in, ONE_TILE);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_blocks = get_arg_val<uint32_t>(0);
     uint32_t input_num_blocks_h = get_arg_val<uint32_t>(1);
 
@@ -84,4 +83,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

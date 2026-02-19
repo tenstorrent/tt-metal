@@ -62,13 +62,13 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
     int num_cores_c,
-    int M,
-    int N,
+    int /*M*/,
+    int /*N*/,
     int K,
     int in0_block_w,
     int out_subblock_h,
@@ -583,9 +583,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCastIn1MCast) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast::
-                        matmul_multi_core_multi_dram_in0_mcast_in1_mcast(devices_.at(id)));
+                        matmul_multi_core_multi_dram_in0_mcast_in1_mcast(device));
     }
 }
 

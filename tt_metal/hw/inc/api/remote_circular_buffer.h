@@ -7,8 +7,10 @@
 #include "internal/circular_buffer_interface.h"
 #include "api/debug/assert.h"
 #include "api/alignment.h"
-#ifndef COMPILE_FOR_TRISC
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/lock.h"
 #endif
 
 namespace experimental {
@@ -16,7 +18,11 @@ namespace experimental {
 namespace detail {
 
 #ifndef COMPILE_FOR_TRISC
+#if defined(KERNEL_BUILD)
 static constexpr uint8_t default_noc_mode = noc_mode;
+#else
+static constexpr uint8_t default_noc_mode = 0;
+#endif
 static constexpr uint8_t default_cmd_buf = write_at_cmd_buf;
 template <uint8_t nm = default_noc_mode>
 FORCE_INLINE void update_pages_sent(
@@ -68,7 +74,7 @@ FORCE_INLINE void update_pages_acked(
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
     *pages_acked_ptr += aligned_page_adjustment;
-    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uint32_t)pages_acked_ptr, noc);
+    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uintptr_t)pages_acked_ptr, noc);
     noc_fast_atomic_increment<nm>(
         noc,
         cmd_buf,
@@ -202,7 +208,7 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(
 }
 
 #ifndef COMPILE_FOR_TRISC
-
+#if defined(KERNEL_BUILD)
 FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
     WAYPOINT("RCWF");
     RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(cb_id);
@@ -374,7 +380,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     }
     remote_cb.fifo_wr_ptr = dest_addr;
 }
-
+#endif
 #endif
 
 template <uint32_t num_local_cbs>
@@ -407,7 +413,7 @@ FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
         remote_cb_interface.fifo_rd_ptr;
 }
 
-#ifndef COMPILE_FOR_TRISC
+#if !defined(COMPILE_FOR_TRISC) && defined(KERNEL_BUILD)
 
 class Noc;
 class CircularBuffer;
