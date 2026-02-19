@@ -111,7 +111,7 @@ def test_full_float(device, input_shape, fill_value, tt_dtype):
             ttnn.BufferType.DRAM,
             ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0)),
                 }
             ),
         ),
