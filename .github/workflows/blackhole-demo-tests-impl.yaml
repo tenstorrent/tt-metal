@@ -182,7 +182,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -306,7 +306,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -474,7 +474,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -658,7 +658,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

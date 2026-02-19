@@ -713,7 +713,7 @@ jobs:
           SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '_')
           echo "prefix=vllm_output_${SAFE_NAME}_" >> $GITHUB_OUTPUT
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:

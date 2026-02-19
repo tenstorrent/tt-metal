@@ -1130,7 +1130,7 @@
           "completed_at": "2025-03-14T14:51:19Z"
         },
         {
-          "name": "Run tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main",
+          "name": "Run tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file",
           "status": "completed",
           "conclusion": "success",
           "number": 9,
@@ -1272,7 +1272,7 @@
           "completed_at": "2025-03-14T14:49:24Z"
         },
         {
-          "name": "Run tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main",
+          "name": "Run tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file",
           "status": "completed",
           "conclusion": "success",
           "number": 9,

@@ -95,7 +95,7 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U01Q0T3J3D0 # Paul Keller
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -106,14 +106,14 @@ jobs:
         if: ${{ failure() }}
         with:
           test-report-path: generated/test_reports/
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
             pgm_bench.json
           prefix: "pgm_benchmarks_json_"
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
