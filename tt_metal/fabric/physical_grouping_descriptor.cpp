@@ -1662,10 +1662,8 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
 
         // Store all best matches
         if (best_matches.empty()) {
-            // No match found - generate a GroupingInfo
-            GroupingInfo generated_grouping =
-                generate_grouping_info_for_mgd_group(instance_name, instance_type, mgd_grouping_info);
-            result[instance_type][instance_name].push_back(generated_grouping);
+            // No match found - use the MGD grouping info itself
+            result[instance_type][instance_name].push_back(mgd_grouping_info);
         } else {
             for (const std::string& match_name : best_matches) {
                 // Look up the GroupingInfo from lookup map
