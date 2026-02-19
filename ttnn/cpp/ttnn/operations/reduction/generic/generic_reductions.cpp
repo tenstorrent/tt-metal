@@ -6,6 +6,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -210,8 +211,15 @@ static Tensor reduce_impl(
     bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
+        // For non-H/W dimension reductions, we need to use transpose operations.
+        // The transpose kernels require properly padded input, so we fill the
+        // implicit tile padding here. For direct H/W/HW reductions (single_reduce_op),
+        // the reduction kernels handle padding natively.
+        bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
+        Tensor padded_input = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
+
         auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
-            Tensor output_tensor = input_tensor_arg;
+            Tensor output_tensor = padded_input;
             bool first = true;
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
                 bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
