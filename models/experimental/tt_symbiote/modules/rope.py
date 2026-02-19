@@ -64,18 +64,6 @@ class TorchRotaryPositionEmbedding(nn.Module):
 class TTNNRotaryPositionEmbedding(TTNNModule):
     """TTNN-accelerated Rotary Position Embedding."""
 
-    def __init__(self):
-        """Initialize TTNN RoPE module with minimal setup."""
-        super().__init__()
-        self._fallback_torch_layer = TorchRotaryPositionEmbedding()
-
-    @classmethod
-    def from_torch(cls, layer):
-        """Create TTNNRotaryPositionEmbedding with no configuration - learned during forward pass."""
-        result = cls()
-        result._fallback_torch_layer = layer
-        return result
-
     def forward(
         self,
         q: ttnn.Tensor,
@@ -174,5 +162,95 @@ class TTNNRotaryPositionEmbedding(TTNNModule):
             q_rotated = q_rotated[:, :, :original_seq_len, :]
         if k_rotated.shape[-2] != original_seq_len:
             k_rotated = k_rotated[:, :, :original_seq_len, :]
+
+        return q_rotated, k_rotated
+
+
+class TTNNDistributedRotaryPositionEmbedding(TTNNModule):
+    """TTNN-accelerated Rotary Position Embedding for distributed/mesh devices.
+
+    Uses ttnn.experimental.rotary_embedding_llama which is optimized for
+    multi-device tensor-parallel scenarios.
+    """
+
+    def move_weights_to_device_impl(self):
+        # Cache key based on device and mode
+        self._trans_mat_cache = {}
+        for is_decode in [True, False]:
+            cache_key = is_decode
+            if cache_key not in self._trans_mat_cache:
+                # Create transformation matrix: swaps pairs and negates for rotation
+                dhead = ttnn.TILE_SIZE  # Assuming head_dim is equal to tile size for optimal performance
+                trans_mat = torch.zeros(1, 1, dhead, dhead)
+                trans_mat[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+                trans_mat[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+
+                # Convert to device tensor
+                mesh_mapper = None
+                if isinstance(self.device, ttnn._ttnn.multi_device.MeshDevice):
+                    mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+
+                trans_mat_tensor = ttnn.from_torch(
+                    trans_mat,
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mesh_mapper,
+                )
+                self._trans_mat_cache[cache_key] = trans_mat_tensor
+
+    def forward(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """
+        Forward pass through distributed RoPE layer.
+
+        Args:
+            q: Query tensor [batch, n_heads, seq_len, head_dim] or [batch, seq_len, n_heads, head_dim]
+            k: Key tensor [batch, n_kv_heads, seq_len, head_dim] or [batch, seq_len, n_kv_heads, head_dim]
+            cos: Cosine position embeddings [1, 1, seq_len, rotary_dim] or [1, batch, 1, rotary_dim]
+            sin: Sine position embeddings [1, 1, seq_len, rotary_dim] or [1, batch, 1, rotary_dim]
+
+        Returns:
+            Tuple of (rotated_query, rotated_key)
+        """
+        # Ensure tensors are in TILE_LAYOUT and bfloat16
+        if q.layout != ttnn.TILE_LAYOUT:
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if k.layout != ttnn.TILE_LAYOUT:
+            k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if cos.layout != ttnn.TILE_LAYOUT:
+            cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if sin.layout != ttnn.TILE_LAYOUT:
+            sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Get device and determine decode mode
+        seq_len = q.shape[2] if len(q.shape) == 4 else q.shape[1]
+        is_decode_mode = False  # (seq_len == 1)
+
+        # Get transformation matrix
+        trans_mat = self._trans_mat_cache[is_decode_mode]
+
+        # Apply rotary embedding using distributed-optimized operation
+        q_rotated = ttnn.experimental.rotary_embedding_llama(
+            q,
+            cos,
+            sin,
+            trans_mat,
+            is_decode_mode=is_decode_mode,
+        )
+
+        k_rotated = ttnn.experimental.rotary_embedding_llama(
+            k,
+            cos,
+            sin,
+            trans_mat,
+            is_decode_mode=is_decode_mode,
+        )
 
         return q_rotated, k_rotated

@@ -22,6 +22,7 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
 import transformers
 from models.experimental.tt_symbiote.core.run_config import TracedRun
 from models.experimental.tt_symbiote.modules.moe import TTNNMoE
+from models.experimental.tt_symbiote.modules.attention import TTNNGlm4MoeLiteAttention
 
 assert transformers.__version__.startswith("5."), "This test requires transformers version 5.0.0.dev0"
 
@@ -55,8 +56,11 @@ def test_glm(mesh_device):
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash")
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
     nn_to_ttnn = {
-        nn.Linear: TTNNLinearIColShardedWRowSharded,  # TTNNLinearLLamaIColShardedWRowSharded
+        model.model.layers[0].self_attn.__class__: TTNNGlm4MoeLiteAttention,  # Add TTNNGlm4MoeLiteAttention module
         model.model.layers[1].mlp.__class__: TTNNMoE,  # Add TTNNMoE module
+    }
+    nn_to_ttnn2 = {
+        nn.Linear: TTNNLinearIColShardedWRowSharded,  # TTNNLinearLLamaIColShardedWRowSharded
     }
 
     messages = [
@@ -73,8 +77,9 @@ def test_glm(mesh_device):
         return_tensors="pt",
     ).to(model.device)
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
+    modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
     set_device(model, mesh_device)
-    all_modules = {**modules1}
+    all_modules = {**modules1, **modules2}
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
