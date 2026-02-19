@@ -725,7 +725,7 @@ struct StaticSizedSenderChannelWorkerInterface
     StaticSizedSenderChannelWorkerInterface(
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
         volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
-        volatile uint32_t* const connection_live_semaphore,
+        ConnectionSemaphorePtrType connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value,
         uint32_t read_counter_update_src_address = 0) :
