@@ -276,8 +276,6 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-                num_kernel_threads = launch_msg_address->kernel_config.num_kernel_threads[hartid];
-                my_thread_id = launch_msg_address->kernel_config.kernel_thread_id[hartid];
                 // Invalidate the i$ now the kernels have loaded and before running
                 // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
@@ -417,8 +415,6 @@ extern "C" uint32_t _start1() {
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-        num_kernel_threads = launch_msg->kernel_config.num_kernel_threads[hartid];
-        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
         int index = hartid;
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
