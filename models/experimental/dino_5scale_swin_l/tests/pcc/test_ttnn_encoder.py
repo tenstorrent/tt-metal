@@ -86,7 +86,6 @@ def test_ttnn_encoder_pcc(device, reset_seeds):
     # Flatten PyTorch neck features to [B, N, 256] for TTNN input
     flat_feats = []
     for feat in neck_out:
-        B, C, H, W = feat.shape
         flat_feats.append(feat.flatten(2).permute(0, 2, 1))
     feat_flatten = torch.cat(flat_feats, dim=1)
     logger.info(f"Flattened feat shape: {feat_flatten.shape}")
