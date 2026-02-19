@@ -85,19 +85,19 @@ class SocketInterface:
             self.upstream_socket.get_mesh_device(), self.downstream_socket.get_mesh_device(), socket_config
         )
 
-        # if (self.send_core_coord.core_coord == self.recv_core_coord.core_coord):
-        termination_semaphore_core_range = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
-            ]
-        )
-        # else:
-        #     termination_semaphore_core_range = ttnn.CoreRangeSet(
-        #         [
-        #             ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
-        #             ttnn.CoreRange(self.recv_core_coord.core_coord, self.recv_core_coord.core_coord),
-        #         ]
-        #     )
+        if self.send_core_coord.core_coord == self.recv_core_coord.core_coord:
+            termination_semaphore_core_range = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
+                ]
+            )
+        else:
+            termination_semaphore_core_range = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
+                    ttnn.CoreRange(self.recv_core_coord.core_coord, self.recv_core_coord.core_coord),
+                ]
+            )
         self.termination_semaphore = ttnn.create_global_semaphore(
             self.upstream_socket.get_mesh_device(),
             termination_semaphore_core_range,
@@ -302,19 +302,19 @@ class HostInterface:
         self.h2d_mesh_core_coord = self.h2d_socket.get_active_cores()[0]
         self.d2h_mesh_core_coord = self.d2h_socket.get_active_cores()[0]
 
-        # if (self.h2d_mesh_core_coord.core_coord == self.d2h_mesh_core_coord.core_coord):
-        termination_semaphore_core_range = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
-            ]
-        )
-        # else:
-        #     termination_semaphore_core_range = ttnn.CoreRangeSet(
-        #         [
-        #             ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
-        #             ttnn.CoreRange(self.d2h_mesh_core_coord.core_coord, self.d2h_mesh_core_coord.core_coord),
-        #         ]
-        #     )
+        if self.h2d_mesh_core_coord.core_coord == self.d2h_mesh_core_coord.core_coord:
+            termination_semaphore_core_range = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
+                ]
+            )
+        else:
+            termination_semaphore_core_range = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
+                    ttnn.CoreRange(self.d2h_mesh_core_coord.core_coord, self.d2h_mesh_core_coord.core_coord),
+                ]
+            )
         self.termination_semaphore = ttnn.create_global_semaphore(
             self.mesh_device,
             termination_semaphore_core_range,
