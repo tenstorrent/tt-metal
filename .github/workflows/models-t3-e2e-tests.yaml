@@ -1,6 +1,9 @@
 name: "[Tier 3] Models End-To-End Tests"
 
 on:
+  push:
+    branches:
+      - models-ci/model_unit_pipeline
   workflow_dispatch:
     inputs:
       model:
@@ -10,6 +13,8 @@ on:
         type: choice
         options:
           - all
+          - llama3.2-1b
+          - llama3.2-3b
       sku:
         description: "Select SKU to test"
         required: false
@@ -17,6 +22,8 @@ on:
         type: choice
         options:
           - all
+          - "wh_n150 (N150)"
+          - "wh_n300 (N300)"
       platform:
         required: false
         type: choice
@@ -55,7 +62,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS=""
+          ALL_SKUS="wh_n150,wh_n300"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
