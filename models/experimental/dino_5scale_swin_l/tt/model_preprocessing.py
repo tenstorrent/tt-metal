@@ -36,8 +36,16 @@ def _to_ttnn_norm_param(param: torch.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor
     return ttnn.from_torch(param.reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
 
+def _resolve_state_dict(checkpoint_path_or_state_dict) -> dict:
+    """Load state_dict from a .pth path, or return it directly if already a dict."""
+    if isinstance(checkpoint_path_or_state_dict, dict):
+        return checkpoint_path_or_state_dict
+    ckpt = torch.load(checkpoint_path_or_state_dict, map_location="cpu")
+    return ckpt.get("state_dict", ckpt)
+
+
 def load_neck_weights(
-    checkpoint_path: str,
+    checkpoint_path_or_state_dict,
     device: ttnn.Device,
     in_channels: Tuple[int, ...] = (192, 384, 768, 1536),
     out_channels: int = 256,
@@ -46,12 +54,14 @@ def load_neck_weights(
     """
     Load neck (ChannelMapper) weights from mmdet DINO checkpoint.
 
+    Args:
+        checkpoint_path_or_state_dict: path string or pre-loaded state_dict.
+
     Conv weights are stored as ttnn tensors on host.
     GN weights are stored as raw torch tensors (_torch_w, _torch_b)
     so the neck module can create per-level GN params with optimal core grids.
     """
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-    sd = ckpt.get("state_dict", ckpt)
+    sd = _resolve_state_dict(checkpoint_path_or_state_dict)
 
     params: Dict = {"convs": {}, "extra_convs": {}}
 
@@ -96,7 +106,7 @@ def load_neck_weights(
 
 
 def load_encoder_weights(
-    checkpoint_path: str,
+    checkpoint_path_or_state_dict,
     device: ttnn.Device,
     num_layers: int = 6,
     embed_dims: int = 256,
@@ -115,9 +125,11 @@ def load_encoder_weights(
       encoder.layers.{i}.norms.{0,1}.{weight,bias}
 
     Also loads level_embed [num_levels, embed_dims].
+
+    Args:
+        checkpoint_path_or_state_dict: path string or pre-loaded state_dict.
     """
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-    sd = ckpt.get("state_dict", ckpt)
+    sd = _resolve_state_dict(checkpoint_path_or_state_dict)
 
     params: Dict = {"layers": {}}
 
@@ -173,7 +185,7 @@ def load_encoder_weights(
 
 
 def load_decoder_weights(
-    checkpoint_path: str,
+    checkpoint_path_or_state_dict,
     device: ttnn.Device,
     num_layers: int = 6,
     embed_dims: int = 256,
@@ -201,9 +213,11 @@ def load_decoder_weights(
       memory_trans_fc.{weight,bias}
       memory_trans_norm.{weight,bias}
       query_embedding.weight
+
+    Args:
+        checkpoint_path_or_state_dict: path string or pre-loaded state_dict.
     """
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-    sd = ckpt.get("state_dict", ckpt)
+    sd = _resolve_state_dict(checkpoint_path_or_state_dict)
 
     params: Dict = {"layers": {}}
 
