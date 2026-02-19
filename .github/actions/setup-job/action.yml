@@ -29,24 +29,8 @@ inputs:
     description: 'Enable kernel ccache'
     default: false
     type: boolean
-  redis-ccache-user:
-    description: 'Redis ccache username'
-    required: false
-    default: ''
-  redis-ccache-password:
-    description: 'Redis ccache password'
-    required: false
-    default: ''
-  redis-ccache-host:
-    description: 'Redis ccache host'
-    required: false
-    default: ''
-  redis-ccache-port:
-    description: 'Redis ccache port'
-    required: false
-    default: ''
-  redis-ccache-readonly:
-    description: 'Redis ccache read-only flag'
+  redis-ccache-storage:
+    description: 'Redis ccache storage connection string (e.g., redis://user:password@host:port|read-only=false)'
     required: false
     default: ''
   use-evaluation-image:
@@ -142,12 +126,11 @@ runs:
         echo "CCACHE_DEBUG=1" >> $GITHUB_ENV
         echo "CCACHE_LOGFILE=/tmp/ccache/ccache.log" >> $GITHUB_ENV
 
-        if [ -z "${{ inputs.redis-ccache-password }}" ]; then
-          echo "Redis ccache password is missing. Did you forget to pass redis credentials?"
+        if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
+          echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
           exit 1
         fi
-        CCACHE_REMOTE_STORAGE="redis://${{ inputs.redis-ccache-user }}:${{ inputs.redis-ccache-password }}@${{ inputs.redis-ccache-host }}:${{ inputs.redis-ccache-port }}|read-only=${{ inputs.redis-ccache-readonly }}"
-        echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+        echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
 
         mkdir -p /tmp/ccache
         echo "=== Creating ccache files for ephemeral runner ==="
