@@ -391,8 +391,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
  * with multiple entries per channel. If asic_id_to_mesh_rank is empty, includes all ASICs from PSD.
  */
 PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     PhysicalAdjacencyMap flat_adj;
 
     // Build a set of all ASIC IDs for quick lookup
@@ -414,17 +413,8 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
-            // Skip ASICs not in any mesh assignment
-            if (!all_asics.contains(src_asic_id)) {
-                continue;
-            }
-
             for (const auto& asic_connection : asic_connections) {
                 auto dst_asic_id = asic_connection.first;
-                // Skip ASICs not in any mesh assignment
-                if (!all_asics.contains(dst_asic_id)) {
-                    continue;
-                }
 
                 // Skip self-connections
                 if (src_asic_id == dst_asic_id) {
@@ -447,7 +437,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Build flat adjacency map from PhysicalSystemDescriptor
-    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor, asic_id_to_mesh_rank);
+    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
 
     // Convert to AdjacencyGraph and use the common algorithm
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
