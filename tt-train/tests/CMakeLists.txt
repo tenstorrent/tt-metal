@@ -133,22 +133,6 @@ if(TARGET benchmark::benchmark)
     )
     target_include_directories(ttml_benchmarks PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
 
-    set(GRAM_BENCHMARK_SOURCES benchmark/gram_matmul_benchmark.cpp)
-
-    add_executable(ttml_gram_matmul_benchmark ${GRAM_BENCHMARK_SOURCES})
-    target_link_libraries(
-        ttml_gram_matmul_benchmark
-        PUBLIC
-            ttml
-            TTNN::TTNN
-            benchmark::benchmark
-    )
-    target_include_directories(
-        ttml_gram_matmul_benchmark
-        PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-    )
-
     set(GRAM_POLYNOMIAL_BENCHMARK_SOURCES benchmark/gram_polynomial_benchmark.cpp)
 
     add_executable(ttml_gram_polynomial_benchmark ${GRAM_POLYNOMIAL_BENCHMARK_SOURCES})
