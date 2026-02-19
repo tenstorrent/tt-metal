@@ -61,7 +61,7 @@ def test_reduce_sum_single_device(device, shape):
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.99)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8), (8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape",
     [
