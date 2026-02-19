@@ -13,6 +13,8 @@ This implements a matmul on a single core where:
 The single core computes: output = A @ B
 """
 
+from loguru import logger
+
 import ttnn
 
 
@@ -68,11 +70,14 @@ class MatmulSingleCore:
         assert (
             a_shape[1] % in0_tile.tile_shape[1] == 0
         ), f"K ({a_shape[1]}) must be divisible by tile_width ({in0_tile.tile_shape[1]})"
-        assert (
-            b_shape[1] // in1_tile.tile_shape[1] == 1
-        ), f"N ({b_shape[1]}) must be a single tile with width same as tile_width ({in1_tile.tile_shape[1]})"
+        # assert (
+        #     b_shape[1] // in1_tile.tile_shape[1] == 1
+        # ), f"N ({b_shape[1]}) must be a single tile with width same as tile_width ({in1_tile.tile_shape[1]})"
         assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
         num_tiles_k = a_shape[1] // in0_tile.tile_shape[1]
+        num_tiles_c = b_shape[1] // in1_tile.tile_shape[1]
+        num_tiles_r = a_shape[0] // in0_tile.tile_shape[0]
+        logger.info(f"Num_tiles_rt: {num_tiles_r}, Num_tiles_k: {num_tiles_k}, Num_tiles_c: {num_tiles_c}")
 
         # Some basic shape checks on output
         out_shape = output_tensor.shape
@@ -80,9 +85,9 @@ class MatmulSingleCore:
         assert (
             out_shape[0] // out_tile.tile_shape[0] == 1
         ), f"M ({out_shape[0]}) must be a single tile with height same as tile_height ({out_tile.tile_shape[0]})"
-        assert (
-            out_shape[1] // out_tile.tile_shape[1] == 1
-        ), f"N ({out_shape[1]}) must be a single tile with width same as tile_width ({out_tile.tile_shape[1]})"
+        # assert (
+        #     out_shape[1] // out_tile.tile_shape[1] == 1
+        # ), f"N ({out_shape[1]}) must be a single tile with width same as tile_width ({out_tile.tile_shape[1]})"
 
         # Get core grid from input tensor (single core)
         all_cores = input_a.memory_config().shard_spec.grid
@@ -156,6 +161,7 @@ class MatmulSingleCore:
             out_cb,
             interm_cb,
             num_tiles_k,
+            num_tiles_c,
             1 if fp32_dest_acc_en else 0,
         ]
 

@@ -18,6 +18,11 @@ def analyze_matmul_blocks(csv_file):
     # Store calculated durations
     durations = []
 
+    # Track TRISC_0 start and TRISC_2 end for total duration calculation
+    # Key: (pcie_slot, core_x, core_y, run_host_id)
+    trisc0_start_times = {}
+    trisc2_end_times = {}
+
     with open(csv_file, "r") as f:
         lines = f.readlines()
 
@@ -44,10 +49,15 @@ def analyze_matmul_blocks(csv_file):
                 zone_type = row[" type"]
 
                 block_key = (pcie_slot, core_x, core_y, risc_type, run_host_id)
+                host_block_key = (pcie_slot, core_x, core_y, run_host_id)
 
                 if zone_type == "ZONE_START":
                     # Store start time
                     start_times[block_key] = int(row[" time[cycles since reset]"])
+
+                    # Track TRISC_0 start
+                    if risc_type.strip() == "TRISC_0":
+                        trisc0_start_times[host_block_key] = int(row[" time[cycles since reset]"])
 
                 elif zone_type == "ZONE_END":
                     # Calculate duration if we have a start time
@@ -72,15 +82,38 @@ def analyze_matmul_blocks(csv_file):
                         # Remove the start time entry
                         del start_times[block_key]
 
-    return durations
+                    # Track TRISC_2 end
+                    if risc_type.strip() == "TRISC_2":
+                        trisc2_end_times[host_block_key] = int(row[" time[cycles since reset]"])
+
+    # Calculate total duration from TRISC_0 start to TRISC_2 end
+    total_durations = {}
+    for host_block_key in trisc0_start_times:
+        if host_block_key in trisc2_end_times:
+            total_duration = trisc2_end_times[host_block_key] - trisc0_start_times[host_block_key]
+            # Extract host_id from the key
+            run_host_id = host_block_key[3]  # (pcie_slot, core_x, core_y, run_host_id)
+            total_durations[run_host_id] = total_duration
+
+    return durations, total_durations
 
 
-def print_results(durations, verbose=False):
+def print_results(durations, total_durations, verbose=False):
     """Print formatted results."""
 
     if not durations:
         print("No MATMUL_SINGLE_TILE blocks found.")
         return
+
+    # Host ID to in0_tile_r_dim mapping
+    host_id_map = {
+        "1024": 1,
+        "2048": 2,
+        "3072": 4,
+        "4096": 8,
+        "5120": 16,
+        "6144": 32,
+    }
 
     # Group by host ID
     by_host_id = defaultdict(list)
@@ -154,31 +187,36 @@ def print_results(durations, verbose=False):
             else:
                 print("No TRISC blocks found for this host.")
 
-    # TRISC_0 Summary (default view)
+    # All TRISC Summary (default view)
     print(f"\n{'='*120}")
-    print("TRISC_0 MATMUL_SINGLE_TILE Duration Summary")
+    print("MATMUL_SINGLE_TILE Duration Summary - All TRISC Cores")
     print(f"{'='*120}")
 
-    # Filter only TRISC_0 blocks
-    trisc0_by_host = defaultdict(list)
+    # Group by host ID and TRISC type
+    trisc_by_host = defaultdict(lambda: defaultdict(list))
     for d in durations:
-        if d["risc_type"] == "TRISC_0":
-            trisc0_by_host[d["run_host_id"]].append(d["duration_cycles"])
+        if d["risc_type"].startswith("TRISC"):
+            trisc_by_host[d["run_host_id"]][d["risc_type"]].append(d["duration_cycles"])
 
-    if trisc0_by_host:
-        print(f"{'Host ID':<10} {'Duration (cycles)':<20}")
-        print("-" * 30)
+    if trisc_by_host:
+        print(f"{'in0_tile_r_dim':<15} {'TRISC_0':<20} {'TRISC_1':<20} {'TRISC_2':<20} {'Total (T0→T2)':<20}")
+        print("-" * 95)
 
-        for host_id in sorted(trisc0_by_host.keys()):
-            values = trisc0_by_host[host_id]
-            # Get the full info for display
-            trisc0_blocks = [d for d in by_host_id[host_id] if d["risc_type"] == "TRISC_0"]
-            for block in trisc0_blocks:
-                print(f"{host_id:<10} {block['duration_cycles']:<20,}")
+        for host_id in sorted(trisc_by_host.keys()):
+            trisc_data = trisc_by_host[host_id]
+            in0_tile_r_dim = host_id_map.get(host_id, "?")
 
-        print("-" * 30)
+            # Get duration for each TRISC (assuming one block per TRISC per host)
+            trisc0_dur = trisc_data.get("TRISC_0", [0])[0] if trisc_data.get("TRISC_0") else 0
+            trisc1_dur = trisc_data.get("TRISC_1", [0])[0] if trisc_data.get("TRISC_1") else 0
+            trisc2_dur = trisc_data.get("TRISC_2", [0])[0] if trisc_data.get("TRISC_2") else 0
+            total_dur = total_durations.get(host_id, 0)
+
+            print(f"{in0_tile_r_dim:<15} {trisc0_dur:<20,} {trisc1_dur:<20,} {trisc2_dur:<20,} {total_dur:<20,}")
+
+        print("-" * 95)
     else:
-        print("No TRISC_0 blocks found.")
+        print("No TRISC blocks found.")
 
     print(f"\n{'='*120}")
 
@@ -198,5 +236,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(f"Analyzing: {args.csv}")
-    durations = analyze_matmul_blocks(args.csv)
-    print_results(durations, verbose=args.verbose)
+    durations, total_durations = analyze_matmul_blocks(args.csv)
+    print_results(durations, total_durations, verbose=args.verbose)

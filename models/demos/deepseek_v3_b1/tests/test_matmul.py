@@ -27,8 +27,8 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
 #     ],
 # )
 @pytest.mark.parametrize("M", [1, 2, 4, 8, 16, 32])
-@pytest.mark.parametrize("K", [7168])
-@pytest.mark.parametrize("N", [32])
+@pytest.mark.parametrize("K", [8 * 32])
+@pytest.mark.parametrize("N", [4 * 32])
 def test_matmul_single_core(device, M, K, N):
     """Test single-core matmul operation with fully sharded inputs"""
 
@@ -36,6 +36,11 @@ def test_matmul_single_core(device, M, K, N):
     a_tile = ttnn.Tile([M, 32])  # Tiny tile height for A and output
     b_tile = ttnn.Tile([32, 32])  # Standard tile for B
     out_tile = ttnn.Tile([M, 32])  # Tiny tile height for output
+
+    # Data formats
+    input_a_format = ttnn.bfloat16
+    input_b_format = ttnn.bfloat4_b
+    output_format = ttnn.bfloat16
 
     # Single core
     core = ttnn.CoreCoord(0, 0)
@@ -72,7 +77,7 @@ def test_matmul_single_core(device, M, K, N):
     # Create input A (height-sharded on single core)
     ttnn_a = ttnn.from_torch(
         torch_a,
-        dtype=ttnn.bfloat16,
+        dtype=input_a_format,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=input_a_mem_config,
@@ -96,7 +101,7 @@ def test_matmul_single_core(device, M, K, N):
     # Create input B (width-sharded on single core)
     ttnn_b = ttnn.from_torch(
         torch_b,
-        dtype=ttnn.bfloat8_b,
+        dtype=input_b_format,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=input_b_mem_config,
@@ -119,7 +124,7 @@ def test_matmul_single_core(device, M, K, N):
     torch_output_zeros = torch.zeros((M, N), dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
         torch_output_zeros,
-        dtype=ttnn.bfloat16,
+        dtype=output_format,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,

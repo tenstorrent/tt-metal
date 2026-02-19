@@ -15,5 +15,5 @@ void kernel_main() {
     constexpr uint32_t num_output_tiles = 1;
     // Wait for all output tiles to be available in CB
     // Note: output_cb is backed by sharded tensor, data will be written directly to L1
-    cb_wait_front(output_cb, 1);
+    // cb_wait_front(output_cb, 1);
 }

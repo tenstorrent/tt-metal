@@ -26,9 +26,9 @@ void kernel_main() {
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(2);  // K dimension in tiles
 
     // Both in0 and in1 are backed by sharded tensors - just signal they're ready
-    cb_reserve_back(in0_cb, num_tiles_k);
-    cb_push_back(in0_cb, num_tiles_k);
+    // cb_reserve_back(in0_cb, num_tiles_k);
+    // cb_push_back(in0_cb, num_tiles_k);
 
-    cb_reserve_back(in1_cb, num_tiles_k);
-    cb_push_back(in1_cb, num_tiles_k);
+    // cb_reserve_back(in1_cb, num_tiles_k);
+    // cb_push_back(in1_cb, num_tiles_k);
 }
