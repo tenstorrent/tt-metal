@@ -14,17 +14,17 @@ void kernel_main() {
     constexpr uint32_t num_k_chunks = get_compile_time_arg_val(5);
 
     constexpr auto q_args = TensorAccessorArgs<6>();
-    constexpr auto kt_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto v_args = TensorAccessorArgs<kt_args.next_compile_time_args_offset()>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
-    const uint32_t kt_addr = get_arg_val<uint32_t>(1);
+    const uint32_t k_addr = get_arg_val<uint32_t>(1);
     const uint32_t v_addr = get_arg_val<uint32_t>(2);
 
     const uint32_t tile_size_bytes = get_tile_size(tt::CBIndex::c_0);
 
     const auto q_accessor = TensorAccessor(q_args, q_addr, tile_size_bytes);
-    const auto kt_accessor = TensorAccessor(kt_args, kt_addr, tile_size_bytes);
+    const auto k_accessor = TensorAccessor(k_args, k_addr, tile_size_bytes);
     const auto v_accessor = TensorAccessor(v_args, v_addr, tile_size_bytes);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
@@ -47,15 +47,20 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_q_in, num_q_tiles);
 
-        // Read KT and V for each K chunk
+        // Read K and V for each K chunk
         for (uint32_t k = 0; k < num_k_chunks; k++) {
-            // Read KT tiles from DRAM
+            // Read K tiles from DRAM and transpose into CB
+            // K in DRAM: [Sk_chunk_t × head_dim_t] per chunk (row-major tiles)
+            // CB after:  [head_dim_t × Sk_chunk_t] (transposed layout for compute)
             cb_reserve_back(cb_kt_in, num_kt_tiles);
-            uint32_t kt_l1_addr = get_write_ptr(cb_kt_in);
-            uint32_t kt_tile_offset = k * num_kt_tiles;
-            for (uint32_t t = 0; t < num_kt_tiles; t++) {
-                noc_async_read_tile(kt_tile_offset + t, kt_accessor, kt_l1_addr);
-                kt_l1_addr += tile_size_bytes;
+            uint32_t base_kt_l1_addr = get_write_ptr(cb_kt_in);
+            uint32_t k_tile_id = k * num_kt_tiles;
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                uint32_t write_ptr = base_kt_l1_addr + row * tile_size_bytes;
+                for (uint32_t col = 0; col < head_dim_t; ++col) {
+                    noc_async_read_tile(k_tile_id++, k_accessor, write_ptr);
+                    write_ptr += tile_size_bytes * Sk_chunk_t;
+                }
             }
             noc_async_read_barrier();
             cb_push_back(cb_kt_in, num_kt_tiles);
