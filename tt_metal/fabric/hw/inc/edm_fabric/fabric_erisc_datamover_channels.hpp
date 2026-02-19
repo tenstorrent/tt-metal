@@ -891,8 +891,8 @@ template <uint8_t WORKER_HANDSHAKE_NOC, size_t... BufferSizes, size_t... Indices
 auto make_heterogeneous_worker_interfaces_impl(std::index_sequence<Indices...>) {
     using TupleType = std::tuple<
         tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
-            WORKER_HANDSHAKE_NOC, 
-            BufferSizes, 
+            WORKER_HANDSHAKE_NOC,
+            BufferSizes,
             ConnectionSemaphorePtrTypeForChannel<Indices>>...
     >;
     return HeterogeneousEdmChannelWorkerInterfaceTuple<WORKER_HANDSHAKE_NOC, TupleType>{};
