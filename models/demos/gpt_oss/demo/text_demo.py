@@ -315,15 +315,30 @@ def prepare_gpt_oss_generator_args(
             True,  # long_context_mode
             False,  # stop_at_eos
         ),
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # users_row_sharded
+            True,  # long_context_mode
+            False,  # stop_at_eos
+        ),
         # (
-        #     "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+        #     "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
         #     1,  # data_parallel
         #     1,  # batch_size
         #     1,  # repeat_batches
-        #     32 * 1024,  # max_seq_len
+        #     64 * 1024,  # max_seq_len
         #     200,  # max_generated_tokens
-        #     {"page_block_size": 64, "page_max_num_blocks_per_dp":  128 * 1024 // 64},  # page_params
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 64 * 1024 // 64},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
         #     True,  # enable_decode_trace
         #     True,  # enable_prefill_trace
         #     False,  # users_row_sharded
@@ -331,11 +346,11 @@ def prepare_gpt_oss_generator_args(
         #     False,  # stop_at_eos
         # ),
         # (
-        #     "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+        #     "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
         #     1,  # data_parallel
         #     1,  # batch_size
         #     1,  # repeat_batches
-        #     64 * 1024,  # max_seq_len
+        #     128 * 1024,  # max_seq_len
         #     200,  # max_generated_tokens
         #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
         #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
@@ -356,8 +371,8 @@ def prepare_gpt_oss_generator_args(
         "prefill_8k",
         "prefill_16k",
         "prefill_32k",
-        # "prefill_64k", OOM error
-        # "prefill_128k", OOM error
+        # "prefill_64k", #OOM error
+        # "prefill_128k", #OOM error
     ],
 )
 @parametrize_mesh_with_fabric()
