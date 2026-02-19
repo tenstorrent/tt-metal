@@ -100,7 +100,7 @@ def register_module_replacement_dict_with_module_names(
                 setattr(model, attr_name, type(value)(ls_value))
     elif isinstance(model, TTNNModule):
         for attr_name in dir(model):
-            if attr_name.startswith("_"):
+            if attr_name.startswith("_") or attr_name in ["torch_layer"]:
                 continue
             try:
                 value = getattr(model, attr_name)
