@@ -386,7 +386,7 @@ class MLA1D(AbstractModule):
                     (0, -3),
                     mesh_device,
                     wkv_b1_dram_memory_config,
-                    (8, 0, 0),  # Pad batch from 16 to 24
+                    (0, 0, 0),  # Pad batch from 16 to 24
                 ),
             },
             "wkv_b2": {
@@ -396,7 +396,7 @@ class MLA1D(AbstractModule):
                     (0, None),
                     mesh_device,
                     wkv_b2_dram_memory_config,
-                    (4, 0, 0),  # Pad batch from 128 to 132
+                    (0, 0, 0),  # Pad batch from 128 to 132
                 ),
             },
         }
@@ -1774,40 +1774,11 @@ class MLA1D(AbstractModule):
         tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, num_heads_local, bsz, qk_nope_head_dim]
         # 1,16,32,128 L1 interleaved
 
-        # Pad batch (num_heads_local) from 16 to 24 for DRAM bank alignment
-        num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)  # 16 -> 24
-        # TODO remove padding, we don't care about the extra shape
-        if num_heads_local_padded != num_heads_local:
-            pad_heads = num_heads_local_padded - num_heads_local
-            pad_shape = list(tt_q_nope.shape)
-            pad_shape[1] = pad_heads
-
-            tt_q_nope = ttnn.concat(
-                [
-                    tt_q_nope,
-                    ttnn.empty(
-                        pad_shape,
-                        dtype=tt_q_nope.dtype,
-                        layout=tt_q_nope.layout,
-                        device=cfg["mesh_device"],
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    ),
-                ],
-                dim=1,
-            )  # [1, num_heads_padded, bsz, kv_lora_rank]
-
-            # tt_q_nope = ttnn.pad(tt_q_nope, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
-
         # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
         tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=cfg["wkv_b1_in0_memory_config"])
 
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
         tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # Slice off padding from wkv_b1 output
-        kv_lora_rank = cfg["kv_lora_rank"]
-        if num_heads_local_padded != num_heads_local:
-            tt_q_nope = ttnn.slice(tt_q_nope, [0, 0, 0, 0], [1, num_heads_local, bsz, kv_lora_rank])
 
         # 1,16,32,512 L1 interleaved
         tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, bsz, num_heads_local, kv_lora_rank]
@@ -1869,49 +1840,28 @@ class MLA1D(AbstractModule):
         attn_out = ttnn.transpose(attn_out, 1, 2)  # [1, num_heads, bsz, kv_lora_rank]
         # 1,128,4,512 L1 interleaved
 
-        num_heads = attn_out.shape[1]
-        bsz = attn_out.shape[2]
-        kv_lora_rank = cfg["kv_lora_rank"]
-        v_head_dim = cfg["v_head_dim"]
-        # TODO: remove padding, we don't care about the extra shape data content
-        # Pad batch (num_heads) from 128 to 132 for DRAM bank alignment
-        num_heads_padded = pad_batch_to_dram_banks(num_heads)  # 128 -> 132
-        if num_heads_padded != num_heads:
-            pad_heads = num_heads_padded - num_heads
-            pad_shape = list(attn_out.shape)
-            pad_shape[1] = pad_heads
-            # pad the shape with garbage, it will get sliced anyway
-            attn_out = ttnn.concat(
-                [
-                    attn_out,
-                    ttnn.empty(
-                        pad_shape,
-                        dtype=attn_out.dtype,
-                        layout=attn_out.layout,
-                        device=cfg["mesh_device"],
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    ),
-                ],
-                dim=1,
-            )  # [1, num_heads_padded, bsz, kv_lora_rank]
-            # attn_out = ttnn.pad(attn_out, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
-
-        # Retile in0 to 4x32 tiny tiles BEFORE sharding for wkv_b2 matmul
-        wkv_b2_in0_tile = cfg["wkv_b2_in0_tile"]
-        # attn_out = ttnn.to_layout(attn_out, ttnn.TILE_LAYOUT, tile=wkv_b2_in0_tile)
-
         # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
         attn_out = ttnn.to_memory_config(attn_out, memory_config=cfg["wkv_b2_in0_memory_config"])
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Slice off padding from wkv_b2 output
-        if num_heads_padded != num_heads:
-            v_out = ttnn.slice(v_out, [0, 0, 0, 0], [1, num_heads, bsz, v_head_dim])
 
         # 1,128,4,128 L1 interleaved = [1, num_heads, bsz, v_head_dim]
         v_out = ttnn.transpose(v_out, 1, 2)
         # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
+        v_out = ttnn.to_memory_config(
+            v_out,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        )
         return v_out
 
     @classmethod
@@ -1927,18 +1877,6 @@ class MLA1D(AbstractModule):
         mesh_shape = cfg["mesh_shape"]
         # 1,4,128,128 L1 interleaved
         # Reshape
-        v_out = ttnn.to_memory_config(
-            v_out,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-                    (128, 128),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        )
         v_out = ttnn.untilize(v_out)
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
