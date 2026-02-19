@@ -46,9 +46,31 @@ class SocketInterface:
         recv_core_coord,
         upstream_socket=None,
         downstream_socket=None,
+        upstream_core_coord=None,
+        downstream_core_coord=None,
+        mesh_device=None,
     ):
-        self.upstream_socket = upstream_socket
-        self.downstream_socket = downstream_socket
+        if upstream_socket is not None:
+            self.upstream_socket = upstream_socket
+        else:
+            socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
+            socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+            socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+            self.upstream_socket_pair = ttnn.create_socket_pair(mesh_device, mesh_device, socket_config)
+            # Initialize upstream as receiver socket
+            self.upstream_socket = self.upstream_socket_pair[1]
+
+        if downstream_socket is not None:
+            self.downstream_socket = downstream_socket
+        else:
+            print(f"Create downstream socket connection between {recv_core_coord} and {downstream_core_coord}")
+            socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
+            socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+            socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+            self.downstream_socket_pair = ttnn.create_socket_pair(mesh_device, mesh_device, socket_config)
+            # Initialize downstream as sender socket
+            self.downstream_socket = self.downstream_socket_pair[0]
+
         self.page_size = page_size
         self.send_core_coord = send_core_coord
         self.recv_core_coord = recv_core_coord
@@ -220,10 +242,17 @@ class SocketInterface:
         ]
         return ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
-    def terminate(self):
+    def terminate(self, sync_devices):
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
-        ttnn.synchronize_device(self.upstream_socket.get_mesh_device())
-        ttnn.synchronize_device(self.downstream_socket.get_mesh_device())
+        if sync_devices:
+            ttnn.synchronize_device(self.upstream_socket.get_mesh_device())
+            ttnn.synchronize_device(self.downstream_socket.get_mesh_device())
+
+    def get_downstream_socket(self):
+        return self.downstream_socket_pair[1]
+
+    def get_upstream_socket(self):
+        return self.upstream_socket_pair[0]
 
 
 class HostInterface:
