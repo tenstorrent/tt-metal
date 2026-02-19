@@ -28,7 +28,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 @pytest.mark.parametrize(
     "layout",
     [
-        ttnn.TILE_LAYOUT,  # Currently only support tile layout
+        ttnn.TILE_LAYOUT,
         ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
@@ -72,7 +72,7 @@ def test_full_like_int(device, input_shape, fill_value, layout):
 @pytest.mark.parametrize(
     "layout",
     [
-        ttnn.TILE_LAYOUT,  # Currently only support tile layout
+        ttnn.TILE_LAYOUT,
         ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
@@ -101,7 +101,7 @@ def test_full_like_float(device, input_shape, fill_value, dtype, layout):
 @pytest.mark.parametrize(
     "layout",
     [
-        ttnn.TILE_LAYOUT,  # Currently only support tile layout
+        ttnn.TILE_LAYOUT,
         ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
