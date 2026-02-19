@@ -17,7 +17,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+from models.tt_transformers.tt.rope import HfRotarySetup, HfRotarySetupNew, RotarySetup
 
 
 class Transformer(LightweightModule):
@@ -62,7 +62,12 @@ class Transformer(LightweightModule):
             embd_cls = Embedding
         self.embd = embd_cls(**embd_kwargs)
 
-        DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
+        if self.args.use_hf_rope_new:
+            DefaultRopeSetup = HfRotarySetupNew
+        elif self.args.use_hf_rope:
+            DefaultRopeSetup = HfRotarySetup
+        else:
+            DefaultRopeSetup = RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,

@@ -61,6 +61,7 @@ class Attention(LightweightModule):
 
         self.use_qk_fused = configuration.use_qk_fused
         self.use_hf_rope = configuration.use_hf_rope
+        self.use_hf_rope_new = getattr(configuration, "use_hf_rope_new", False)
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -154,7 +155,9 @@ class Attention(LightweightModule):
         if self.use_hf_rope and self.use_qk_fused:
             raise NotImplementedError("Fused QK is not implemented for HF-style rope")
             # self.rotary_embedding_decode = self._hf_rope_decode
-        if self.use_hf_rope:
+        if self.use_hf_rope_new:
+            self.rotary_embedding_decode = self._hf_rope_new_decode
+        elif self.use_hf_rope:
             self.rotary_embedding_decode = self._hf_rope_decode
         elif self.use_qk_fused:
             self.rotary_embedding_decode = self._mllama_rope_fused_qk_decode
@@ -162,7 +165,9 @@ class Attention(LightweightModule):
             self.rotary_embedding_decode = self._mllama_rope_decode
 
         # Select rotary embedding implementation for prefill
-        if self.use_hf_rope:
+        if self.use_hf_rope_new:
+            self.rotary_embedding_prefill = self._hf_rope_new_prefill
+        elif self.use_hf_rope:
             self.rotary_embedding_prefill = self._hf_rope_prefill
         else:
             self.rotary_embedding_prefill = self._mllama_rope_prefill
@@ -592,6 +597,77 @@ class Attention(LightweightModule):
             k_heads_1KSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
+        )
+
+        return q_heads_1QSD, k_heads_1KSD
+
+    def _hf_rope_new_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        """Use rotary_embedding_hf with per-batch positions.
+
+        This method uses ttnn.experimental.rotary_embedding_hf which supports
+        per-batch position rotation. Each batch element can have a different position.
+
+        Args:
+            q_heads_pre_rot_1BQD: Query heads before rotation [1, batch, num_heads, head_dim]
+            k_heads_pre_rot_1BKD: Key heads before rotation [1, batch, num_heads, head_dim]
+            rot_mats: List of [cos, sin] tensors, each [1, batch, 1, head_dim]
+            current_pos: Not used (kept for API compatibility)
+
+        Returns:
+            Tuple of (q_heads_1BQD, k_heads_1BKD) with rotary embedding applied
+        """
+        # Q Rotary Embeddings
+        q_heads_1BQD = ttnn.experimental.rotary_embedding_hf(
+            q_heads_pre_rot_1BQD,
+            rot_mats[0],  # cos: [1, batch, 1, head_dim]
+            rot_mats[1],  # sin: [1, batch, 1, head_dim]
+            is_decode=True,
+        )
+
+        # K Rotary Embeddings
+        k_heads_1BKD = ttnn.experimental.rotary_embedding_hf(
+            k_heads_pre_rot_1BKD,
+            rot_mats[0],  # cos: [1, batch, 1, head_dim]
+            rot_mats[1],  # sin: [1, batch, 1, head_dim]
+            is_decode=True,
+        )
+
+        return q_heads_1BQD, k_heads_1BKD
+
+    def _hf_rope_new_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        """Use rotary_embedding_hf for prefill mode.
+
+        This method uses ttnn.experimental.rotary_embedding_hf for prefill mode.
+        The rot_mats should be sliced cos/sin cache for the sequence length.
+
+        Args:
+            q_heads_1QSD_pre_rot: Query heads before rotation [1, num_heads, seq_len, head_dim]
+            k_heads_1KSD_pre_rot: Key heads before rotation [1, num_heads, seq_len, head_dim]
+            rot_mats: List of [cos, sin] tensors, each [1, 1, seq_len, head_dim]
+
+        Returns:
+            Tuple of (q_heads_1QSD, k_heads_1KSD) with rotary embedding applied
+        """
+        # Q Rotary Embeddings - HF-style
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+
+        q_heads_1QSD = ttnn.experimental.rotary_embedding_hf(
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],  # cos: [1, 1, seq_len, head_dim]
+            rot_mats[1],  # sin: [1, 1, seq_len, head_dim]
+            is_decode=False,
+        )
+
+        # K Rotary Embeddings - HF-style
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_hf(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],  # cos: [1, 1, seq_len, head_dim]
+            rot_mats[1],  # sin: [1, 1, seq_len, head_dim]
+            is_decode=False,
         )
 
         return q_heads_1QSD, k_heads_1KSD

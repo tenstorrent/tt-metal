@@ -465,6 +465,7 @@ class ModelArgs:
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
         prefetcher=None,
         use_hf_rope=False,  # Choose HF or mllama RoPE (default: mllama, previously, only that one was used). mllama will be removed, only HF will remain (Issue #37605).
+        use_hf_rope_new=False,  # Use new rotary_embedding_hf with per-batch position support (requires use_hf_rope=True)
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -499,6 +500,9 @@ class ModelArgs:
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
         self.use_hf_rope = use_hf_rope
+        self.use_hf_rope_new = use_hf_rope_new
+        if use_hf_rope_new and not use_hf_rope:
+            raise ValueError("use_hf_rope_new requires use_hf_rope=True")
 
         assert not os.getenv(
             "FAKE_DEVICE"
