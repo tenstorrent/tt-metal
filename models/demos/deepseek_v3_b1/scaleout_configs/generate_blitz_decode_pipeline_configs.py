@@ -110,18 +110,36 @@ def generate_rank_file(pipeline_config):
 
 
 def generate_pipeline_config_files(
-    pipeline_config_file, test_executable_path=None, mpi_user=None, skip_mpi_net_filter=False
+    pipeline_config_file, test_executable_path=None, mpi_user=None, skip_mpi_net_filter=False, hostfile=None
 ):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
 
-    host_vector = []
+    # Extract unique hosts in order of first appearance
+    config_hosts = []
     seen_hosts = set()
     for entry in config["stage_to_slice_mapping"].values():
         host = entry["host"]
         if host not in seen_hosts:
-            host_vector.append(host)
+            config_hosts.append(host)
             seen_hosts.add(host)
+
+    # If a hostfile is provided, replace config hosts with allocated hosts
+    if hostfile:
+        with open(hostfile, "r") as f:
+            allocated_hosts = [line.strip() for line in f if line.strip()]
+        if len(allocated_hosts) != len(config_hosts):
+            logger.error(
+                f"Hostfile has {len(allocated_hosts)} hosts but pipeline config has {len(config_hosts)} unique hosts"
+            )
+            sys.exit(1)
+        host_map = dict(zip(config_hosts, allocated_hosts))
+        logger.info(f"Remapping hosts: {host_map}")
+        for entry in config["stage_to_slice_mapping"].values():
+            entry["host"] = host_map[entry["host"]]
+        config_hosts = allocated_hosts
+
+    host_vector = config_hosts
     # Generate the list of PCIe devices for each physical slice in the pipeline
     # Metal generates the list of PCIe devices per physical slice in this file
     # when generate_slice_to_pcie_device_mapping is called
@@ -157,7 +175,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip adding --mca btl_tcp_if_include ens5f0np0 (use in CI where btl_tcp_if_exclude is already set)",
     )
+    parser.add_argument(
+        "--hostfile",
+        type=str,
+        default=None,
+        help="File with one hostname per line. Overrides hosts in pipeline config (matched by order of appearance).",
+    )
     args = parser.parse_args()
     generate_pipeline_config_files(
-        args.pipeline_config_file, args.physical_discovery_test_path, args.mpi_user, args.skip_mpi_net_filter
+        args.pipeline_config_file,
+        args.physical_discovery_test_path,
+        args.mpi_user,
+        args.skip_mpi_net_filter,
+        args.hostfile,
     )
