@@ -184,7 +184,7 @@ class ReduceToOneB1:
             d2d_socket_pairs.append(socket_pair)
 
         # Create termination semaphore for worker cores + D2H core
-        shard_grid = ttnn.num_cores_to_corerangeset(len(shard_cores), compute_grid, row_wise=True)
+        shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in shard_cores])
         d2h_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(d2h_core, d2h_core)])
         worker_and_d2h_cores = shard_grid.merge(d2h_core_set)
         d2h_termination_semaphore = ttnn.create_global_semaphore(submesh_device, worker_and_d2h_cores, 0)
@@ -219,7 +219,7 @@ class ReduceToOneB1:
         termination_semaphore = d2h_infrastructure["d2h_termination_semaphore"]
 
         # Compile-time args for D2H receiver kernel
-        total_page_size = 14 * 1024  # 14k = 8 cores * 896 * 2
+        total_page_size = num_shard_cores * page_size_bytes  # 14k = 8 cores * 896 * 2
         ct_args = [
             d2h_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(termination_semaphore),
@@ -233,7 +233,7 @@ class ReduceToOneB1:
             ct_args.append(socket_pair[1].get_config_buffer_address())  # Receiver socket
 
         # Pad with zeros if fewer than 8 sockets
-        while len(ct_args) < 12:  # 4 base args + 8 socket addresses
+        while len(ct_args) < 13:  # 5 base args + 8 socket addresses
             ct_args.append(0)
 
         # Create kernel descriptor
@@ -375,7 +375,7 @@ class ReduceToOneB1:
             if d2h_infrastructure is None:
                 # D2H page size is based on shard width (not tile width)
                 # Each worker core sends one shard worth of data
-                d2h_page_size_bytes = 8 * shard_width * element_size
+                d2h_page_size_bytes = num_pages * shard_width * element_size
 
                 # Create D2H infrastructure
                 d2h_infra = ReduceToOneB1.create_d2h_infrastructure(
