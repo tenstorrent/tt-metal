@@ -19,6 +19,10 @@ namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
+namespace tt::tt_fabric {
+class PhysicalGroupingDescriptor;
+}  // namespace tt::tt_fabric
+
 namespace tt::tt_metal::experimental::tt_fabric {
 
 // Import types from tt::tt_fabric for use in this API
@@ -383,6 +387,24 @@ struct PhysicalMultiMeshGraph {
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
+/**
+ * @brief Build a physical multi-mesh adjacency graph from physical system descriptor and physical grouping descriptor
+ *
+ * Creates a PhysicalMultiMeshGraph with:
+ * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
+ * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<AsicID>)
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @param physical_grouping_descriptor Reference to the physical grouping descriptor containing mesh grouping
+ * information
+ * @param mesh_graph_descriptor Reference to the mesh graph descriptor containing logical mesh topology
+ * @return PhysicalMultiMeshGraph containing mesh-level graph and internal mesh nodes
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
 
 /**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
