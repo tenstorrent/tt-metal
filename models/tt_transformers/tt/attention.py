@@ -934,35 +934,32 @@ class Attention(LightweightModule):
                 k_fill = ttnn.interleaved_to_sharded(k_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
                 v_fill = ttnn.interleaved_to_sharded(v_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
 
-        if self.TG:
-            k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
-            v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
-        if page_table:
-            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
-            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
-            block_size = keys_BKSD.shape[2]
-            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            if self.TG:
+                k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
+                v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
+            if page_table:
+                block_size = keys_BKSD.shape[2]
+                fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
-            page_len = fill_page_table.shape[1] * block_size
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
-        else:
-            ttnn.fill_cache(
-                keys_BKSD,
-                k_fill,
-                user_id % self.batch_size_per_device_group,
-            )
-            ttnn.fill_cache(
-                values_BKSD,
-                v_fill,
-                user_id % self.batch_size_per_device_group,
-            )
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            ttnn.deallocate(k_fill)
-            ttnn.deallocate(v_fill)
+                page_len = fill_page_table.shape[1] * block_size
+                k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+                v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
+            else:
+                ttnn.fill_cache(
+                    keys_BKSD,
+                    k_fill,
+                    user_id % self.batch_size_per_device_group,
+                )
+                ttnn.fill_cache(
+                    values_BKSD,
+                    v_fill,
+                    user_id % self.batch_size_per_device_group,
+                )
+            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+                ttnn.deallocate(k_fill)
+                ttnn.deallocate(v_fill)
 
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
