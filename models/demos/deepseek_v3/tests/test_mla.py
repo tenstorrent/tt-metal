@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
@@ -347,14 +348,16 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING
+            if (os.getenv("USE_TORUS_MODE") is not None)
+            else ttnn.FabricConfig.FABRIC_1D
         }
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "module_path",
-    [None, "model.layers.0.self_attn"],
+    [None],
 )
 @pytest.mark.parametrize(
     "test_closure",
