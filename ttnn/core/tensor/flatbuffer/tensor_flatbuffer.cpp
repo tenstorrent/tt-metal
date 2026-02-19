@@ -25,6 +25,7 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
+#include <algorithm>
 
 namespace ttnn {
 namespace {
@@ -165,29 +166,102 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.tensor_spec(), builder);
 
     const auto& host_storage = tensor.host_storage();
+    const auto& topology = tensor.tensor_topology();
+    const auto& placements = topology.placements();
+    const auto& dist_shape = topology.distribution_shape();
 
+    // Determine if we should collapse replicate axes in the stored representation.
+    // This makes the serialized file topology-portable: a tensor with [R, S(-1)] on a 2x4 mesh
+    // is stored as [1,4] with 4 shards, loadable on any mesh with 4+ columns.
+    // Condition: buffer dimensionality must match placements (excludes 1D overrides on ND meshes).
+    const bool collapse_replicates =
+        host_storage.buffer().shape().dims() == placements.size() &&
+        std::any_of(placements.begin(), placements.end(), [](const auto& p) {
+            return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(p);
+        });
+
+    // Build shard entries: pairs of (physical_coord_for_data_lookup, coord_to_store).
+    struct ShardEntry {
+        tt::tt_metal::distributed::MeshCoordinate phys_coord;
+        tt::tt_metal::distributed::MeshCoordinate stored_coord;
+    };
+    std::vector<ShardEntry> shard_entries;
+
+    tt::tt_metal::distributed::MeshShape stored_mesh_shape = host_storage.buffer().shape();
+
+    if (collapse_replicates) {
+        // Compute reduced mesh shape: replicate axes collapse to 1, shard axes keep their size.
+        std::vector<uint32_t> reduced_dims;
+        for (size_t i = 0; i < placements.size(); i++) {
+            reduced_dims.push_back(
+                std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[i])
+                    ? 1
+                    : dist_shape[i]);
+        }
+        stored_mesh_shape = tt::tt_metal::distributed::MeshShape(reduced_dims);
+
+        // Walk distribution coords in lockstep with topology mesh_coords.
+        // Keep only the canonical representative for each projected coord
+        // (the one where all replicate-axis components are 0).
+        const auto& mesh_coords = topology.mesh_coords();
+        size_t coord_idx = 0;
+        for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(dist_shape)) {
+            if (coord_idx >= mesh_coords.size()) {
+                break;
+            }
+            const auto& phys_coord = mesh_coords[coord_idx++];
+
+            // Skip non-canonical entries: any replicate-axis component > 0 means this is a replica.
+            bool is_canonical = true;
+            for (size_t i = 0; i < dist_coord.dims(); i++) {
+                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[i]) &&
+                    dist_coord[i] != 0) {
+                    is_canonical = false;
+                    break;
+                }
+            }
+            if (!is_canonical) {
+                continue;
+            }
+
+            // For canonical entries, the distribution coord already has replicate axes at 0,
+            // so it serves directly as the stored coord in the reduced space.
+            std::vector<uint32_t> projected;
+            for (size_t i = 0; i < dist_coord.dims(); i++) {
+                projected.push_back(dist_coord[i]);
+            }
+            shard_entries.push_back({phys_coord, tt::tt_metal::distributed::MeshCoordinate(projected)});
+        }
+    } else {
+        // No reduction: store all populated shard coords as-is.
+        for (const auto& coord : host_storage.buffer().shard_coords()) {
+            if (host_storage.buffer().get_shard(coord).has_value()) {
+                shard_entries.push_back({coord, coord});
+            }
+        }
+    }
+
+    // Create shard flatbuffer entries.
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
-    // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
     uint64_t next_buffer_offset = 0;
-    for (const auto& coord : host_storage.buffer().shard_coords()) {
-        // Iterate over local populated shards.
-        if (const auto& buffer = host_storage.buffer().get_shard(coord); buffer.has_value()) {
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> stored_coords;
+
+    for (const auto& [phys_coord, stored_coord] : shard_entries) {
+        if (const auto& buffer = host_storage.buffer().get_shard(phys_coord); buffer.has_value()) {
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
 
             uint64_t shard_buffer_offset = next_buffer_offset;
             if (auto [it, inserted] = buffer_to_offset.try_emplace(buffer_address, shard_buffer_offset); inserted) {
-                // Encountered a new buffer, add it to the buffers vector.
                 next_buffer_offset += buffer_size;
                 buffers.push_back(*buffer);
             } else {
-                // Point to the existing buffer.
                 shard_buffer_offset = it->second;
             }
 
             auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
-            auto mesh_coord_offset = to_flatbuffer(coord, builder);
+            auto mesh_coord_offset = to_flatbuffer(stored_coord, builder);
 
             auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
                 builder,
@@ -196,13 +270,17 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 mesh_coord_offset);
 
             shards_vector.push_back(shard_offset);
+            stored_coords.push_back(stored_coord);
         }
     }
     auto shards = builder.CreateVector(shards_vector);
 
-    auto mesh_shape_offset = to_flatbuffer(host_storage.buffer().shape(), builder);
+    auto mesh_shape_offset = to_flatbuffer(stored_mesh_shape, builder);
 
-    auto topology_offset = to_flatbuffer(tensor.tensor_topology(), builder);
+    // Store reduced topology if replicates were collapsed, otherwise store the original.
+    auto stored_topology =
+        collapse_replicates ? tt::tt_metal::TensorTopology(stored_mesh_shape, placements, stored_coords) : topology;
+    auto topology_offset = to_flatbuffer(stored_topology, builder);
 
     auto tensor_offset =
         ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards, topology_offset);

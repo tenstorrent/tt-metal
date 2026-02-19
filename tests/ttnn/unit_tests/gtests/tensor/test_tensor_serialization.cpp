@@ -333,16 +333,21 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, PartiallyReplicatedRoundtrip) {
     EXPECT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
 
+    // After collapsing replicate axes, the loaded tensor has [2,1] distribution shape
+    // with only 2 unique shards (one per row), instead of the original 8.
+    EXPECT_EQ(loaded_tensor.tensor_topology().distribution_shape(), MeshShape(kNumRows, 1));
+
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
     std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
 
-    ASSERT_THAT(loaded_device_tensors, SizeIs(original_device_tensors.size()));
+    ASSERT_THAT(loaded_device_tensors, SizeIs(kNumRows));
 
-    for (size_t i = 0; i < original_device_tensors.size(); i++) {
+    // Each loaded shard should match the corresponding row from the original.
+    for (int row = 0; row < kNumRows; row++) {
         EXPECT_THAT(
-            loaded_device_tensors[i].to_vector<float>(),
-            Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
-        EXPECT_EQ(loaded_device_tensors[i].logical_shape(), original_device_tensors[i].logical_shape());
+            loaded_device_tensors[row].to_vector<float>(),
+            Pointwise(FloatEq(), original_device_tensors[row * kNumCols].to_vector<float>()));
+        EXPECT_EQ(loaded_device_tensors[row].logical_shape(), original_device_tensors[row * kNumCols].logical_shape());
     }
 }
 
@@ -373,6 +378,65 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, FullyReplicatedRoundtrip) {
 
     EXPECT_EQ(loaded_tensor.tensor_topology().distribution_shape(), expected_shape);
     EXPECT_EQ(loaded_tensor.tensor_topology().placements(), expected_placements);
+}
+
+TEST_F(TensorSerializationFlatbuffer2x4Test, TopologyPortablePartialReplicateRoundtrip) {
+    TemporaryFile test_file("topology_portable_partial_replicate.tensorbin");
+    constexpr int kNumRows = 2;
+    constexpr int kNumCols = 4;
+    constexpr int kNumElements = 1024;
+    const int num_devices = kNumRows * kNumCols;
+
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return i * 1.0f; });
+    }
+
+    Tensor input_tensor = Tensor::from_vector(
+        test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, kNumElements}, DataType::FLOAT32));
+
+    // [R, S(2)] — replicate along rows, shard along columns.
+    auto mapper = ttnn::distributed::create_mesh_mapper(
+        *mesh_device_,
+        ttnn::distributed::MeshMapperConfig{
+            .placements =
+                {ttnn::distributed::MeshMapperConfig::Replicate{}, ttnn::distributed::MeshMapperConfig::Shard{2}},
+        });
+
+    Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
+    EXPECT_TRUE(sharded_tensor.storage_type() == StorageType::HOST);
+
+    dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
+
+    // Verify the loaded host tensor has reduced distribution shape [1,4] with 4 unique shards.
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    EXPECT_EQ(loaded_tensor.tensor_topology().distribution_shape(), MeshShape(1, kNumCols));
+
+    std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
+    ASSERT_THAT(loaded_device_tensors, SizeIs(kNumCols));
+
+    // Verify data of each unique shard matches the corresponding column from the original.
+    std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
+    for (int col = 0; col < kNumCols; col++) {
+        EXPECT_THAT(
+            loaded_device_tensors[col].to_vector<float>(),
+            Pointwise(FloatEq(), original_device_tensors[col].to_vector<float>()));
+    }
+
+    // Load with device — should expand replicate axes to fill 2x4 mesh.
+    Tensor device_tensor = load_tensor_flatbuffer(test_file.string(), mesh_device_.get());
+    EXPECT_TRUE(device_tensor.storage_type() == StorageType::DEVICE);
+
+    std::vector<Tensor> expanded_device_tensors = ttnn::distributed::get_device_tensors(device_tensor);
+    ASSERT_THAT(expanded_device_tensors, SizeIs(num_devices));
+
+    // Verify replicated rows have matching data.
+    for (int col = 0; col < kNumCols; col++) {
+        auto row0_data = expanded_device_tensors[col].to_vector<float>();
+        auto row1_data = expanded_device_tensors[kNumCols + col].to_vector<float>();
+        EXPECT_THAT(row0_data, Pointwise(FloatEq(), row1_data))
+            << "Row 0 and Row 1 should have identical data at column " << col;
+    }
 }
 
 }  // namespace
