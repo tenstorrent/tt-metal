@@ -39,25 +39,6 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, 2, M, K)
     """
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for layer in range(L):
-    #     for expert in range(E):
-    #         for k_chunk_id in range(K // 32):
-    #             k_start, k_end = k_chunk_id * 32, k_chunk_id * 32 + 32
-    #             chunk_value = le_val * 0.001 * k_chunk_id
-    #             torch_input[layer, :, expert, :, k_start:k_end] = chunk_value
-    #         le_val *= -1
-    # torch_input = 0.25 * 0.25 *torch.ones((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # k_half = K // 2
-    # # Interleave the positive and negatives
-    # for i in range(K):
-    #     if i % 2 == 0:
-    #         torch_input[..., i] = 0.25
-    #     else:
-    #         torch_input[..., i] = -0.25
-    # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
     torch_input = torch.rand((L, 2, M, K), dtype=torch.bfloat16) - 0.5
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
     return torch_input
@@ -76,19 +57,6 @@ def create_torch_w0(L, E, K, N):
     Returns:
         torch_w0: Tensor of shape (L, E, K, N)
     """
-    # torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
-
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w0
 
@@ -106,19 +74,6 @@ def create_torch_w1(L, E, K, N):
     Returns:
         torch_w1: Tensor of shape (L, E, K, N)
     """
-    # torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = -1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
-
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w1
 
@@ -136,18 +91,6 @@ def create_torch_w2(L, E, N, K):
     Returns:
         torch_w2: Tensor of shape (L, E, N, K)
     """
-    # torch_w2 = torch.empty((L, E, N, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for n_chunk in range(N // 32):
-    #             n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #             n_val = 0.001 * n_chunk
-    #             for k_chunk in range(K // 32):
-    #                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #                 k_val = k_chunk
-    #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
     return torch_w2
 
