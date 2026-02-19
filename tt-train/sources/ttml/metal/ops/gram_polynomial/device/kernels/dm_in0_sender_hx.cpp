@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Phase 3 in0 DM kernel for muon_precondition: X' = H @ X + a*X.
+// Phase 3 in0 DM kernel for newton_schulz_iteration: X' = H @ X + a*X.
 // Adapted from Phase 2's dm_in0_sender_gsq.cpp.
 // Key differences:
 //   - Two TensorAccessors: H (in0 for matmul rows) and X (c_4 for aX epilogue)

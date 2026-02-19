@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Phase 3 in1 DM kernel for muon_precondition: X' = H @ X + a*X.
+// Phase 3 in1 DM kernel for newton_schulz_iteration: X' = H @ X + a*X.
 // Adapted from Phase 2's dm_in1_sender_gsq.cpp.
 // Key difference: reads X[k,n] instead of G[k,n]. Shape is [M,K] rectangular.
 //

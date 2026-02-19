@@ -102,8 +102,8 @@ ttnn::Tensor make_random_tensor(
         device.get());
 }
 
-// Benchmark fused muon_precondition (Phase 1 + Phase 2 + Phase 3)
-BenchResult bench_muon_precondition(
+// Benchmark fused newton_schulz_iteration (Phase 1 + Phase 2 + Phase 3)
+BenchResult bench_newton_schulz_iteration(
     const BenchShape& shape,
     const std::shared_ptr<ttnn::device::MeshDevice>& device,
     const ttnn::Tensor& x,
@@ -114,7 +114,7 @@ BenchResult bench_muon_precondition(
     auto* dev_ptr = device.get();
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
-        auto out = ttml::metal::muon_precondition(x, a, b, c);
+        auto out = ttml::metal::newton_schulz_iteration(x, a, b, c);
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         out.deallocate();
     }
@@ -122,7 +122,7 @@ BenchResult bench_muon_precondition(
     std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
     for (int i = 0; i < test_config.num_measurement_iterations; ++i) {
         auto start = std::chrono::high_resolution_clock::now();
-        auto out = ttml::metal::muon_precondition(x, a, b, c);
+        auto out = ttml::metal::newton_schulz_iteration(x, a, b, c);
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         auto end = std::chrono::high_resolution_clock::now();
         total_time += end - start;
@@ -137,7 +137,7 @@ BenchResult bench_muon_precondition(
     double utilization = compute_utilization(avg_s, total_matmul_flops(M, K), device, device_id);
 
     return BenchResult{
-        .impl_name = "muon_precondition",
+        .impl_name = "newton_schulz_iteration",
         .time_us = avg_s * 1e6,
         .tflops = tflops,
         .utilization_pct = utilization,
@@ -510,8 +510,8 @@ void PrintComparisonTable(const std::string& shape_name, const std::vector<Bench
 
     // Print speedup summary
     if (results.size() >= 2) {
-        double fused_us = results[0].time_us;  // muon_precondition is first
-        std::cout << "\n  Speedups vs muon_precondition (" << std::fixed << std::setprecision(1) << fused_us
+        double fused_us = results[0].time_us;  // newton_schulz_iteration is first
+        std::cout << "\n  Speedups vs newton_schulz_iteration (" << std::fixed << std::setprecision(1) << fused_us
                   << " us):\n";
         for (size_t i = 1; i < results.size(); ++i) {
             if (results[i].impl_name.find("phase") != std::string::npos) {
@@ -524,7 +524,7 @@ void PrintComparisonTable(const std::string& shape_name, const std::vector<Bench
     }
 }
 
-void BM_MuonPrecondition(benchmark::State& state) {
+void BM_NewtonSchulzIteration(benchmark::State& state) {
     const int shape_index = static_cast<int>(state.range(0));
     const BenchShape& shape = shapes[shape_index];
 
@@ -551,7 +551,7 @@ void BM_MuonPrecondition(benchmark::State& state) {
         std::vector<BenchResult> results;
 
         // Full fused pipeline
-        results.push_back(bench_muon_precondition(shape, device, x, a, b, c, device_id));
+        results.push_back(bench_newton_schulz_iteration(shape, device, x, a, b, c, device_id));
 
         // Individual phases
         results.push_back(bench_phase1(shape, device, x, device_id));
@@ -583,11 +583,11 @@ void BM_MuonPrecondition(benchmark::State& state) {
 
 }  // namespace
 
-BENCHMARK(BM_MuonPrecondition)
+BENCHMARK(BM_NewtonSchulzIteration)
     ->DenseRange(0, static_cast<int>(shapes.size()) - 1, 1)
     ->Unit(benchmark::kMillisecond)
     ->UseManualTime()
     ->Iterations(1)
-    ->Name("MuonPrecondition");
+    ->Name("NewtonSchulzIteration");
 
 BENCHMARK_MAIN();

@@ -27,7 +27,7 @@ ttnn::Tensor gram_polynomial(
     return H;
 }
 
-ttnn::Tensor muon_precondition(
+ttnn::Tensor newton_schulz_iteration(
     const ttnn::Tensor& x_tensor,
     float a,
     float b,

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Phase 3 compute kernel for muon_precondition: X' = H @ X + a*X.
+// Phase 3 compute kernel for newton_schulz_iteration: X' = H @ X + a*X.
 // Adapted from Phase 2's compute_gsq.cpp.
 // Key differences:
 //   - Epilogue: a*X + HX instead of b*G + c*G^2

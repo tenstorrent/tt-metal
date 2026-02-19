@@ -11,7 +11,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
-class MuonPreconditionTest : public ::testing::Test {
+class NewtonSchulzIterationTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
@@ -79,15 +79,15 @@ float compute_pcc(const xt::xarray<float>& a, const xt::xarray<float>& b) {
     return cov / (std_a * std_b + 1e-12F);
 }
 
-void run_muon_precondition_test(
+void run_newton_schulz_iteration_test(
     uint32_t batch, uint32_t channels, uint32_t rows, uint32_t cols, float a, float b, float c) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
     auto x = make_random_tensor(batch, channels, rows, cols, device);
 
-    // muon_precondition(X, a, b, c) — fused Phase 1 + Phase 2 + Phase 3
-    auto X_prime = metal::muon_precondition(x, a, b, c);
+    // newton_schulz_iteration(X, a, b, c) — fused Phase 1 + Phase 2 + Phase 3
+    auto X_prime = metal::newton_schulz_iteration(x, a, b, c);
 
     // Reference: compute using standard ops
     // G = X @ X^T
@@ -111,11 +111,11 @@ void run_muon_precondition_test(
 
     std::cout << "Shape: [" << batch << ", " << channels << ", " << rows << ", " << cols << "], a=" << a << ", b=" << b
               << ", c=" << c << "\n";
-    print_error_stats("muon_precondition vs reference", result_xt, ref_xt);
+    print_error_stats("newton_schulz_iteration vs reference", result_xt, ref_xt);
 
     float pcc = compute_pcc(result_xt, ref_xt);
     std::cout << "    PCC: " << pcc << "\n";
-    EXPECT_GT(pcc, 0.999F) << "PCC too low — structural mismatch between muon_precondition and reference";
+    EXPECT_GT(pcc, 0.999F) << "PCC too low — structural mismatch between newton_schulz_iteration and reference";
 
     xt::xarray<float> abs_diff = xt::abs(result_xt - ref_xt);
     xt::xarray<float> abs_expected = xt::abs(ref_xt) + 1e-8F;
@@ -128,31 +128,31 @@ void run_muon_precondition_test(
 }  // namespace
 
 // Test 1: a=1, b=0, c=0 -> X' should equal X
-TEST_F(MuonPreconditionTest, IdentityX_128) {
-    run_muon_precondition_test(1, 1, 128, 128, 1.0F, 0.0F, 0.0F);
+TEST_F(NewtonSchulzIterationTest, IdentityX_128) {
+    run_newton_schulz_iteration_test(1, 1, 128, 128, 1.0F, 0.0F, 0.0F);
 }
 
 // Test 2: a=0, b=1, c=0 -> X' = GX
-TEST_F(MuonPreconditionTest, GX_128) {
-    run_muon_precondition_test(1, 1, 128, 128, 0.0F, 1.0F, 0.0F);
+TEST_F(NewtonSchulzIterationTest, GX_128) {
+    run_newton_schulz_iteration_test(1, 1, 128, 128, 0.0F, 1.0F, 0.0F);
 }
 
 // Test 3: a=0, b=0, c=1 -> X' = G^2 X
-TEST_F(MuonPreconditionTest, G2X_128) {
-    run_muon_precondition_test(1, 1, 128, 128, 0.0F, 0.0F, 1.0F);
+TEST_F(NewtonSchulzIterationTest, G2X_128) {
+    run_newton_schulz_iteration_test(1, 1, 128, 128, 0.0F, 0.0F, 1.0F);
 }
 
 // Test 4: General case
-TEST_F(MuonPreconditionTest, General_128) {
-    run_muon_precondition_test(1, 1, 128, 128, 0.9F, 0.5F, 0.3F);
+TEST_F(NewtonSchulzIterationTest, General_128) {
+    run_newton_schulz_iteration_test(1, 1, 128, 128, 0.9F, 0.5F, 0.3F);
 }
 
 // Test 5: Rectangular input (K > M)
-TEST_F(MuonPreconditionTest, Rectangular_128x256) {
-    run_muon_precondition_test(1, 1, 128, 256, 0.9F, 0.5F, 0.3F);
+TEST_F(NewtonSchulzIterationTest, Rectangular_128x256) {
+    run_newton_schulz_iteration_test(1, 1, 128, 256, 0.9F, 0.5F, 0.3F);
 }
 
 // Test 6: Large 2048x5632 (production size)
-TEST_F(MuonPreconditionTest, Large2048x5632) {
-    run_muon_precondition_test(1, 1, 2048, 5632, 0.9F, 0.5F, 0.3F);
+TEST_F(NewtonSchulzIterationTest, Large2048x5632) {
+    run_newton_schulz_iteration_test(1, 1, 2048, 5632, 0.9F, 0.5F, 0.3F);
 }

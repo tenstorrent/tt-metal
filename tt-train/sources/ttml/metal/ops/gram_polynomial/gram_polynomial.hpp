@@ -26,9 +26,9 @@ ttnn::Tensor gram_polynomial(
     std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-// Full Muon preconditioner: X' = aX + (cG^2 + bG)X where G = XX^T
+// One Newton-Schulz iteration: X' = aX + (cG^2 + bG)X where G = XX^T
 // Runs 3 phases: G = gram_matmul(X), H = gram_polynomial_phase2(G, b, c), X' = HX + aX
-ttnn::Tensor muon_precondition(
+ttnn::Tensor newton_schulz_iteration(
     const ttnn::Tensor& x_tensor,
     float a,
     float b,

@@ -63,7 +63,7 @@ set(SOURCES
     ops/swiglu_op_test.cpp
     ops/gram_matmul_op_test.cpp
     ops/gram_polynomial_op_test.cpp
-    ops/muon_precondition_op_test.cpp
+    ops/newton_schulz_iteration_op_test.cpp
     utils/memory_utils_test.cpp
 )
 
@@ -165,18 +165,18 @@ if(TARGET benchmark::benchmark)
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
     )
 
-    set(MUON_PRECONDITION_BENCHMARK_SOURCES benchmark/muon_precondition_benchmark.cpp)
+    set(NEWTON_SCHULZ_ITERATION_BENCHMARK_SOURCES benchmark/newton_schulz_iteration_benchmark.cpp)
 
-    add_executable(ttml_muon_precondition_benchmark ${MUON_PRECONDITION_BENCHMARK_SOURCES})
+    add_executable(ttml_newton_schulz_iteration_benchmark ${NEWTON_SCHULZ_ITERATION_BENCHMARK_SOURCES})
     target_link_libraries(
-        ttml_muon_precondition_benchmark
+        ttml_newton_schulz_iteration_benchmark
         PUBLIC
             ttml
             TTNN::TTNN
             benchmark::benchmark
     )
     target_include_directories(
-        ttml_muon_precondition_benchmark
+        ttml_newton_schulz_iteration_benchmark
         PRIVATE
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
     )
