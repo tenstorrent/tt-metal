@@ -6,6 +6,7 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
@@ -51,6 +52,7 @@ class BroadcastRMSNorm:
         fp32_dest_acc_en=False,
         rsqrt_fast_approx=False,
         skip_ccl=False,
+        socket=None,
     ):
         """
         Execute fused Broadcast+RMSNorm operation.
@@ -86,23 +88,32 @@ class BroadcastRMSNorm:
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
 
-        # Calculate packet size and page info
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
-
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         tile = input_tensor_sample.tile
         tile_height, tile_width = tile.tile_shape
 
+        input_shape = input_tensor_sample.shape
         dtype = input_tensor_sample.dtype
-        element_size = 2
+        element_size = dtype_size(dtype)
         tile_id_start = 0
 
         # bcast cb info
-        input_shape = input_tensor_sample.shape
+        payload_size_bytes = input_shape[0] * input_shape[1] * element_size
+        packet_size_bytes = payload_size_bytes
         page_size_bytes = 32 * 32 * element_size  # interpret it as 32x32 tile to use the same cb as rmsnorm
-        input_num_pages = input_shape[0] * input_shape[1] * element_size // page_size_bytes
+        assert (
+            payload_size_bytes % page_size_bytes == 0
+        ), f"payload_size_bytes {payload_size_bytes} must be a multiple of page_size_bytes {page_size_bytes}"
+        input_num_pages = payload_size_bytes // page_size_bytes
         num_pages_per_packet = packet_size_bytes // page_size_bytes
+
+        socket_page_size = packet_size_bytes
+        assert socket_page_size % 16 == 0, f"socket_page_size {socket_page_size} must be 16-byte aligned"
+        assert socket_page_size == input_num_pages * page_size_bytes, (
+            f"single-shot requires socket_page_size {socket_page_size} == full payload "
+            f"{input_num_pages} * {page_size_bytes}"
+        )
 
         # CB indices for rms norm
         input_cb = 0
@@ -193,6 +204,10 @@ class BroadcastRMSNorm:
 
                 rmsnorm_input_source_cb = input_cb
 
+                use_socket = socket is not None and is_sender and not skip_ccl
+                socket_config_addr = socket.get_config_buffer_address() if use_socket else 0
+                socket_num_pages = 1 if use_socket else 0
+
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     # CCL broadcast reader args (dummy values when skip_ccl)
@@ -203,6 +218,7 @@ class BroadcastRMSNorm:
                     ("core_noc_x", core_noc_x if not skip_ccl else 0),
                     ("core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
+                    ("use_socket", 1 if use_socket else 0),
                     ("rmsnorm_input_cb", rmsnorm_input_source_cb),
                     ("rmsnorm_num_tiles", num_tiles),
                 ]
@@ -266,9 +282,12 @@ class BroadcastRMSNorm:
 
                 # Common runtime args for reader (broadcast args shared across cores)
                 reader_common_rt_args = [
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
+                    0 if use_socket else int(input_tensor_device.buffer_address()),  # tensor_address0
                     tile_id_start,  # tile_id_start
                     input_num_pages,  # tile_id_end
+                    int(socket_config_addr),  # socket_config_addr
+                    int(socket_page_size) if use_socket else 0,  # socket_page_size
+                    int(socket_num_pages),  # socket_num_pages
                 ]
 
                 # Common runtime args for writer (broadcast args shared across cores)

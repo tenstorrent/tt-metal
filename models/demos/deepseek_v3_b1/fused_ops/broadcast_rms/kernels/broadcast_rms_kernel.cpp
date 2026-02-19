@@ -33,7 +33,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_sender"),
         get_named_compile_time_arg_val("core_noc_x"),
         get_named_compile_time_arg_val("core_noc_y"),
-        get_named_compile_time_arg_val("is_secondary_sender")>;
+        get_named_compile_time_arg_val("is_secondary_sender"),
+        get_named_compile_time_arg_val("use_socket")>;
 
     // Only read broadcast runtime args if CCL is enabled
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
@@ -42,6 +43,9 @@ void kernel_main() {
         get_common_arg_val<uint32_t>(0),  // tensor_address0
         get_common_arg_val<uint32_t>(1),  // tile_id_start
         get_common_arg_val<uint32_t>(2),  // tile_id_end
+        get_common_arg_val<uint32_t>(3),  // socket_config_addr
+        get_common_arg_val<uint32_t>(4),  // socket_page_size
+        get_common_arg_val<uint32_t>(5),  // socket_num_pages
     };
 #endif
 
