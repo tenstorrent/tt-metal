@@ -313,8 +313,8 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
         logger.info(f"  Divergent queries: {NUM_QUERIES - overlap}")
         if overlap_pct < 100:
             logger.info(
-                f"  (Divergence caused by encoder bfloat16 → memory_trans_fc amplifies "
-                f"tiny differences → different top-K ranking)"
+                "  (Divergence caused by encoder bfloat16 -> memory_trans_fc amplifies "
+                "tiny differences -> different top-K ranking)"
             )
 
     ref_query_init = ref_dec_out.get("reference_points_init")

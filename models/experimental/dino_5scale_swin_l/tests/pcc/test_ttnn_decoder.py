@@ -63,7 +63,7 @@ def test_ttnn_decoder_pcc(device):
     # Run full reference: backbone -> neck -> encoder -> pre_decoder -> decoder
     dummy_input = torch.randn(1, 3, DINO_INPUT_H, DINO_INPUT_W)
     backbone_feats = ref_model.forward_backbone(dummy_input)
-    neck_out = ref_model.forward_neck(backbone_feats)
+    ref_model.forward_neck(backbone_feats)
     neck_features = ref_model.model.neck(backbone_feats)
 
     ref_decoder_out = ref_model.forward_decoder(
