@@ -13,8 +13,15 @@ def dequantize_tensor(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape
     """
     Dequantize a tensor using block-wise inverse scales.
 
-    This implementation avoids materializing a fully expanded inverse-scale tensor
-    via repeat_interleave and instead applies scales with broadcasted block views.
+    Performance notes:
+    - Avoids `repeat_interleave` over `inv_scale`, which would materialize a huge
+      expanded scale tensor and significantly increase peak memory.
+    - Uses reshape+broadcast to apply scales per block, so scale expansion stays
+      virtual and the only dense payload is the output tensor itself.
+    - Uses in-place multiply on a view (`mul_`) to reduce temporary allocations
+      and memory bandwidth pressure.
+    - Pads only when needed for non-divisible shapes, then slices back to the
+      original shape.
     """
     if tensor.ndim != inv_scale.ndim:
         raise ValueError(f"Tensor and inverse scale must have same ndim, got {tensor.ndim} and {inv_scale.ndim}")
@@ -34,6 +41,8 @@ def dequantize_tensor(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape
 
     out = tensor.float()
     if padded_shape != original_shape:
+        # Only allocate a padded buffer when block coverage extends past the
+        # original tensor shape (tail blocks on non-divisible dimensions).
         padded = torch.zeros(padded_shape, dtype=out.dtype)
         padded[original_slices] = out
         out = padded
@@ -45,6 +54,8 @@ def dequantize_tensor(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape
         interleaved_shape.extend([blocks, block_dim])
         scale_broadcast_shape.extend([blocks, 1])
 
+    # Reshape into [blocks, block_size, ...] and apply broadcasted scales in
+    # place, avoiding explicit per-element scale expansion.
     out_view = out.reshape(*interleaved_shape)
     out_view.mul_(inv_scale.float().reshape(*scale_broadcast_shape))
     out = out_view.reshape(*padded_shape)
