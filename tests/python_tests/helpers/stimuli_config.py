@@ -58,6 +58,7 @@ class StimuliConfig:
         sfpu=False,
         write_full_tiles: bool = False,
         use_dense_tile_dimensions: bool = False,
+        operand_res_tile_size: int = None,
     ):
 
         # Fields init
@@ -78,6 +79,7 @@ class StimuliConfig:
         self.sfpu = sfpu
         self.write_full_tiles = write_full_tiles
         self.use_dense_tile_dimensions = use_dense_tile_dimensions
+        self.operand_res_tile_size = operand_res_tile_size
 
         # Stimuli addresses calculation
         # Use actual tile size based on tile_dimensions for memory-efficient allocation
@@ -127,6 +129,8 @@ class StimuliConfig:
         buf_res_tile_size = calculate_tile_size_bytes(
             output_format, self.tile_dimensions, format_tile_sizes
         )
+        if self.operand_res_tile_size is not None:
+            buf_res_tile_size = self.operand_res_tile_size
 
         values = [
             self.buf_a_addr,
@@ -176,6 +180,8 @@ class StimuliConfig:
         buf_res_tile_size = calculate_tile_size_bytes(
             output_format, self.tile_dimensions, format_tile_sizes
         )
+        if self.operand_res_tile_size is not None:
+            buf_res_tile_size = self.operand_res_tile_size
 
         lines: list[str] = [
             f"constexpr Operand buffer_A({hex(self.buf_a_addr)}, {buf_a_tile_size});",
