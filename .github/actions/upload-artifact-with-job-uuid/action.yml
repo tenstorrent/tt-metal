@@ -26,24 +26,9 @@ runs:
         name: "${{ steps.generate-artifact-name.outputs.artifact-name }}"
         path: ${{ inputs.path }}
 
-    # Upload triage RISC debug signals if present (from TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT).
-    # No per-workflow change needed: any job that uses this action will upload the file when generated.
-    - name: Check for triage debug signals file
-      id: triage-debug-check
-      shell: bash
-      run: |
-        if [ -n "${TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT:-}" ] && [ -f "$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT" ]; then
-          echo "path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT" >> "$GITHUB_OUTPUT"
-          echo "exists=true" >> "$GITHUB_OUTPUT"
-        elif [ -f "docker-job/debug_bus_signals.json" ]; then
-          echo "path=docker-job/debug_bus_signals.json" >> "$GITHUB_OUTPUT"
-          echo "exists=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "exists=false" >> "$GITHUB_OUTPUT"
-        fi
-    - name: Upload triage debug signals
-      if: steps.triage-debug-check.outputs.exists == 'true'
+    - name: Upload triage debug bus signals
       uses: actions/upload-artifact@v4
       with:
         name: "debug_bus_signals_${{ job.job_id }}_${{ github.run_id }}"
-        path: ${{ steps.triage-debug-check.outputs.path }}
+        path: $TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT
+        if-no-files-found: ignore
