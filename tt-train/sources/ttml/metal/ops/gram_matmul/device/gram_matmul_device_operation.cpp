@@ -108,6 +108,9 @@ GramMatmulDeviceOperation::spec_return_value_t GramMatmulDeviceOperation::comput
 
 GramMatmulDeviceOperation::tensor_return_value_t GramMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
@@ -121,7 +124,8 @@ ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation::tensor_return_
     const std::optional<const ttml::metal::ops::gram_matmul::device::GramMatmulConfig>& config,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& output) {
     using OperationType = ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -137,7 +141,7 @@ ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation::tensor_return_
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = kernel_config_val},
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .output_tensor = output});
 }
 
 }  // namespace ttnn::prim

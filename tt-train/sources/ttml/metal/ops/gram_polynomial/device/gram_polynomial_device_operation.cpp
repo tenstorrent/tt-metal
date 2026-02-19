@@ -98,6 +98,9 @@ GramPolynomialDeviceOperation::spec_return_value_t GramPolynomialDeviceOperation
 
 GramPolynomialDeviceOperation::tensor_return_value_t GramPolynomialDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
@@ -196,6 +199,9 @@ HxPlusAxDeviceOperation::spec_return_value_t HxPlusAxDeviceOperation::compute_ou
 
 HxPlusAxDeviceOperation::tensor_return_value_t HxPlusAxDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value();
+    }
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.x_tensor.device());
 }
 
@@ -211,7 +217,8 @@ ttml_gram_polynomial_phase2(
     const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& output) {
     using OperationType = ttml::metal::ops::gram_polynomial::device::GramPolynomialDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         g_tensor.device()->arch(),
@@ -229,7 +236,7 @@ ttml_gram_polynomial_phase2(
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = kernel_config_val},
-        OperationType::tensor_args_t{.input_tensor = g_tensor});
+        OperationType::tensor_args_t{.input_tensor = g_tensor, .output_tensor = output});
 }
 
 ttml::metal::ops::gram_polynomial::device::HxPlusAxDeviceOperation::tensor_return_value_t ttml_hx_plus_ax(
@@ -239,7 +246,8 @@ ttml::metal::ops::gram_polynomial::device::HxPlusAxDeviceOperation::tensor_retur
     const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& output) {
     using OperationType = ttml::metal::ops::gram_polynomial::device::HxPlusAxDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         h_tensor.device()->arch(),
@@ -256,7 +264,7 @@ ttml::metal::ops::gram_polynomial::device::HxPlusAxDeviceOperation::tensor_retur
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = kernel_config_val},
-        OperationType::tensor_args_t{.h_tensor = h_tensor, .x_tensor = x_tensor});
+        OperationType::tensor_args_t{.h_tensor = h_tensor, .x_tensor = x_tensor, .output_tensor = output});
 }
 
 }  // namespace ttnn::prim

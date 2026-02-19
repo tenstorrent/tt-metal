@@ -31,6 +31,7 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     ttnn::Tensor input_tensor;
+    std::optional<ttnn::Tensor> output_tensor;
 };
 
 using tensor_return_value_t = ttnn::Tensor;

@@ -20,6 +20,7 @@ ttnn::Tensor gram_matmul(
     const std::optional<const ttml::metal::ops::gram_matmul::device::GramMatmulConfig>& config = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
 
 }  // namespace ttml::metal

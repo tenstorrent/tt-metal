@@ -76,7 +76,8 @@ ttml_gram_polynomial_phase2(
     const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
 
 // Phase 3: X' = H @ X + a*X.  Takes H (square) and X (rectangular) as inputs.
 ttml::metal::ops::gram_polynomial::device::HxPlusAxDeviceOperation::tensor_return_value_t ttml_hx_plus_ax(
@@ -86,6 +87,7 @@ ttml::metal::ops::gram_polynomial::device::HxPlusAxDeviceOperation::tensor_retur
     const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
 
 }  // namespace ttnn::prim

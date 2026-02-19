@@ -33,6 +33,7 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     ttnn::Tensor input_tensor;  // G (square, M x M)
+    std::optional<ttnn::Tensor> output_tensor;
 };
 
 using tensor_return_value_t = ttnn::Tensor;
@@ -50,6 +51,7 @@ struct phase3_operation_attributes_t {
 struct phase3_tensor_args_t {
     ttnn::Tensor h_tensor;  // H [M, M] square
     ttnn::Tensor x_tensor;  // X [M, K] rectangular
+    std::optional<ttnn::Tensor> output_tensor;
 };
 
 using phase3_tensor_return_value_t = ttnn::Tensor;

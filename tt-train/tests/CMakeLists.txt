@@ -164,4 +164,20 @@ if(TARGET benchmark::benchmark)
         PRIVATE
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
     )
+
+    set(BLOCK_SIZE_SWEEP_BENCHMARK_SOURCES benchmark/block_size_sweep_benchmark.cpp)
+
+    add_executable(ttml_block_size_sweep_benchmark ${BLOCK_SIZE_SWEEP_BENCHMARK_SOURCES})
+    target_link_libraries(
+        ttml_block_size_sweep_benchmark
+        PUBLIC
+            ttml
+            TTNN::TTNN
+            benchmark::benchmark
+    )
+    target_include_directories(
+        ttml_block_size_sweep_benchmark
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+    )
 endif()

@@ -48,6 +48,7 @@ ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation::tensor_return_
     const std::optional<const ttml::metal::ops::gram_matmul::device::GramMatmulConfig>& config,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
 
 }  // namespace ttnn::prim

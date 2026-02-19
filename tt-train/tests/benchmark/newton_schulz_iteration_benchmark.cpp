@@ -24,6 +24,7 @@
 #include "metal/ops/gram_polynomial/device/gram_polynomial_device_operation.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -61,6 +62,10 @@ const TestConfig test_config = {
 
 namespace {
 
+auto make_hifi4_config() {
+    return ttml::core::ComputeKernelConfig::matmul();  // HiFi4, fp32_acc, packer_l1_acc
+}
+
 double compute_utilization(
     double avg_s, double matmul_flops, const std::shared_ptr<ttnn::device::MeshDevice>& device, int device_id) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -73,7 +78,7 @@ double compute_utilization(
     return ideal_cycles / actual_cycles * 100.0;
 }
 
-// Total matmul FLOPs for the full Muon preconditioner:
+// Total matmul FLOPs for the full Newton-Schulz iteration:
 //   Phase 1: 2*M*M*K (G = X @ X^T)
 //   Phase 2: 2*M*M*M (G^2 in cG^2+bG)
 //   Phase 3: 2*M*M*K (H @ X in HX+aX)
@@ -83,9 +88,6 @@ double total_matmul_flops(uint64_t M, uint64_t K) {
 
 // Total FLOPs including epilogue ops
 double total_flops(uint64_t M, uint64_t K) {
-    // Phase 1: 2*M*M*K
-    // Phase 2: 2*M*M*M + 3*M*M (mul+mul+add per element for cG^2+bG)
-    // Phase 3: 2*M*M*K + 2*M*K (mul+add per element for aX+HX)
     return 2.0 * M * M * K + 2.0 * M * M * M + 3.0 * M * M + 2.0 * M * M * K + 2.0 * M * K;
 }
 
@@ -137,7 +139,7 @@ BenchResult bench_newton_schulz_iteration(
     double utilization = compute_utilization(avg_s, total_matmul_flops(M, K), device, device_id);
 
     return BenchResult{
-        .impl_name = "newton_schulz_iteration",
+        .impl_name = "newton_schulz",
         .time_us = avg_s * 1e6,
         .tflops = tflops,
         .utilization_pct = utilization,
@@ -173,14 +175,13 @@ BenchResult bench_phase3(
     double avg_s = total_time.count() / test_config.num_measurement_iterations;
     uint64_t M = shape.M;
     uint64_t K = shape.K;
-    // Phase 3 FLOPs: H@X matmul (2*M*M*K) + epilogue (2*M*K for mul+add)
     double flops = 2.0 * M * M * K + 2.0 * M * K;
     double tflops = flops / 1e12 / avg_s;
     double matmul_flops = 2.0 * M * M * K;
     double utilization = compute_utilization(avg_s, matmul_flops, device, device_id);
 
     return BenchResult{
-        .impl_name = "phase3 (HX+aX)",
+        .impl_name = "  phase3 (HX+aX)",
         .time_us = avg_s * 1e6,
         .tflops = tflops,
         .utilization_pct = utilization,
@@ -219,7 +220,7 @@ BenchResult bench_phase1(
     double utilization = compute_utilization(avg_s, flops, device, device_id);
 
     return BenchResult{
-        .impl_name = "phase1 (G=XX^T)",
+        .impl_name = "  phase1 (G=XX^T)",
         .time_us = avg_s * 1e6,
         .tflops = tflops,
         .utilization_pct = utilization,
@@ -262,7 +263,7 @@ BenchResult bench_phase2(
     double utilization = compute_utilization(avg_s, matmul_flops, device, device_id);
 
     return BenchResult{
-        .impl_name = "phase2 (cG²+bG)",
+        .impl_name = "  phase2 (cG^2+bG)",
         .time_us = avg_s * 1e6,
         .tflops = tflops,
         .utilization_pct = utilization,
@@ -270,7 +271,6 @@ BenchResult bench_phase2(
 }
 
 // Benchmark composite reference: separate ttnn ops for the full pipeline
-// G = matmul(X, X^T), G2 = matmul(G, G), H = c*G2 + b*G, HX = matmul(H, X), X' = HX + a*X
 BenchResult bench_composite_ttnn(
     const BenchShape& shape,
     const std::shared_ptr<ttnn::device::MeshDevice>& device,
@@ -399,19 +399,89 @@ BenchResult bench_composite_ttnn(
     double avg_s = total_time.count() / test_config.num_measurement_iterations;
     uint64_t M = shape.M;
     uint64_t K = shape.K;
-    double flops = total_flops(M, K);
-    double tflops = flops / 1e12 / avg_s;
-    double utilization = compute_utilization(avg_s, total_matmul_flops(M, K), device, device_id);
-
     return BenchResult{
-        .impl_name = "ttnn composite",
+        .impl_name = "ttnn::matmul composite",
         .time_us = avg_s * 1e6,
-        .tflops = tflops,
-        .utilization_pct = utilization,
+        .tflops = total_flops(M, K) / 1e12 / avg_s,
+        .utilization_pct = compute_utilization(avg_s, total_matmul_flops(M, K), device, device_id),
     };
 }
 
-// Benchmark hybrid: use fused Phase 1+2 (gram_polynomial) + separate ttnn for Phase 3
+// Benchmark composite with minimal_matmul instead of ttnn::matmul
+BenchResult bench_composite_minimal(
+    const BenchShape& shape,
+    const std::shared_ptr<ttnn::device::MeshDevice>& device,
+    const ttnn::Tensor& x,
+    float a,
+    float b,
+    float c,
+    int device_id) {
+    auto* dev_ptr = device.get();
+
+    auto xt_tensor = ttnn::transpose(x, -2, -1);
+
+    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
+        auto G = ttnn::experimental::minimal_matmul(
+            x, xt_tensor, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        auto G2 = ttnn::experimental::minimal_matmul(
+            G, G, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        auto cG2 = ttnn::multiply(G2, c);
+        auto bG = ttnn::multiply(G, b);
+        auto H = ttnn::add(cG2, bG);
+        auto HX = ttnn::experimental::minimal_matmul(
+            H, x, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        auto aX = ttnn::multiply(x, a);
+        auto X_prime = ttnn::add(HX, aX);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        G.deallocate();
+        G2.deallocate();
+        cG2.deallocate();
+        bG.deallocate();
+        H.deallocate();
+        HX.deallocate();
+        aX.deallocate();
+        X_prime.deallocate();
+    }
+
+    std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
+    for (int i = 0; i < test_config.num_measurement_iterations; ++i) {
+        auto start = std::chrono::high_resolution_clock::now();
+        auto G = ttnn::experimental::minimal_matmul(
+            x, xt_tensor, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        auto G2 = ttnn::experimental::minimal_matmul(
+            G, G, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        auto cG2 = ttnn::multiply(G2, c);
+        auto bG = ttnn::multiply(G, b);
+        auto H = ttnn::add(cG2, bG);
+        auto HX = ttnn::experimental::minimal_matmul(
+            H, x, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        auto aX = ttnn::multiply(x, a);
+        auto X_prime = ttnn::add(HX, aX);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        auto end = std::chrono::high_resolution_clock::now();
+        total_time += end - start;
+        G.deallocate();
+        G2.deallocate();
+        cG2.deallocate();
+        bG.deallocate();
+        H.deallocate();
+        HX.deallocate();
+        aX.deallocate();
+        X_prime.deallocate();
+    }
+
+    double avg_s = total_time.count() / test_config.num_measurement_iterations;
+    uint64_t M = shape.M;
+    uint64_t K = shape.K;
+    return BenchResult{
+        .impl_name = "minimal_mm composite",
+        .time_us = avg_s * 1e6,
+        .tflops = total_flops(M, K) / 1e12 / avg_s,
+        .utilization_pct = compute_utilization(avg_s, total_matmul_flops(M, K), device, device_id),
+    };
+}
+
+// Benchmark hybrid: fused Phase 1+2 (gram_polynomial) + separate ttnn for Phase 3
 BenchResult bench_hybrid_gram_poly_plus_ttnn(
     const BenchShape& shape,
     const std::shared_ptr<ttnn::device::MeshDevice>& device,
@@ -478,47 +548,43 @@ BenchResult bench_hybrid_gram_poly_plus_ttnn(
     double avg_s = total_time.count() / test_config.num_measurement_iterations;
     uint64_t M = shape.M;
     uint64_t K = shape.K;
-    double flops = total_flops(M, K);
-    double tflops = flops / 1e12 / avg_s;
-    double utilization = compute_utilization(avg_s, total_matmul_flops(M, K), device, device_id);
-
     return BenchResult{
-        .impl_name = "gram_poly+ttnn P3",
+        .impl_name = "gram_poly + ttnn P3",
         .time_us = avg_s * 1e6,
-        .tflops = tflops,
-        .utilization_pct = utilization,
+        .tflops = total_flops(M, K) / 1e12 / avg_s,
+        .utilization_pct = compute_utilization(avg_s, total_matmul_flops(M, K), device, device_id),
     };
 }
 
+// Table column widths: name=25, time=13, tflops=13, util=15
 void PrintComparisonTable(const std::string& shape_name, const std::vector<BenchResult>& results) {
     std::cout << "\n";
-    std::cout << "╔══════════════════════╦═══════════════╦═══════════════╦═════════════════╗\n";
-    std::cout << "║ " << std::setw(20) << std::left << ("Shape: " + shape_name)
+    std::cout << "╔═══════════════════════════╦═══════════════╦═══════════════╦═════════════════╗\n";
+    std::cout << "║ " << std::setw(25) << std::left << ("Shape: " + shape_name)
               << " ║               ║               ║                 ║\n";
-    std::cout << "╠══════════════════════╬═══════════════╬═══════════════╬═════════════════╣\n";
-    std::cout << "║ Implementation       ║   Time (us)   ║    TFLOPs     ║   Utilization   ║\n";
-    std::cout << "╠══════════════════════╬═══════════════╬═══════════════╬═════════════════╣\n";
+    std::cout << "╠═══════════════════════════╬═══════════════╬═══════════════╬═════════════════╣\n";
+    std::cout << "║ Implementation              ║  Time (us)    ║    TFLOPs     ║   Utilization   ║\n";
+    std::cout << "╠═══════════════════════════╬═══════════════╬═══════════════╬═════════════════╣\n";
 
     for (const auto& result : results) {
-        std::cout << "║ " << std::setw(20) << std::left << result.impl_name << " ║ " << std::setw(13) << std::right
+        std::cout << "║ " << std::setw(25) << std::left << result.impl_name << " ║ " << std::setw(13) << std::right
                   << std::fixed << std::setprecision(1) << result.time_us << " ║ " << std::setw(13) << std::fixed
                   << std::setprecision(2) << result.tflops << " ║ " << std::setw(14) << std::fixed
                   << std::setprecision(1) << result.utilization_pct << "% ║\n";
     }
 
-    std::cout << "╚══════════════════════╩═══════════════╩═══════════════╩═════════════════╝\n";
+    std::cout << "╚═══════════════════════════╩═══════════════╩═══════════════╩═════════════════╝\n";
 
     // Print speedup summary
     if (results.size() >= 2) {
-        double fused_us = results[0].time_us;  // newton_schulz_iteration is first
-        std::cout << "\n  Speedups vs newton_schulz_iteration (" << std::fixed << std::setprecision(1) << fused_us
-                  << " us):\n";
+        double fused_us = results[0].time_us;
+        std::cout << "\n  Speedups vs newton_schulz (" << std::fixed << std::setprecision(1) << fused_us << " us):\n";
         for (size_t i = 1; i < results.size(); ++i) {
             if (results[i].impl_name.find("phase") != std::string::npos) {
-                continue;  // Skip individual phase entries
+                continue;
             }
             double speedup = results[i].time_us / fused_us;
-            std::cout << "    vs " << std::setw(20) << std::left << results[i].impl_name << ": " << std::fixed
+            std::cout << "    vs " << std::setw(25) << std::left << results[i].impl_name << ": " << std::fixed
                       << std::setprecision(2) << speedup << "x\n";
         }
     }
@@ -560,6 +626,7 @@ void BM_NewtonSchulzIteration(benchmark::State& state) {
 
         // Composite baselines
         results.push_back(bench_composite_ttnn(shape, device, x, a, b, c, device_id));
+        results.push_back(bench_composite_minimal(shape, device, x, a, b, c, device_id));
         results.push_back(bench_hybrid_gram_poly_plus_ttnn(shape, device, x, a, b, c, device_id));
 
         PrintComparisonTable(shape.name, results);
@@ -570,14 +637,186 @@ void BM_NewtonSchulzIteration(benchmark::State& state) {
         state.counters["phase1_us"] = results[1].time_us;
         state.counters["phase2_us"] = results[2].time_us;
         state.counters["phase3_us"] = results[3].time_us;
-        state.counters["composite_ttnn_us"] = results[4].time_us;
-        state.counters["hybrid_us"] = results[5].time_us;
+        state.counters["ttnn_composite_us"] = results[4].time_us;
+        state.counters["minimal_composite_us"] = results[5].time_us;
+        state.counters["hybrid_us"] = results[6].time_us;
 
         x.deallocate();
         G.deallocate();
         H.deallocate();
     }
 
+    device->close();
+}
+
+// Benchmark N iterations of newton_schulz vs ttnn composite
+BenchResult bench_newton_schulz_n_iters(
+    const BenchShape& shape,
+    const std::shared_ptr<ttnn::device::MeshDevice>& device,
+    const ttnn::Tensor& x,
+    float a,
+    float b,
+    float c,
+    int n_iters,
+    int device_id) {
+    auto* dev_ptr = device.get();
+
+    // Warmup
+    for (int i = 0; i < 2; ++i) {
+        auto out = ttml::metal::newton_schulz(x, a, b, c, n_iters);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        out.deallocate();
+    }
+
+    constexpr int num_measurements = 20;
+    std::chrono::duration<double> total_time{};
+    for (int i = 0; i < num_measurements; ++i) {
+        auto start = std::chrono::high_resolution_clock::now();
+        auto out = ttml::metal::newton_schulz(x, a, b, c, n_iters);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        total_time += std::chrono::high_resolution_clock::now() - start;
+        out.deallocate();
+    }
+
+    double avg_s = total_time.count() / num_measurements;
+    uint64_t M = shape.M;
+    uint64_t K = shape.K;
+    double flops = n_iters * total_flops(M, K);
+    return BenchResult{
+        .impl_name = "newton_schulz x" + std::to_string(n_iters),
+        .time_us = avg_s * 1e6,
+        .tflops = flops / 1e12 / avg_s,
+        .utilization_pct = compute_utilization(avg_s, n_iters * total_matmul_flops(M, K), device, device_id),
+    };
+}
+
+BenchResult bench_composite_ttnn_n_iters(
+    const BenchShape& shape,
+    const std::shared_ptr<ttnn::device::MeshDevice>& device,
+    const ttnn::Tensor& x,
+    float a,
+    float b,
+    float c,
+    int n_iters,
+    int device_id) {
+    auto* dev_ptr = device.get();
+    auto compute_kernel_config = ttml::core::ComputeKernelConfig::matmul();
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+    auto core_grid = std::make_optional<ttnn::CoreGrid>(compute_grid_size.x, compute_grid_size.y);
+
+    auto run_n_iters = [&](const ttnn::Tensor& x_in) {
+        auto X = x_in;
+        for (int iter = 0; iter < n_iters; iter++) {
+            auto xt_tensor = ttnn::transpose(X, -2, -1);
+            auto G = ttnn::matmul(
+                X,
+                xt_tensor,
+                false,
+                false,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                compute_kernel_config,
+                core_grid,
+                std::nullopt);
+            xt_tensor.deallocate();
+            auto G2 = ttnn::matmul(
+                G,
+                G,
+                false,
+                false,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                compute_kernel_config,
+                core_grid,
+                std::nullopt);
+            auto cG2 = ttnn::multiply(G2, c);
+            G2.deallocate();
+            auto bG = ttnn::multiply(G, b);
+            auto H = ttnn::add(cG2, bG);
+            cG2.deallocate();
+            bG.deallocate();
+            G.deallocate();
+            auto HX = ttnn::matmul(
+                H,
+                X,
+                false,
+                false,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                compute_kernel_config,
+                core_grid,
+                std::nullopt);
+            H.deallocate();
+            auto aX = ttnn::multiply(X, a);
+            auto X_prime = ttnn::add(HX, aX);
+            HX.deallocate();
+            aX.deallocate();
+            if (iter > 0) {
+                X.deallocate();
+            }
+            X = X_prime;
+        }
+        return X;
+    };
+
+    // Warmup
+    for (int i = 0; i < 2; ++i) {
+        auto out = run_n_iters(x);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        out.deallocate();
+    }
+
+    constexpr int num_measurements = 20;
+    std::chrono::duration<double> total_time{};
+    for (int i = 0; i < num_measurements; ++i) {
+        auto start = std::chrono::high_resolution_clock::now();
+        auto out = run_n_iters(x);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        total_time += std::chrono::high_resolution_clock::now() - start;
+        out.deallocate();
+    }
+
+    double avg_s = total_time.count() / num_measurements;
+    uint64_t M = shape.M;
+    uint64_t K = shape.K;
+    double flops = n_iters * total_flops(M, K);
+    return BenchResult{
+        .impl_name = "ttnn composite x" + std::to_string(n_iters),
+        .time_us = avg_s * 1e6,
+        .tflops = flops / 1e12 / avg_s,
+        .utilization_pct = compute_utilization(avg_s, n_iters * total_matmul_flops(M, K), device, device_id),
+    };
+}
+
+void BM_NewtonSchulzNIters(benchmark::State& state) {
+    const int device_id = 0;
+    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/1048576);
+    device->enable_program_cache();
+
+    const float a = 0.9F, b = 0.5F, c = 0.3F;
+    constexpr int N_ITERS = 5;
+
+    for (auto _ : state) {
+        for (const auto& shape : shapes) {
+            ttnn::Shape x_shape({1, 1, shape.M, shape.K});
+            auto x = make_random_tensor(x_shape, device, 42);
+
+            std::vector<BenchResult> results;
+            results.push_back(bench_newton_schulz_n_iters(shape, device, x, a, b, c, N_ITERS, device_id));
+            results.push_back(bench_composite_ttnn_n_iters(shape, device, x, a, b, c, N_ITERS, device_id));
+
+            PrintComparisonTable(shape.name + " x" + std::to_string(N_ITERS), results);
+
+            x.deallocate();
+        }
+        state.SetIterationTime(0.001);
+    }
     device->close();
 }
 
@@ -589,5 +828,11 @@ BENCHMARK(BM_NewtonSchulzIteration)
     ->UseManualTime()
     ->Iterations(1)
     ->Name("NewtonSchulzIteration");
+
+BENCHMARK(BM_NewtonSchulzNIters)
+    ->Unit(benchmark::kMillisecond)
+    ->UseManualTime()
+    ->Iterations(1)
+    ->Name("NewtonSchulzNIters");
 
 BENCHMARK_MAIN();
