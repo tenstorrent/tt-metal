@@ -300,6 +300,7 @@ models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeo
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
+models/demos/deepseek_v3_d_p @mbezuljTT @pavlepopovic @ipotkonjak-tt @ianastasijevicTT @ddjekicTT @tenstorrent/codeowner-bypass
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
