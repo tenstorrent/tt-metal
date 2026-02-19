@@ -602,7 +602,7 @@ def test_mlp1d_llama_demo(
     )
     generator.warmup_model_decode(
         kv_cache=tt_kv_cache_list,
-        enable_trace=not measure_accuracy,
+        enable_trace=True,
         max_batch_size=batch_size,
         num_blocks=paged_attention_config.max_num_blocks,
         can_sample_on_device=generator.metal_supports_on_device_sampling(),
@@ -610,16 +610,15 @@ def test_mlp1d_llama_demo(
     )
 
     # --- Prefill Phase ---
-    if not generator.already_warmed_up_prefill:
-        logger.info("Starting prefill warmup...")
-        profiler.start("compile_prefill")
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=page_table,
-            kv_cache=tt_kv_cache_list,
-            prompt_lens=decoding_pos,
-        )
-        profiler.end("compile_prefill")
+    logger.info("Starting prefill warmup...")
+    profiler.start("compile_prefill")
+    logits = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache_list,
+        prompt_lens=decoding_pos,
+    )
+    profiler.end("compile_prefill")
 
     logger.info("Starting prefill inference...")
     profiler.start("inference_prefill")

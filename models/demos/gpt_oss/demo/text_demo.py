@@ -909,19 +909,18 @@ def test_gpt_oss_demo(
 
         else:
             # Standard sequential prefill (batch_size < num_rows)
-            if not generator.already_warmed_up_prefill:
-                logger.info("Starting prefill warmup...")
-                profiler.start(f"compile_prefill", iteration=batch_idx)
-                generator.prefill_forward_text(
-                    input_tokens_prefill_pt[:1],
-                    page_table=page_table,
-                    kv_cache=tt_kv_cache,
-                    prompt_lens=decoding_pos,
-                    enable_trace=enable_prefill_trace,
-                    warmup_prefill=False,
-                )
-                profiler.end(f"compile_prefill", iteration=batch_idx)
-                logger.info("Finished prefill warmup")
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            generator.prefill_forward_text(
+                input_tokens_prefill_pt[:1],
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)

@@ -137,24 +137,16 @@ class Generator(WarmupForwardMixin):
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
-
     def metal_supports_on_device_sampling(self):
         return (
             getattr(self.model[0], "_supports_on_device_sampling", False)
             and getattr(self.model[0], "sampling", None) is not None
         )
-    
+
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
-
-        sampling_params = self._create_sampling_params(
-            can_sample_on_device,
-            non_greedy_decoding_on_device,
-            None,
-            mode="prefill",
-        )
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 

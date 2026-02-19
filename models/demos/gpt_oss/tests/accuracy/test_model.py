@@ -376,15 +376,15 @@ def test_full_model_accuracy(mesh_device, mesh_shape, device_params, reset_seeds
     # warmup the model
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
-        enable_trace=True,
+        enable_trace=False,  # No paged attention
         can_sample_on_device=generator.metal_supports_on_device_sampling(),
         non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
     )
     generator.warmup_model_decode(
         kv_cache=tt_kv_cache,
-        enable_trace=False,
+        enable_trace=False,  # No paged attention
         max_batch_size=global_batch_size,
-        num_blocks=paged_attention_config.max_num_blocks,
+        num_blocks=None,  # No paged attention
         can_sample_on_device=generator.metal_supports_on_device_sampling(),
         non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
     )
