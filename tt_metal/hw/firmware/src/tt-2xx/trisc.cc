@@ -20,6 +20,7 @@
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
 #endif
+#include "internal/dataflow_buffer_init.h"
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
 
@@ -39,6 +40,8 @@ uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
+
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 
 namespace ckernel {
 
@@ -101,8 +104,9 @@ extern "C" uint32_t _start1() {
     std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
     hartid = 8 + 4 * neo_id + trisc_id;  // after 8 DM cores
-    volatile tt_l1_ptr uint8_t* const trisc_run =
-        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hartid];  // first entry is for NCRISC
+    DPRINT << "hartid: " << hartid << ENDL();
+    volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
+                                                       ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
 
     extern uint32_t __ldm_data_start[];
@@ -150,6 +154,11 @@ extern "C" uint32_t _start1() {
         // experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
 #endif
 
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+
         rta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].rta_offset);
         crta_l1_base =
@@ -167,7 +176,9 @@ extern "C" uint32_t _start1() {
         WAYPOINT("D");
 
         // Signal completion
+        DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
+        DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
     }
 }
