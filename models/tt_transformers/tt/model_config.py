@@ -546,58 +546,12 @@ class ModelArgs:
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
-        max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
-        if max_prefill_chunk_size_div1024 is None:
-            # TODO Improve this to be more general to more devices and models
-            MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
-                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
-                "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
-                "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
-                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Mistral-Small-3.1-24B": {
-                    "N150": 32,
-                    "N300": 64,
-                    "T3K": 128,
-                    "TG": 128,
-                    "P150x4": 128,
-                },  # Conservative: Allow on all devices
-            }
-            try:
-                max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
-            except KeyError:
-                logger.warning(
-                    f"Unknown model {self.model_name} on device {self.device_name}, setting MAX_PREFILL_CHUNK_SIZE to 4 for compatibility"
-                )
-                logger.warning(
-                    f"Try setting MAX_PREFILL_CHUNK_SIZE to larger powers of 2 up to e.g. 128 for faster performance (if you run out of L1 memory it was too high)"
-                )
-                max_prefill_chunk_size_div1024 = 4
-            assert (
-                max_prefill_chunk_size_div1024 is not None
-            ), f"Unsupported model {self.model_name} on device {self.device_name}"
-        else:
-            max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
-        self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
+        self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
 
-        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"
-        ):
+        if (
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b"]
+            and self.device_name == "N150"
+        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -785,138 +739,7 @@ class ModelArgs:
             self.model_config["MIXTRAL_PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
             self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
-
-            # Create memory config for sharded tensors
-            residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
-            self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
-                ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
-                    ),
-                    residual_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-            )
-
-            # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=None: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
-                # We want 256 if seqlen >= 2048 else 64. BUT:
-                # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
-                # Here (x & -x) is the highest power of 2 that divides x.
-                # When chunk_start_idx=0, we use default values since 0 is a multiple of any number.
-                q_chunk_size=256
-                if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else 64
-                if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else min(256, chunk_start_idx & -chunk_start_idx)
-                if seqlen >= 2048
-                else min(64, chunk_start_idx & -chunk_start_idx),
-                # Original:
-                # k_chunk_size=256 if seqlen >= 2048 else 64,
-                # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225 :
-                k_chunk_size=256
-                if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else 64
-                if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else min(256, chunk_start_idx & -chunk_start_idx)
-                if seqlen >= 2048
-                else min(64, chunk_start_idx & -chunk_start_idx),
-            )
-
-            # nlp_concat_heads_decode will shard the data across this number of cores
-            assert (
-                self.n_heads % self.cluster_shape[1] == 0
-            ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
-
-            # Note: for some models (e.g. Mistral-Small) n_heads * head_dim != dim
-            self.model_config["ATTN_OUTPUT_PROGCFG"] = (
-                None
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=(self.n_heads * self.head_dim) // self.num_devices,
-                    n=self.dim,
-                    num_cores=self.n_heads // self.num_devices,
-                )
-            )
-
-            # All Gather Matmul for Dense Out (DO)
-            # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
-            # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
-            # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
-            self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.num_devices == 8
-                and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
-                and self.num_devices > 1
-                and self.ccl_topology() == ttnn.Topology.Ring
-            )
-
-            if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
-                do_core_grid_size = (8, 1)
-                do_per_core_N = (
-                    self.dim // self.num_devices // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
-                )
-                self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=do_core_grid_size,
-                    in0_block_w=self.dim
-                    // self.tile_size
-                    // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
-                    out_subblock_h=1,
-                    out_subblock_w=get_out_subblock_w(
-                        do_per_core_N, out_subblock_h=1
-                    ),  # Max out_subblock_w = 4, needs to be divisible by per_core_N
-                    per_core_M=self.tile_padded_batch_rows // self.tile_size,
-                    per_core_N=do_per_core_N,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-            else:
-                self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
-
-            # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
-            # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
-            prefill_rows = 8  # TODO if BH = 10, if wh = 8
-            mlp1_3_grid = lambda seq_len: (
-                (8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows, self.dim // self.tile_size)
-            )
-            mlp2_grid = lambda seq_len: (
-                (8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows, self.hidden_dim // self.tile_size)
-            )
-
-            mlp_w_dram_sharded = not self.is_galaxy
-            n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
-            # Using dram_shard_grid_width to ensure per_core_N matches DRAM shard width for P100, otherwise matmuls silently give bad PCC
-            dram_shard_grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
-            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.dim // self.cluster_shape[0],
-                n=n_w1_w3,
-                grid_size=mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width))
-                if mlp_w_dram_sharded
-                else None,
-            )
-            n_w2 = self.dim
-            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
-                n=n_w2,
-                grid_size=mlp2_grid(seq_len),
-                per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
-            )
+            # Mixtral prefill program configs
             self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
@@ -934,90 +757,24 @@ class ModelArgs:
                 per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
                 per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
             )
-            # Attention output is not necessarily the same dimension as the self.dim, e.g. in Mistral
-            k_dim = (
-                (self.n_heads * self.head_dim) // self.cluster_shape[0]
-                if self.is_galaxy
-                else (self.n_heads * self.head_dim) // self.num_devices
-            )
-            # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
-            n_dim = (
-                self.dim // self.cluster_shape[1]
-                if self.is_galaxy
-                else (
-                    1024
-                    if self.num_devices == 8
-                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                    and not is_blackhole()
-                    and 1024 % (self.dim // self.num_devices) == 0
-                    else self.dim
-                )
-            )
-            num_rows = lambda seq_len: min(seq_len, 1024)
-            dram_sharded_wo = not (self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy)
-            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=num_rows(seq_len),
-                k=k_dim,
-                n=n_dim,
-                grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
-                in0_block_w=1 if self.is_galaxy else None,
-                fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
-            )
-
-            # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
-            if self.num_devices == 32:
-                lm_head_num_rows = 4
-                while self.dim % (32 * 32 * lm_head_num_rows) != 0:
-                    lm_head_num_rows -= 1
-            else:
-                lm_head_num_rows = 8
-            lm_head_cores_per_row = 8
-            while self.dim % (32 * lm_head_num_rows * lm_head_cores_per_row) != 0:
-                lm_head_num_rows -= 1
-                if lm_head_num_rows == 0:
-                    lm_head_cores_per_row -= 1
-                    if lm_head_cores_per_row == 0:
-                        raise ValueError(
-                            f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
-                        )
-                    lm_head_num_rows = 8
-            self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
-            # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
-            # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
-            # FIXME: Update blackhole figure to be per-core as well.
-            self.max_columns_per_device_lm_head = (
-                128256 // 8 if is_blackhole() else 668 * self.lm_head_core_grid.num_cores
-            )
-
-            self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (
-                    self.tile_padded_batch_rows,
-                    nearest_32((self.dim // (4 if self.is_galaxy else 1)) // self.lm_head_core_grid.num_cores),
-                ),  # Shard shape: [32, 128] -> 1 shard per core
-                self.lm_head_core_grid,
-                ttnn.ShardStrategy.WIDTH,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+            self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=7
-                if self.device_name == "P100"
-                else (
-                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                        1,
-                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
-                    )
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(
-                    self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
-                ),  # N / TILE_WIDTH / grid width
+                per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=ttnn.UnaryOpType.SILU,
+                fuse_batch=False,
+            )
+            self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=1,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=False,
@@ -1025,9 +782,14 @@ class ModelArgs:
 
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                in0_block_w=1,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
             )
             # ============================================================================
             # TG (Galaxy) specific MLP memory configs (dictionary access only)
@@ -3126,18 +2888,27 @@ class ModelArgs:
 
             from_config_exc = None
             try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # Avoid loading checkpoint weights when dummy_weights is set.
+                try:
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                except TypeError:
+                    model = model_cls.from_config(config)
+            except Exception as exc:
+                from_config_exc = exc
+                logger.info("Error loading dummy weights using .from_config. Error: {}", exc)
+                if hasattr(model_cls, "_from_config"):
+                    try:
+                        try:
+                            model = model_cls._from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                        except TypeError:
+                            model = model_cls._from_config(config)
+                    except Exception as fallback_exc:
+                        logger.info("Error loading dummy weights using ._from_config. Error: {}", fallback_exc)
+                        if from_config_exc is not None:
+                            raise fallback_exc from from_config_exc
+                        raise
+                else:
+                    raise
 
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
