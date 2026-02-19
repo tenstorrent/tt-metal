@@ -207,22 +207,22 @@ bool is_legacy_only(
     const auto& rhs,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations) {
+    [[maybe_unused]] tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    [[maybe_unused]] tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations) {
     const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
 
     if (detail::any_sharded_block_format(lhs, rhs) or detail::any_subtile_broadcasted_block_format(lhs, rhs)) {
-        TT_FATAL(
-            lhs_activations.size() <= 1,
-            "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
-            "but note there may be issues");
-        TT_FATAL(
-            rhs_activations.empty(),
-            "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
-            "there may be issues");
-        return true;
+        // TT_FATAL(
+        //     lhs_activations.size() <= 1,
+        //     "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
+        //     "but note there may be issues");
+        // TT_FATAL(
+        //     rhs_activations.empty(),
+        //     "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
+        //     "there may be issues");
+        // return true;
     }
-
+    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return true now
     return false;
 }
 
