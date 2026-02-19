@@ -20,16 +20,31 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Write inputs to temp files (avoid env var size limits)
+      id: write-inputs
+      shell: bash
+      run: |
+        REGRESSED_FILE="${RUNNER_TEMP}/regressed_raw.json"
+        cat > "$REGRESSED_FILE" << '__REGRESSED_JSON_EOF__'
+        ${{ inputs.regressed_workflows }}
+        __REGRESSED_JSON_EOF__
+        echo "regressed_file=$REGRESSED_FILE" >> "$GITHUB_OUTPUT"
+
+        ALERT_FILE="${RUNNER_TEMP}/alert_raw.txt"
+        cat > "$ALERT_FILE" << '__ALERT_TEXT_EOF__'
+        ${{ inputs.alert_all_message }}
+        __ALERT_TEXT_EOF__
+        echo "alert_file=$ALERT_FILE" >> "$GITHUB_OUTPUT"
+
     - name: Build Slack message from regressions
       id: build
       shell: bash
       env:
-        ALERT_RAW: ${{ inputs.alert_all_message }}
-        REGRESSED_RAW: ${{ inputs.regressed_workflows }}
+        REGRESSED_FILE: ${{ steps.write-inputs.outputs.regressed_file }}
+        ALERT_FILE: ${{ steps.write-inputs.outputs.alert_file }}
       run: |
         set -euo pipefail
-        tmp_file="$(mktemp)"
-        printf '%s' "$REGRESSED_RAW" > "$tmp_file"
+        tmp_file="$REGRESSED_FILE"
         if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
           echo "⚠️ Failed to parse regression list JSON. Skipping Slack notification."
           echo "has_regressions=false" >> "$GITHUB_OUTPUT"
@@ -236,8 +251,8 @@ runs:
         # The alert message format is: "*Alerts: failing workflows on main*\n• Workflow Name <url|open> mentions jobs"
         # We count lines starting with "• " to get the total number of failing workflows
         FAILING_WORKFLOWS_COUNT_MESSAGE=""
+        ALERT_RAW="$(cat "$ALERT_FILE" 2>/dev/null || true)"
         if [ -n "${ALERT_RAW:-}" ]; then
-          # Decode the alert message and count workflow lines
           decoded_alert=$(printf '%b' "$ALERT_RAW")
           total_failing_count=$(echo "$decoded_alert" | grep -E '^• ' | wc -l | tr -d ' ')
 
@@ -425,12 +440,17 @@ runs:
             echo "Body block text length: $body_text_length characters (limit: 3000)"
 
             if [ "$body_text_length" -gt 3000 ]; then
-              echo "⚠️ ERROR: Body text length ($body_text_length) exceeds Slack's 3000 char limit!"
-              echo "This message will fail. Skipping to prevent API error."
-              echo "Cleaning up oversized payload file: $payload_file"
-              rm -f "$payload_file" || echo "⚠️ Failed to remove payload file: $payload_file"
-              SEND_ERRORS=$((SEND_ERRORS + 1))
-              continue
+              echo "⚠️ WARNING: Body text ($body_text_length chars) exceeds Slack's 3000 char limit. Truncating..."
+              truncated_text="${body_text:0:2950}"$'\n'"_(message truncated due to size limit)_"
+              PAYLOAD=$(echo "$PAYLOAD" | jq -c --arg trunc "$truncated_text" \
+                '.blocks[1].text.text = $trunc' 2>/dev/null || echo "")
+              if [ -z "$PAYLOAD" ]; then
+                echo "⚠️ Failed to truncate payload for chunk $((i + 1))"
+                SEND_ERRORS=$((SEND_ERRORS + 1))
+                continue
+              fi
+              echo "$PAYLOAD" > "$payload_file"
+              echo "Truncated body to $(printf '%s' "$truncated_text" | wc -c) characters"
             fi
 
             # Build request body with channel and optional thread_ts
