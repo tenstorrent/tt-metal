@@ -6,19 +6,16 @@ import os
 import pytest
 from loguru import logger
 from pathlib import Path
+from unittest.mock import patch
 
-from tracy.process_model_log import run_device_profiler
+from tracy.process_model_log import run_device_profiler as tracy_run_device_profiler
 from models.perf.device_perf_utils import prep_device_perf_report, run_device_perf
-import models.perf.device_perf_utils
+import models.perf.device_perf_utils as device_perf_utils
 
 
-def _run_device_profiler_op_support_count(*args, **kwargs):
-    # MaskFormer Swin-B generates a large number of ops; increase op support count to avoid truncated logs.
+def _run_device_profiler_with_high_op_support(*args, **kwargs):
     kwargs.setdefault("op_support_count", 20000)
-    return run_device_profiler(*args, **kwargs)
-
-
-models.perf.device_perf_utils.run_device_profiler = _run_device_profiler_op_support_count
+    return tracy_run_device_profiler(*args, **kwargs)
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -51,7 +48,10 @@ def test_perf_device_bare_metal_maskformer_swin_b():
         f"--dump-perf {perf_json} "
         f"--dump-perf-header {perf_header_json}"
     )
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    with patch.object(
+        device_perf_utils, "run_device_profiler", side_effect=_run_device_profiler_with_high_op_support
+    ):
+        post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
 
     # No fixed perf target yet (bring-up baseline); report only.
     expected_results = {}

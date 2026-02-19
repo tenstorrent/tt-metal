@@ -115,5 +115,7 @@ def test_maskformer_swin_b_pcc(device, reset_seeds, monkeypatch, backbone_tile_m
     assert ref_class is not None, "Reference model output missing class_queries_logits"
     assert ref_masks is not None, "Reference model output missing masks_queries_logits"
 
-    assert_with_pcc(ref_class, class_logits, pcc=0.97)
-    assert_with_pcc(ref_masks, mask_logits, pcc=0.97)
+    _, class_pcc = assert_with_pcc(ref_class, class_logits, pcc=0.97)
+    _, mask_pcc = assert_with_pcc(ref_masks, mask_logits, pcc=0.97)
+    print(f"[maskformer][pcc] class logits pcc={float(class_pcc):.6f}")
+    print(f"[maskformer][pcc] mask logits pcc={float(mask_pcc):.6f}")
