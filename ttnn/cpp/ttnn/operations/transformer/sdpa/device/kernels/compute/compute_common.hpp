@@ -1409,7 +1409,6 @@ template <
     uint32_t DHt,
     uint32_t vDHt,
     bool use_attention_sink,
-    bool is_causal,
     bool use_provided_mask,
     bool use_padded_mask,
     bool use_joint_mask,
@@ -1469,13 +1468,15 @@ void sdpa_inner_loop(
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
-    const uint32_t cb_out) {
+    const uint32_t cb_out,
+    const bool is_causal) {
     uint32_t KV_chunks_processed_in_iter = 0;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
         uint32_t q_high_idx;
         if constexpr (sdpa_type == STANDARD) {
+            // if ((sdpa_type == STANDARD) || (sdpa_type == RING && is_causal)) {
             uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
             uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
@@ -1493,7 +1494,7 @@ void sdpa_inner_loop(
                 q_chunk = chunked_q_chunk_offset + q_chunk;
             }
             q_low_idx = q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
-            if constexpr (is_causal) {
+            if (is_causal) {
                 q_high_idx = q_low_idx + Sq_chunk_t;
             } else {
                 q_high_idx = Skt;
@@ -1510,6 +1511,7 @@ void sdpa_inner_loop(
 
         uint32_t k_chunk_end;
         if constexpr (sdpa_type == STANDARD) {
+            // if ((sdpa_type == STANDARD) || (sdpa_type == RING && is_causal)) {
             // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_idx.
             k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
         } else {  // RING or JOINT.
@@ -1561,10 +1563,12 @@ void sdpa_inner_loop(
 
             bool apply_mask = false;
             if constexpr (sdpa_type == RING) {
-                apply_mask = (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
-                             (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
-                             (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
-            } else if constexpr (is_causal || sliding_window_size > 0) {
+                apply_mask =
+                    (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
+                    (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
+                    (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);  // ||
+                // is_causal;
+            } else if (is_causal || sliding_window_size > 0) {
                 // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
                 // Q-range = [q_low, q_high)
                 // K-range = [k_low, k_high)
@@ -1588,6 +1592,8 @@ void sdpa_inner_loop(
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+            } else if (sdpa_type == RING && is_causal) {
+                cb_pop_front(cb_mask_in, qk_chunk_tiles);
             }
 
             /**
@@ -2121,7 +2127,8 @@ void sdpa_ring(
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
-    const uint32_t cb_out) {
+    const uint32_t cb_out,
+    const bool is_causal) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2133,7 +2140,6 @@ void sdpa_ring(
         DHt,
         DHt,    // vDHt = DHt
         false,  // use_attention_sink (not used)
-        false,  // is_causal (not used)
         false,  // use_provided_mask (not used)
         false,  // use_padded_mask (not used)
         false,  // use_joint_mask (not used)
@@ -2192,7 +2198,8 @@ void sdpa_ring(
         cb_lse_in,
         cb_lse_out,
         cb_prev_out,
-        cb_out);
+        cb_out,
+        is_causal);
 }
 
 /**
