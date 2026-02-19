@@ -139,12 +139,20 @@ class TtBEVFormerEncoder:
         for img_meta in img_metas:
             lidar2img.append(img_meta["lidar2img"])
         lidar2img = np.asarray(lidar2img)
-        reference_points = ttnn.to_torch(reference_points)
-        lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
-        reference_points = ttnn.from_torch(
-            reference_points, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        lidar2img = ttnn.from_torch(lidar2img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # Replace the following lines with ttnn equivalent
+        # reference_points = ttnn.to_torch(reference_points)
+        # lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
+        # reference_points = ttnn.from_torch(
+        #     reference_points, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        # )
+        # lidar2img = ttnn.from_torch(lidar2img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        # Ensure reference_points has TILE_LAYOUT (dtype and device are already correct)
+        reference_points = ttnn.to_layout(reference_points, ttnn.TILE_LAYOUT)
+
+        lidar2img_torch = torch.from_numpy(lidar2img).to(dtype=torch.bfloat16)
+        lidar2img = ttnn.from_torch(lidar2img_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
         ref = ttnn.clone(reference_points)
 
         x, y, z = ttnn.split(ref, (1, 1, 1), dim=3)
@@ -265,6 +273,8 @@ class TtBEVFormerEncoder:
             prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             prev_bev = ttnn.stack([prev_bev, bev_query], 1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, len_bev, -1))
+            # Ensure both tensors have the same layout for stack
+            shift_ref_2d = ttnn.to_layout(shift_ref_2d, ref_2d.layout)
             hybird_ref_2d = ttnn.stack([shift_ref_2d, ref_2d], 1)
             hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         else:
@@ -273,7 +283,7 @@ class TtBEVFormerEncoder:
         ttnn.deallocate(ref_2d)
         ttnn.deallocate(shift)
         ttnn.deallocate(shift_ref_2d)
-        reference_points_cam = ttnn.to_torch(reference_points_cam)
+
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
@@ -445,8 +455,8 @@ class TtBEVFormerLayer:
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
                 )
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
+                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
+                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
             # spaital cross attention

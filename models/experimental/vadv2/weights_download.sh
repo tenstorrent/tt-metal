@@ -11,7 +11,7 @@ fi
 # === Download and unzip ===
 
 # Google Drive file ID for weights.zip
-FILE_ID=""1yH8-4sNBsQJmon3fLdxugI0wJlaOB33s""
+FILE_ID="1yH8-4sNBsQJmon3fLdxugI0wJlaOB33s"
 OUTPUT_FILE="models/experimental/vadv2/weights.zip"
 
 # Ensure the target directory exists

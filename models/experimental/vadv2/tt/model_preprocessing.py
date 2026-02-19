@@ -5,6 +5,79 @@
 import ttnn
 import torch
 import torch.nn as nn
+import os
+import sys
+import gc
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+try:
+    import resource
+except ImportError:
+    resource = None
+
+
+def _env_flag_enabled(env_value, default=False):
+    if env_value is None:
+        return default
+    return env_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+MEMORY_DEBUG = _env_flag_enabled(os.getenv("VADV2_MEMORY_DEBUG"), default=False)
+ENABLE_TILE_LAYOUT = _env_flag_enabled(os.getenv("VADV2_ENABLE_TILE_LAYOUT"), default=True)
+
+
+def _get_memory_usage_mb():
+    rss_mb = peak_mb = None
+    if psutil is not None:
+        proc = psutil.Process(os.getpid())
+        info = proc.memory_info()
+        rss_mb = info.rss / (1024**2)
+    elif resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        rss = usage.ru_maxrss
+        if os.name == "posix" and not sys.platform.startswith("darwin"):
+            rss_mb = rss / 1024
+        else:
+            rss_mb = rss / (1024**2)
+
+    if resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        peak = usage.ru_maxrss
+        if os.name == "posix" and not sys.platform.startswith("darwin"):
+            peak_mb = peak / 1024
+        else:
+            peak_mb = peak / (1024**2)
+
+    return rss_mb, peak_mb
+
+
+def log_memory_usage(prefix):
+    if not MEMORY_DEBUG:
+        return
+
+    rss_mb, peak_mb = _get_memory_usage_mb()
+    if rss_mb is None and peak_mb is None:
+        print(f"[Memory][model_preprocessing][{prefix}] Unavailable")
+        return
+
+    if rss_mb is not None and peak_mb is not None:
+        print(f"[Memory][model_preprocessing][{prefix}] RSS: {rss_mb:.2f} MB | Peak: {peak_mb:.2f} MB")
+    elif rss_mb is not None:
+        print(f"[Memory][model_preprocessing][{prefix}] RSS: {rss_mb:.2f} MB")
+    else:
+        print(f"[Memory][model_preprocessing][{prefix}] Peak: {peak_mb:.2f} MB")
+
+
+def _from_torch_optional_layout(tensor, dtype, layout):
+    if layout is None:
+        return ttnn.from_torch(tensor, dtype=dtype)
+    return ttnn.from_torch(tensor, dtype=dtype, layout=layout)
+
+
 from models.experimental.vadv2.reference.resnet import ResNet
 from models.experimental.vadv2.reference.vad import VAD
 from models.experimental.vadv2.reference.fpn import FPN
@@ -353,19 +426,25 @@ def custom_preprocessor(model, name):
             parameters["img_neck"] = {}
             parameters["img_neck"]["lateral_convs"] = {}
             parameters["img_neck"]["lateral_convs"]["conv"] = {}
-            parameters["img_neck"]["lateral_convs"]["conv"]["weight"] = ttnn.from_torch(
-                neck.lateral_convs.conv.weight, dtype=ttnn.float32
+            weight_layout = ttnn.TILE_LAYOUT if ENABLE_TILE_LAYOUT else None
+            row_layout = ttnn.ROW_MAJOR_LAYOUT if ENABLE_TILE_LAYOUT else None
+            parameters["img_neck"]["lateral_convs"]["conv"]["weight"] = _from_torch_optional_layout(
+                neck.lateral_convs.conv.weight, dtype=ttnn.float32, layout=weight_layout
             )
             bias = neck.lateral_convs.conv.bias.reshape((1, 1, 1, -1))
-            parameters["img_neck"]["lateral_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+            parameters["img_neck"]["lateral_convs"]["conv"]["bias"] = _from_torch_optional_layout(
+                bias, dtype=ttnn.float32, layout=row_layout
+            )
 
             parameters["img_neck"]["fpn_convs"] = {}
             parameters["img_neck"]["fpn_convs"]["conv"] = {}
-            parameters["img_neck"]["fpn_convs"]["conv"]["weight"] = ttnn.from_torch(
-                neck.fpn_convs.conv.weight, dtype=ttnn.float32
+            parameters["img_neck"]["fpn_convs"]["conv"]["weight"] = _from_torch_optional_layout(
+                neck.fpn_convs.conv.weight, dtype=ttnn.float32, layout=weight_layout
             )
             bias = neck.fpn_convs.conv.bias.reshape((1, 1, 1, -1))
-            parameters["img_neck"]["fpn_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+            parameters["img_neck"]["fpn_convs"]["conv"]["bias"] = _from_torch_optional_layout(
+                bias, dtype=ttnn.float32, layout=row_layout
+            )
 
         if isinstance(model.img_backbone, ResNet):
             # if isinstance(model, ResNet):
@@ -374,9 +453,11 @@ def custom_preprocessor(model, name):
 
             # Initial conv + bn
             weight, bias = fold_batch_norm2d_into_conv2d(backbone.conv1, backbone.bn1)
+            weight_layout = ttnn.TILE_LAYOUT if ENABLE_TILE_LAYOUT else None
+            row_layout = ttnn.ROW_MAJOR_LAYOUT if ENABLE_TILE_LAYOUT else None
             parameters["img_backbone"]["conv1"] = {
-                "weight": ttnn.from_torch(weight, dtype=ttnn.float32),
-                "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                "weight": _from_torch_optional_layout(weight, dtype=ttnn.float32, layout=weight_layout),
+                "bias": _from_torch_optional_layout(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32, layout=row_layout),
             }
 
             # Loop over all layers (layer1 to layer4)
@@ -392,8 +473,10 @@ def custom_preprocessor(model, name):
                         bn = getattr(block, f"bn{conv_name[-1]}")
                         w, b = fold_batch_norm2d_into_conv2d(conv, bn)
                         parameters["img_backbone"][prefix][conv_name] = {
-                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                            "weight": _from_torch_optional_layout(w, dtype=ttnn.float32, layout=weight_layout),
+                            "bias": _from_torch_optional_layout(
+                                b.reshape((1, 1, 1, -1)), dtype=ttnn.float32, layout=row_layout
+                            ),
                         }
 
                     # downsample (if present)
@@ -404,37 +487,84 @@ def custom_preprocessor(model, name):
                             bn = ds[1]
                             w, b = fold_batch_norm2d_into_conv2d(conv, bn)
                             parameters["img_backbone"][prefix]["downsample"] = {
-                                "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                                "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                                "weight": _from_torch_optional_layout(w, dtype=ttnn.float32, layout=weight_layout),
+                                "bias": _from_torch_optional_layout(
+                                    b.reshape((1, 1, 1, -1)), dtype=ttnn.float32, layout=row_layout
+                                ),
                             }
 
     return parameters
 
 
 def create_vadv2_model_parameters_vad(model: ResNet, input_tensor: input, device=None):
+    cache_path = os.getenv("VADV2_PARAMETER_CACHE_PATH")
+    force_rebuild = _env_flag_enabled(os.getenv("VADV2_PARAMETER_CACHE_REBUILD"), default=False)
+    if cache_path:
+        cache_path = os.path.abspath(os.path.expanduser(cache_path))
+        if os.path.exists(cache_path) and not force_rebuild:
+            if MEMORY_DEBUG:
+                log_memory_usage("load cache - before")
+            try:
+                parameters = torch.load(cache_path, map_location="cpu")
+                if MEMORY_DEBUG:
+                    log_memory_usage("load cache - after")
+                return parameters
+            except Exception as exc:
+                print(f"[model_preprocessing] Failed to load cached parameters from {cache_path}: {exc}")
+
+    def _coerce_img_tensor(source):
+        if source is None:
+            raise ValueError("input_tensor is required to infer img backbone shapes")
+        if isinstance(source, torch.Tensor):
+            return source
+        if isinstance(source, (list, tuple)) and source:
+            # Direct list/tuple of tensors
+            first = source[0]
+            if isinstance(first, torch.Tensor):
+                return first
+            try:
+                return source[1][0][0]
+            except Exception:
+                pass
+        raise TypeError(
+            "Unsupported input_tensor format for create_vadv2_model_parameters_vad; "
+            "provide a torch.Tensor or nested list matching dataset output."
+        )
+
+    img = _coerce_img_tensor(input_tensor)
+
+    if MEMORY_DEBUG:
+        log_memory_usage("preprocess - before")
+
     parameters = preprocess_model_parameters(
+        model_name="vadv2_tt_vad",
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
 
-    parameters.conv_args = {"img_backbone": {}, "img_neck": {}}
+    if MEMORY_DEBUG:
+        log_memory_usage("preprocess - after")
 
-    img = input_tensor[1]
+    parameters.conv_args = {"img_backbone": {}, "img_neck": {}}
 
     if isinstance(img, list):
         img = torch.tensor(img[0])
-        if img.dim() == 5 and img.size(0) == 1:
-            img.squeeze_()
-        elif img.dim() == 5 and img.size(0) > 1:
-            B, N, C, H, W = img.size()
-            img = img.reshape(B * N, C, H, W)
+
+    if img.dim() == 5 and img.size(0) == 1:
+        img = img.squeeze(0)
+    elif img.dim() == 5 and img.size(0) > 1:
+        B, N, C, H, W = img.size()
+        img = img.reshape(B * N, C, H, W)
 
     parameters.conv_args["img_backbone"] = infer_ttnn_module_args(
         model=model.img_backbone,
         run_model=lambda model: model(img),
         device=None,
     )
+
+    if MEMORY_DEBUG:
+        log_memory_usage("infer img_backbone")
 
     img_feats = model.img_backbone(img)
 
@@ -443,6 +573,14 @@ def create_vadv2_model_parameters_vad(model: ResNet, input_tensor: input, device
         run_model=lambda model: model(img_feats),
         device=None,
     )
+
+    if MEMORY_DEBUG:
+        log_memory_usage("infer img_neck")
+
+    del img_feats
+    gc.collect()
+    if MEMORY_DEBUG:
+        log_memory_usage("post img_neck gc")
 
     assert parameters is not None
 
@@ -453,5 +591,14 @@ def create_vadv2_model_parameters_vad(model: ResNet, input_tensor: input, device
         elif key == "img_neck":
             for conv_key in parameters.conv_args[key].keys():
                 parameters.conv_args[key][conv_key].module = getattr(model.img_neck, conv_key)
+
+    if cache_path:
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            torch.save(parameters, cache_path)
+            if MEMORY_DEBUG:
+                log_memory_usage("cache saved")
+        except Exception as exc:
+            print(f"[model_preprocessing] Failed to save parameters to {cache_path}: {exc}")
 
     return parameters
