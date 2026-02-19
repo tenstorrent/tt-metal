@@ -59,6 +59,14 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         input_page_sizes[i] = buf->aligned_page_size();
     }
 
+    // Scratch CB (index 0) for copy_tensor_data: one page, size = max of all page sizes.
+    const uint32_t scratch_page_size =
+        std::max(output_page_size, *std::max_element(input_page_sizes.begin(), input_page_sizes.end()));
+    constexpr uint8_t cb_scratch_id = 0;
+    auto scratch_cb_config = CircularBufferConfig(scratch_page_size, {{cb_scratch_id, tt::DataFormat::RawUInt32}})
+                                 .set_page_size(cb_scratch_id, scratch_page_size);
+    CreateCircularBuffer(program, all_cores, scratch_cb_config);
+
     // Compile-time args: num_input_tensors, output_page_size, input_page_sizes[0..15],
     // then output TensorAccessorArgs, then 16 input TensorAccessorArgs (absent filled from first input).
     std::vector<uint32_t> reader_compile_time_args = {
