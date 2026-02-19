@@ -54,6 +54,20 @@ class FF1Test(OpTestBase):
             determinism_check_enabled,
             determinism_check_interval,
         )
+        self.biases = None
+        self.cos_core_range_set = None
+
+    def run_device_operation(self):
+        for i in range(1000):
+            ttnn.matmul(
+                self.activations,
+                self.weights,
+                program_config=self.program_config,
+                memory_config=self.out_mem_config,
+                dtype=self.out_dtype,
+                compute_kernel_config=self.compute_config,
+            )
+        return ttnn.cos(self.biases, sub_core_grids=self.cos_core_range_set)
 
 
 GELU_FIDELITY_PARAMETRIZATION = ((False, ttnn.MathFidelity.LoFi), (True, ttnn.MathFidelity.HiFi2))
@@ -89,7 +103,7 @@ def test_ff1_matmul(
 
     # Initialize input configurations
     if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
+        compute_grid = ttnn.CoreCoord(2, 1)  # get_blackhole_grid_size(mesh_device)
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
     logger.info(f"Running on {compute_grid} cores")
@@ -157,6 +171,20 @@ def test_ff1_matmul(
         loop_count=didt_workload_iterations,
         determinism_check_enabled=True if determinism_check_interval > 0 else False,
         determinism_check_interval=determinism_check_interval,
+    )
+
+    ff1_test.cos_core_range_set = ttnn.CoreRangeSet({core_range})
+
+    biases_shape = [1, 1, 32, 1024]
+    biases_torch = torch.randn(biases_shape, dtype=torch.bfloat16)
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if isinstance(mesh_device, ttnn.MeshDevice) else None
+    ff1_test.biases = ttnn.from_torch(
+        biases_torch,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
     )
 
     # Run test
