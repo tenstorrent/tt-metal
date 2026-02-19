@@ -1809,6 +1809,17 @@ class MoeSharedExpertOp:
         mcast_grid,
         k_parallel=8,
         n_parallel=8,
+        # Semaphore IDs (overridable, defaults match MoE layout)
+        ag_receiver_semaphore_id=6,
+        bg_receiver_semaphore_id=7,
+        ag_noc1_receiver_semaphore_id=8,
+        bg_noc1_receiver_semaphore_id=9,
+        shared_mcast_sender_semaphore_id=0,
+        shared_mcast_receiver_semaphore_id=10,
+        output_gather_noc0_receiver_semaphore_id=11,
+        output_gather_noc1_receiver_semaphore_id=12,
+        output_mcast_sender_semaphore_id=0,
+        output_mcast_receiver_semaphore_id=13,
     ):
         """
         Compute shared expert dimensions and build _MoeSharedExpertContext.
@@ -1836,6 +1847,16 @@ class MoeSharedExpertOp:
             mcast_grid: CoreRangeSet for mcast destination grid (same as routed input mcast)
             k_parallel: K parallelism factor
             n_parallel: N parallelism factor
+            ag_receiver_semaphore_id: Gate gather NOC0 receiver sem ID
+            bg_receiver_semaphore_id: Up gather NOC0 receiver sem ID
+            ag_noc1_receiver_semaphore_id: Gate gather NOC1 receiver sem ID
+            bg_noc1_receiver_semaphore_id: Up gather NOC1 receiver sem ID
+            shared_mcast_sender_semaphore_id: Shared mcast sender sem ID
+            shared_mcast_receiver_semaphore_id: Shared mcast receiver sem ID
+            output_gather_noc0_receiver_semaphore_id: Output gather NOC0 receiver sem ID
+            output_gather_noc1_receiver_semaphore_id: Output gather NOC1 receiver sem ID
+            output_mcast_sender_semaphore_id: Output mcast sender sem ID
+            output_mcast_receiver_semaphore_id: Output mcast receiver sem ID
 
         Returns:
             _MoeSharedExpertContext
@@ -1865,21 +1886,6 @@ class MoeSharedExpertOp:
         assert k_parallel * n_parallel == num_compute_cores
         total_gather_tiles = num_compute_cores  # 64
         gu_gather_data_size_bytes = input_tile_size  # each compute core sends 1 tile
-
-        # ==================================================================
-        # Semaphore IDs (continuing after routed expert's semaphores 0-5)
-        # ==================================================================
-        ag_receiver_semaphore_id = 6
-        bg_receiver_semaphore_id = 7
-        ag_noc1_receiver_semaphore_id = 8
-        bg_noc1_receiver_semaphore_id = 9
-        # Shared mcasts (residual, down, output) are serialized — reuse one pair
-        shared_mcast_sender_semaphore_id = 0  # Reuse unified sender semaphore
-        shared_mcast_receiver_semaphore_id = 10
-        output_gather_noc0_receiver_semaphore_id = 11
-        output_gather_noc1_receiver_semaphore_id = 12
-        output_mcast_sender_semaphore_id = 0  # Reuse unified sender semaphore
-        output_mcast_receiver_semaphore_id = 13
 
         # ==================================================================
         # Core grids
