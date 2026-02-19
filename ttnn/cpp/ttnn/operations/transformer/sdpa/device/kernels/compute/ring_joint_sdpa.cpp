@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -46,6 +47,7 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(29);
 
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(30);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(31) == 1;
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
@@ -80,8 +82,10 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
+    uint32_t rind_index = fused_op_indexer.ring_index;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+        // DPRINT << "ring_id: " << ring_id << ENDL();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
@@ -90,9 +94,11 @@ void kernel_main() {
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+        const bool ring_iter_does_work =
+            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
 
         if (!ring_iter_does_work) {
+            DPRINT << "SKIPPING WORK FOR: " << rind_index << ENDL();
             continue;
         }
 
@@ -112,6 +118,8 @@ void kernel_main() {
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+
+        bool causality = (ring_iter == 0 ? is_causal : false);
 
         sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
             qk_in0_block_w,
@@ -160,6 +168,8 @@ void kernel_main() {
             cb_lse_in,
             cb_lse_out,
             cb_prev_out,
-            cb_out);
+            cb_out,
+            causality);
     }
+    DPRINT << "COMPUTE EXIT FOR: " << rind_index << ENDL();
 }
