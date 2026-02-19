@@ -10,9 +10,10 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(1);
     constexpr uint32_t Sv_chunk_t = get_compile_time_arg_val(2);
     constexpr uint32_t head_dim_t = get_compile_time_arg_val(3);
-    constexpr uint32_t num_iter = get_compile_time_arg_val(4);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(4);
+    constexpr uint32_t num_k_chunks = get_compile_time_arg_val(5);
 
-    constexpr auto q_args = TensorAccessorArgs<5>();
+    constexpr auto q_args = TensorAccessorArgs<6>();
     constexpr auto kt_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<kt_args.next_compile_time_args_offset()>();
 
@@ -34,35 +35,41 @@ void kernel_main() {
     constexpr uint32_t num_kt_tiles = head_dim_t * Sk_chunk_t;
     constexpr uint32_t num_v_tiles = Sv_chunk_t * head_dim_t;
 
-    for (uint32_t i = 0; i < num_iter; i++) {
-        // Read Q tiles from DRAM
+    for (uint32_t q = 0; q < num_q_chunks; q++) {
+        // Read Q chunk once per Q iteration
         cb_reserve_back(cb_q_in, num_q_tiles);
         uint32_t q_l1_addr = get_write_ptr(cb_q_in);
+        uint32_t q_tile_offset = q * num_q_tiles;
         for (uint32_t t = 0; t < num_q_tiles; t++) {
-            noc_async_read_tile(t, q_accessor, q_l1_addr);
+            noc_async_read_tile(q_tile_offset + t, q_accessor, q_l1_addr);
             q_l1_addr += tile_size_bytes;
         }
         noc_async_read_barrier();
         cb_push_back(cb_q_in, num_q_tiles);
 
-        // Read KT tiles from DRAM
-        cb_reserve_back(cb_kt_in, num_kt_tiles);
-        uint32_t kt_l1_addr = get_write_ptr(cb_kt_in);
-        for (uint32_t t = 0; t < num_kt_tiles; t++) {
-            noc_async_read_tile(t, kt_accessor, kt_l1_addr);
-            kt_l1_addr += tile_size_bytes;
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_kt_in, num_kt_tiles);
+        // Read KT and V for each K chunk
+        for (uint32_t k = 0; k < num_k_chunks; k++) {
+            // Read KT tiles from DRAM
+            cb_reserve_back(cb_kt_in, num_kt_tiles);
+            uint32_t kt_l1_addr = get_write_ptr(cb_kt_in);
+            uint32_t kt_tile_offset = k * num_kt_tiles;
+            for (uint32_t t = 0; t < num_kt_tiles; t++) {
+                noc_async_read_tile(kt_tile_offset + t, kt_accessor, kt_l1_addr);
+                kt_l1_addr += tile_size_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_kt_in, num_kt_tiles);
 
-        // Read V tiles from DRAM
-        cb_reserve_back(cb_v_in, num_v_tiles);
-        uint32_t v_l1_addr = get_write_ptr(cb_v_in);
-        for (uint32_t t = 0; t < num_v_tiles; t++) {
-            noc_async_read_tile(t, v_accessor, v_l1_addr);
-            v_l1_addr += tile_size_bytes;
+            // Read V tiles from DRAM
+            cb_reserve_back(cb_v_in, num_v_tiles);
+            uint32_t v_l1_addr = get_write_ptr(cb_v_in);
+            uint32_t v_tile_offset = k * num_v_tiles;
+            for (uint32_t t = 0; t < num_v_tiles; t++) {
+                noc_async_read_tile(v_tile_offset + t, v_accessor, v_l1_addr);
+                v_l1_addr += tile_size_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_v_in, num_v_tiles);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_v_in, num_v_tiles);
     }
 }

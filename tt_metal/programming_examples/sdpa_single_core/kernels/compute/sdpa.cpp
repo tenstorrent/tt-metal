@@ -689,6 +689,7 @@ void InitPrevBuffers(uint32_t cb_sum, uint32_t cb_out, uint32_t cb_max, uint32_t
 
     // prev_max: -inf (Sq_chunk_t tiles)
     // Writer produces a -inf tile in cb_neginf; we copy it to DST then pack to cb_max.
+    // Note: cb_neginf is NOT popped — it stays available across Q-chunk iterations.
     cb_wait_front(cb_neginf, 1);
     copy_tile_to_dst_init_short(cb_neginf);
     cb_reserve_back(cb_max, Sq_chunk_t);
@@ -701,8 +702,123 @@ void InitPrevBuffers(uint32_t cb_sum, uint32_t cb_out, uint32_t cb_max, uint32_t
     }
     tile_regs_release();
     cb_push_back(cb_max, Sq_chunk_t);
-    cb_pop_front(cb_neginf, 1);
 }
+
+// ===================== Normalization Functions =====================
+
+#ifdef TRISC_MATH
+template <bool legacy_compat = true>
+void calculate_recip_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+        if constexpr (DST_ACCUM_MODE || APPROX) {
+            sfpi::dst_reg[0] = out;
+        } else {
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+        }
+        sfpi::dst_reg += 2;
+    }
+}
+
+void recip_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROX>(calculate_recip_first_column<true>, idst, (int)VectorMode::C);
+}
+#endif
+
+/**
+ * Multiplies each tile in out_cb by the col_identity tile to collapse partial row sums
+ * into a single value per row in column 0. In-place: pop -> matmul -> pack -> push per subblock.
+ */
+template <uint32_t M>
+void matmul_reduce_inplace(uint32_t col_identity_cb, uint32_t out_cb) {
+    constexpr uint32_t N = 1;
+    constexpr uint32_t in0_block_w = N;
+    constexpr uint32_t subblock_w = N;
+    constexpr uint32_t subblock_h = 1;
+    constexpr uint32_t in0_num_subblocks = M;
+
+    mm_block_init_short(out_cb, col_identity_cb, 0, subblock_w, subblock_h, in0_block_w);
+
+    reconfig_data_format(col_identity_cb, out_cb);
+    cb_wait_front(col_identity_cb, N);
+    cb_wait_front(out_cb, M);
+
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        tile_regs_acquire();
+
+        uint32_t dst_index = 0;
+        uint32_t in0_index = 0;
+        uint32_t in1_index = 0;
+        matmul_block(out_cb, col_identity_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
+
+        tile_regs_commit();
+        cb_pop_front(out_cb, subblock_h);
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < subblock_h; i++) {
+            pack_tile(i, out_cb);
+        }
+        tile_regs_release();
+        cb_push_back(out_cb, subblock_h);
+    }
+}
+
+/**
+ * in_cb = 1 / in_cb (column 0 only)
+ */
+void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+    copy_tile_to_dst_init_short(in_cb);
+    recip_tile_init();
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(in_cb);
+
+    cb_wait_front(in_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        acquire_dst();
+        copy_tile(in_cb, i, 0);
+        MATH((recip_tile_first_column(0)));
+        pack_tile(0, in_cb);
+        release_dst();
+    }
+    cb_pop_front(in_cb, num_tiles);
+    cb_reserve_back(in_cb, num_tiles);
+    cb_push_back(in_cb, num_tiles);
+}
+
+/**
+ * Multiplies each output tile by the corresponding 1/sum value (broadcast from column 0).
+ * Consumes final_out and final_sum, produces to normalized_out tile-by-tile (streaming).
+ * The 1-tile streaming pattern allows the writer to drain concurrently with minimal L1.
+ */
+template <uint32_t rows, uint32_t cols>
+void normalize_output(uint32_t final_out_cb, uint32_t final_sum_cb, uint32_t normalized_out_cb) {
+    constexpr uint32_t num_tiles = rows * cols;
+
+    mul_bcast_cols_init_short(final_out_cb, final_sum_cb);
+    cb_wait_front(final_out_cb, num_tiles);
+    cb_wait_front(final_sum_cb, rows);
+
+    uint32_t in0_index = 0;
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            cb_reserve_back(normalized_out_cb, 1);
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(final_out_cb, final_sum_cb, in0_index, i, 0);
+            in0_index++;
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, normalized_out_cb);
+            tile_regs_release();
+            cb_push_back(normalized_out_cb, 1);
+        }
+    }
+    cb_pop_front(final_sum_cb, rows);
+    cb_pop_front(final_out_cb, num_tiles);
+}
+
+// ==================================================================
 
 template <
     uint32_t Sq_chunk_t,
@@ -836,7 +952,6 @@ void sdpa_inner_loop(
             q_wait_tiles += q_subblock_num_tiles;
         }
 
-        cb_pop_front(cb_q_in, head_dim_t * Sq_chunk_t);
         cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
 
         // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
@@ -1087,11 +1202,8 @@ void sdpa_inner_loop(
             std::swap(alias_prev_max, alias_cur_max);
             std::swap(alias_prev_sum, alias_cur_sum);
             std::swap(alias_prev_out, alias_cur_out);
-        } else {
-            cb_pop_front(alias_cur_max, Sq_chunk_t);
-            cb_pop_front(alias_cur_sum, Sq_chunk_t);
-            // alias_cur_out left in CB for the writer kernel to consume and write to DRAM.
         }
+        // Last iteration: cur_sum, cur_out, cur_max left alive for caller
         MATH(DPRINT << "Finished iteration " << iter << ENDL());
     }  // end for (iter)
 }
@@ -1101,9 +1213,10 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(1);
     constexpr uint32_t Sv_chunk_t = get_compile_time_arg_val(2);
     constexpr uint32_t head_dim_t = get_compile_time_arg_val(3);
-    constexpr uint32_t num_iter = get_compile_time_arg_val(4);
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(4);
+    constexpr uint32_t num_k_chunks = get_compile_time_arg_val(5);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(6);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(7);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_kt_in = tt::CBIndex::c_1;
@@ -1122,27 +1235,54 @@ void kernel_main() {
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
 
     constexpr uint32_t cb_neginf = tt::CBIndex::c_7;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
+    constexpr uint32_t cb_normalized_out = tt::CBIndex::c_9;
 
     mm_init(cb_q_in, cb_kt_in, cb_qkt_im);
 
-    // Temporary: pre-populate prev buffers before the inner loop so that the first iteration
-    // is numerically correct without special-casing it. In production the inner loop's first
-    // pass would handle this, but we don't want that shorter pass to pollute worst-case timing.
-    InitPrevBuffers<Sq_chunk_t, head_dim_t>(cb_sum_A, cb_out_A, cb_max_A, cb_neginf);
+    // Determine which CBs hold final state based on num_k_chunks parity.
+    // sdpa_inner_loop starts with cur=B, prev=A, and does (num_k_chunks - 1) swaps.
+    // num_k_chunks even → cur = {sum_A, out_A, max_A}
+    // num_k_chunks odd  → cur = {sum_B, out_B, max_B}
+    constexpr uint32_t cb_final_sum = (num_k_chunks % 2 == 0) ? cb_sum_A : cb_sum_B;
+    constexpr uint32_t cb_final_out = (num_k_chunks % 2 == 0) ? cb_out_A : cb_out_B;
+    constexpr uint32_t cb_final_max = (num_k_chunks % 2 == 0) ? cb_max_A : cb_max_B;
 
-    sdpa_inner_loop<
-        Sq_chunk_t,
-        Sk_chunk_t,
-        Sv_chunk_t,
-        head_dim_t,
-        cb_q_in,
-        cb_kt_in,
-        cb_v_in,
-        cb_qkt_im,
-        cb_identity_scale_in,
-        cb_exp_max_diff,
-        scale_fp32,
-        subblock_h,
-        cb_qkt_row_A,
-        cb_qkt_row_B>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B, cb_out_A, cb_out_B, num_iter);
+    for (uint32_t q = 0; q < num_q_chunks; q++) {
+        // Initialize prev buffers (sum=0, out=0, max=-inf) for this Q chunk.
+        // Always writes to A-variant CBs since normalization of the previous Q chunk
+        // consumed the A-variants (or they were never written for q=0).
+        InitPrevBuffers<Sq_chunk_t, head_dim_t>(cb_sum_A, cb_out_A, cb_max_A, cb_neginf);
+
+        sdpa_inner_loop<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            Sv_chunk_t,
+            head_dim_t,
+            cb_q_in,
+            cb_kt_in,
+            cb_v_in,
+            cb_qkt_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            scale_fp32,
+            subblock_h,
+            cb_qkt_row_A,
+            cb_qkt_row_B>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B, cb_out_A, cb_out_B, num_k_chunks);
+
+        // Pop Q after all K chunks are processed for this Q chunk
+        cb_pop_front(cb_q_in, Sq_chunk_t * head_dim_t);
+
+        // Pop max (no longer needed)
+        cb_pop_front(cb_final_max, Sq_chunk_t);
+
+        // Normalize: out = out / sum
+        matmul_reduce_inplace<Sq_chunk_t>(cb_col_identity, cb_final_sum);
+        recip_block_inplace(cb_final_sum, Sq_chunk_t);
+        normalize_output<Sq_chunk_t, head_dim_t>(cb_final_out, cb_final_sum, cb_normalized_out);
+        // cb_normalized_out has the final normalized output for the writer to drain.
+    }
+
+    // Pop the permanent -inf tile now that all Q chunks are done
+    cb_pop_front(cb_neginf, 1);
 }

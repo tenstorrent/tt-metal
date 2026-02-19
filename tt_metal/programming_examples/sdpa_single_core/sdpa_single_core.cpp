@@ -27,6 +27,8 @@ void sdpa_single_core(
     const uint32_t Sv_chunk_t,
     const uint32_t head_dim_t,
     const uint32_t subblock_h,
+    const uint32_t num_q_chunks,
+    const uint32_t num_k_chunks,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     TT_FATAL(subblock_h == 1 || subblock_h == 2, "subblock_h must be 1 or 2. Got {}.", subblock_h);
     TT_FATAL(
@@ -44,23 +46,31 @@ void sdpa_single_core(
     const MathFidelity math_fidelity = MathFidelity::HiFi2;
     const uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-    // DRAM data sizes (one chunk each)
-    const uint32_t q_num_tiles = Sq_chunk_t * head_dim_t;
-    const uint32_t kt_num_tiles = head_dim_t * Sk_chunk_t;
-    const uint32_t v_num_tiles = Sv_chunk_t * head_dim_t;
-    const uint32_t out_num_tiles = Sq_chunk_t * head_dim_t;
+    // Per-chunk tile counts
+    const uint32_t q_chunk_tiles = Sq_chunk_t * head_dim_t;
+    const uint32_t kt_chunk_tiles = head_dim_t * Sk_chunk_t;
+    const uint32_t v_chunk_tiles = Sv_chunk_t * head_dim_t;
+    const uint32_t out_chunk_tiles = Sq_chunk_t * head_dim_t;
+
+    // DRAM data sizes: Q/Out sized for num_q_chunks, KT/V sized for num_k_chunks
+    const uint32_t q_num_tiles = num_q_chunks * q_chunk_tiles;
+    const uint32_t kt_num_tiles = num_k_chunks * kt_chunk_tiles;
+    const uint32_t v_num_tiles = num_k_chunks * v_chunk_tiles;
+    const uint32_t out_num_tiles = num_q_chunks * out_chunk_tiles;
 
     const uint32_t q_data_size = q_num_tiles * single_tile_size;
     const uint32_t kt_data_size = kt_num_tiles * single_tile_size;
     const uint32_t v_data_size = v_num_tiles * single_tile_size;
     const uint32_t out_data_size = out_num_tiles * single_tile_size;
 
-    // CB sizes (double-buffered for Q, KT, V)
-    const uint32_t q_cb_size = 2 * q_data_size;
-    const uint32_t kt_cb_size = 2 * kt_data_size;
-    const uint32_t v_cb_size = 2 * v_data_size;
+    // CB sizes still based on per-chunk (double-buffered for pipelining)
+    const uint32_t q_chunk_data_size = q_chunk_tiles * single_tile_size;
+    const uint32_t out_chunk_data_size = out_chunk_tiles * single_tile_size;
 
-    const uint32_t num_iter = 16;
+    // CB sizes (double-buffered per chunk for Q, KT, V)
+    const uint32_t q_cb_size = 2 * q_chunk_data_size;
+    const uint32_t kt_cb_size = 2 * kt_chunk_tiles * single_tile_size;
+    const uint32_t v_cb_size = 2 * v_chunk_tiles * single_tile_size;
 
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
@@ -121,14 +131,28 @@ void sdpa_single_core(
                                         .set_page_size(tt::CBIndex::c_5, single_tile_size);
     CreateCircularBuffer(program, core, c_identity_scalar_config);
 
+    // cb_col_identity — tile with 1.0 in column 0, zeros elsewhere; used for matmul_reduce normalization
+    const uint32_t col_identity_cb_index = CBIndex::c_8;
+    auto cb_col_identity_config = CircularBufferConfig(single_tile_size, {{col_identity_cb_index, cb_data_format}})
+                                      .set_page_size(col_identity_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_col_identity_config);
+
+    // cb_normalized_out — 1-tile streaming CB for normalized output (decoupled from ping-pong out CBs)
+    const uint32_t normalized_out_cb_index = CBIndex::c_9;
+    auto cb_normalized_out_config = CircularBufferConfig(single_tile_size, {{normalized_out_cb_index, cb_data_format}})
+                                        .set_page_size(normalized_out_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_normalized_out_config);
+
     const uint32_t cb_prev_out_index = CBIndex::c_25;
-    CircularBufferConfig cb_prev_out_config = CircularBufferConfig(out_data_size, {{cb_prev_out_index, cb_data_format}})
-                                                  .set_page_size(cb_prev_out_index, single_tile_size);
+    CircularBufferConfig cb_prev_out_config =
+        CircularBufferConfig(out_chunk_data_size, {{cb_prev_out_index, cb_data_format}})
+            .set_page_size(cb_prev_out_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_prev_out_config);
 
     const uint32_t cb_curr_out_index = CBIndex::c_26;
-    CircularBufferConfig cb_curr_out_config = CircularBufferConfig(out_data_size, {{cb_curr_out_index, cb_data_format}})
-                                                  .set_page_size(cb_curr_out_index, single_tile_size);
+    CircularBufferConfig cb_curr_out_config =
+        CircularBufferConfig(out_chunk_data_size, {{cb_curr_out_index, cb_data_format}})
+            .set_page_size(cb_curr_out_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_curr_out_config);
 
     // cb_prev_max
@@ -176,7 +200,8 @@ void sdpa_single_core(
         Sk_chunk_t,
         Sv_chunk_t,
         head_dim_t,
-        num_iter,
+        num_q_chunks,
+        num_k_chunks,
     };
     TensorAccessorArgs(*q_dram_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*kt_dram_buffer).append_to(reader_compile_time_args);
@@ -201,7 +226,7 @@ void sdpa_single_core(
     scale_union.f = 1.0f / std::sqrt(static_cast<float>(head_dim_t * TILE_WIDTH));
 
     std::vector<uint32_t> writer_compile_time_args = {
-        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_iter, packed_identity_scalar};
+        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_q_chunks, num_k_chunks, packed_identity_scalar};
     TensorAccessorArgs(*out_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
@@ -214,7 +239,7 @@ void sdpa_single_core(
             .defines = defines});
 
     std::vector<uint32_t> compute_compile_time_args = {
-        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_iter, scale_union.u, subblock_h};
+        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_q_chunks, num_k_chunks, scale_union.u, subblock_h};
     tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/compute/sdpa.cpp",
@@ -235,17 +260,17 @@ void sdpa_single_core(
     // this step.
 
     // Create zero-filled input data, tilize, and upload to DRAM
-    const uint32_t q_rows = Sq_chunk_t * TILE_HEIGHT;
+    const uint32_t q_rows = num_q_chunks * Sq_chunk_t * TILE_HEIGHT;
     const uint32_t q_cols = head_dim_t * TILE_WIDTH;
     std::vector<bfloat16> q_data(q_rows * q_cols, bfloat16(0.0f));
     q_data = tilize_nfaces(q_data, q_rows, q_cols);
 
     const uint32_t kt_rows = head_dim_t * TILE_HEIGHT;
-    const uint32_t kt_cols = Sk_chunk_t * TILE_WIDTH;
+    const uint32_t kt_cols = num_k_chunks * Sk_chunk_t * TILE_WIDTH;
     std::vector<bfloat16> kt_data(kt_rows * kt_cols, bfloat16(0.0f));
     kt_data = tilize_nfaces(kt_data, kt_rows, kt_cols);
 
-    const uint32_t v_rows = Sv_chunk_t * TILE_HEIGHT;
+    const uint32_t v_rows = num_k_chunks * Sv_chunk_t * TILE_HEIGHT;
     const uint32_t v_cols = head_dim_t * TILE_WIDTH;
     std::vector<bfloat16> v_data(v_rows * v_cols, bfloat16(0.0f));
     v_data = tilize_nfaces(v_data, v_rows, v_cols);
@@ -278,8 +303,11 @@ int main() {
         constexpr uint32_t Sv_chunk_t = 16;
         constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
         constexpr uint32_t subblock_h = 1;
+        constexpr uint32_t num_q_chunks = 2;
+        constexpr uint32_t num_k_chunks = 3;
 
-        sdpa_single_core(Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, subblock_h, mesh_device);
+        sdpa_single_core(
+            Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, subblock_h, num_q_chunks, num_k_chunks, mesh_device);
 
         pass &= mesh_device->close();
 
