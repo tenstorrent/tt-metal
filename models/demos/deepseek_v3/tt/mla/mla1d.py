@@ -810,8 +810,6 @@ class MLA1D(AbstractModule):
         wkv_b2_m = 32  # m dimension (tiny tile height)
         wkv_b2_k = kv_lora_rank  # 512
         wkv_b2_n = v_head_dim  # 128
-        wkv_b2_in0_core_grid_x = 3
-        wkv_b2_in0_core_grid_y = 4
         wkv_b2_tile_h = 32  # Tiny tile for wkv_b2
 
         # Program config for wkv_b2 (batched DRAM sharded)
@@ -868,13 +866,10 @@ class MLA1D(AbstractModule):
         # wo: m=32, k=16384, n=896 (pads to 1152)
         # in0_core_grid=(8,1), out_core_grid=(6,1), WIDTH sharding
         # =====================================================================
-        wo_k = num_heads * v_head_dim  # 128 * 128 = 16384
         wo_n = dim // mesh_device.shape[1]  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
         wo_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
         wo_out_core_grid = ttnn.CoreGrid(y=2, x=6)
-        wo_num_in0_cores = 16
-        wo_num_out_cores = 12
 
         # Program config for wo
         wo_in0_block_w = 32  # 16384 // 8 // 32 = 64
