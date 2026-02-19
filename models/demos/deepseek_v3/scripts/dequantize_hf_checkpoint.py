@@ -9,7 +9,8 @@ import argparse
 import concurrent.futures
 import json
 import shutil
-from collections import defaultdict
+import time
+from collections import OrderedDict, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -226,10 +227,15 @@ def preflight_validate_checkpoint_structure(
                     f"(expected '{base_key}' in weight_map)"
                 )
 
+    total_shards = len(keys_by_file)
+    logger.info(f"Preflight: validating {total_shards} shard file(s)")
+
     missing_shards: list[str] = []
     missing_keys_in_shard: list[tuple[str, str]] = []
     unindexed_key_count = 0
-    for shard_name, shard_keys in sorted(keys_by_file.items()):
+    preflight_started = time.monotonic()
+    last_progress_log = preflight_started
+    for shard_idx, (shard_name, shard_keys) in enumerate(sorted(keys_by_file.items()), start=1):
         shard_path = model_dir / shard_name
         if not shard_path.is_file():
             missing_shards.append(shard_name)
@@ -241,6 +247,15 @@ def preflight_validate_checkpoint_structure(
                     missing_keys_in_shard.append((shard_name, key))
             # Not fatal but useful: report keys physically present but not indexed.
             unindexed_key_count += len(available - index_key_set)
+
+        now = time.monotonic()
+        if now - last_progress_log >= 10.0:
+            elapsed = now - preflight_started
+            logger.info(
+                f"Preflight progress: {shard_idx}/{total_shards} shards checked "
+                f"({(100.0 * shard_idx / total_shards):.1f}%), elapsed={elapsed:.1f}s"
+            )
+            last_progress_log = now
 
     if missing_shards:
         raise FileNotFoundError("Index references missing shard files: " + ", ".join(missing_shards))
@@ -255,10 +270,13 @@ def preflight_validate_checkpoint_structure(
 
 
 class ShardTensorReader:
-    def __init__(self, model_dir: Path, weight_map: dict[str, str]):
+    def __init__(self, model_dir: Path, weight_map: dict[str, str], max_open_handles: int = 32):
+        if max_open_handles <= 0:
+            raise ValueError("max_open_handles must be > 0.")
         self._model_dir = model_dir
         self._weight_map = weight_map
-        self._handles: dict[str, Any] = {}
+        self._max_open_handles = max_open_handles
+        self._handles: OrderedDict[str, Any] = OrderedDict()
 
     def get_tensor(self, key: str) -> torch.Tensor:
         if key not in self._weight_map:
@@ -269,9 +287,17 @@ class ShardTensorReader:
             raise FileNotFoundError(f"Shard file not found for key '{key}': {shard_path}")
         handle = self._handles.get(shard_name)
         if handle is None:
+            while len(self._handles) >= self._max_open_handles:
+                evicted_shard, evicted_handle = self._handles.popitem(last=False)
+                close_fn = getattr(evicted_handle, "close", None)
+                if callable(close_fn):
+                    close_fn()
+                logger.debug(f"Evicted cached source shard handle: {evicted_shard}")
             logger.info(f"Opening source shard: {shard_name}")
             handle = safe_open(shard_path, framework="pt", device="cpu")
             self._handles[shard_name] = handle
+        else:
+            self._handles.move_to_end(shard_name)
         return handle.get_tensor(key)
 
     def close(self) -> None:
@@ -418,6 +444,9 @@ def process_source_shard(
     shard_dequantized = 0
     shard_scales_kept = 0
     shard_passthrough = 0
+    started = time.monotonic()
+    last_progress_log = started
+    total_keys = len(keys)
     try:
         for key in keys:
             shard_seen += 1
@@ -442,6 +471,7 @@ def process_source_shard(
                     raise ValueError(f"Scale tensor '{scale_key}' must be floating point, got {inv_scale.dtype}")
                 tensor_out = dequantize_tensor(tensor, inv_scale, block_shape).to(out_dtype)
                 shard_dequantized += 1
+                del inv_scale
             else:
                 is_fp8 = tensor.dtype in FP8_DTYPES
                 if is_fp8:
@@ -451,6 +481,19 @@ def process_source_shard(
                 shard_passthrough += 1
 
             writer.add_tensor(key, tensor_out)
+            del tensor
+            del tensor_out
+
+            now = time.monotonic()
+            if now - last_progress_log >= 10.0:
+                elapsed = now - started
+                logger.info(
+                    f"[worker {shard_idx}] progress {shard_seen}/{total_keys} "
+                    f"({(100.0 * shard_seen / total_keys):.1f}%), "
+                    f"dequantized={shard_dequantized}, passthrough={shard_passthrough}, "
+                    f"scales_kept={shard_scales_kept}, elapsed={elapsed:.1f}s"
+                )
+                last_progress_log = now
     finally:
         reader.close()
 
@@ -494,6 +537,12 @@ def convert_checkpoint(
     preflight_validate_checkpoint_structure(input_dir, weight_map, keys_by_file)
     logger.info(f"Discovered {len(keys_by_file)} source shard files")
     logger.info(f"Conversion worker mode: num_workers={num_workers}")
+    per_worker_output_buffer_bytes = max(1, max_output_shard_size_bytes // num_workers)
+    logger.info(
+        "Effective per-worker output buffer cap: "
+        f"{format_bytes(per_worker_output_buffer_bytes)} "
+        f"(global target shard size {format_bytes(max_output_shard_size_bytes)})"
+    )
     shard_names = sorted(keys_by_file.keys())
     work_items = [(idx, name, keys_by_file[name]) for idx, name in enumerate(shard_names, start=1)]
     logger.info(f"Number of work items: {len(work_items)}")
@@ -512,7 +561,7 @@ def convert_checkpoint(
                     block_shape=block_shape,
                     out_dtype=out_dtype,
                     keep_scale_inv=keep_scale_inv,
-                    max_output_shard_size_bytes=max_output_shard_size_bytes,
+                    max_output_shard_size_bytes=per_worker_output_buffer_bytes,
                 )
             )
     else:
@@ -529,7 +578,7 @@ def convert_checkpoint(
                     block_shape,
                     out_dtype,
                     keep_scale_inv,
-                    max_output_shard_size_bytes,
+                    per_worker_output_buffer_bytes,
                 )
                 for idx, name, keys in work_items
             ]
