@@ -5,10 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#if __has_include("chlkc_unpack_data_format.h")
-#include "chlkc_pack_data_format.h"
-#include "chlkc_unpack_data_format.h"
-#include "chlkc_unpack_tile_dims.h"
+#if __has_include("chlkc_descriptors.h")
+#include "chlkc_descriptors.h"
 #define DATA_FORMATS_DEFINED
 #endif
 
@@ -497,9 +495,10 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
  * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ * | use_vc (template argument)        | Enable custom VC usage                             | bool      | True/False                       | False    |
  */
 // clang-format on
-template <bool enable_noc_tracing = true>
+template <bool enable_noc_tracing = true, bool use_vc = false>
 FORCE_INLINE void noc_async_read_one_packet(
     uint64_t src_noc_addr,
     uint32_t dst_local_l1_addr,
@@ -520,7 +519,7 @@ FORCE_INLINE void noc_async_read_one_packet(
 
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
+    ncrisc_noc_fast_read<noc_mode, use_vc>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
     WAYPOINT("NAOD");
 }
 
@@ -542,9 +541,10 @@ FORCE_INLINE void noc_async_read_one_packet(
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number              | False    |
+ * | use_vc (template argument)        | Enable custom VC usage                             | bool      | True or False                    | False    |
  */
 // clang-format on
-template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true>
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true, bool use_vc = false>
 inline void noc_async_read(
     uint64_t src_noc_addr,
     uint32_t dst_local_l1_addr,
@@ -560,11 +560,11 @@ inline void noc_async_read(
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_read_one_packet<false>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
+        noc_async_read_one_packet<false, use_vc>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
+        ncrisc_noc_fast_read_any_len<noc_mode, use_vc>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
         WAYPOINT("NARD");
     }
 }
@@ -942,7 +942,8 @@ inline void noc_async_write_multicast(
         noc);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet<false>(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
+        noc_async_write_multicast_one_packet<false>(
+            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, noc);
     } else {
         WAYPOINT("NMWW");
         NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);

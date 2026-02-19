@@ -520,7 +520,7 @@ def test_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Run decode forward
-            logits, _ = generator.decode_forward_text(
+            logits, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
