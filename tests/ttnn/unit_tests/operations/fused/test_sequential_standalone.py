@@ -14,15 +14,16 @@ import sys
 from unittest.mock import MagicMock
 
 
-# Mock ttnn before importing the descriptor modules (which do `import ttnn` at
-# module level).  We snapshot sys.modules BEFORE the mock, import the descriptor
-# modules under the mock, keep private references to them, then FULLY UNDO
-# everything in sys.modules so that test files collected later (e.g.
-# test_sequential.py) re-import from scratch with the real ttnn.
+# Mock ttnn before importing the fusion subpackage modules (which do
+# `import ttnn` at module level).  We snapshot sys.modules BEFORE the mock,
+# import the fusion modules under the mock, keep private references to them,
+# then FULLY UNDO everything in sys.modules so that test files collected later
+# (e.g. test_sequential.py) re-import from scratch with the real ttnn.
 #
 # The standalone test functions below access the mock-backed modules via the
-# private module-level references (_mock_sequential / _mock_cpp_parser) instead
-# of doing a bare `from models.experimental.ops... import X`.
+# private module-level references (_mock_common / _mock_cb_allocator /
+# _mock_codegen / _mock_fusion / _mock_graph) instead of doing a bare
+# `from models.experimental.ops... import X`.
 
 _modules_before = set(sys.modules)
 _ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
@@ -31,8 +32,11 @@ _ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
 for _k in _ttnn_mocked_keys:
     sys.modules[_k] = MagicMock()
 
-import models.experimental.ops.descriptors.sequential as _mock_sequential  # noqa: E402
-import models.experimental.ops.descriptors.cpp_parser as _mock_cpp_parser  # noqa: E402
+import models.experimental.ops.descriptors.fusion.common as _mock_common  # noqa: E402
+import models.experimental.ops.descriptors.fusion.cb_allocator as _mock_cb_allocator  # noqa: E402
+import models.experimental.ops.descriptors.fusion.codegen as _mock_codegen  # noqa: E402
+import models.experimental.ops.descriptors.fusion.fusion as _mock_fusion  # noqa: E402
+import models.experimental.ops.descriptors.fusion.graph as _mock_graph  # noqa: E402
 
 # Remove every module that was added during the mock window.
 for _k in set(sys.modules) - _modules_before:
@@ -53,7 +57,7 @@ class TestCBInfo:
 
     def test_creation(self):
         """Test creating CBInfo."""
-        CBInfo = _mock_sequential.CBInfo
+        CBInfo = _mock_cb_allocator.CBInfo
 
         cb = CBInfo(
             original_index=5,
@@ -75,8 +79,8 @@ class TestPhaseInfo:
 
     def test_creation(self):
         """Test creating PhaseInfo."""
-        PhaseInfo = _mock_sequential.PhaseInfo
-        CBInfo = _mock_sequential.CBInfo
+        PhaseInfo = _mock_cb_allocator.PhaseInfo
+        CBInfo = _mock_cb_allocator.CBInfo
 
         phase = PhaseInfo(
             phase_idx=0,
@@ -90,7 +94,7 @@ class TestPhaseInfo:
 
     def test_default_empty_cb_info(self):
         """Test PhaseInfo with default empty cb_info."""
-        PhaseInfo = _mock_sequential.PhaseInfo
+        PhaseInfo = _mock_cb_allocator.PhaseInfo
 
         phase = PhaseInfo(phase_idx=1, op_descriptor=MagicMock())
         assert phase.cb_info == {}
@@ -101,7 +105,7 @@ class TestExtractCBInfo:
 
     def test_extract_from_descriptor(self):
         """Test extracting CB info from a mock descriptor."""
-        extract_cb_info = _mock_sequential.extract_cb_info
+        extract_cb_info = _mock_cb_allocator.extract_cb_info
 
         # Create mock format descriptor
         fmt_desc = MagicMock()
@@ -129,7 +133,7 @@ class TestExtractCBInfo:
 
     def test_extract_multiple_cbs(self):
         """Test extracting multiple CBs."""
-        extract_cb_info = _mock_sequential.extract_cb_info
+        extract_cb_info = _mock_cb_allocator.extract_cb_info
 
         fmt1 = MagicMock(buffer_index=0, data_format="F16", page_size=1024)
         fmt2 = MagicMock(buffer_index=16, data_format="F32", page_size=2048)
@@ -155,7 +159,7 @@ class TestExtractCBNames:
 
     def test_extract_cb_names(self):
         """Test extracting CB names from kernel descriptor."""
-        extract_cb_names_from_kernel = _mock_sequential.extract_cb_names_from_kernel
+        extract_cb_names_from_kernel = _mock_cb_allocator.extract_cb_names_from_kernel
 
         kernel = MagicMock()
         kernel.named_compile_time_args = [
@@ -189,8 +193,8 @@ class TestOpGraphBuilderBasic:
 
     def test_creation(self):
         """Test creating a builder."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         mock_desc = self._make_mock_op()
         builder = OpGraphBuilder(OpNode(mock_desc))
@@ -198,22 +202,22 @@ class TestOpGraphBuilderBasic:
 
     def test_single_node_returns_fused_op(self):
         """Test that single-node build returns FusedOp wrapping the original."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
-        FusedOp = _mock_sequential.FusedOp
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
+        FusedOp = _mock_fusion.FusedOp
 
         mock_desc = self._make_mock_op()
         result = OpGraphBuilder(OpNode(mock_desc)).build(device=MagicMock())
 
-        assert isinstance(result, FusedOp)
+        assert type(result).__name__ == "FusedOp"
         assert result.descriptor is mock_desc.descriptor
         assert result.input_tensors is mock_desc.input_tensors
         assert result.output_tensors is mock_desc.output_tensors
 
     def test_build_twice_raises(self):
         """Test that building twice raises ValueError."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         mock_desc = self._make_mock_op()
         builder = OpGraphBuilder(OpNode(mock_desc))
@@ -228,7 +232,7 @@ class TestSourceTransformations:
 
     def test_prefix_named_args_phase0_unchanged(self):
         """Test that phase 0 source is unchanged."""
-        _prefix_named_args_in_source = _mock_sequential._prefix_named_args_in_source
+        _prefix_named_args_in_source = _mock_codegen._prefix_named_args_in_source
 
         source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
         result = _prefix_named_args_in_source(source, 0)
@@ -236,7 +240,7 @@ class TestSourceTransformations:
 
     def test_prefix_named_args_phase1(self):
         """Test that phase 1 gets prefixed named args."""
-        _prefix_named_args_in_source = _mock_sequential._prefix_named_args_in_source
+        _prefix_named_args_in_source = _mock_codegen._prefix_named_args_in_source
 
         source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
         result = _prefix_named_args_in_source(source, 1)
@@ -244,7 +248,7 @@ class TestSourceTransformations:
 
     def test_prefix_named_args_phase2(self):
         """Test phase 2 prefix."""
-        _prefix_named_args_in_source = _mock_sequential._prefix_named_args_in_source
+        _prefix_named_args_in_source = _mock_codegen._prefix_named_args_in_source
 
         source = 'constexpr uint32_t blk = get_named_compile_time_arg_val("blk");'
         result = _prefix_named_args_in_source(source, 2)
@@ -252,7 +256,7 @@ class TestSourceTransformations:
 
     def test_emit_rt_arg_wrapper_bakes_offset(self):
         """Test that wrapper function bakes the literal offset value."""
-        _emit_rt_arg_wrapper = _mock_sequential._emit_rt_arg_wrapper
+        _emit_rt_arg_wrapper = _mock_codegen._emit_rt_arg_wrapper
         result = _emit_rt_arg_wrapper(1, 12)
         joined = "\n".join(result)
         assert "arg_idx + 12" in joined
@@ -263,15 +267,15 @@ class TestSourceTransformations:
 
     def test_emit_rt_arg_define_and_undef(self):
         """Test that define/undef emit the correct preprocessor directives."""
-        _emit_rt_arg_define = _mock_sequential._emit_rt_arg_define
-        _emit_rt_arg_undef = _mock_sequential._emit_rt_arg_undef
+        _emit_rt_arg_define = _mock_codegen._emit_rt_arg_define
+        _emit_rt_arg_undef = _mock_codegen._emit_rt_arg_undef
         assert _emit_rt_arg_define(1) == "#define get_arg_val phase_1_get_arg_val"
         assert _emit_rt_arg_define(2) == "#define get_arg_val phase_2_get_arg_val"
         assert _emit_rt_arg_undef() == "#undef get_arg_val"
 
     def test_offset_compile_time_args_phase0_unchanged(self):
         """Test that phase 0 positional args are unchanged."""
-        _offset_compile_time_args_in_source = _mock_sequential._offset_compile_time_args_in_source
+        _offset_compile_time_args_in_source = _mock_codegen._offset_compile_time_args_in_source
 
         source = "uint32_t blk = get_compile_time_arg_val(0);"
         result = _offset_compile_time_args_in_source(source, 0, 0)
@@ -279,7 +283,7 @@ class TestSourceTransformations:
 
     def test_offset_compile_time_args_phase1(self):
         """Test that phase 1 positional args are offset."""
-        _offset_compile_time_args_in_source = _mock_sequential._offset_compile_time_args_in_source
+        _offset_compile_time_args_in_source = _mock_codegen._offset_compile_time_args_in_source
 
         source = "uint32_t blk = get_compile_time_arg_val(0);\nuint32_t mode = get_compile_time_arg_val(1);"
         result = _offset_compile_time_args_in_source(source, 1, 3)
@@ -288,7 +292,7 @@ class TestSourceTransformations:
 
     def test_offset_compile_time_args_tensor_accessor(self):
         """Test that TensorAccessorArgs<N> is also offset."""
-        _offset_compile_time_args_in_source = _mock_sequential._offset_compile_time_args_in_source
+        _offset_compile_time_args_in_source = _mock_codegen._offset_compile_time_args_in_source
 
         source = "constexpr auto src_args = TensorAccessorArgs<2>();"
         result = _offset_compile_time_args_in_source(source, 1, 5)
@@ -301,7 +305,7 @@ class TestSourceTransformations:
         (see _emit_rt_arg_define/_emit_rt_arg_undef), NOT by source-level rewriting in
         _transform_phase_source. So get_arg_val calls are left unchanged.
         """
-        _transform_phase_source = _mock_sequential._transform_phase_source
+        _transform_phase_source = _mock_codegen._transform_phase_source
 
         source = (
             'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");\n'
@@ -322,7 +326,7 @@ class TestKernelBodyExtraction:
 
     def test_extract_simple_body(self):
         """Test extracting a simple kernel body."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 #include "api.h"
@@ -351,7 +355,7 @@ void other_func() {
 
     def test_extract_nested_braces(self):
         """Test extracting body with nested braces."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -368,7 +372,7 @@ void kernel_main() {
 
     def test_extract_empty_body(self):
         """Test extracting from source with no kernel_main."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void other_function() {
@@ -384,7 +388,7 @@ class TestCollectIncludes:
 
     def test_collect_unique_includes(self):
         """Test collecting unique includes from multiple sources."""
-        collect_includes = _mock_cpp_parser.collect_includes
+        collect_includes = _mock_codegen.collect_includes
 
         sources = [
             '#include "common.h"\n#include "phase0.h"\nvoid kernel_main() {}',
@@ -404,7 +408,7 @@ class TestCollectDefines:
 
     def test_collect_defines_before_main(self):
         """Test collecting defines only before kernel_main."""
-        collect_defines = _mock_cpp_parser.collect_defines
+        collect_defines = _mock_codegen.collect_defines
 
         sources = [
             "#define FOO 1\n#define BAR 2\nvoid kernel_main() {\n#define INSIDE 3\n}",
@@ -423,7 +427,7 @@ class TestInlineLocalIncludes:
 
     def test_inlines_local_include(self, tmp_path):
         """Test inlining a local include file."""
-        inline_local_includes = _mock_cpp_parser.inline_local_includes
+        inline_local_includes = _mock_codegen.inline_local_includes
 
         # Create a local header file
         header = tmp_path / "utils.h"
@@ -440,7 +444,7 @@ class TestInlineLocalIncludes:
 
     def test_leaves_path_includes(self):
         """Test that includes with paths are left unchanged."""
-        inline_local_includes = _mock_cpp_parser.inline_local_includes
+        inline_local_includes = _mock_codegen.inline_local_includes
 
         source = '#include "api/dataflow/dataflow_api.h"\nvoid kernel_main() {}\n'
         headers, remaining = inline_local_includes(source, "/some/dir")
@@ -451,7 +455,7 @@ class TestInlineLocalIncludes:
 
     def test_no_kernel_dir_returns_unchanged(self):
         """Test that None kernel_dir returns source unchanged."""
-        inline_local_includes = _mock_cpp_parser.inline_local_includes
+        inline_local_includes = _mock_codegen.inline_local_includes
 
         source = '#include "utils.h"\nvoid kernel_main() {}\n'
         headers, remaining = inline_local_includes(source, None)
@@ -464,7 +468,7 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_phase0_keeps_original_names(self):
         """Test that phase 0 keeps original arg names."""
-        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
+        _merge_named_compile_time_args = _mock_codegen._merge_named_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[("cb_in", 0), ("blk", 4)])},
@@ -479,7 +483,7 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_phase1_gets_prefixed_names(self):
         """Test that phase 1+ args get prefixed."""
-        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
+        _merge_named_compile_time_args = _mock_codegen._merge_named_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
@@ -493,7 +497,7 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_rt_arg_offsets_not_in_named_args(self):
         """RT arg offsets are baked into source, not passed as named compile-time args."""
-        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
+        _merge_named_compile_time_args = _mock_codegen._merge_named_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
@@ -506,7 +510,7 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_barrier_rt_offset_added(self):
         """Test that barrier_rt_offset named arg is added."""
-        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
+        _merge_named_compile_time_args = _mock_codegen._merge_named_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[])},
@@ -559,7 +563,7 @@ class TestComputeRuntimeArgOffsets:
 
     def test_basic_offsets(self):
         """Test basic runtime arg offset computation."""
-        _compute_runtime_arg_offsets = _mock_sequential._compute_runtime_arg_offsets
+        _compute_runtime_arg_offsets = _mock_codegen._compute_runtime_arg_offsets
 
         core_ranges = _make_mock_core_ranges()
 
@@ -582,7 +586,7 @@ class TestComputeRuntimeArgOffsets:
 
     def test_offsets_with_missing_kernel(self):
         """Test offsets when a phase has no kernel of that type."""
-        _compute_runtime_arg_offsets = _mock_sequential._compute_runtime_arg_offsets
+        _compute_runtime_arg_offsets = _mock_codegen._compute_runtime_arg_offsets
 
         core_ranges = _make_mock_core_ranges()
 
@@ -605,7 +609,7 @@ class TestConcatenateRuntimeArgs:
 
     def test_basic_concatenation(self):
         """Test basic runtime arg concatenation across phases."""
-        _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
+        _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
 
         core_ranges = _make_mock_core_ranges()
 
@@ -633,7 +637,7 @@ class TestMergeCompileTimeArgs:
 
     def test_concatenates_all_phases(self):
         """Test that compile-time args from all phases are concatenated."""
-        _merge_compile_time_args = _mock_sequential._merge_compile_time_args
+        _merge_compile_time_args = _mock_codegen._merge_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(compile_time_args=[10, 20, 30])},
@@ -646,7 +650,7 @@ class TestMergeCompileTimeArgs:
 
     def test_handles_missing_kernel(self):
         """Test offset computation with a missing kernel."""
-        _merge_compile_time_args = _mock_sequential._merge_compile_time_args
+        _merge_compile_time_args = _mock_codegen._merge_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(compile_time_args=[10, 20])},
@@ -664,7 +668,7 @@ class TestValidateFp32Consistency:
 
     def test_consistent_fp32_passes(self):
         """Test that consistent fp32 settings pass validation."""
-        _validate_fp32_consistency = _mock_sequential._validate_fp32_consistency
+        _validate_fp32_consistency = _mock_codegen._validate_fp32_consistency
 
         mock_kernel1 = MagicMock()
         mock_kernel1.config = MagicMock(fp32_dest_acc_en=True)
@@ -682,7 +686,7 @@ class TestValidateFp32Consistency:
 
     def test_inconsistent_fp32_raises(self):
         """Test that inconsistent fp32 settings raise ValueError."""
-        _validate_fp32_consistency = _mock_sequential._validate_fp32_consistency
+        _validate_fp32_consistency = _mock_codegen._validate_fp32_consistency
 
         mock_kernel1 = MagicMock()
         mock_kernel1.config = MagicMock(fp32_dest_acc_en=True)
@@ -703,7 +707,7 @@ class TestExtractKernelBody:
     """Tests for kernel body extraction via brace matching."""
 
     def test_extract_body_with_alwi_kernel_main(self):
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 ALWI void kernel_main() {
@@ -717,7 +721,7 @@ ALWI void kernel_main() {
 
     def test_extract_body_with_string_braces(self):
         """kernel_main body with string literal containing braces."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -730,14 +734,14 @@ void kernel_main() {
         assert "int y = 2" in body
 
     def test_standard_kernel_main(self):
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = "void kernel_main() {\n    int x = 1;\n}"
         body = extract_kernel_body(source)
         assert "int x = 1" in body
 
     def test_no_kernel_main(self):
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = "void other_function() { int x = 1; }"
         body = extract_kernel_body(source)
@@ -745,7 +749,7 @@ void kernel_main() {
 
     def test_raw_string_with_braces(self):
         """Raw string literal with braces should not confuse brace matching."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -759,7 +763,7 @@ void kernel_main() {
 
     def test_raw_string_with_delimiter(self):
         """Raw string with custom delimiter containing braces and quotes."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = '''
 void kernel_main() {
@@ -774,7 +778,7 @@ void kernel_main() {
 
     def test_prefixed_raw_string(self):
         """LR, uR, UR, u8R raw string prefixes."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -790,7 +794,7 @@ void kernel_main() {
 
     def test_identifier_ending_in_R_not_raw_string(self):
         """Variable named fooR followed by string is not a raw string."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -804,7 +808,7 @@ void kernel_main() {
 
     def test_line_comment_with_braces(self):
         """Braces in line comments should be ignored."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -817,7 +821,7 @@ void kernel_main() {
 
     def test_block_comment_with_braces(self):
         """Braces in block comments should be ignored."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -830,7 +834,7 @@ void kernel_main() {
 
     def test_char_literal_with_brace(self):
         """Char literal containing a brace character."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -843,7 +847,7 @@ void kernel_main() {
 
     def test_escaped_quote_in_string(self):
         """Escaped quote followed by brace in string."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = r"""
 void kernel_main() {
@@ -856,7 +860,7 @@ void kernel_main() {
 
     def test_deeply_nested_braces(self):
         """Multiple levels of nested braces."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -876,7 +880,7 @@ void kernel_main() {
 
     def test_mixed_comments_and_strings(self):
         """Body with interspersed comments, strings, and braces."""
-        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
+        extract_kernel_body = _mock_codegen.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -900,7 +904,7 @@ class TestRuntimeArgRedirect:
 
     def test_wrapper_bakes_literal_offset(self):
         """Wrapper for phase 2 should bake the literal offset."""
-        _emit_rt_arg_wrapper = _mock_sequential._emit_rt_arg_wrapper
+        _emit_rt_arg_wrapper = _mock_codegen._emit_rt_arg_wrapper
         result = _emit_rt_arg_wrapper(2, 18)
         joined = "\n".join(result)
         assert "arg_idx + 18" in joined
@@ -909,8 +913,8 @@ class TestRuntimeArgRedirect:
 
     def test_define_and_undef(self):
         """Define/undef should emit correct preprocessor directives."""
-        _emit_rt_arg_define = _mock_sequential._emit_rt_arg_define
-        _emit_rt_arg_undef = _mock_sequential._emit_rt_arg_undef
+        _emit_rt_arg_define = _mock_codegen._emit_rt_arg_define
+        _emit_rt_arg_undef = _mock_codegen._emit_rt_arg_undef
         assert _emit_rt_arg_define(2) == "#define get_arg_val phase_2_get_arg_val"
         assert _emit_rt_arg_undef() == "#undef get_arg_val"
 
@@ -920,7 +924,7 @@ class TestInlineLocalIncludesRelative:
 
     def test_relative_path_inlined(self, tmp_path):
         """Includes with relative paths are resolved and inlined."""
-        inline_local_includes = _mock_cpp_parser.inline_local_includes
+        inline_local_includes = _mock_codegen.inline_local_includes
 
         # Create directory structure
         subdir = tmp_path / "subdir"
@@ -936,7 +940,7 @@ class TestInlineLocalIncludesRelative:
 
     def test_local_include_still_works(self, tmp_path):
         """Local includes (no path separator) still work."""
-        inline_local_includes = _mock_cpp_parser.inline_local_includes
+        inline_local_includes = _mock_codegen.inline_local_includes
 
         header = tmp_path / "local.h"
         header.write_text("int local_val = 1;")
@@ -952,8 +956,8 @@ class TestCBPoolAllocator:
 
     def test_basic_allocation_same_config_reuses_slot(self):
         """Two phases with identical CB configs should reuse the same slot."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -977,8 +981,8 @@ class TestCBPoolAllocator:
 
     def test_different_page_size_gets_separate_slot(self):
         """Different page sizes on the same CB index should get separate slots."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1001,8 +1005,8 @@ class TestCBPoolAllocator:
 
     def test_different_data_format_gets_separate_slot(self):
         """Different data formats on the same CB index should get separate slots."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1016,8 +1020,8 @@ class TestCBPoolAllocator:
 
     def test_different_unpack_to_dest_mode_gets_separate_slot(self):
         """Different unpack_to_dest_mode on same (format, page_size) gets separate slots."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1031,8 +1035,8 @@ class TestCBPoolAllocator:
 
     def test_overflow_raises_error(self):
         """Exceeding max_slots raises ValueError."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=3)
 
@@ -1048,8 +1052,8 @@ class TestCBPoolAllocator:
 
     def test_phantom_cb_reservation(self):
         """Phantom CBs get identity-mapped and don't collide with real allocations."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1072,8 +1076,8 @@ class TestCBPoolAllocator:
 
     def test_multiple_cbs_per_phase(self):
         """Within a phase, each CB gets its own slot even with same config."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1096,8 +1100,8 @@ class TestCBPoolAllocator:
 
     def test_cross_phase_sharing(self):
         """CBs with same config across different phases should share a slot."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1114,8 +1118,8 @@ class TestCBPoolAllocator:
 
     def test_cross_phase_sharing_different_index(self):
         """CBs at different indices but same config across phases share a slot."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1132,8 +1136,8 @@ class TestCBPoolAllocator:
 
     def test_get_all_slot_indices(self):
         """get_all_slot_indices returns all allocated slots."""
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        CBInfo = _mock_sequential.CBInfo
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
 
         pool = CBPoolAllocator(max_slots=32)
 
@@ -1149,7 +1153,7 @@ class TestCBPoolAllocator:
 
     def test_named_arg_cb_remapping(self):
         """CB-reference named args (cb_*) should get remapped values."""
-        merge_fn = _mock_sequential._merge_named_compile_time_args
+        merge_fn = _mock_codegen._merge_named_compile_time_args
 
         # Create mock kernel with named compile-time args
         kernel = MagicMock()
@@ -1176,7 +1180,7 @@ class TestCBPoolAllocator:
 
     def test_named_arg_cb_remapping_phase1_prefix(self):
         """Phase 1+ named args should be prefixed AND remapped."""
-        merge_fn = _mock_sequential._merge_named_compile_time_args
+        merge_fn = _mock_codegen._merge_named_compile_time_args
 
         kernel0 = MagicMock()
         kernel0.named_compile_time_args = [("cb_in0", 0)]
@@ -1240,7 +1244,7 @@ def _make_op_with_cores(core_range_set):
 # producing unusable MagicMock objects).  Since each test mock op has exactly
 # one kernel, returning that kernel's core_ranges directly is equivalent and
 # keeps the mock CoreRangeSet that _core_range_set_to_coords can iterate.
-_mock_sequential._get_node_core_range = lambda node: node.op.descriptor.kernels[0].core_ranges
+_mock_graph._get_node_core_range = lambda node: node.op.descriptor.kernels[0].core_ranges
 
 
 class TestOpGraphTopologyValidation:
@@ -1248,8 +1252,8 @@ class TestOpGraphTopologyValidation:
 
     def test_overlapping_siblings_rejected(self):
         """Two children of root with overlapping core ranges should be rejected."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         # Root covers (0,0)-(3,0); children overlap at (1,0) and (2,0)
         root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
@@ -1263,8 +1267,8 @@ class TestOpGraphTopologyValidation:
 
     def test_child_outside_parent_rejected(self):
         """Child range that extends beyond its parent should be rejected."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         # Intermediate parent covers (0,0)-(3,0), but one child extends to (5,0)
         parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
@@ -1282,8 +1286,8 @@ class TestOpGraphTopologyValidation:
 
     def test_overlapping_children_rejected(self):
         """Sibling children with overlapping ranges should be rejected."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         # Parent covers (0,0)-(5,0), children overlap at (2,0) and (3,0)
         parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))]))
@@ -1297,8 +1301,8 @@ class TestOpGraphTopologyValidation:
 
     def test_leaf_nodes_accepted(self):
         """Leaf nodes (children with no further descendants) should be accepted."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
         child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
@@ -1311,8 +1315,8 @@ class TestOpGraphTopologyValidation:
 
     def test_valid_topology_accepted(self):
         """Valid 2-branch split should pass validation."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
         child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
@@ -1325,8 +1329,8 @@ class TestOpGraphTopologyValidation:
 
     def test_valid_nested_topology_accepted(self):
         """Valid nested branching should pass validation."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         # Tree: root(0-5) -> mid(0-3, children=[leaf(0-1), leaf(2-3)]), leaf(4-5)
         leaf_0_1 = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
@@ -1348,8 +1352,8 @@ class TestOpGraphTopologyValidation:
 
         Unused parent cores simply don't participate in child phases.
         """
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         # Parent covers (0,0)-(5,0) = 6 cores, but children only use 4
         parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))]))
@@ -1364,8 +1368,8 @@ class TestOpGraphTopologyValidation:
 
     def test_intermediate_node_with_children_accepted(self):
         """Intermediate node (has children) is valid -- it runs its op then branches."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        OpNode = _mock_sequential.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
 
         # Intermediate node has an op AND children -- every OpNode has exactly one op
         mid_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
@@ -1383,8 +1387,8 @@ class TestEffectiveLeafRange:
 
     def test_leaf_node_returns_own_range(self):
         """Leaf node should return its own core coords."""
-        OpNode = _mock_sequential.OpNode
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
 
         node = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
 
@@ -1393,8 +1397,8 @@ class TestEffectiveLeafRange:
 
     def test_intermediate_node_returns_leaf_union(self):
         """Intermediate node should return union of all descendant leaf ranges."""
-        OpNode = _mock_sequential.OpNode
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
 
         leaf_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
         leaf_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((4, 0), (5, 0))])))
@@ -1410,8 +1414,8 @@ class TestEffectiveLeafRange:
 
     def test_nested_effective_range(self):
         """Deeply nested tree should return only the leaf-level core coords."""
-        OpNode = _mock_sequential.OpNode
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
 
         # Tree: mid(0-3) -> [leaf(0-1), leaf(2-3)]
         # Effective = {0,1,2,3}
@@ -1431,7 +1435,7 @@ class TestCBRestoreVerification:
 
     def test_verify_passes_on_correct_restore(self):
         """Verification should pass when state matches."""
-        _verify_cb_restore = _mock_sequential._verify_cb_restore
+        _verify_cb_restore = _mock_cb_allocator._verify_cb_restore
 
         cb = MagicMock()
         cb.total_size = 4096
@@ -1444,7 +1448,7 @@ class TestCBRestoreVerification:
 
     def test_verify_fails_on_total_size_mismatch(self):
         """Verification should fail when total_size doesn't match."""
-        _verify_cb_restore = _mock_sequential._verify_cb_restore
+        _verify_cb_restore = _mock_cb_allocator._verify_cb_restore
 
         cb = MagicMock()
         cb.total_size = 8192  # Different from saved!
@@ -1457,7 +1461,7 @@ class TestCBRestoreVerification:
 
     def test_verify_fails_on_buffer_index_mismatch(self):
         """Verification should fail when buffer_index doesn't match."""
-        _verify_cb_restore = _mock_sequential._verify_cb_restore
+        _verify_cb_restore = _mock_cb_allocator._verify_cb_restore
 
         cb = MagicMock()
         cb.total_size = 4096
@@ -1527,7 +1531,7 @@ class TestCompileTimePerformance:
 
         descriptor.kernels = [reader, writer, compute]
 
-        op = _mock_sequential.OpDescriptor(
+        op = _mock_fusion.OpDescriptor(
             descriptor=descriptor,
             input_tensors=[MagicMock()],
             output_tensors=[MagicMock()],
@@ -1538,8 +1542,8 @@ class TestCompileTimePerformance:
         """Run CB pool allocation pipeline for n_phases, return elapsed time."""
         import time
 
-        CBPoolAllocator = _mock_sequential.CBPoolAllocator
-        extract = _mock_sequential.extract_cb_info
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        extract = _mock_cb_allocator.extract_cb_info
 
         pool = CBPoolAllocator()
         phases = [self._make_mock_phase() for _ in range(n_phases)]
@@ -1635,19 +1639,19 @@ class TestRuntimeArgsPadding:
 
     def _patch_core_coord(self):
         """Temporarily set ttnn.CoreCoord to return objects with proper .x/.y."""
-        original = _mock_sequential.ttnn.CoreCoord
-        _mock_sequential.ttnn.CoreCoord = _SimpleCoreCoord
+        original = _mock_codegen.ttnn.CoreCoord
+        _mock_codegen.ttnn.CoreCoord = _SimpleCoreCoord
         return original
 
     def _restore_core_coord(self, original):
-        _mock_sequential.ttnn.CoreCoord = original
+        _mock_codegen.ttnn.CoreCoord = original
 
     def test_padding_matches_offsets(self):
         """Core A has 5 args, core B has 3 — both should pad to 5 for phase offset alignment."""
         original = self._patch_core_coord()
         try:
-            _compute_runtime_arg_offsets = _mock_sequential._compute_runtime_arg_offsets
-            _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
+            _compute_runtime_arg_offsets = _mock_codegen._compute_runtime_arg_offsets
+            _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
 
             coords = [(0, 0), (1, 0)]
             core_ranges = _make_mock_core_ranges_multi(coords)
@@ -1698,7 +1702,7 @@ class TestRuntimeArgsPadding:
         """A core with no args in a phase gets zero-padded to max width."""
         original = self._patch_core_coord()
         try:
-            _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
+            _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
 
             coords = [(0, 0), (1, 0)]
             core_ranges = _make_mock_core_ranges_multi(coords)
@@ -1730,7 +1734,7 @@ class TestRuntimeArgsPadding:
         """When all cores have same arg count, no padding is needed."""
         original = self._patch_core_coord()
         try:
-            _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
+            _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
 
             coords = [(0, 0), (1, 0)]
             core_ranges = _make_mock_core_ranges_multi(coords)
@@ -1759,7 +1763,7 @@ class TestCBArgNaming:
 
     def test_valid_cb_arg_identified(self):
         """Standard CB args with valid index are identified."""
-        _is_cb_named_arg = _mock_sequential._is_cb_named_arg
+        _is_cb_named_arg = _mock_cb_allocator._is_cb_named_arg
         assert _is_cb_named_arg("cb_in", 0) is True
         assert _is_cb_named_arg("cb_out", 16) is True
         assert _is_cb_named_arg("cb_scaler", 2) is True
@@ -1767,14 +1771,14 @@ class TestCBArgNaming:
 
     def test_non_cb_prefix_excluded(self):
         """Args without cb_ prefix are not identified as CB args."""
-        _is_cb_named_arg = _mock_sequential._is_cb_named_arg
+        _is_cb_named_arg = _mock_cb_allocator._is_cb_named_arg
         assert _is_cb_named_arg("blk", 4) is False
         assert _is_cb_named_arg("Ht", 8) is False
         assert _is_cb_named_arg("num_tiles", 16) is False
 
     def test_out_of_range_value_excluded(self):
         """CB-prefixed args with values outside [0,31] are excluded."""
-        _is_cb_named_arg = _mock_sequential._is_cb_named_arg
+        _is_cb_named_arg = _mock_cb_allocator._is_cb_named_arg
         assert _is_cb_named_arg("cb_debug_flag", 100) is False
         assert _is_cb_named_arg("cb_count", -1) is False
         assert _is_cb_named_arg("cb_large", 32) is False
@@ -1786,9 +1790,9 @@ class TestCBStateSaveRestore:
 
     def test_save_and_restore_round_trip(self):
         """Save/restore should preserve original values after mutation."""
-        _save_cb_state = _mock_sequential._save_cb_state
-        _restore_cb_state = _mock_sequential._restore_cb_state
-        _verify_cb_restore = _mock_sequential._verify_cb_restore
+        _save_cb_state = _mock_cb_allocator._save_cb_state
+        _restore_cb_state = _mock_cb_allocator._restore_cb_state
+        _verify_cb_restore = _mock_cb_allocator._verify_cb_restore
 
         # Create a mock ProgramDescriptor with one CB
         fmt = MagicMock()
@@ -1816,7 +1820,7 @@ class TestCBStateSaveRestore:
 
     def test_deduplicates_shared_cbs(self):
         """When multiple phases share the same CB object, save it once."""
-        _save_cb_state = _mock_sequential._save_cb_state
+        _save_cb_state = _mock_cb_allocator._save_cb_state
 
         fmt = MagicMock()
         fmt.buffer_index = 3
@@ -1840,13 +1844,13 @@ class TestSemaphoreInitialValue:
 
     def test_nonzero_initial_value_in_source(self):
         """Generated source should reset semaphore to initial_value=5, not 0."""
-        _generate_fused_riscv0_source = _mock_sequential._generate_fused_riscv0_source
+        _generate_fused_riscv0_source = _mock_codegen._generate_fused_riscv0_source
 
         # Create minimal mock data for a 2-phase chain
         core_ranges = _make_mock_core_ranges()
 
         # source_type must be the exact same object as ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-        source_code_type = _mock_sequential.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        source_code_type = _mock_codegen.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
 
         kernel = MagicMock()
         kernel.kernel_source = "void kernel_main() { /* reader */ }"
@@ -1855,8 +1859,8 @@ class TestSemaphoreInitialValue:
         kernel.core_ranges = core_ranges
         kernel.named_compile_time_args = [("cb_in", 0)]
 
-        PhaseInfo = _mock_sequential.PhaseInfo
-        CBInfo = _mock_sequential.CBInfo
+        PhaseInfo = _mock_cb_allocator.PhaseInfo
+        CBInfo = _mock_cb_allocator.CBInfo
 
         phase0 = PhaseInfo(
             phase_idx=0,
@@ -1872,9 +1876,9 @@ class TestSemaphoreInitialValue:
 
         phase_kernels = [{"reader": kernel}, {"reader": kernel}]
 
-        MultiBarrierSpec = _mock_sequential.MultiBarrierSpec
-        BarrierSegment = _mock_sequential.BarrierSegment
-        BarrierConfig = _mock_sequential.BarrierConfig
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
 
         seg = BarrierSegment(
             config=BarrierConfig(
@@ -1913,9 +1917,9 @@ class TestSemaphoreInitialValue:
 
     def test_mixed_initial_values(self):
         """Multiple semaphores with different initial values get their own values."""
-        _generate_fused_riscv0_source = _mock_sequential._generate_fused_riscv0_source
+        _generate_fused_riscv0_source = _mock_codegen._generate_fused_riscv0_source
 
-        source_code_type = _mock_sequential.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        source_code_type = _mock_codegen.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
 
         core_ranges = _make_mock_core_ranges()
         kernel = MagicMock()
@@ -1925,17 +1929,17 @@ class TestSemaphoreInitialValue:
         kernel.core_ranges = core_ranges
         kernel.named_compile_time_args = [("cb_in", 0)]
 
-        PhaseInfo = _mock_sequential.PhaseInfo
-        CBInfo = _mock_sequential.CBInfo
+        PhaseInfo = _mock_cb_allocator.PhaseInfo
+        CBInfo = _mock_cb_allocator.CBInfo
 
         phase0 = PhaseInfo(0, MagicMock(), {0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())})
         phase1 = PhaseInfo(1, MagicMock(), {0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())})
 
         phase_kernels = [{"reader": kernel}, {"reader": kernel}]
 
-        MultiBarrierSpec = _mock_sequential.MultiBarrierSpec
-        BarrierSegment = _mock_sequential.BarrierSegment
-        BarrierConfig = _mock_sequential.BarrierConfig
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
 
         seg = BarrierSegment(
             config=BarrierConfig(
@@ -1978,7 +1982,7 @@ class TestMustMatchDefines:
 
     def test_matching_accepted(self):
         """Same REDUCE_OP value across phases should be accepted."""
-        _collect = _mock_sequential._collect_phase_defines
+        _collect = _mock_codegen._collect_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("REDUCE_DIM", "1")])},
@@ -1992,7 +1996,7 @@ class TestMustMatchDefines:
 
     def test_mismatched_rejected(self):
         """Different REDUCE_OP values across phases should raise ValueError."""
-        _collect = _mock_sequential._collect_phase_defines
+        _collect = _mock_codegen._collect_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0")])},
@@ -2004,7 +2008,7 @@ class TestMustMatchDefines:
 
     def test_present_in_one_phase_only(self):
         """MUST_MATCH define present in only one phase should not raise and should be in must_match."""
-        _collect = _mock_sequential._collect_phase_defines
+        _collect = _mock_codegen._collect_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("BCAST_LLKOP", "2")])},
@@ -2027,7 +2031,7 @@ def _make_mock_op(name="op"):
 
     Uses the real OpDescriptor NamedTuple with mock field values.
     """
-    OpDescriptor = _mock_sequential.OpDescriptor
+    OpDescriptor = _mock_fusion.OpDescriptor
     return OpDescriptor(
         descriptor=MagicMock(name=f"{name}_desc"),
         input_tensors=[MagicMock(name=f"{name}_in")],
@@ -2041,8 +2045,7 @@ def _tree_shape(node):
     Each node becomes (node.op, [child_shapes...]).  This makes it easy
     to assert tree structure without comparing MagicMock internals.
     """
-    OpNode = _mock_sequential.OpNode
-    if not isinstance(node, OpNode):
+    if type(node).__name__ != "OpNode":
         raise TypeError(f"Expected OpNode, got {type(node)}")
     return (node.op, [_tree_shape(c) for c in node.children])
 
@@ -2052,10 +2055,10 @@ class TestSequentialParallelAPI:
 
     def test_linear_chain(self):
         """Sequential(a, b, c) produces a→b→c chain."""
-        _resolve = _mock_sequential._resolve
+        _resolve = _mock_fusion._resolve
 
         a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
-        seq = _mock_sequential.Sequential(a, b, c)
+        seq = _mock_fusion.Sequential(a, b, c)
         nodes = _resolve(seq)
 
         assert len(nodes) == 1
@@ -2069,10 +2072,10 @@ class TestSequentialParallelAPI:
 
     def test_stem_and_branches(self):
         """Sequential(a, Parallel(b, c)) produces a→[b, c]."""
-        _resolve = _mock_sequential._resolve
+        _resolve = _mock_fusion._resolve
 
         a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
-        seq = _mock_sequential.Sequential(a, _mock_sequential.Parallel(b, c))
+        seq = _mock_fusion.Sequential(a, _mock_fusion.Parallel(b, c))
         nodes = _resolve(seq)
 
         assert len(nodes) == 1
@@ -2084,11 +2087,11 @@ class TestSequentialParallelAPI:
 
     def test_nested_sequential_flattening(self):
         """Sequential(Sequential(a, b), c) flattens to a→b→c."""
-        _resolve = _mock_sequential._resolve
+        _resolve = _mock_fusion._resolve
 
         a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
-        inner = _mock_sequential.Sequential(a, b)
-        outer = _mock_sequential.Sequential(inner, c)
+        inner = _mock_fusion.Sequential(a, b)
+        outer = _mock_fusion.Sequential(inner, c)
         nodes = _resolve(outer)
 
         assert len(nodes) == 1
@@ -2101,9 +2104,9 @@ class TestSequentialParallelAPI:
 
     def test_nested_branches(self):
         """Sequential(a, Parallel(Sequential(b, c), d)) produces correct tree."""
-        _resolve = _mock_sequential._resolve
-        Sequential = _mock_sequential.Sequential
-        Parallel = _mock_sequential.Parallel
+        _resolve = _mock_fusion._resolve
+        Sequential = _mock_fusion.Sequential
+        Parallel = _mock_fusion.Parallel
 
         a, b, c, d = [_make_mock_op(n) for n in "abcd"]
         seq = Sequential(a, Parallel(Sequential(b, c), d))
@@ -2123,9 +2126,9 @@ class TestSequentialParallelAPI:
 
     def test_add_method(self):
         """Incremental .add() matches inline construction."""
-        _resolve = _mock_sequential._resolve
-        Sequential = _mock_sequential.Sequential
-        Parallel = _mock_sequential.Parallel
+        _resolve = _mock_fusion._resolve
+        Sequential = _mock_fusion.Sequential
+        Parallel = _mock_fusion.Parallel
 
         a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
 
@@ -2144,7 +2147,7 @@ class TestSequentialParallelAPI:
 
     def test_add_chaining(self):
         """s.add(a).add(b) returns self."""
-        Sequential = _mock_sequential.Sequential
+        Sequential = _mock_fusion.Sequential
         a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
 
         s = Sequential(a)
@@ -2154,8 +2157,8 @@ class TestSequentialParallelAPI:
 
     def test_single_op(self):
         """Sequential(op) produces a single OpNode(op)."""
-        _resolve = _mock_sequential._resolve
-        Sequential = _mock_sequential.Sequential
+        _resolve = _mock_fusion._resolve
+        Sequential = _mock_fusion.Sequential
 
         a = _make_mock_op("a")
         nodes = _resolve(Sequential(a))
@@ -2165,16 +2168,16 @@ class TestSequentialParallelAPI:
 
     def test_parallel_requires_two(self):
         """Parallel(op) raises ValueError."""
-        Parallel = _mock_sequential.Parallel
+        Parallel = _mock_fusion.Parallel
         a = _make_mock_op("a")
         with pytest.raises(ValueError, match="at least 2"):
             Parallel(a)
 
     def test_parallel_in_middle_errors(self):
         """Sequential(a, Parallel(b, c), d) raises ValueError."""
-        _resolve = _mock_sequential._resolve
-        Sequential = _mock_sequential.Sequential
-        Parallel = _mock_sequential.Parallel
+        _resolve = _mock_fusion._resolve
+        Sequential = _mock_fusion.Sequential
+        Parallel = _mock_fusion.Parallel
 
         a, b, c, d = [_make_mock_op(n) for n in "abcd"]
         seq = Sequential(a, Parallel(b, c), d)
@@ -2183,14 +2186,14 @@ class TestSequentialParallelAPI:
 
     def test_empty_sequential(self):
         """Sequential() raises ValueError."""
-        Sequential = _mock_sequential.Sequential
+        Sequential = _mock_fusion.Sequential
         with pytest.raises(ValueError, match="at least 1"):
             Sequential()
 
     def test_parallel_add(self):
         """Parallel(a, b).add(c) adds a third branch."""
-        _resolve = _mock_sequential._resolve
-        Parallel = _mock_sequential.Parallel
+        _resolve = _mock_fusion._resolve
+        Parallel = _mock_fusion.Parallel
 
         a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
         p = Parallel(a, b)
@@ -2203,9 +2206,9 @@ class TestSequentialParallelAPI:
 
     def test_deep_nested_split(self):
         """Split of a split: Sequential(a, Parallel(Sequential(b, Parallel(c, d)), e))."""
-        _resolve = _mock_sequential._resolve
-        Sequential = _mock_sequential.Sequential
-        Parallel = _mock_sequential.Parallel
+        _resolve = _mock_fusion._resolve
+        Sequential = _mock_fusion.Sequential
+        Parallel = _mock_fusion.Parallel
 
         a, b, c, d, e = [_make_mock_op(n) for n in "abcde"]
         seq = Sequential(a, Parallel(Sequential(b, Parallel(c, d)), e))
@@ -2230,8 +2233,8 @@ class TestSequentialParallelAPI:
 
     def test_merge_build_results(self):
         """_merge_build_results deduplicates inputs, concatenates outputs, unions semaphores."""
-        _merge = _mock_sequential._merge_build_results
-        _BuildResult = _mock_sequential._BuildResult
+        _merge = _mock_graph._merge_build_results
+        _BuildResult = _mock_common._BuildResult
 
         shared_input = MagicMock(name="shared_in")
         in_a = MagicMock(name="in_a")
@@ -2274,8 +2277,8 @@ class TestSequentialParallelAPI:
 
     def test_merge_build_results_single(self):
         """_merge_build_results with single result returns it directly."""
-        _merge = _mock_sequential._merge_build_results
-        _BuildResult = _mock_sequential._BuildResult
+        _merge = _mock_graph._merge_build_results
+        _BuildResult = _mock_common._BuildResult
         r = _BuildResult(
             descriptor=MagicMock(name="desc"),
             input_tensors=[MagicMock(name="in")],
@@ -2285,18 +2288,18 @@ class TestSequentialParallelAPI:
 
     def test_resolve_raw_op_descriptor(self):
         """_resolve(OpDescriptor) returns [OpNode(op)]."""
-        _resolve = _mock_sequential._resolve
-        OpNode = _mock_sequential.OpNode
+        _resolve = _mock_fusion._resolve
+        OpNode = _mock_graph.OpNode
 
         op = _make_mock_op("raw")
         nodes = _resolve(op)
         assert len(nodes) == 1
-        assert isinstance(nodes[0], OpNode)
+        assert type(nodes[0]).__name__ == "OpNode"
         assert nodes[0].op is op
 
     def test_parallel_add_chaining(self):
         """p.add(c).add(d) returns self for chaining."""
-        Parallel = _mock_sequential.Parallel
+        Parallel = _mock_fusion.Parallel
         a, b, c, d = [_make_mock_op(n) for n in "abcd"]
         p = Parallel(a, b)
         result = p.add(c).add(d)
@@ -2305,15 +2308,15 @@ class TestSequentialParallelAPI:
 
     def test_unsupported_type_raises(self):
         """_resolve with unsupported type raises TypeError."""
-        _resolve = _mock_sequential._resolve
+        _resolve = _mock_fusion._resolve
         with pytest.raises(TypeError, match="Unsupported"):
             _resolve(42)
 
     def test_resolve_rejects_fused_op(self):
         """_resolve(FusedOp) raises TypeError — prevents nesting."""
-        _resolve = _mock_sequential._resolve
-        FusedOp = _mock_sequential.FusedOp
-        OpDescriptor = _mock_sequential.OpDescriptor
+        _resolve = _mock_fusion._resolve
+        FusedOp = _mock_fusion.FusedOp
+        OpDescriptor = _mock_fusion.OpDescriptor
         fused = FusedOp(
             op=OpDescriptor(
                 descriptor=MagicMock(name="desc"),
@@ -2326,8 +2329,8 @@ class TestSequentialParallelAPI:
 
     def test_multi_level_sequential_flattening(self):
         """Sequential(Sequential(a, Sequential(b, c)), d) deeply flattens."""
-        _resolve = _mock_sequential._resolve
-        Sequential = _mock_sequential.Sequential
+        _resolve = _mock_fusion._resolve
+        Sequential = _mock_fusion.Sequential
 
         a, b, c, d = [_make_mock_op(n) for n in "abcd"]
         inner_inner = Sequential(b, c)
