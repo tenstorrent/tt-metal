@@ -5,9 +5,9 @@
 import pytest
 import torch
 import ttnn
+import math
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_t3000 import get_max_chunks_per_sync
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -19,6 +19,13 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+# Modified from tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_t3000.py
+def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links, packet_size, dtype_size):
+    packet_elems = packet_size // dtype_size
+    total_elems = math.prod(ag_output_shape)
+    return (total_elems // packet_elems) // (num_devices * num_links)
 
 
 @skip_for_blackhole("This test is for wormhole")
@@ -583,22 +590,24 @@ def test_all_gather_async_wan_galaxy_4x32(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params, all_gather_topology, max_payload_size",
     [
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(8192),
+                "fabric_router_config": create_fabric_router_config(size),
                 "trace_region_size": 1000000,
             },
             ttnn.Topology.Ring,
-        ),
+            size,
+        )
+        for size in [2048]
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=[f"fabric_ring_{size}B" for size in [2048]],
 )
 @pytest.mark.parametrize("num_links", [2], ids=lambda v: f"{v}links")
-@pytest.mark.parametrize("chunks_per_sync", [320], ids=lambda v: f"{v}chunks")
+@pytest.mark.parametrize("chunks_per_sync", [320, "MAXby8"], ids=lambda v: f"{v}chunks")
 @pytest.mark.parametrize("num_workers_per_link", [3], ids=lambda v: f"{v}workers")
 @pytest.mark.parametrize("num_buffers_per_channel", [4], ids=lambda v: f"{v}buffers")
 @pytest.mark.parametrize("num_iters, warmup_iters", [(75, 10)])
@@ -617,6 +626,7 @@ def test_all_gather_wan(
     num_workers_per_link,
     num_buffers_per_channel,
     all_gather_topology,
+    max_payload_size,
     num_iters,
     warmup_iters,
 ):
@@ -641,10 +651,15 @@ def test_all_gather_wan(
     )
 
     # AllGather config
-    if chunks_per_sync == "MAX":
-        chunks_per_sync_val = get_max_chunks_per_sync(num_devices, ag_output_shape, num_links)
+    if isinstance(chunks_per_sync, str) and chunks_per_sync.startswith("MAXby"):
+        divisor = int(chunks_per_sync[5:])  # extract int after "MAXby"
+        max_chunks_per_sync = get_max_chunks_per_sync(num_devices, ag_output_shape, num_links, max_payload_size, 2)
+        chunks_per_sync_val = max_chunks_per_sync // divisor
     else:
         chunks_per_sync_val = chunks_per_sync
+    if chunks_per_sync_val < 1:
+        # pytest.skip(f"Chunks per sync value is too small: {chunks_per_sync_val}")
+        chunks_per_sync_val = 1
 
     # Compile Run
     logger.info("Compiling op")
@@ -677,7 +692,7 @@ def test_all_gather_wan(
     def capture_trace(n_iters):
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(n_iters):
-            _ = ttnn.all_gather(
+            tt_output = ttnn.all_gather(
                 tt_input,
                 dim=dim,
                 cluster_axis=cluster_axis,
