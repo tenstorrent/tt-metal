@@ -357,7 +357,11 @@ void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataF
     }
 }
 
-void emit_data_format_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch, uint32_t max_cbs) {
+struct ComputedDataFormats {
+    std::vector<DataFormat> unpack_src, unpack_dst, pack_src, pack_dst;
+};
+
+ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARCH arch, uint32_t max_cbs) {
     // assuming all cores within a op have the same desc
     const tt_hlk_desc& desc = options.hlk_desc;
 
@@ -385,8 +389,12 @@ void emit_data_format_descriptors(std::ostream& out, const JitBuildOptions& opti
     // TODO: for any CB to be used as both in & out of compute kernels (ie intermediate), additional work is required to
     // propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)"
     equalize_data_format_vectors(unpack_src_formats_all_cbs, pack_dst_formats_all_cbs);
-    emit_unpack_data_formats(out, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs, max_cbs);
-    emit_pack_data_formats(out, pack_src_formats_all_cbs, pack_dst_formats_all_cbs, max_cbs);
+
+    return {
+        std::move(unpack_src_formats_all_cbs),
+        std::move(unpack_dst_formats_all_cbs),
+        std::move(pack_src_formats_all_cbs),
+        std::move(pack_dst_formats_all_cbs)};
 }
 
 void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
@@ -409,15 +417,20 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
 }
 
-void emit_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, const tt_hlk_desc& desc) {
+void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
-        "#define DST_SYNC_MODE DstSync::Sync{}\n\n"
+        "#define DST_SYNC_MODE DstSync::Sync{}\n",
+        options.fp32_dest_acc_en,
+        options.dst_full_sync_en ? "Full" : "Half");
+}
+
+void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
+    fmt::format_to(
+        std::ostreambuf_iterator<char>(out),
         "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n"
         "constexpr bool APPROX = {};\n",
-        options.fp32_dest_acc_en,
-        options.dst_full_sync_en ? "Full" : "Half",
         static_cast<std::uint32_t>(desc.get_hlk_math_fidelity()),
         desc.get_hlk_math_approx_mode());
 }
@@ -433,13 +446,27 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
         throw std::runtime_error("Cannot create file: " + descriptors_path);
     }
 
-    out << "#pragma once\n\n";
-    out << "#include \"llk_defs.h\"\n\n";
+    auto fmts = compute_data_formats(options, env.get_arch(), max_cbs);
 
-    emit_data_format_descriptors(out, options, env.get_arch(), max_cbs);
+    out << "#pragma once\n\n"
+           "#if defined(UCK_CHLKC_MATH)\n"
+           "#include \"llk_defs.h\"\n";
+    emit_math_scalar_descriptors(out, desc);
+    out << "#endif\n\n";
+
+    out << "#if !defined(UCK_CHLKC_PACK)\n";
+    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
     emit_unpack_tile_dims(out, desc, max_cbs);
+    out << "#endif\n\n";
+
+    out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
+    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
     emit_pack_tile_dims(out, desc, max_cbs);
-    emit_scalar_descriptors(out, options, desc);
+    out << "#endif\n\n";
+
+    out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK)\n";
+    emit_compute_scalar_descriptors(out, options);
+    out << "#endif\n";
 
     if (!out) {
         throw std::runtime_error("Failed to write file: " + descriptors_path);

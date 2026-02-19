@@ -821,7 +821,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_read<noc_modem use_vc>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
+    ncrisc_noc_fast_read<noc_mode, use_vc>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
