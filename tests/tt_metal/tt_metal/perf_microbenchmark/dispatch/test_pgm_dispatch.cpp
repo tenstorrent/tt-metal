@@ -699,6 +699,18 @@ static int pgm_dispatch(T& state, TestInfo info) {
             device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
 
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (info.workers.end_coord.x >= grid_size.x || info.workers.end_coord.y >= grid_size.y) {
+            log_fatal(
+                LogTest,
+                "Requested worker range ({},{}) exceeds device grid ({}x{})",
+                info.workers.end_coord.x,
+                info.workers.end_coord.y,
+                grid_size.x,
+                grid_size.y);
+            return 1;
+        }
+
         std::vector<tt_metal::SubDevice> sub_devices;
         if (info.n_subdevice_ranges > 1) {
             std::array<CoreRangeSet, NumHalProgrammableCoreTypes> core_ranges;
