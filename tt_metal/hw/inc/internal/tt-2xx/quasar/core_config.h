@@ -86,6 +86,7 @@ union subordinate_map_t {
 } __attribute__((packed));
 
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
+constexpr uint8_t MaxProcessorsForThreadingVariables = 16;  // 8 DMs + 4 trisc engines; round up to multiple of 8 for alignment
 constexpr uint8_t MaxDMProcessorsPerCoreType = 8;
 constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 2;

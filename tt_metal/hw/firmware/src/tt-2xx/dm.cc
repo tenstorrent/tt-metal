@@ -51,6 +51,10 @@ thread_local uint32_t rta_count __attribute__((used));
 thread_local uint32_t crta_count __attribute__((used));
 #endif
 
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_kernel_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
+
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
 uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
@@ -272,6 +276,8 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+                num_kernel_threads = launch_msg_address->kernel_config.num_kernel_threads[hartid];
+                my_thread_id = launch_msg_address->kernel_config.kernel_thread_id[hartid];
                 // Invalidate the i$ now the kernels have loaded and before running
                 // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
@@ -408,6 +414,8 @@ extern "C" uint32_t _start1() {
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+        num_kernel_threads = launch_msg->kernel_config.num_kernel_threads[hartid];
+        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
         int index = hartid;
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];

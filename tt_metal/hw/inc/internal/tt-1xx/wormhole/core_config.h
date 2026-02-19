@@ -28,6 +28,7 @@ union subordinate_map_t {
 };
 
 constexpr uint8_t MaxProcessorsPerCoreType = 5;
+constexpr uint8_t MaxProcessorsForThreadingVariables = 8;   // round up to multiple of 8 for alignment
 constexpr uint8_t MaxDMProcessorsPerCoreType = 2;
 constexpr uint8_t noc_size_x = 10;
 constexpr uint8_t noc_size_y = 12;
