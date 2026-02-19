@@ -14,26 +14,20 @@
 #define MEM_PORT_NONCACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define PERIPH_PORT_BASE_ADDR (uint64_t)TT_CLUSTER_CTRL_REG_MAP_BASE_ADDR
 
-// =============================================================================
-// L2 Cache Controller Registers
-// =============================================================================
+// L2 Cache Controller Flush Registers
 //
-// L2 is a 128KB, 4-way associative, write-back cache shared between 8 DM cores.
-//
-// Flush registers (DIFFERENT address encodings):
-//   - FLUSH64 (0x04010200): Takes raw byte address
+// The two flush registers use DIFFERENT address encodings:
+//   - FLUSH64 (0x04010200): Takes the raw byte address
 //   - FLUSH32 (0x04010240): Takes (byte_address >> 4)
 //
-// Full invalidation register (0x04010300):
-//   - Each core writes its bit (1 << hartid) to signal ready
-//   - HW starts wipe when all core bits are set
-//   - HW clears register to 0 when complete
-//   - Cores poll until they read 0, then invalidate their own L1 caches
+// Example: To flush cache line containing address 0x19000:
+//   FLUSH64: write 0x19000
+//   FLUSH32: write 0x1900  (0x19000 >> 4)
 //
 #define L2_FLUSH_ADDR (uint64_t)TT_CACHE_CONTROLLER_FLUSH64_REG_ADDR
 #define L2_FLUSH32_ADDR (uint64_t)TT_CACHE_CONTROLLER_FLUSH32_REG_ADDR  // NOTE: takes (addr >> 4)
-#define L2_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_INVALIDATE64_REG_ADDR
-#define L2_FULL_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_FULLINVALIDATE_REG_ADDR
+#define L2_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_INVALIDATE64_REG_ADDR  // NOT implemented in HW
+#define L2_FULL_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_FULLINVALIDATE_REG_ADDR  // NOT implemented in HW
 
 // L2 cache geometry: 128KB, 4-way associative, 64B lines
 #define L2_CACHE_LINE_SIZE 64
