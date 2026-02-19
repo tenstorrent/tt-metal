@@ -2868,9 +2868,18 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
     tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
-    bool valid = pgd.validate_preformed_groups_from_physical_system_descriptor(psd);
-    EXPECT_TRUE(valid) << "Expected validation to fail: PGD host structure (tray orientations) "
-                          "does not match PSD; fix ASIC orientation in groupings to match physical topology";
+    std::vector<std::string> errors;
+    bool valid = pgd.validate_preformed_groups_from_physical_system_descriptor(psd, &errors);
+
+    EXPECT_FALSE(valid) << "Expected validation to fail: 8x16_Mesh grouping cannot be mapped to single-galaxy PSD "
+                           "(tray orientations differ)";
+    ASSERT_FALSE(errors.empty()) << "Expected at least one validation error";
+
+    // Only 8x16_Mesh should fail; all other MESH groupings (2x4, 2x2, 4x4, 2x8, 4x8) must pass
+    for (const auto& err : errors) {
+        EXPECT_TRUE(err.find("8x16_Mesh") != std::string::npos)
+            << "Expected only 8x16_Mesh to fail; got error for other grouping: " << err;
+    }
 }
 
 // ============================================================================
