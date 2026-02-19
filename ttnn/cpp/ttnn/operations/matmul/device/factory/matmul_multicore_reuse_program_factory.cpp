@@ -124,20 +124,28 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, {}, {{"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}}));
 
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, {{"cb_out", tt::CBIndex::c_16}}));
 
     // Create compute kernel
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .compile_args = compute_kernel_args,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_out", tt::CBIndex::c_16},
+                {"cb_intermed0", (uint32_t)24}}});
 
     for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {

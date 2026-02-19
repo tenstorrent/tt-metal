@@ -128,6 +128,15 @@ void py_module_types(nb::module_& mod) {
                 Note:
                     Sockets should typically be created in pairs using create_socket_pair()
                     rather than using this constructor directly.
+            )doc")
+        .def(
+            "get_config_buffer_address",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) {
+                return static_cast<uint32_t>(socket.get_config_buffer()->address());
+            },
+            R"doc(
+                Returns the L1 address of the socket configuration buffer on the device.
+                This address is passed to device kernels to access socket metadata.
             )doc");
 }
 
