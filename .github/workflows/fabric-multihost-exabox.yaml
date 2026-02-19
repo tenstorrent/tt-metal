@@ -135,14 +135,26 @@ jobs:
       - name: Run Pipeline Test
         timeout-minutes: 15
         run: |
+          FIRST_HOST=$(head -1 /ci/ttrun/hostfile)
           PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
-          python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
-            --physical-discovery-test-path /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery \
-            --mpi-user user \
-            --skip-mpi-net-filter \
-            --hostfile /ci/ttrun/hostfile \
-            models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
-          tt-run --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml ./build_Release/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null user@$FIRST_HOST bash <<EOF
+            set -euo pipefail
+            cd /home/user/tt-metal
+            export PRTE_MCA_plm_ssh_args="-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+            export PRTE_MCA_prte_launch_agent=/opt/openmpi-v5.0.7-ulfm/bin/prted
+            export PRTE_MCA_prte_default_hostfile=/ci/ttrun/hostfile
+            export LD_LIBRARY_PATH=/home/user/tt-metal/build/lib
+            export TT_METAL_RUNTIME_ROOT=/home/user/tt-metal
+
+            python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+              --hostfile /ci/ttrun/hostfile \
+              models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+
+            tt-run \
+              --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+              --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
+              ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+          EOF
 
   cleanup:
     name: Cleanup
