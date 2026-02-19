@@ -12,7 +12,9 @@ import yaml
 from loguru import logger
 
 
-def generate_slice_to_pcie_device_mapping(mapping_file, host_vector, test_executable_path=None, mpi_user=None):
+def generate_slice_to_pcie_device_mapping(
+    mapping_file, host_vector, test_executable_path=None, mpi_user=None, skip_mpi_net_filter=False
+):
     # Use optional input, then env (e.g. CI where build lives on workers), then default
     test_executable = Path(
         test_executable_path
@@ -38,13 +40,10 @@ def generate_slice_to_pcie_device_mapping(mapping_file, host_vector, test_execut
         "--mca",
         "btl",
         "self,tcp",
-        "--mca",
-        "btl_tcp_if_include",
-        "ens5f0np0",
-        "--bind-to",
-        "none",
-        "--tag-output",
     ]
+    if not skip_mpi_net_filter:
+        MAPPING_GENERATION_CMD.extend(["--mca", "btl_tcp_if_include", "ens5f0np0"])
+    MAPPING_GENERATION_CMD.extend(["--bind-to", "none", "--tag-output"])
     # When using a remote/CI path, pass lib and runtime root so workers can load libtt_metal.so
     if explicit_path and test_executable.is_absolute():
         build_dir = test_executable.parent.parent.parent.parent  # .../build/test/tt_metal/tt_fabric
@@ -110,7 +109,9 @@ def generate_rank_file(pipeline_config):
             f.write(f"rank {stage}={host} slot=0-31\n")
 
 
-def generate_pipeline_config_files(pipeline_config_file, test_executable_path=None, mpi_user=None):
+def generate_pipeline_config_files(
+    pipeline_config_file, test_executable_path=None, mpi_user=None, skip_mpi_net_filter=False
+):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
 
@@ -125,7 +126,9 @@ def generate_pipeline_config_files(pipeline_config_file, test_executable_path=No
     # Metal generates the list of PCIe devices per physical slice in this file
     # when generate_slice_to_pcie_device_mapping is called
     physical_mapping_file = "slice_to_pcie_device_mapping.yaml"
-    generate_slice_to_pcie_device_mapping(physical_mapping_file, host_vector, test_executable_path, mpi_user)
+    generate_slice_to_pcie_device_mapping(
+        physical_mapping_file, host_vector, test_executable_path, mpi_user, skip_mpi_net_filter
+    )
     # Using the generated list of PCIe devices per slice and the stage to physical
     # slice mapping, generate rank bindings for the pipeline
     generate_rank_bindings(config, physical_mapping_file)
@@ -149,5 +152,12 @@ if __name__ == "__main__":
         default=None,
         help="SSH user for mpirun (e.g. 'user' to connect as user@host instead of current user)",
     )
+    parser.add_argument(
+        "--skip-mpi-net-filter",
+        action="store_true",
+        help="Skip adding --mca btl_tcp_if_include ens5f0np0 (use in CI where btl_tcp_if_exclude is already set)",
+    )
     args = parser.parse_args()
-    generate_pipeline_config_files(args.pipeline_config_file, args.physical_discovery_test_path, args.mpi_user)
+    generate_pipeline_config_files(
+        args.pipeline_config_file, args.physical_discovery_test_path, args.mpi_user, args.skip_mpi_net_filter
+    )
