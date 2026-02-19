@@ -169,7 +169,7 @@ def _get_t5_prompt_embeds(
             if attention_mask is not None
             else None
         )
-        tt_hidden_states = text_encoder(prompt=tt_tokens, attention_mask=tt_attention_mask, device=mesh_device)
+        tt_hidden_states = text_encoder(prompt=tt_tokens, attention_mask=tt_attention_mask)
         tt_prompt_embeds = tt_hidden_states[-1]
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])
