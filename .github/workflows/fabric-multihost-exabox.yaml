@@ -135,7 +135,7 @@ jobs:
       - name: Run Pipeline Test
         timeout-minutes: 15
         run: |
-          python models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+          python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
           tt-run --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host bh-glx-c09u08:4,bh-glx-c09u02:4,bh-glx-c10u02:4,bh-glx-c10u08:4 --tag-output" --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml ./build_Release/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
 
   cleanup:
