@@ -61,6 +61,64 @@ def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_
     return submesh_device
 
 
+def create_balanced_chunk_order(rp_factor):
+    """Create balanced chunk order for sequence reordering.
+
+    For rp_factor=4, creates 2*4=8 chunks with order: 0,7,1,6,2,5,3,4
+    This interleaves chunks from start and end to balance workload.
+    """
+    num_chunks = 2 * rp_factor
+    chunks = list(range(num_chunks))
+    balanced_order = []
+
+    left = 0
+    right = num_chunks - 1
+
+    for i in range(num_chunks):
+        if i % 2 == 0:
+            balanced_order.append(left)
+            left += 1
+        else:
+            balanced_order.append(right)
+            right -= 1
+
+    return balanced_order
+
+
+def reorder_tensor_chunks(tensor, chunk_order, seq_dim=2):
+    """Reorder tensor chunks along sequence dimension according to chunk_order."""
+    seq_len = tensor.shape[seq_dim]
+    num_chunks = len(chunk_order)
+    chunk_size = seq_len // num_chunks
+
+    # Split into chunks
+    chunks = []
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = start + chunk_size
+        if seq_dim == 2:
+            chunks.append(tensor[:, :, start:end, :])
+        else:
+            raise NotImplementedError(f"Reordering for seq_dim={seq_dim} not implemented")
+
+    # Reorder chunks according to chunk_order
+    reordered_chunks = [chunks[i] for i in chunk_order]
+
+    # Concatenate reordered chunks
+    return torch.cat(reordered_chunks, dim=seq_dim)
+
+
+def reverse_reorder_tensor_chunks(tensor, chunk_order, seq_dim=2):
+    """Reverse the chunk reordering to restore original order."""
+    # Create inverse permutation
+    inverse_order = [0] * len(chunk_order)
+    for new_pos, orig_pos in enumerate(chunk_order):
+        inverse_order[orig_pos] = new_pos
+
+    print(f"inverse order: {inverse_order}")
+    return reorder_tensor_chunks(tensor, inverse_order, seq_dim)
+
+
 def run_ring_joint_sdpa(
     submesh,
     b,
@@ -81,6 +139,8 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    is_causal=False,
+    is_balanced=False,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -149,6 +209,17 @@ def run_ring_joint_sdpa(
     padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
 
+    # Apply balanced reordering if requested
+    chunk_order = None
+    if is_balanced:
+        rp_factor = submesh.shape[rp_axis]
+        chunk_order = create_balanced_chunk_order(rp_factor)
+        logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
+
+        padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
+        padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
+        padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
+
     joint_Q = fa_rand(b, nh, joint_seq_len, d)
     joint_K = fa_rand(b, nh, joint_seq_len, d)
     joint_V = fa_rand(b, nh, joint_seq_len, d)
@@ -160,6 +231,8 @@ def run_ring_joint_sdpa(
     logger.debug(f"padded_Q: {padded_Q.shape}")
     logger.debug(f"padded_K: {padded_K.shape}")
     logger.debug(f"padded_V: {padded_V.shape}")
+    if is_balanced:
+        logger.debug(f"Balanced reordering applied with chunk order: {chunk_order}")
 
     sdpa_input_shard_dims = [None, None]
     sdpa_input_shard_dims[rp_axis] = 2  # sequence dim
@@ -241,6 +314,8 @@ def run_ring_joint_sdpa(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
+                is_causal=is_causal,
+                is_balanced=is_balanced,
             )
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
@@ -266,7 +341,7 @@ def run_ring_joint_sdpa(
         pt_Q = torch.cat([Q, joint_Q], dim=2)
         pt_K = torch.cat([K, joint_K], dim=2)
         pt_V = torch.cat([V, joint_V], dim=2)
-        gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
+        gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=is_causal)
         gt_out = gt[:, :, :base_seq_len, :]
         gt_joint_out = gt[:, :, base_seq_len:, :]
 
@@ -286,8 +361,18 @@ def run_ring_joint_sdpa(
                     submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
                 ),
             )
-            # Slice out any tile-padding
-            tt_out = tt_out[:, :, :base_seq_len, :]
+
+            # Reverse reordering for TT output if balanced reordering was applied
+            if is_balanced and chunk_order is not None:
+                logger.debug("Reversing balanced reordering for TT output")
+                # First slice to padded sequence length, then reverse reorder
+                tt_out_padded = tt_out[:, :, :padded_seq_len, :]
+                tt_out_reordered = reverse_reorder_tensor_chunks(tt_out_padded, chunk_order, seq_dim=2)
+                tt_out = tt_out_reordered[:, :, :base_seq_len, :]
+            else:
+                # Slice out any tile-padding
+                tt_out = tt_out[:, :, :base_seq_len, :]
+
             tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
             logger.debug(f"tt_out: {tt_out.shape}")
             logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
@@ -331,6 +416,7 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
+    is_causal=False,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
@@ -370,6 +456,7 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        is_causal=is_causal,
     )
 
 
@@ -980,4 +1067,107 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "b, nh, base_seq_len, d",
+    # [(1, 2, 4 * 64, 32)],
+    [(1, 64, 4 * 4096, 128)],
+    ids=["deepseek_v3_prefill"],
+)
+@pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 256], ids=["q32", "q64", "q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 256], ids=["k32", "k64", "k128", "k256"])
+@pytest.mark.parametrize(
+    "n_iters, trace_enabled, skip_check",
+    [
+        (1, False, False),
+    ],
+    ids=["no_trace"],
+)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(2, 4)],
+    ids=["2x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, rp_factor, up_axis, up_factor",
+    [
+        [1, 4, 0, 2],
+    ],
+    ids=[
+        "4rpx2up",
+    ],
+)
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
+def test_causal_ring_joint_sdpa(
+    mesh_device,
+    b,
+    nh,
+    base_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
+    all_gather_topology,
+    skip_check,
+    is_balanced,
+    reset_seeds,
+):
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
+
+    joint_seq_len = 0  # causality is enabled only for non-joint cases
+
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        0.999,
+        is_causal=True,
+        is_balanced=is_balanced,
     )

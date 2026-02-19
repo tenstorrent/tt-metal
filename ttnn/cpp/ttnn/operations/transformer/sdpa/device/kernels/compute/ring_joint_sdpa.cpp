@@ -16,35 +16,40 @@
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
-    constexpr uint32_t DHt = get_compile_time_arg_val(2);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(9);
-    constexpr uint32_t Lt = get_compile_time_arg_val(10);
-    constexpr uint32_t L = get_compile_time_arg_val(11);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(17);
+    constexpr uint32_t NHK = get_compile_time_arg_val(2);
+    constexpr uint32_t DHt = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
+    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    constexpr uint32_t Lt = get_compile_time_arg_val(12);
+    constexpr uint32_t L = get_compile_time_arg_val(13);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(16);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(17);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(18);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(19);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(20);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(21);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(22);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(23);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(24);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(25);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(26);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(27);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(29);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(30);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(31);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(18);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(19);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(20);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(21);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(22);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(23);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(24);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(26);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(27);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(28);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(29);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(32);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t is_balanced = get_compile_time_arg_val(34) == 1;
 
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(30);
     constexpr bool use_streaming_compute = get_compile_time_arg_val(31) == 1;
@@ -58,7 +63,7 @@ void kernel_main() {
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+    constexpr bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !is_causal;
 
     constexpr uint32_t neginf_tile_idx = 0;
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? 1 : 0;
@@ -74,8 +79,9 @@ void kernel_main() {
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -115,6 +121,8 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
+    uint32_t ring_index = fused_op_indexer.ring_index;
+    uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -125,7 +133,8 @@ void kernel_main() {
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
+                                         !(is_causal && ring_index < ring_id && !is_balanced);
 
         if (!ring_iter_does_work) {
             continue;
@@ -211,7 +220,15 @@ void kernel_main() {
                 cb_sum_B,
                 lw_mask);
         } else {
-            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
+            bool causality = (ring_iter == 0 ? is_causal : false);
+
+            uint32_t iter_num_kv_chunks = num_kv_chunks;
+            if (is_causal && is_balanced && ring_index > ring_id) {
+                iter_num_kv_chunks /= 2;
+            }
+            bool balancing = (ring_index >= ring_id ? false : is_balanced);
+
+            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, NH, DHt, vDHt, scale_fp32>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,
@@ -226,10 +243,12 @@ void kernel_main() {
                 out_num_blocks,
                 global_q_start,
                 global_q_end,
+                num_local_q_chunks,
                 0,
-                num_kv_chunks,
+                iter_num_kv_chunks,
                 q_chunk_tiles,
                 k_chunk_tiles,
+                v_chunk_tiles,
                 qk_chunk_tiles,
                 out_chunk_tiles,
                 ring_iter,
@@ -259,7 +278,9 @@ void kernel_main() {
                 cb_lse_out,
                 cb_prev_out,
                 cb_out,
-                lw_mask);
+                lw_mask,
+                causality,
+                balancing);
         }
     }
 }

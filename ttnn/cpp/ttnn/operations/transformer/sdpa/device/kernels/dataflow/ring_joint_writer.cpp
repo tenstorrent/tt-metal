@@ -69,28 +69,32 @@ void write_output_and_lse(
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
-    constexpr uint32_t DHt = get_compile_time_arg_val(2);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(9);
-    constexpr uint32_t Lt = get_compile_time_arg_val(10);
-    constexpr uint32_t L = get_compile_time_arg_val(11);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(17);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(18);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(19);
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(20);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(21);
+    constexpr uint32_t NHK = get_compile_time_arg_val(2);
+    constexpr uint32_t DHt = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
+    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    constexpr uint32_t Lt = get_compile_time_arg_val(12);
+    constexpr uint32_t L = get_compile_time_arg_val(13);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(16);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(17);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(18);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(19);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(20);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(21);
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(22);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(23);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t is_balanced = get_compile_time_arg_val(25) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<26>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -117,8 +121,8 @@ void kernel_main() {
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
     const auto lse_writer = TensorAccessor(lse_args, lse_addr, lse_tile_bytes);
 
-    const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
-    const auto joint_tile_logical = TensorTileShape(B, NH, Lt, DHt);
+    const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
+    const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
     const auto lse_tile_logical = TensorTileShape(B, NH, local_padded_Nt + Lt, 1);
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
@@ -138,11 +142,13 @@ void kernel_main() {
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+    constexpr bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !is_causal;
     if constexpr (needs_lightweight_mask) {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>();
     }
 
+    uint32_t ring_index = fused_op_receiver.ring_index;
+    uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -151,8 +157,8 @@ void kernel_main() {
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
+                                         !(is_causal && ring_index < ring_id && !is_balanced);
         if (!ring_iter_does_work) {
             continue;
         }
@@ -161,10 +167,8 @@ void kernel_main() {
         We have 3 possible masks
         - global N mask
         - local N mask
-        - joint L mask
 
         Global N mask:
-            - If the logical_n falls within this ring iter's KV range
             - And logical_n length (within local_padded_N) does not divide by K chunk size
 
         Local N mask
@@ -198,16 +202,37 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
+            // Only truly causal case appear in the iteration with local KV
+            // Other iterations will just skip the conmputation with subsequent KV chunks
+            bool causality = (ring_iter == 0 ? is_causal : false);
+
+            if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+                continue;
+            }
+
+            if (is_causal) {
+                generate_mask<false, 0, true, cb_mask_in>(
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    q_chunk,
+                    0,
+                    ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
+                    ring_iter_needs_joint_n_mask,
+                    ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
+                    L,
+                    causality);
+            }
+
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;
             uint32_t end_seq_tile;
             if (is_joint_q) {
                 const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+                out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, vDHt);
                 end_seq_tile = Lt;
             } else {
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-                out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, vDHt);
                 end_seq_tile = local_padded_Nt * (ring_id + 1);
             }
 
