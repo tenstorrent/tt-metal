@@ -69,22 +69,12 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         reader_compile_time_args.push_back(input_page_sizes[i]);
     }
 
+    // TensorAccessor parameters come from tensor buffers only; no Circular Buffer required.
     TensorAccessorArgs(*output.buffer()).append_to(reader_compile_time_args);
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
         const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
         TensorAccessorArgs(*buf).append_to(reader_compile_time_args);
     }
-
-    // CB for reader: one page (max of output and any input page size)
-    uint32_t cb_page_size = output_page_size;
-    for (uint32_t i = 0; i < num_input_tensors; ++i) {
-        cb_page_size = std::max(cb_page_size, static_cast<uint32_t>(input_tensors[i].buffer()->aligned_page_size()));
-    }
-    const tt::DataFormat data_format = datatype_to_dataformat_converter(output.dtype());
-    constexpr uint32_t cb_index = 0;
-    CircularBufferConfig cb_config =
-        CircularBufferConfig(cb_page_size * 1, {{cb_index, data_format}}).set_page_size(cb_index, cb_page_size);
-    CreateCircularBuffer(program, all_cores, cb_config);
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -108,7 +98,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         std::move(program),
         {.num_input_tensors = num_input_tensors,
          .cb_inputs = {},
-         .cb_output = tt::CBIndex::c_0,
+         .cb_output = 0,
          .reader_kernel_id = reader_kernel_id,
          .writer_kernel_id = 0,
          .all_cores = all_cores,
