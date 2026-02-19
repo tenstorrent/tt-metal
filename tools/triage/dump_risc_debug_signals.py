@@ -75,8 +75,6 @@ def collect_debug_bus_signals(
             continue
 
         try:
-            if risc_name == "brisc" or risc_name == "erisc":
-                raise RiscHaltError(risc_name, location)
             with risc_debug.ensure_halted():
                 pass
         except RiscHaltError:
