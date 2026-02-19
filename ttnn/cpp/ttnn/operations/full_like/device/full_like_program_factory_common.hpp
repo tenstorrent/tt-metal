@@ -10,7 +10,7 @@ namespace ttnn::prim {
 union datatype {
     uint32_t u32;
     float f32;
-} u;
+};
 
 // After the full modification and if there are no issues in the overall tests, it will be added to `bfloat16.hpp` and
 // applied globally.

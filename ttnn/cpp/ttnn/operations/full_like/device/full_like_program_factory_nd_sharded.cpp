@@ -67,6 +67,7 @@ FullLikeNDShardedProgramFactory::cached_program_t FullLikeNDShardedProgramFactor
         default: break;
     }
 
+    datatype u;
     if (std::holds_alternative<int>(fill_value)) {
         u.u32 = std::get<int>(fill_value);
     } else if (std::holds_alternative<float>(fill_value)) {

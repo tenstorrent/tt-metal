@@ -75,7 +75,6 @@ FullLikeShardedProgramFactory::cached_program_t FullLikeShardedProgramFactory::c
                 auto buffer_dist_spec = output.buffer()->buffer_distribution_spec().value();
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
                 has_ordered_cores_with_data = true;
-                compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
             } else {  // If the tensor does not have an nd_shard_spec, then we need to create a bufferdistributionspec
                       // from the shard_spec.
                 const auto page_shape = (operation_attributes.layout == Layout::TILE)
@@ -92,7 +91,6 @@ FullLikeShardedProgramFactory::cached_program_t FullLikeShardedProgramFactory::c
                         : tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D);
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
                 has_ordered_cores_with_data = true;
-                compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
             }
             compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
 
@@ -118,6 +116,7 @@ FullLikeShardedProgramFactory::cached_program_t FullLikeShardedProgramFactory::c
         default: break;
     }
 
+    datatype u;
     if (std::holds_alternative<int>(fill_value)) {
         u.u32 = std::get<int>(fill_value);
     } else if (std::holds_alternative<float>(fill_value)) {
