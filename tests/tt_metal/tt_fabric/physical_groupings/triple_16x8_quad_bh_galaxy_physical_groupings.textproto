@@ -159,8 +159,8 @@ groupings {
   name: "4x4_Mesh"
   preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_1 } },
-    { id: 1 grouping_ref { preset_type: TRAY_2 } }
+    { id: 0 grouping_ref { preset_type: TRAY_2 } },
+    { id: 1 grouping_ref { preset_type: TRAY_1 } }
   ]
   row_major_mesh {
     dims: [2, 1]
@@ -172,8 +172,8 @@ groupings {
   name: "4x4_Mesh"
   preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_3 } },
-    { id: 1 grouping_ref { preset_type: TRAY_4 } }
+    { id: 0 grouping_ref { preset_type: TRAY_4 } },
+    { id: 1 grouping_ref { preset_type: TRAY_3 } }
   ]
   row_major_mesh {
     dims: [2, 1]
