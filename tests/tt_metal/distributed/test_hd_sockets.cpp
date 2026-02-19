@@ -353,7 +353,7 @@ TEST_F(HDSocketFixture, D2HSocketThroughputBenchmark) {
         1024UL * 1024 * 1024  // 1GB
     };
 
-    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
     std::vector<std::size_t> fifo_sizes = {
         1024,
         2048,
@@ -386,17 +386,37 @@ TEST_F(HDSocketFixture, D2HSocketThroughputBenchmark) {
         return page_size * std::max<std::size_t>(pages, 1);
     };
 
-    // Find first MMIO-mapped device
+    // Select a specific sender ASIC by physical location.
+    constexpr uint32_t target_tray_id = 1;
+    constexpr uint32_t target_asic_location = 6;
+    auto physical_system_descriptor = PhysicalSystemDescriptor(
+        MetalContext::instance().get_cluster().get_driver(),
+        MetalContext::instance().get_distributed_context_ptr(),
+        &MetalContext::instance().hal(),
+        MetalContext::instance().rtoptions(),
+        true);
+
+    // Find MMIO-mapped device matching tray/location.
     std::optional<MeshCoordinate> sender_coord_opt;
+    const auto& control_plane = MetalContext::instance().get_control_plane();
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
+        if (!is_device_coord_mmio_mapped(mesh_device_, coord)) {
+            continue;
+        }
+        auto fabric_node_id = mesh_device_->get_fabric_node_id(coord);
+        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
+        if (*asic_desc.tray_id == target_tray_id && *asic_desc.asic_location == target_asic_location) {
             sender_coord_opt = coord;
             break;
         }
     }
-    ASSERT_TRUE(sender_coord_opt.has_value()) << "No MMIO-mapped device found";
+    ASSERT_TRUE(sender_coord_opt.has_value())
+        << "No MMIO-mapped device found for Tray ID " << target_tray_id << " ASIC Location " << target_asic_location;
     auto sender_coord = sender_coord_opt.value();
     MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
+    std::cout << "# sender target tray=" << target_tray_id << " asic_location=" << target_asic_location
+              << " mesh_coord=" << sender_coord << std::endl;
 
     std::cout << "page_size,socket_fifo_size,total_data,data_size,pages_per_iter,"
               << "num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
@@ -513,6 +533,9 @@ std::pair<double, double> benchmark_d2h_socket(
         }
     }
     output_socket.barrier();
+    // Ensure the launched program has fully completed and flushed measurement writes
+    // before reading measurement_buffer from host.
+    Finish(mesh_device->mesh_command_queue());
 
     const auto& cluster = MetalContext::instance().get_cluster();
     std::vector<uint64_t> latency_data(1);
