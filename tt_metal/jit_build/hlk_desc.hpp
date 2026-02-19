@@ -107,7 +107,6 @@ public:
 };  // tt_hlk_desc
 }  // namespace tt
 
-// Stable hash for cache paths. Same logical inputs as std::hash<tt_hlk_desc> but deterministic.
 inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
     tt::FNV1a hasher;
     for (size_t i = 0; i < obj.buf_dataformat_arr.size(); i++) {
@@ -119,17 +118,6 @@ inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
     hasher.update(obj.get_hlk_math_approx_mode() ? 1u : 0u);
     void* hlk_args = obj.get_hlk_args();
     size_t hlk_args_size = obj.get_hlk_args_size();
-    if (hlk_args != nullptr && hlk_args_size > 0) {
-        const char* raw = reinterpret_cast<const char*>(hlk_args);
-        hasher.update(raw, raw + hlk_args_size);
-    } else if (hlk_args != nullptr || hlk_args_size != 0) {
-        TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
-    }
-    return hasher.digest();
-}
-
-// Hash for hlk_args (used by std::hash<tt_hlk_desc> only)
-inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
     // C++20 standard, section 7.2.1, paragraph 11:
     // If a program attempts to access the stored value of an object through a glvalue whose type is not
     // similar to one of the following types the behavior is undefined:
@@ -140,36 +128,11 @@ inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
     //
     // Since we are accessing the raw bytes through a char type,
     // reinterpret_casting is well defined.
-
-    const char* const raw_bytes = reinterpret_cast<char*>(hlk_args);
-
-    for (size_t i = 0; i < hlk_args_size; ++i) {
-        ttsl::hash::hash_combine(seed, std::hash<char>{}(raw_bytes[i]));
+    if (hlk_args != nullptr && hlk_args_size > 0) {
+        const char* raw = reinterpret_cast<const char*>(hlk_args);
+        hasher.update(raw, raw + hlk_args_size);
+    } else if (hlk_args != nullptr || hlk_args_size != 0) {
+        TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
     }
+    return hasher.digest();
 }
-
-template <>
-struct std::hash<tt::tt_hlk_desc> {
-    std::size_t operator()(const tt::tt_hlk_desc& obj) const {
-        std::size_t hash_value = 0;
-        for (size_t i = 0; i < obj.buf_dataformat_arr.size(); i++) {
-            ttsl::hash::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_buf_dataformat(i)));
-            ttsl::hash::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_r_dim(i)));
-            ttsl::hash::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_c_dim(i)));
-        }
-        ttsl::hash::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
-        ttsl::hash::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
-
-        // Get hash for hlk_args here
-        void* hlk_args = obj.get_hlk_args();
-        size_t hlk_args_size = obj.get_hlk_args_size();
-        if (hlk_args != nullptr and hlk_args_size > 0) {
-            hash_hlk_args(hash_value, hlk_args, hlk_args_size);
-        } else if (hlk_args == nullptr and hlk_args_size == 0) {
-        } else {
-            TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
-        }
-
-        return hash_value;
-    }
-};
