@@ -73,7 +73,7 @@ def test_ttnn_neck_pcc(device, reset_seeds):
 
     # --- TTNN backbone (reuse swin_l) ---
     from models.experimental.swin_l.tt import TtSwinLBackbone, load_backbone_weights, compute_attn_masks
-    from models.experimental.dino_5scale_swin_l.tt.model_preprocessing import load_neck_weights
+    from models.experimental.dino_5scale_swin_l.tt.model_preprocessing import load_neck_weights, _resolve_state_dict
     from models.experimental.dino_5scale_swin_l.tt.tt_neck import TtDINONeck
     from models.experimental.swin_l.common import (
         SWIN_L_EMBED_DIM,
@@ -82,7 +82,8 @@ def test_ttnn_neck_pcc(device, reset_seeds):
         SWIN_L_WINDOW_SIZE,
     )
 
-    backbone_params = load_backbone_weights(ckpt_path, device)
+    sd = _resolve_state_dict(ckpt_path)
+    backbone_params = load_backbone_weights(sd, device)
     attn_masks = compute_attn_masks(DINO_INPUT_H, DINO_INPUT_W, 4, SWIN_L_WINDOW_SIZE, device)
     ttnn_backbone = TtSwinLBackbone(
         device,
@@ -104,7 +105,7 @@ def test_ttnn_neck_pcc(device, reset_seeds):
     ttnn_backbone_feats = ttnn_backbone(ttnn_input)
 
     # --- TTNN neck ---
-    neck_params = load_neck_weights(ckpt_path, device)
+    neck_params = load_neck_weights(sd, device)
     ttnn_neck = TtDINONeck(
         device,
         neck_params,
