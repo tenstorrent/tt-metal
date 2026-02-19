@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import json
 import pathlib
 from abc import ABC, abstractmethod
@@ -242,36 +243,70 @@ class VectorExportSource(VectorSource):
                             if "sweep_name" not in vector_data:
                                 vector_data["sweep_name"] = module_name
 
-                            # Get traced_machine_info for filtering checks
+                            # Normalize traced_machine_info to a list of dict entries.
+                            # Some vectors carry multiple machine descriptors; filtering
+                            # should accept a vector if ANY entry matches.
                             traced_machine_info = vector_data.get("traced_machine_info")
-                            # Handle both list and dict formats
-                            if isinstance(traced_machine_info, list) and traced_machine_info:
-                                traced_machine_info = traced_machine_info[0]
+                            traced_machine_entries = []
+                            if isinstance(traced_machine_info, dict):
+                                traced_machine_entries = [traced_machine_info]
+                            elif isinstance(traced_machine_info, list):
+                                traced_machine_entries = [
+                                    entry for entry in traced_machine_info if isinstance(entry, dict)
+                                ]
+
+                            def _extract_mesh_shape(entry: dict) -> tuple[int, int] | None:
+                                """Extract mesh shape from machine entry when present."""
+                                mesh = entry.get("mesh_device_shape")
+                                if isinstance(mesh, list) and len(mesh) == 2:
+                                    return (mesh[0], mesh[1])
+                                if isinstance(mesh, str):
+                                    try:
+                                        parsed = ast.literal_eval(mesh)
+                                        if isinstance(parsed, list) and len(parsed) == 2:
+                                            return (parsed[0], parsed[1])
+                                    except (SyntaxError, ValueError):
+                                        pass
+
+                                # Legacy location used by some vectors
+                                placements = entry.get("tensor_placements")
+                                if isinstance(placements, list) and placements:
+                                    placement_mesh = placements[0].get("mesh_device_shape")
+                                    if isinstance(placement_mesh, list) and len(placement_mesh) == 2:
+                                        return (placement_mesh[0], placement_mesh[1])
+                                    if isinstance(placement_mesh, str):
+                                        try:
+                                            parsed = ast.literal_eval(placement_mesh)
+                                            if isinstance(parsed, list) and len(parsed) == 2:
+                                                return (parsed[0], parsed[1])
+                                        except (SyntaxError, ValueError):
+                                            pass
+                                return None
 
                             # Check if required mesh shape exceeds available devices
                             # This check only applies to model_traced runs (not nightly/lead models)
                             # and is independent of MESH_DEVICE_SHAPE env var
                             skip_for_resources = False
-                            if current_machine_info and traced_machine_info and isinstance(traced_machine_info, dict):
-                                # Get the mesh shape from traced config (this is what actually matters)
-                                traced_mesh_shape = traced_machine_info.get("mesh_device_shape")
-
-                                # Calculate required device count from mesh shape
-                                if isinstance(traced_mesh_shape, list) and len(traced_mesh_shape) == 2:
-                                    required_device_count = traced_mesh_shape[0] * traced_mesh_shape[1]
-                                else:
-                                    # Fallback to device_count if mesh_shape not available
-                                    required_device_count = traced_machine_info.get("device_count", 1)
-
-                                # Get current machine capabilities
+                            if current_machine_info and traced_machine_entries:
                                 current_device_count = current_machine_info.get("device_count", 1)
+                                required_device_counts = []
+                                for entry in traced_machine_entries:
+                                    mesh_shape = _extract_mesh_shape(entry)
+                                    if mesh_shape is not None:
+                                        required_device_counts.append(mesh_shape[0] * mesh_shape[1])
+                                        continue
 
-                                # Skip if vector requires more devices than available
-                                # Use mesh shape product (actual requirement) instead of card_count from trace machine
-                                if required_device_count > current_device_count:
+                                    fallback_device_count = entry.get("device_count")
+                                    if isinstance(fallback_device_count, int) and fallback_device_count > 0:
+                                        required_device_counts.append(fallback_device_count)
+
+                                # Only skip if we have explicit requirements and ALL exceed current capacity.
+                                # If no requirement is present, do not filter the vector out.
+                                if required_device_counts and all(
+                                    required > current_device_count for required in required_device_counts
+                                ):
                                     logger.debug(
-                                        f"Skipping vector requiring {required_device_count} devices "
-                                        f"(mesh shape: {traced_mesh_shape}) "
+                                        f"Skipping vector requiring one of {required_device_counts} devices "
                                         f"(current machine has {current_device_count} devices)"
                                     )
                                     machine_mismatch_count += 1
@@ -282,50 +317,46 @@ class VectorExportSource(VectorSource):
 
                             # Apply mesh filtering if enabled
                             if mesh_filter and target_mesh:
-                                if traced_machine_info and isinstance(traced_machine_info, dict):
-                                    # Extract mesh shape from traced config
-                                    vector_mesh = traced_machine_info.get("mesh_device_shape")
-                                    if isinstance(vector_mesh, list) and len(vector_mesh) == 2:
-                                        vector_mesh_tuple = (vector_mesh[0], vector_mesh[1])
-                                    else:
-                                        vector_mesh_tuple = (1, 1)  # Default for single device
+                                # If mesh shape is missing in JSON, do not filter out.
+                                # Otherwise, accept when ANY traced entry matches target mesh.
+                                traced_mesh_entries = []
+                                for entry in traced_machine_entries:
+                                    mesh_shape = _extract_mesh_shape(entry)
+                                    if mesh_shape is not None:
+                                        traced_mesh_entries.append((entry, mesh_shape))
 
-                                    # Check if mesh shape matches
-                                    if vector_mesh_tuple != target_mesh:
+                                if traced_mesh_entries:
+                                    matching_entries = [
+                                        entry for entry, mesh_shape in traced_mesh_entries if mesh_shape == target_mesh
+                                    ]
+                                    if not matching_entries:
                                         filtered_count += 1
                                         continue
 
-                                    # Validate device_count consistency
-                                    device_count = traced_machine_info.get("device_count", 1)
-                                    expected_device_count = target_mesh[0] * target_mesh[1]
-                                    if device_count != expected_device_count:
-                                        logger.debug(
-                                            f"Vector mesh {vector_mesh_tuple} has device_count={device_count}, "
-                                            f"expected {expected_device_count} for mesh {target_mesh}"
-                                        )
-                                        filtered_count += 1
-                                        continue
-
-                                    # Check machine compatibility if current_machine_info is available
+                                    # Optional machine compatibility check: require at least one compatible entry.
                                     if current_machine_info:
-                                        # Check board_type (flexible matching for wormhole variants)
-                                        traced_board = traced_machine_info.get("board_type", "").lower()
                                         current_board = current_machine_info.get("board_type", "").lower()
-                                        if traced_board and current_board:
-                                            # Allow "wormhole" to match "wormhole_b0" etc.
-                                            board_match = (
-                                                traced_board == current_board
-                                                or "wormhole" in traced_board
-                                                and "wormhole" in current_board
-                                            )
-                                            if not board_match:
-                                                machine_mismatch_count += 1
-                                                continue
-
-                                        # Check device_series
-                                        traced_series = traced_machine_info.get("device_series", "").lower()
                                         current_series = current_machine_info.get("device_series", "").lower()
-                                        if traced_series and current_series and traced_series != current_series:
+                                        has_compatible_entry = False
+                                        for entry in matching_entries:
+                                            traced_board = entry.get("board_type", "").lower()
+                                            traced_series = entry.get("device_series", "").lower()
+
+                                            board_match = True
+                                            if traced_board and current_board:
+                                                board_match = traced_board == current_board or (
+                                                    "wormhole" in traced_board and "wormhole" in current_board
+                                                )
+
+                                            series_match = True
+                                            if traced_series and current_series:
+                                                series_match = traced_series == current_series
+
+                                            if board_match and series_match:
+                                                has_compatible_entry = True
+                                                break
+
+                                        if not has_compatible_entry:
                                             machine_mismatch_count += 1
                                             continue
 
