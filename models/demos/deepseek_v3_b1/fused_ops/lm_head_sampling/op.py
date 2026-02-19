@@ -114,6 +114,7 @@ class LMHeadSampling:
         num_links=1,
         fp32_dest_acc_en=False,
         skip_ccl=None,
+        d2h_socket=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -138,11 +139,14 @@ class LMHeadSampling:
             num_links: Number of fabric links for CCL
             fp32_dest_acc_en: Whether to enable FP32 accumulation
             skip_ccl: Whether to skip CCL broadcast. If None, defaults to True for single-device meshes.
+            d2h_socket: Optional D2H socket. If provided, final sampled token is also emitted to host.
         Returns:
             Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
         enable_argmax = True
+        enable_d2h_output = d2h_socket is not None
+        d2h_page_size_bytes = 64
         if indices_tensor is None or output_index_tensor is None:
             raise ValueError("indices_tensor and output_index_tensor are required for fused LM-head + sampling")
 
@@ -153,6 +157,12 @@ class LMHeadSampling:
         mesh_cols = mesh_shape[1]
         if skip_ccl is None:
             skip_ccl = mesh_rows * mesh_cols == 1
+        if enable_d2h_output:
+            if not skip_ccl:
+                raise NotImplementedError("d2h output for lm_head_sampling currently supports only single-device mode")
+            if mesh_rows * mesh_cols != 1:
+                raise NotImplementedError("d2h output for lm_head_sampling currently supports only a 1x1 mesh")
+            d2h_socket.set_page_size(d2h_page_size_bytes)
         # In multi-column meshes, enable secondary-axis relay by default so broadcast reaches
         # all clusters. Callers can still override explicitly if needed.
         if not skip_ccl and mesh_cols > 1 and secondary_cluster_axis is None:
@@ -246,6 +256,7 @@ class LMHeadSampling:
         argmax_winner_cb = 3
         argmax_gather_cb = 4
         argmax_indices_cb = 5
+        argmax_d2h_cb = 6
         matmul_out_cb = 16  # Matmul output on matmul cores (tensor-backed)
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
@@ -381,6 +392,19 @@ class LMHeadSampling:
                         raise ValueError("argmax_final_core_coord must be within the matmul core grid")
                     if output_index_core.x != argmax_final_core.x or output_index_core.y != argmax_final_core.y:
                         raise ValueError("output_index_tensor shard core must match argmax_final_core_coord")
+                    if enable_d2h_output:
+                        active_socket_cores = d2h_socket.get_active_cores()
+                        if len(active_socket_cores) != 1:
+                            raise ValueError("d2h_socket for lm_head_sampling must have exactly one active core")
+                        socket_core = active_socket_cores[0]
+                        if (
+                            socket_core.device_coord != ttnn.MeshCoordinate(row, col)
+                            or socket_core.core_coord.x != argmax_final_core.x
+                            or socket_core.core_coord.y != argmax_final_core.y
+                        ):
+                            raise ValueError(
+                                "d2h_socket active core must match argmax final core and target device for lm_head_sampling"
+                            )
                     argmax_num_values = n_per_core
                     argmax_num_senders = len(argmax_cores_row_wise)
                     argmax_expected_remote_incs = argmax_num_senders - 1
@@ -528,6 +552,9 @@ class LMHeadSampling:
                     ("argmax_mesh_local_send_slot_offset", argmax_mesh_local_send_slot_offset),
                     ("argmax_gather_cb", argmax_gather_cb),
                     ("argmax_indices_cb", argmax_indices_cb),
+                    ("argmax_enable_d2h_output", 1 if enable_d2h_output else 0),
+                    ("argmax_d2h_cb", argmax_d2h_cb if enable_d2h_output else 0),
+                    ("argmax_d2h_page_size_bytes", d2h_page_size_bytes if enable_d2h_output else 0),
                 ]
 
                 # ================================================================
@@ -565,6 +592,9 @@ class LMHeadSampling:
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
                     ("argmax_winner_page_bytes", argmax_winner_page_bytes),
                     ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
+                    ("argmax_enable_d2h_output", 1 if enable_d2h_output else 0),
+                    ("argmax_d2h_cb", argmax_d2h_cb if enable_d2h_output else 0),
+                    ("argmax_d2h_page_size_bytes", d2h_page_size_bytes if enable_d2h_output else 0),
                 ]
 
                 # ================================================================
@@ -598,6 +628,7 @@ class LMHeadSampling:
                         int(final_core_phys.x),
                         int(final_core_phys.y),
                         0,
+                        int(d2h_socket.get_config_buffer_address()) if enable_d2h_output else 0,
                     ]
                     dst_nodes = []
                     fabric_node_id = None
@@ -664,6 +695,7 @@ class LMHeadSampling:
                         int(final_core_phys.x),
                         int(final_core_phys.y),
                         int(scratch_tensors_per_device[device_idx].buffer_address()),
+                        int(d2h_socket.get_config_buffer_address()) if enable_d2h_output else 0,
                     ]
 
                 # ================================================================
@@ -738,6 +770,19 @@ class LMHeadSampling:
                             argmax_indices_cb_descriptor,
                         ]
                     )
+                    if enable_d2h_output:
+                        argmax_d2h_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=d2h_page_size_bytes,
+                            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)]),
+                            format_descriptors=[
+                                ttnn.CBFormatDescriptor(
+                                    buffer_index=argmax_d2h_cb,
+                                    data_format=ttnn.uint32,
+                                    page_size=d2h_page_size_bytes,
+                                )
+                            ],
+                        )
+                        cbs_list.append(argmax_d2h_cb_descriptor)
 
                 # CB 30: CCL broadcast packet buffer (only in multi-device mode)
                 if not skip_ccl:
