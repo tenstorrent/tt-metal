@@ -396,7 +396,7 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     # When redirecting to file, use a larger width to avoid wrapping.
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
+    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
     progress_disabled = bool(args["--disable-progress"])
 
