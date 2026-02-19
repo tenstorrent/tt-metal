@@ -593,7 +593,9 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
                 auto* device_buffer = device_storage.mesh_buffer->get_device_buffer(coord);
                 if (device_buffer != nullptr) {
                     device_tensors_json.push_back(
-                        {{"device_id", device_buffer->device()->id()}, {"address", device_buffer->address()}});
+                        {{"device_id", device_buffer->device()->id()},
+                         {kMeshDeviceId, buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
+                         {"address", device_buffer->address()}});
                 }
             }
         }
