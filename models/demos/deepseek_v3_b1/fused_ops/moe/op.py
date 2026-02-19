@@ -881,8 +881,8 @@ class MoeRoutedExpertOp:
         gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_proj_cb_index, expert_index_tensor)
         index_tile = expert_index_tensor.get_tile()
         index_tile_size = index_tile.get_tile_size(expert_index_tensor.dtype)
-        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
+        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender sem 0 (read-only VALID source)
+        index_mcast_receiver_semaphore_id = 14  # Dedicated (avoid reuse of sem 1)
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
@@ -979,7 +979,7 @@ class MoeRoutedExpertOp:
             dst_cb=down_proj_mcast_dst_cb,
             dst_tensor=down_proj_mcast_output_tensor,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
-            receiver_semaphore_id=mcast_data_receiver_semaphore_id,
+            receiver_semaphore_id=15,  # Dedicated (avoid reuse of sem 1)
             data_size_bytes=down_proj_mcast_data_size_bytes,
         )
 
@@ -2664,9 +2664,13 @@ class MoeOp:
         shared_n_parallel,
         epsilon=1e-6,
         use_hardcoded_expert_index=False,
+        num_iterations=1,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
+
+        Args:
+            num_iterations: Number of iterations to loop inside the kernel (default 1).
 
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor)
@@ -2834,6 +2838,17 @@ class MoeOp:
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
+            # Dedicated mcast receiver semaphores (avoid reuse of sem 1)
+            ttnn.SemaphoreDescriptor(
+                id=routed_ctx.index_mcast_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=routed_ctx.down_proj_mcast_params["receiver_semaphore_id"],
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
         ]
 
         # ==================================================================
@@ -2904,6 +2919,11 @@ class MoeOp:
                 ncrisc_args += shared_ncrisc
                 brisc_args += shared_brisc
                 trisc_args += shared_trisc
+
+                # Loop iteration count (available to all RISCs in common section)
+                ncrisc_args += [("num_iterations", num_iterations)]
+                brisc_args += [("num_iterations", num_iterations)]
+                trisc_args += [("num_iterations", num_iterations)]
 
                 # Create unified kernel
                 unified_kernel = UnifiedKernelDescriptor(
