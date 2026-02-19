@@ -2349,6 +2349,11 @@ bool PhysicalGroupingDescriptor::validate_grouping_with_psd(
     return errors.empty();
 }
 
+bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    return validate_preformed_groups_from_physical_system_descriptor(physical_system_descriptor, nullptr);
+}
+
 // Stream operator for FlattenedMeshNodeInfo (required by topology solver)
 std::ostream& operator<<(std::ostream& os, const PhysicalGroupingDescriptor::FlattenedMeshNodeInfo& node_info) {
     os << "FlattenedMeshNodeInfo{unique_id=" << node_info.unique_id;

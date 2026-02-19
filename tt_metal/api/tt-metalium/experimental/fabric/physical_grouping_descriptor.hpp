@@ -113,6 +113,11 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>* errors_out = nullptr);
 
+    // Same as above but populates errors_out when validation fails (for testing/inspection)
+    bool validate_preformed_groups_from_physical_system_descriptor(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        std::vector<std::string>* errors_out) const;
+
     // Node metadata for flattened mesh nodes
     // Generic enough to be used throughout the flattened mesh representation
     struct FlattenedMeshNodeInfo {
