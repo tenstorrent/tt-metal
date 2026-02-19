@@ -280,8 +280,8 @@ struct ReduceToOneB1 {
 
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
-                    noc_semaphore_wait(worker_sem_ptr, 1);
-                    noc_semaphore_set(worker_sem_ptr, 0);
+                    noc_semaphore_wait_min(worker_sem_ptr, 1);
+                    semaphore_dec(worker_sem_ptr);
 
                     fabric_sender.wait_for_empty_write_slot();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(

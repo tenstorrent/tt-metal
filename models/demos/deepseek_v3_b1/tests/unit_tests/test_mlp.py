@@ -565,7 +565,7 @@ def test_mlp_fused_with_reduce(bh_2d_mesh_device):
     logger.info("Created 4 global semaphores for reduce synchronization")
 
     # ── Run fused MLP op with reduce (looping inside kernel) ──
-    num_iterations = 1
+    num_iterations = 100
     ttnn_result_reduce = MlpOp.op(
         r["ttnn_rmsnorm_output"],
         r["ttnn_mcast_output"],
