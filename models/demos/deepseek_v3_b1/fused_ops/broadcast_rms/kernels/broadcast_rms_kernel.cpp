@@ -8,7 +8,7 @@
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
-#if !defined(SKIP_CCL)
+#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
 #include "../../../unified_kernels/broadcast.hpp"
 #endif
 #include "../../../unified_kernels/rmsnorm.hpp"
@@ -24,8 +24,13 @@ void kernel_main() {
 // NCRISC: Broadcast reader + RMSNorm reader
 // -----------------------
 #if defined(COMPILE_FOR_NCRISC)
+#if defined(ENABLE_SOCKET_READER)
+    constexpr bool use_socket = true;
+#else
+    constexpr bool use_socket = false;
+#endif
 
-#if !defined(SKIP_CCL)
+#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
@@ -33,10 +38,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_sender"),
         get_named_compile_time_arg_val("core_noc_x"),
         get_named_compile_time_arg_val("core_noc_y"),
-        get_named_compile_time_arg_val("is_secondary_sender"),
-        get_named_compile_time_arg_val("use_socket")>;
+        get_named_compile_time_arg_val("is_secondary_sender")>;
 
-    // Only read broadcast runtime args if CCL is enabled
+    // Only read broadcast runtime args if CCL is enabled or socket reader is active
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
     bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
@@ -127,14 +131,16 @@ void kernel_main() {
 
 #endif
 
-    // CCL Broadcast
-#if !defined(SKIP_CCL)
+    // CCL Broadcast (reader only when socket is enabled with skip_ccl)
+#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
-    bcast(bcast_args);
+    if constexpr (!skip_ccl || use_socket) {
+        bcast(bcast_args);
+    }
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
-    if constexpr (skip_ccl) {
+    if constexpr (skip_ccl && !use_socket) {
         // Single-device: setup sharded buffer for input
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");

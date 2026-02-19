@@ -151,18 +151,29 @@ class BroadcastRMSNorm:
         # Define circular buffer page size
         cb_page_size = tile_size
 
+        def select_data_path(use_socket, socket_obj):
+            if skip_ccl:
+                if use_socket:
+                    return pkt_cb, socket_obj.get_config_buffer_address(), 1, True
+                return input_cb, 0, 0, False
+            return (
+                input_cb,
+                (socket_obj.get_config_buffer_address() if use_socket else 0),
+                (1 if use_socket else 0),
+                True,
+            )
+
         # For each device in the mesh, create appropriate program
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
 
-                # CCL role calculation (only matters if not skipping CCL)
+                # CCL role calculation
+                is_sender = (row == sender_row) and (col == sender_col)
                 if skip_ccl:
-                    is_sender = False
                     is_secondary_sender = False
                     is_receiver = False
                 else:
-                    is_sender = (row == sender_row) and (col == sender_col)
                     is_secondary_sender = (
                         secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
                     )
@@ -202,23 +213,25 @@ class BroadcastRMSNorm:
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
 
-                rmsnorm_input_source_cb = input_cb
-
-                use_socket = socket is not None and is_sender and not skip_ccl
-                socket_config_addr = socket.get_config_buffer_address() if use_socket else 0
-                socket_num_pages = 1 if use_socket else 0
+                # Data-path modes:
+                # 1) CCL enabled: broadcast fills pkt_cb then RMSNorm reads intermediate output.
+                # 2) skip_ccl + socket: NCRISC reader pulls from socket into pkt_cb; RMSNorm reads pkt_cb.
+                # 3) skip_ccl + no socket: RMSNorm reads directly from input_cb.
+                use_socket = socket is not None and is_sender
+                rmsnorm_input_source_cb, socket_config_addr, socket_num_pages, bcast_reader_enabled = select_data_path(
+                    use_socket, socket
+                )
 
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    # CCL broadcast reader args (dummy values when skip_ccl)
-                    ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
-                    ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
-                    ("is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("use_socket", 1 if use_socket else 0),
+                    # CCL broadcast reader args (dummy values when skip_ccl or reader disabled)
+                    ("cb0_id", pkt_cb if bcast_reader_enabled else 0),
+                    ("packet_size_in_pages", num_pages_per_packet if bcast_reader_enabled else 0),
+                    ("tensor0_page_size", page_size_bytes if bcast_reader_enabled else 0),
+                    ("is_sender", int(is_sender) if bcast_reader_enabled else 0),
+                    ("core_noc_x", core_noc_x if bcast_reader_enabled else 0),
+                    ("core_noc_y", core_noc_y if bcast_reader_enabled else 0),
+                    ("is_secondary_sender", int(is_secondary_sender) if bcast_reader_enabled else 0),
                     ("rmsnorm_input_cb", rmsnorm_input_source_cb),
                     ("rmsnorm_num_tiles", num_tiles),
                 ]
@@ -281,13 +294,14 @@ class BroadcastRMSNorm:
                     num_connections = len(dst_nodes)
 
                 # Common runtime args for reader (broadcast args shared across cores)
+                tensor_address0 = 0 if use_socket else int(input_tensor_device.buffer_address())
                 reader_common_rt_args = [
-                    0 if use_socket else int(input_tensor_device.buffer_address()),  # tensor_address0
-                    tile_id_start,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                    int(socket_config_addr),  # socket_config_addr
-                    int(socket_page_size) if use_socket else 0,  # socket_page_size
-                    int(socket_num_pages),  # socket_num_pages
+                    tensor_address0,
+                    tile_id_start,
+                    input_num_pages,
+                    int(socket_config_addr),
+                    int(socket_page_size) if use_socket else 0,
+                    int(socket_num_pages),
                 ]
 
                 # Common runtime args for writer (broadcast args shared across cores)
@@ -349,7 +363,11 @@ class BroadcastRMSNorm:
                 out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
                 out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
-                kernel_defines = [("SKIP_CCL", "1")] if skip_ccl else []
+                kernel_defines = []
+                if skip_ccl:
+                    kernel_defines.append(("SKIP_CCL", "1"))
+                if use_socket:
+                    kernel_defines.append(("ENABLE_SOCKET_READER", "1"))
 
                 # Unified kernel descriptor for fused op
                 unified_kernel = UnifiedKernelDescriptor(

@@ -49,8 +49,7 @@ struct Broadcast {
         uint32_t isSender,
         uint32_t coreNocX,
         uint32_t coreNocY,
-        uint32_t isSecondarySender,
-        uint32_t useSocket = 0>
+        uint32_t isSecondarySender>
     struct ReaderCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t packet_size_in_pages = packetSizeInPages;
@@ -59,7 +58,6 @@ struct Broadcast {
         static constexpr uint32_t core_noc_x = coreNocX;
         static constexpr uint32_t core_noc_y = coreNocY;
         static constexpr uint32_t is_secondary_sender = isSecondarySender;
-        static constexpr bool use_socket = useSocket != 0;
     };
 
     struct ReaderArgs {
@@ -145,7 +143,8 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
                     uint32_t num_pages_to_read =
                         std::min(args.tile_id_end - args.tile_id_start, CTArgs::packet_size_in_pages);
-                    if constexpr (CTArgs::use_socket) {
+#if defined(ENABLE_SOCKET_READER)
+                    {
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
@@ -154,16 +153,16 @@ struct Broadcast {
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv);
                         update_socket_config(recv);
-                    } else {
-                        cb_reserve_back(CTArgs::cb0_id, num_pages_to_read);
-                        const uint32_t l1_write_addr = get_write_ptr(CTArgs::cb0_id);
-                        uint64_t base_src_addr =
-                            get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0);
-                        uint64_t read_addr = base_src_addr + (args.tile_id_start * CTArgs::tensor0_page_size);
-                        noc_async_read(read_addr, l1_write_addr, num_pages_to_read * CTArgs::tensor0_page_size);
-                        noc_async_read_barrier();
-                        cb_push_back(CTArgs::cb0_id, num_pages_to_read);
                     }
+#else
+                    cb_reserve_back(CTArgs::cb0_id, num_pages_to_read);
+                    const uint32_t l1_write_addr = get_write_ptr(CTArgs::cb0_id);
+                    uint64_t base_src_addr = get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0);
+                    uint64_t read_addr = base_src_addr + (args.tile_id_start * CTArgs::tensor0_page_size);
+                    noc_async_read(read_addr, l1_write_addr, num_pages_to_read * CTArgs::tensor0_page_size);
+                    noc_async_read_barrier();
+                    cb_push_back(CTArgs::cb0_id, num_pages_to_read);
+#endif
                 }
             }
 #elif defined(COMPILE_FOR_BRISC)
