@@ -82,6 +82,26 @@
           "BUILD_TT_TRAIN": {"value": "OFF"}
         },
         "toolchainFile": "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
+      },
+      {
+        "name": "gcc-system",
+        "inherits": "default",
+        "description": "Build with system GCC (unversioned gcc/g++)",
+        "binaryDir": "${sourceDir}/.build/gcc-system",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-gcc-toolchain.cmake"
+      },
+      {
+        "name": "clang-system",
+        "inherits": "default",
+        "description": "Build with system Clang (unversioned clang/clang++)",
+        "binaryDir": "${sourceDir}/.build/clang-system",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-libstdcpp-toolchain.cmake"
       }
     ],
     "buildPresets": [
