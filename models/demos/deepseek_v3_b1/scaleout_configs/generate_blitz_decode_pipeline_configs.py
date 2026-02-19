@@ -65,6 +65,17 @@ def generate_slice_to_pcie_device_mapping(
         logger.error(f"{MAPPING_GENERATION_CMD} Interrupted")
         sys.exit(1)
 
+    # When running remotely, the file is written on the workers not the runner.
+    # Copy it back from the first host.
+    if not os.path.exists(mapping_file) and mpi_user:
+        remote_host = f"{mpi_user}@{host_vector[0]}"
+        scp_cmd = ["scp", f"{remote_host}:{mapping_file}", mapping_file]
+        logger.info(f"Copying mapping file from worker: {' '.join(scp_cmd)}")
+        scp_result = subprocess.run(scp_cmd)
+        if scp_result.returncode != 0:
+            logger.error(f"Failed to copy {mapping_file} from {remote_host}")
+            sys.exit(1)
+
     if not os.path.exists(mapping_file):
         logger.error(f"{mapping_file} not found")
         sys.exit(1)
