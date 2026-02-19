@@ -24,13 +24,13 @@ runs:
       id: write-inputs
       shell: bash
       run: |
-        REGRESSED_FILE="${RUNNER_TEMP}/regressed_raw.json"
+        REGRESSED_FILE="$(mktemp "${RUNNER_TEMP}/regressed_raw.XXXXXX.json")"
         cat > "$REGRESSED_FILE" << '__REGRESSED_JSON_EOF__'
         ${{ inputs.regressed_workflows }}
         __REGRESSED_JSON_EOF__
         echo "regressed_file=$REGRESSED_FILE" >> "$GITHUB_OUTPUT"
 
-        ALERT_FILE="${RUNNER_TEMP}/alert_raw.txt"
+        ALERT_FILE="$(mktemp "${RUNNER_TEMP}/alert_raw.XXXXXX.txt")"
         cat > "$ALERT_FILE" << '__ALERT_TEXT_EOF__'
         ${{ inputs.alert_all_message }}
         __ALERT_TEXT_EOF__
@@ -441,7 +441,7 @@ runs:
 
             if [ "$body_text_length" -gt 3000 ]; then
               echo "⚠️ WARNING: Body text ($body_text_length chars) exceeds Slack's 3000 char limit. Truncating..."
-              truncated_text="${body_text:0:2950}"$'\n'"_(message truncated due to size limit)_"
+              truncated_text=$(printf '%s' "$body_text" | jq -R -r '.[0:2950] + "\n_(message truncated due to size limit)_"')
               PAYLOAD=$(echo "$PAYLOAD" | jq -c --arg trunc "$truncated_text" \
                 '.blocks[1].text.text = $trunc' 2>/dev/null || echo "")
               if [ -z "$PAYLOAD" ]; then
