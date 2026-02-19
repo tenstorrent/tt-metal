@@ -2139,155 +2139,74 @@ using tt::tt_metal::ASICLocation;
 using tt::tt_metal::TrayID;
 using FlattenedMeshNodeInfo = PhysicalGroupingDescriptor::FlattenedMeshNodeInfo;
 
-AdjacencyGraph<AsicID> build_physical_adjacency_graph_for_host(
-    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::string& hostname) {
+AdjacencyGraph<AsicID> build_physical_adjacency_graph_for_cluster(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     std::map<AsicID, std::vector<AsicID>> adj_map;
-    const auto& asic_graph = psd.get_system_graph().asic_connectivity_graph.at(hostname);
-    for (const auto& [asic_id, edges] : asic_graph) {
-        std::vector<AsicID> neighbors;
-        for (const auto& [dst_asic, _] : edges) {
-            neighbors.push_back(dst_asic);
+    for (const std::string& hostname : psd.get_all_hostnames()) {
+        const auto& asic_graph = psd.get_system_graph().asic_connectivity_graph.at(hostname);
+        for (const auto& [asic_id, edges] : asic_graph) {
+            std::vector<AsicID> neighbors;
+            for (const auto& [dst_asic, _] : edges) {
+                neighbors.push_back(dst_asic);
+            }
+            adj_map[asic_id] = std::move(neighbors);
         }
-        adj_map[asic_id] = std::move(neighbors);
     }
     return AdjacencyGraph<AsicID>(adj_map);
 }
 
-std::string build_tray_mapping_error_message(
-    const std::string& hostname,
+std::string build_pgd_mapping_failure_message(
+    const std::string& grouping_name,
     const AdjacencyGraph<FlattenedMeshNodeInfo>& flat_mesh,
-    const std::map<AsicID, uint32_t>& global_tray_traits,
     const MappingResult<FlattenedMeshNodeInfo, AsicID>& result) {
-    // Helper to format a vector as comma-separated list
-    auto format_list = [](const std::vector<uint32_t>& vec) {
-        std::string result;
-        for (size_t i = 0; i < vec.size(); ++i) {
-            if (i > 0) {
-                result += ", ";
-            }
-            result += std::to_string(vec[i]);
-        }
-        return result;
-    };
-
-    // Helper to extract and sort locations from nodes
-    auto get_locations = [](const std::vector<FlattenedMeshNodeInfo>& nodes) {
-        std::vector<uint32_t> locations;
-        locations.reserve(nodes.size());
-        for (const auto& node : nodes) {
-            locations.push_back(node.asic_location);
-        }
-        std::sort(locations.begin(), locations.end());
-        return locations;
-    };
-
-    // Find unmapped nodes
     std::set<FlattenedMeshNodeInfo> mapped_nodes;
     for (const auto& [node, _] : result.target_to_global) {
         mapped_nodes.insert(node);
     }
 
-    std::map<uint32_t, std::vector<FlattenedMeshNodeInfo>> unmapped_by_tray;
-    for (const auto& node : flat_mesh.get_nodes()) {
-        if (node.tray_id != 0 && node.asic_location != 0 && !mapped_nodes.contains(node)) {
-            unmapped_by_tray[node.tray_id].push_back(node);
-        }
-    }
-
-    if (unmapped_by_tray.empty()) {
-        return fmt::format(
-            "Host {}: Tray mapping validation failed\n  No unmapped nodes found (this should not happen)\n", hostname);
-    }
-
-    // Collect physical trays and mapped trays
-    std::set<uint32_t> physical_trays;
-    for (const auto& [_, tray_id] : global_tray_traits) {
-        physical_trays.insert(tray_id);
-    }
-
-    std::set<uint32_t> mapped_trays;
+    std::map<uint32_t, size_t> mapped_by_tray, unmapped_by_tray;
     for (const auto& [node, _] : result.target_to_global) {
         if (node.tray_id != 0) {
-            mapped_trays.insert(node.tray_id);
+            mapped_by_tray[node.tray_id]++;
+        }
+    }
+    for (const auto& node : flat_mesh.get_nodes()) {
+        if (!mapped_nodes.contains(node) && node.tray_id != 0) {
+            unmapped_by_tray[node.tray_id]++;
         }
     }
 
-    // Separate missing trays from mismatches
-    std::vector<uint32_t> missing_trays, mismatch_trays;
-    for (const auto& [tray_id, _] : unmapped_by_tray) {
-        (physical_trays.contains(tray_id) ? mismatch_trays : missing_trays).push_back(tray_id);
-    }
-    std::sort(missing_trays.begin(), missing_trays.end());
-    std::sort(mismatch_trays.begin(), mismatch_trays.end());
+    size_t total = flat_mesh.get_nodes().size();
+    size_t mapped_count = result.target_to_global.size();
+    size_t unmapped_count = total - mapped_count;
 
-    std::vector<uint32_t> physical_tray_list(physical_trays.begin(), physical_trays.end());
-    std::sort(physical_tray_list.begin(), physical_tray_list.end());
-    std::vector<uint32_t> mapped_tray_list(mapped_trays.begin(), mapped_trays.end());
-    std::sort(mapped_tray_list.begin(), mapped_tray_list.end());
-
-    // Build error message
-    std::string msg = fmt::format("Host {}: Tray mapping validation failed\n", hostname);
-
-    if (!missing_trays.empty()) {
-        msg += fmt::format(
-            "  PGD HOSTS grouping expects {} tray(s) that are not present in this host:\n", missing_trays.size());
-        for (uint32_t tray_id : missing_trays) {
-            auto locations = get_locations(unmapped_by_tray.at(tray_id));
-            msg += fmt::format(
-                "    - Tray {}: {} ASIC(s) at locations [{}]\n", tray_id, locations.size(), format_list(locations));
+    auto fmt_trays = [](const std::map<uint32_t, size_t>& m) {
+        std::string s;
+        for (const auto& [tid, c] : m) {
+            if (!s.empty()) {
+                s += ", ";
+            }
+            s += fmt::format("g{}:{}", tid, c);
         }
+        return s;
+    };
+
+    std::string msg = fmt::format(
+        "PGD grouping '{}' could not be mapped to PSD: {}/{} nodes mapped, {} unmatched",
+        grouping_name,
+        mapped_count,
+        total,
+        unmapped_count);
+    if (!mapped_by_tray.empty()) {
+        msg += fmt::format(" (matched: {})", fmt_trays(mapped_by_tray));
     }
-
-    if (!mismatch_trays.empty()) {
-        msg += fmt::format(
-            "  PGD HOSTS grouping expects {} tray(s) that exist but have ASIC location/orientation mismatches:\n",
-            mismatch_trays.size());
-        for (uint32_t tray_id : mismatch_trays) {
-            auto locations = get_locations(unmapped_by_tray.at(tray_id));
-            msg += fmt::format(
-                "    - Tray {}: {} ASIC(s) at locations [{}] (check ASIC orientation/corner settings in PGD)\n",
-                tray_id,
-                locations.size(),
-                format_list(locations));
-        }
+    if (!unmapped_by_tray.empty()) {
+        msg += fmt::format(" (unmatched: {})", fmt_trays(unmapped_by_tray));
     }
-
-    msg += fmt::format(
-        "  This host in PSD has {} tray(s): [{}]\n", physical_tray_list.size(), format_list(physical_tray_list));
-
-    if (!mapped_tray_list.empty()) {
-        msg += fmt::format(
-            "  Successfully mapped {} ASIC(s) from tray(s): [{}]\n",
-            result.target_to_global.size(),
-            format_list(mapped_tray_list));
-    }
-
-    msg += "  Suggested fixes:\n";
-    if (!missing_trays.empty()) {
-        msg += fmt::format(
-            "    - PGD HOSTS grouping expects tray(s) [{}] but this host only has tray(s) [{}]\n",
-            format_list(missing_trays),
-            format_list(physical_tray_list));
-        msg += fmt::format(
-            "    - Option 1: Update PGD HOSTS grouping to only include tray(s) [{}] (matching what this host has)\n",
-            format_list(physical_tray_list));
-        msg += fmt::format(
-            "    - Option 2: Update PSD/hardware configuration - add tray(s) [{}] to this host\n",
-            format_list(missing_trays));
-    }
-
-    if (!mismatch_trays.empty()) {
-        msg += fmt::format(
-            "    - Tray(s) [{}] exist but ASIC locations/orientations don't match\n", format_list(mismatch_trays));
-        msg += "    - Fix: Update PGD tray corner orientations to match PSD physical ASIC layout\n";
-        msg += "    - Check TRAY_1/TRAY_2/TRAY_3/TRAY_4 preset_type corner settings in PGD\n";
-    }
-
     return msg;
 }
 
-bool validate_host(
-    const std::string& hostname,
+bool validate(
+    const std::string& grouping_name,
     const AdjacencyGraph<FlattenedMeshNodeInfo>& flat_mesh,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
@@ -2317,8 +2236,8 @@ bool validate_host(
             global_tray_traits[asic_id] = *tray_id;
             global_location_traits[asic_id] = *asic_location;
         } catch (...) {
-            errors.push_back(
-                fmt::format("Host {}: failed to get tray_id/asic_location for asic_id {}", hostname, *asic_id));
+            errors.push_back(fmt::format(
+                "PGD grouping '{}': failed to get tray_id/asic_location for asic_id {}", grouping_name, *asic_id));
             return false;
         }
     }
@@ -2329,11 +2248,10 @@ bool validate_host(
     constraints.add_required_trait_constraint<uint32_t>(target_location_traits, global_location_traits);
 
     auto result =
-        solve_topology_mapping(flat_mesh, physical_graph, constraints, ConnectionValidationMode::STRICT, true);
+        solve_topology_mapping(flat_mesh, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
 
     if (!result.success) {
-        std::string detailed_error = build_tray_mapping_error_message(hostname, flat_mesh, global_tray_traits, result);
-        errors.push_back(detailed_error);
+        errors.push_back(build_pgd_mapping_failure_message(grouping_name, flat_mesh, result));
         return false;
     }
     return true;
@@ -2342,37 +2260,42 @@ bool validate_host(
 }  // namespace
 
 bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
-    auto host_groupings = get_groupings_by_type("HOSTS");
-    if (host_groupings.empty()) {
-        log_critical(
-            tt::LogFabric, "Internal error: validate_preformed_groups: no grouping with preset_type HOSTS found");
-        return false;
-    }
-
-    const GroupingInfo& host_grouping = host_groupings[0];
-    auto flat_mesh = build_flattened_adjacency_mesh(host_grouping);
-
-    if (flat_mesh.get_nodes().empty()) {
-        log_critical(tt::LogFabric, "Internal error: host grouping produced empty graph");
-        return false;
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    std::vector<std::string>* errors_out) const {
+    auto mesh_groupings = get_groupings_by_type("MESH");
+    if (mesh_groupings.empty()) {
+        log_warning(tt::LogFabric, "No MESH groupings found in PGD, skipping preformed groups validation");
+        return true;
     }
 
     std::vector<std::string> errors;
-    for (const std::string& hostname : physical_system_descriptor.get_all_hostnames()) {
-        auto physical_graph = build_physical_adjacency_graph_for_host(physical_system_descriptor, hostname);
+    auto physical_graph = build_physical_adjacency_graph_for_cluster(physical_system_descriptor);
 
-        if (!validate_host(hostname, flat_mesh, physical_graph, physical_system_descriptor, errors)) {
-            continue;
+    for (const auto& mesh_grouping : mesh_groupings) {
+        auto flat_mesh = build_flattened_adjacency_mesh(mesh_grouping);
+
+        if (flat_mesh.get_nodes().empty()) {
+            TT_THROW("Internal error: mesh grouping produced empty graph");
         }
+
+        validate(mesh_grouping.name, flat_mesh, physical_graph, physical_system_descriptor, errors);
     }
 
     // log the validation errors
-    for (const auto& error : errors) {
-        log_critical(tt::LogFabric, "Validation error: {}", error);
+    for (const auto& err : errors) {
+        log_critical(tt::LogFabric, "Validation error: {}", err);
+    }
+
+    if (errors_out != nullptr) {
+        *errors_out = errors;
     }
 
     return errors.empty();
+}
+
+bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    return validate_preformed_groups_from_physical_system_descriptor(physical_system_descriptor, nullptr);
 }
 
 // Stream operator for FlattenedMeshNodeInfo (required by topology solver)
