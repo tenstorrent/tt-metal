@@ -323,6 +323,21 @@ Register stages in order. The JSON payload follows this schema:
 | `output_shape_expr` | string | No | Output shape if different from input |
 | `dtype_parametrize` | string | No | List of dtype names for multi-dtype testing |
 
+#### Test Data Rule: Always Use Randomized Tensors
+
+**CRITICAL**: All test tensors — inputs, weights, scalars — MUST use randomized values (`torch.randn`, `torch.rand`). **NEVER** use identity values like `torch.ones` or `torch.zeros` for auxiliary tensors (gamma, beta, masks, weights, etc.).
+
+**Why**: Identity values (gamma=1, beta=0) make the test unable to distinguish "feature correctly implemented" from "feature completely missing." A normalization with gamma=1, beta=0 produces identical output whether the affine path exists or not.
+
+**Pattern for stages with extra tensors:**
+```python
+# extra_setup field:
+"W = shape[-1]\\n    gamma_pt = torch.randn(W, dtype=torch.bfloat16)\\n    beta_pt = torch.randn(W, dtype=torch.bfloat16)"
+
+# extra_ttnn_setup field:
+"gamma_tt = ttnn.from_torch(gamma_pt, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\\n    beta_tt = ttnn.from_torch(beta_pt, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+```
+
 #### Tolerance Guidelines
 
 | Stage Type | rtol | atol |
