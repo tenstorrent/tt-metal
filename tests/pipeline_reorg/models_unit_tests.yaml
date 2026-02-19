@@ -25,7 +25,7 @@
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 5
       tier: 1
     wh_llmbox_perf:
       timeout: 30
@@ -64,10 +64,10 @@
   model: llama3.2-1b
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 5
       tier: 3
     wh_n300:
-      timeout: 30
+      timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -85,10 +85,10 @@
   model: llama3.2-3b
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 5
       tier: 3
     wh_n300:
-      timeout: 30
+      timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
