@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
+#include "ttnn/types.hpp"
 
 class TensorUtilsTest : public ::testing::Test {
 protected:
@@ -107,6 +108,28 @@ TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorTypeLimits) {
     for (size_t i = 0; i < test_data.size(); i++) {
         EXPECT_EQ(vec_back[i], test_data[i]);
     }
+}
+
+TYPED_TEST(TtmlFromVectorIntUintTest, RowMajorLayout) {
+    using scalar_t = typename TypeParam::scalar_t;
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<scalar_t> test_data = {1, 2, 3};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor =
+        ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device, ttnn::ROW_MAJOR_LAYOUT);
+    ASSERT_EQ(tensor.layout(), ttnn::ROW_MAJOR_LAYOUT);
+}
+
+TYPED_TEST(TtmlFromVectorIntUintTest, TileLayout) {
+    using scalar_t = typename TypeParam::scalar_t;
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<scalar_t> test_data = {1, 2, 3};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor =
+        ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device, ttnn::TILE_LAYOUT);
+    ASSERT_EQ(tensor.layout(), ttnn::TILE_LAYOUT);
 }
 
 /* Typed tests for <float, BFLOAT16> and <bfloat16, BFLOAT16> */
@@ -250,6 +273,28 @@ TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorOdd) {
     }
 }
 
+TYPED_TEST(TtmlFromVectorBf16Test, RowMajorLayout) {
+    using scalar_t = typename TypeParam::scalar_t;
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<scalar_t> test_data = {1, 2, 3};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor =
+        ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device, ttnn::ROW_MAJOR_LAYOUT);
+    ASSERT_EQ(tensor.layout(), ttnn::ROW_MAJOR_LAYOUT);
+}
+
+TYPED_TEST(TtmlFromVectorBf16Test, TileLayout) {
+    using scalar_t = typename TypeParam::scalar_t;
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<scalar_t> test_data = {1, 2, 3};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor =
+        ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device, ttnn::TILE_LAYOUT);
+    ASSERT_EQ(tensor.layout(), ttnn::TILE_LAYOUT);
+}
+
 class TtmlFromVectorFloat32Test : public TensorUtilsTest {};
 
 /* <float, ttnn::DataType::FLOAT32> */
@@ -323,6 +368,25 @@ TEST_F(TtmlFromVectorFloat32Test, TestFloat32ToFromTensorLimits) {
     for (size_t i = 0; i < test_data.size(); i++) {
         EXPECT_EQ(vec_back[i], test_data[i]);
     }
+}
+
+TEST_F(TtmlFromVectorFloat32Test, RowMajorLayout) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data = {1, 2, 3};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor =
+        ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device, ttnn::ROW_MAJOR_LAYOUT);
+    ASSERT_EQ(tensor.layout(), ttnn::ROW_MAJOR_LAYOUT);
+}
+
+TEST_F(TtmlFromVectorFloat32Test, TileLayout) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data = {1, 2, 3};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device, ttnn::TILE_LAYOUT);
+    ASSERT_EQ(tensor.layout(), ttnn::TILE_LAYOUT);
 }
 
 TEST_F(TensorUtilsTest, TestOnes_0) {
