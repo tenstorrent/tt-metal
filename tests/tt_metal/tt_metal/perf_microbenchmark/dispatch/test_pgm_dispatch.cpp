@@ -106,8 +106,8 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
         core_x = 7;
         core_y = 6;
     } else if (arch_name == "blackhole") {
-        // Two columns and one row harvested.
-        core_x = 11;
+        // Two columns harvested, plus a row and column used for dispatch cores.
+        core_x = 10;
         core_y = 8;
     } else {
         log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
