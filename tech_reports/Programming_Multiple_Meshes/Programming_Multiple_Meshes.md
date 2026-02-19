@@ -287,7 +287,6 @@ If `--tcp-interface` is specified, it uses `btl_tcp_if_include` instead to expli
 **Tagged Output:** `tt-run` always enables `--tag-output`, which prefixes each output line with rank information (e.g., `[1,0]<stdout>:`). This makes it easier to identify which rank produced each line of output when debugging distributed applications.
 
 **Automatic Environment Setup:** `tt-run` spawns one process per rank and automatically manages per-rank environments:
-- `TT_METAL_CACHE`: Unique cache directory per rank (prevents kernel compilation conflicts when multiple processes compile kernels simultaneously)
 - `TT_MESH_ID`: Mesh identifier from rank binding
 - `TT_MESH_GRAPH_DESC_PATH`: Path to topology descriptor
 - `TT_MESH_HOST_RANK`: Host rank within mesh (if specified)
@@ -648,7 +647,6 @@ if __name__ == "__main__":
 | `RuntimeError: Distributed context not initialized` | Called `get_rank()` or `get_size()` before opening any device | Open a device first, or call `ttnn.init_distributed_context()` manually |
 | Processes hang on socket operations | Ranks are incorrectly specified in socket configuration | Ensure `sender_rank` and `receiver_rank` are correct and match the actual process ranks. Mismatched socket configs will produce an error. |
 | `TT_VISIBLE_DEVICES` not working | Environment variable not set before device opens | Set `TT_VISIBLE_DEVICES` before importing `ttnn`, or use `env_overrides` in rank bindings |
-| Kernel compilation conflicts | Multiple processes sharing cache | Set unique `TT_METAL_CACHE` per process (done automatically by `tt-run`) |
 | Fabric initialization fails | Incorrect MGD, unstable hardware, or missing ethernet links | 1) Use `RELAXED` channel policy to allow fewer links than specified. 2) Verify ethernet links match MGD specification. 3) Run physical validation to ensure cluster is healthy: `python tests/tt_metal/distributed/test_physical_ethernet_link_ping.py` |
 
 ### Debugging Tips

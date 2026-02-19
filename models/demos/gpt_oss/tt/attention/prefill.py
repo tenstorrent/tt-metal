@@ -156,6 +156,6 @@ def prefill_forward(
     # Note: apply_output_projection already deallocates its input tensor internally
 
     # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, 1, total_seq_len, hidden_size)
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
 
     return tt_out

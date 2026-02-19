@@ -96,8 +96,10 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr);
         volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_next_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr + 4);
-        volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+        volatile tt_l1_ptr uint32_t* k_write_curr_ptr_shared =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr + 8);
+        volatile tt_l1_ptr uint32_t* k_write_next_ptr_shared =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr + 12);
 
         // Receiver ready semaphore: wait for all receivers to reserve CB before multicast
         // This ensures consistent write addresses across cores for double-buffer safety
@@ -121,7 +123,7 @@ void kernel_main() {
             // Wait for NCRISC to have first page ready
             noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 1);
             invalidate_l1_cache();
-            uint32_t page_addr = *k_write_ptr_shared;
+            uint32_t page_addr = *k_write_curr_ptr_shared;
 
             uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
 
@@ -147,6 +149,7 @@ void kernel_main() {
             noc_async_writes_flushed(MCAST_NOC);
             *ncrisc_brisc_sync_curr_ptr = 0;
             std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);
+            std::swap(k_write_curr_ptr_shared, k_write_next_ptr_shared);
         }
         noc_async_write_barrier(MCAST_NOC);
     }
@@ -207,7 +210,7 @@ void kernel_main() {
                 cb_pop_front(cb_out_o, out_chunk_tiles);
                 // Atomic barrier sure guarantee writes are completed
                 noc_async_atomic_barrier();
-                return;
+                break;
 
             } else if (role_code == 2) {
                 // RECEIVER
