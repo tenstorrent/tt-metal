@@ -114,7 +114,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_stage2_local_slot_offset"),
         get_named_compile_time_arg_val("argmax_mesh_local_send_slot_offset"),
         get_named_compile_time_arg_val("argmax_sender_idx"),
-        get_named_compile_time_arg_val("argmax_enable_d2h_output"),
+        get_named_compile_time_arg_val("argmax_emit_d2h_on_this_device"),
         get_named_compile_time_arg_val("argmax_d2h_cb"),
         get_named_compile_time_arg_val("argmax_d2h_page_size_bytes")>;
 
@@ -205,7 +205,7 @@ void kernel_main() {
     using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
         get_named_compile_time_arg_val("argmax_winner_page_bytes"),
         get_named_compile_time_arg_val("argmax_local_ready_semaphore_id"),
-        get_named_compile_time_arg_val("argmax_enable_d2h_output"),
+        get_named_compile_time_arg_val("argmax_emit_d2h_on_this_device"),
         get_named_compile_time_arg_val("argmax_d2h_cb"),
         get_named_compile_time_arg_val("argmax_d2h_page_size_bytes")>;
 

@@ -42,7 +42,7 @@ struct Sampling {
         uint32_t Stage2LocalSlotOffset,
         uint32_t MeshLocalSendSlotOffset,
         uint32_t SenderIdx,
-        uint32_t EnableD2HOutput = 0,
+        uint32_t EmitD2HOnThisDevice = 0,
         uint32_t D2HCBId = 0,
         uint32_t D2HPageSizeBytes = 0>
     struct ReaderCTArgs {
@@ -67,7 +67,7 @@ struct Sampling {
         static constexpr uint32_t stage2_local_slot_offset = Stage2LocalSlotOffset;
         static constexpr uint32_t mesh_local_send_slot_offset = MeshLocalSendSlotOffset;
         static constexpr uint32_t sender_idx = SenderIdx;
-        static constexpr bool enable_d2h_output = EnableD2HOutput == 1;
+        static constexpr bool emit_d2h_on_this_device = EmitD2HOnThisDevice == 1;
         static constexpr uint32_t d2h_cb_id = D2HCBId;
         static constexpr uint32_t d2h_page_size_bytes = D2HPageSizeBytes;
     };
@@ -75,13 +75,13 @@ struct Sampling {
     template <
         uint32_t WinnerPageBytes,
         uint32_t LocalReadySemaphoreId,
-        uint32_t EnableD2HOutput = 0,
+        uint32_t EmitD2HOnThisDevice = 0,
         uint32_t D2HCBId = 0,
         uint32_t D2HPageSizeBytes = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
-        static constexpr bool enable_d2h_output = EnableD2HOutput == 1;
+        static constexpr bool emit_d2h_on_this_device = EmitD2HOnThisDevice == 1;
         static constexpr uint32_t d2h_cb_id = D2HCBId;
         static constexpr uint32_t d2h_page_size_bytes = D2HPageSizeBytes;
     };
@@ -354,7 +354,7 @@ struct Sampling {
                 if constexpr (!CTArgs::mesh_mode) {
                     auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                     output_ptr[0] = global_best_index;
-                    if constexpr (CTArgs::enable_d2h_output) {
+                    if constexpr (CTArgs::emit_d2h_on_this_device) {
                         cb_reserve_back(CTArgs::d2h_cb_id, 1);
                         auto d2h_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::d2h_cb_id));
                         d2h_ptr[0] = global_best_index;
@@ -387,12 +387,19 @@ struct Sampling {
                             stage2_best_index);
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                         output_ptr[0] = stage2_best_index;
+                        if constexpr (CTArgs::emit_d2h_on_this_device) {
+                            cb_reserve_back(CTArgs::d2h_cb_id, 1);
+                            auto d2h_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::d2h_cb_id));
+                            d2h_ptr[0] = stage2_best_index;
+                            cb_push_back(CTArgs::d2h_cb_id, 1);
+                        }
                     }
                 }
             }
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
-            if constexpr (IsFinalCore && CTArgs::enable_d2h_output) {
+            if constexpr (IsFinalCore && CTArgs::emit_d2h_on_this_device) {
                 send_d2h_token_from_cb_brisc(args.d2h_socket_config_addr);
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {

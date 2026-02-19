@@ -158,11 +158,11 @@ class LMHeadSampling:
         if skip_ccl is None:
             skip_ccl = mesh_rows * mesh_cols == 1
         if enable_d2h_output:
-            if not skip_ccl:
-                raise NotImplementedError("d2h output for lm_head_sampling currently supports only single-device mode")
-            if mesh_rows * mesh_cols != 1:
-                raise NotImplementedError("d2h output for lm_head_sampling currently supports only a 1x1 mesh")
             d2h_socket.set_page_size(d2h_page_size_bytes)
+            active_socket_cores = d2h_socket.get_active_cores()
+            if len(active_socket_cores) != 1:
+                raise ValueError("d2h_socket for lm_head_sampling must have exactly one active core")
+            socket_core = active_socket_cores[0]
         # In multi-column meshes, enable secondary-axis relay by default so broadcast reaches
         # all clusters. Callers can still override explicitly if needed.
         if not skip_ccl and mesh_cols > 1 and secondary_cluster_axis is None:
@@ -392,19 +392,7 @@ class LMHeadSampling:
                         raise ValueError("argmax_final_core_coord must be within the matmul core grid")
                     if output_index_core.x != argmax_final_core.x or output_index_core.y != argmax_final_core.y:
                         raise ValueError("output_index_tensor shard core must match argmax_final_core_coord")
-                    if enable_d2h_output:
-                        active_socket_cores = d2h_socket.get_active_cores()
-                        if len(active_socket_cores) != 1:
-                            raise ValueError("d2h_socket for lm_head_sampling must have exactly one active core")
-                        socket_core = active_socket_cores[0]
-                        if (
-                            socket_core.device_coord != ttnn.MeshCoordinate(row, col)
-                            or socket_core.core_coord.x != argmax_final_core.x
-                            or socket_core.core_coord.y != argmax_final_core.y
-                        ):
-                            raise ValueError(
-                                "d2h_socket active core must match argmax final core and target device for lm_head_sampling"
-                            )
+                    emit_d2h_on_this_device = bool(enable_d2h_output)
                     argmax_num_values = n_per_core
                     argmax_num_senders = len(argmax_cores_row_wise)
                     argmax_expected_remote_incs = argmax_num_senders - 1
@@ -436,6 +424,7 @@ class LMHeadSampling:
                             raise ValueError(
                                 f"argmax_final_mesh_coord {argmax_final_mesh_coord} out of bounds for mesh shape {mesh_shape}"
                             )
+                        emit_d2h_on_this_device = bool(enable_d2h_output and row == target_row and col == target_col)
 
                         def _x_axis_link_idx_for_stage1_sender(sender_row_local: int) -> int:
                             linear_distance = abs(int(sender_row_local) - target_row)
@@ -493,6 +482,15 @@ class LMHeadSampling:
                                         int(sender_dst_sem_addr),
                                     ],
                                 )
+                            )
+                    if emit_d2h_on_this_device:
+                        if (
+                            socket_core.device_coord != ttnn.MeshCoordinate(row, col)
+                            or socket_core.core_coord.x != argmax_final_core.x
+                            or socket_core.core_coord.y != argmax_final_core.y
+                        ):
+                            raise ValueError(
+                                "d2h_socket active core must match argmax final core and emitting mesh device for lm_head_sampling"
                             )
 
                 # Determine if sender is part of the mcast rectangle
@@ -552,7 +550,7 @@ class LMHeadSampling:
                     ("argmax_mesh_local_send_slot_offset", argmax_mesh_local_send_slot_offset),
                     ("argmax_gather_cb", argmax_gather_cb),
                     ("argmax_indices_cb", argmax_indices_cb),
-                    ("argmax_enable_d2h_output", 1 if enable_d2h_output else 0),
+                    ("argmax_emit_d2h_on_this_device", 1 if emit_d2h_on_this_device else 0),
                     ("argmax_d2h_cb", argmax_d2h_cb if enable_d2h_output else 0),
                     ("argmax_d2h_page_size_bytes", d2h_page_size_bytes if enable_d2h_output else 0),
                 ]
@@ -592,7 +590,7 @@ class LMHeadSampling:
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
                     ("argmax_winner_page_bytes", argmax_winner_page_bytes),
                     ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
-                    ("argmax_enable_d2h_output", 1 if enable_d2h_output else 0),
+                    ("argmax_emit_d2h_on_this_device", 1 if emit_d2h_on_this_device else 0),
                     ("argmax_d2h_cb", argmax_d2h_cb if enable_d2h_output else 0),
                     ("argmax_d2h_page_size_bytes", d2h_page_size_bytes if enable_d2h_output else 0),
                 ]
