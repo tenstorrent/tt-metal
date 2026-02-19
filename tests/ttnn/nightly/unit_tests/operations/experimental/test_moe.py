@@ -16,7 +16,9 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
-PCC_THRESHOLD = 0.988
+# SwiGLU achieves ~0.985 PCC (vs SiLU's ~0.989) due to additional multiplicative
+# terms amplifying Bfp4_b weight quantization error. This is inherent to the formula.
+PCC_THRESHOLD = 0.984
 
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES = {0, 1, 8, 9}
@@ -37,25 +39,6 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, 2, M, K)
     """
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for layer in range(L):
-    #     for expert in range(E):
-    #         for k_chunk_id in range(K // 32):
-    #             k_start, k_end = k_chunk_id * 32, k_chunk_id * 32 + 32
-    #             chunk_value = le_val * 0.001 * k_chunk_id
-    #             torch_input[layer, :, expert, :, k_start:k_end] = chunk_value
-    #         le_val *= -1
-    # torch_input = 0.25 * 0.25 *torch.ones((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # k_half = K // 2
-    # # Interleave the positive and negatives
-    # for i in range(K):
-    #     if i % 2 == 0:
-    #         torch_input[..., i] = 0.25
-    #     else:
-    #         torch_input[..., i] = -0.25
-    # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
     torch_input = torch.rand((L, 2, M, K), dtype=torch.bfloat16) - 0.5
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
     return torch_input
@@ -74,19 +57,6 @@ def create_torch_w0(L, E, K, N):
     Returns:
         torch_w0: Tensor of shape (L, E, K, N)
     """
-    # torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
-
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w0
 
@@ -104,19 +74,6 @@ def create_torch_w1(L, E, K, N):
     Returns:
         torch_w1: Tensor of shape (L, E, K, N)
     """
-    # torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = -1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
-
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w1
 
@@ -134,18 +91,6 @@ def create_torch_w2(L, E, N, K):
     Returns:
         torch_w2: Tensor of shape (L, E, N, K)
     """
-    # torch_w2 = torch.empty((L, E, N, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for n_chunk in range(N // 32):
-    #             n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #             n_val = 0.001 * n_chunk
-    #             for k_chunk in range(K // 32):
-    #                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #                 k_val = k_chunk
-    #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
     return torch_w2
 
@@ -496,13 +441,19 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             # Use first 2*M rows of input (one copy of the original replicated input)
             torch_input_ref = torch_input[:, 0, ...]
 
-            # Compute gate activations for each expert
+            # Compute gate and up projections for each expert
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
-            torch_w0_output_ref = torch_input_ref @ torch_w0
-            torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
-            # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
-            torch_w1_output_ref = torch_input_ref @ torch_w1
-            torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, M, N)
+            torch_w0_output_ref = torch_input_ref @ torch_w0  # gate
+            torch_w1_output_ref = torch_input_ref @ torch_w1  # up
+
+            # GPT-OSS SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
+            alpha = 1.702
+            clamp_limit = 7.0
+            gate = torch.clamp(torch_w0_output_ref, max=clamp_limit)
+            up = torch.clamp(torch_w1_output_ref, min=-clamp_limit, max=clamp_limit)
+            up_plus_1 = up + 1.0
+            glu = gate * torch.sigmoid(alpha * gate)
+            torch_intermediate_ref = up_plus_1 * glu  # (L, E, M, N)
 
             # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
             torch_output_ref = torch_intermediate_ref @ torch_w2
@@ -518,12 +469,17 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     if dump_outputs:
         torch.set_printoptions(profile="full")
         var2filename = {
-            torch_w0_output_ref: f"torch_w0_output_ref.txt",
-            torch_w1_output_ref: f"torch_w1_output_ref.txt",
-            torch_intermediate_ref: f"torch_intermediate_ref.txt",
-            torch_output_ref: f"torch_output_ref.txt",
             tt_to_torch_outputs: f"tt_output_act.txt",
         }
+        if check_accuracy:
+            var2filename.update(
+                {
+                    torch_w0_output_ref: f"torch_w0_output_ref.txt",
+                    torch_w1_output_ref: f"torch_w1_output_ref.txt",
+                    torch_intermediate_ref: f"torch_intermediate_ref.txt",
+                    torch_output_ref: f"torch_output_ref.txt",
+                }
+            )
 
         for var, filename in var2filename.items():
             with open(filename, "w") as f:
