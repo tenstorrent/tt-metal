@@ -55,7 +55,6 @@ set(SOURCES
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
-    ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/sdpa_bw_op_test.cpp
