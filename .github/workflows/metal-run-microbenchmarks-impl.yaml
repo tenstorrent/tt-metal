@@ -116,14 +116,14 @@ jobs:
         timeout-minutes: 45
         run: ${{ matrix.test-group.cmd }}
       - name: Upload microbenchmark report csvs
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
           path: /work/generated/profiler/.logs
       - name: Upload generated test reports
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
