@@ -32,6 +32,10 @@ on:
         required: false
         type: boolean
         default: false
+      timeout:
+        required: false
+        type: number
+        description: "Job timeout in minutes (overrides test-specific default)"
       merge-gate-call:
         required: false
         type: boolean
@@ -147,7 +151,7 @@ jobs:
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+        timeout-minutes: ${{ inputs.timeout || matrix.test-group.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
