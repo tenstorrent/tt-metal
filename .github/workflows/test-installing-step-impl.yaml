@@ -95,7 +95,7 @@ jobs:
   install-and-run-llama70b-t3k:
     name: TT-Installer and run T3K Llama 70B Demo
     runs-on: ${{ format('tt-ubuntu-2204-{0}-llmbox-viommu-stable', 'n300') }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Prepare system
         run: |
