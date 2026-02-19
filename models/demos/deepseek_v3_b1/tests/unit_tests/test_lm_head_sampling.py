@@ -23,7 +23,6 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
-from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -76,7 +75,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_forced_winner_device(
     M = 1
     K = 7168
     num_matmul_cores = 101
-    n_per_core = 128  # TODO: Change to 160 for full test
+    n_per_core = 160  # TODO: Change to 160 for full test
     n_total = num_matmul_cores * n_per_core
 
     a_tile = ttnn.Tile([1, 32])
@@ -102,13 +101,9 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_forced_winner_device(
     torch_b_per_device = torch.zeros((num_devices, K, n_total), dtype=torch.bfloat16)
     torch_b_per_device[forced_winner_device_idx, :, winner_local_idx] = torch.tensor(1.0, dtype=torch.bfloat16)
 
-    torch_scores_all = torch.stack(
-        [LMHeadSampling.golden(torch_a.float(), torch_b_per_device[d].float()).bfloat16() for d in range(num_devices)],
-        dim=0,
-    )
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_expected_idx = SamplingOp.golden(
-        torch_scores_all.reshape(1, -1), torch_indices_all.reshape(1, -1), k=1, p=1.0
+    torch_expected_idx = LMHeadSampling.golden(
+        torch_a.float(), torch_b_per_device.float(), indices=torch_indices_all, k=1, p=1.0
     )
     expected_device_idx = int(torch_expected_idx.item()) // n_total
     assert (
@@ -297,7 +292,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
     M = 1
     K = 7168
     num_matmul_cores = 101
-    n_per_core = 128
+    n_per_core = 160
     n_total = num_matmul_cores * n_per_core
     seed = 7
 
@@ -321,11 +316,13 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
-    torch_scores_per_device = LMHeadSampling.golden(torch_a.float(), torch_b.float()).bfloat16()
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_scores_all = torch_scores_per_device.unsqueeze(0).repeat(num_devices, 1, 1)
-    torch_expected_idx = SamplingOp.golden(
-        torch_scores_all.reshape(1, -1), torch_indices_all.reshape(1, -1), k=1, p=1.0
+    torch_expected_idx = LMHeadSampling.golden(
+        torch_a.float(),
+        torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
+        indices=torch_indices_all,
+        k=1,
+        p=1.0,
     )
 
     input_a_mem_config = ttnn.MemoryConfig(
@@ -580,7 +577,7 @@ def test_lm_head_sampling_fused_argmax_single_device(
     M = 1
     K = 7168
     num_matmul_cores = 101
-    n_per_core = 128
+    n_per_core = 160
     n_total = num_matmul_cores * n_per_core
 
     a_tile = ttnn.Tile([1, 32])
@@ -602,9 +599,8 @@ def test_lm_head_sampling_fused_argmax_single_device(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
-    torch_scores = LMHeadSampling.golden(torch_a.float(), torch_b.float()).bfloat16()
     torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = SamplingOp.golden(torch_scores, torch_indices, k=1, p=1.0)
+    torch_expected_idx = LMHeadSampling.golden(torch_a.float(), torch_b.float(), indices=torch_indices, k=1, p=1.0)
 
     input_a_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -745,7 +741,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
     M = 1
     K = 7168
     num_matmul_cores = 101
-    n_per_core = 128
+    n_per_core = 160
     n_total = num_matmul_cores * n_per_core
 
     a_tile = ttnn.Tile([1, 32])
@@ -768,13 +764,14 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
-    torch_scores_per_device = LMHeadSampling.golden(torch_a.float(), torch_b.float()).bfloat16()
-
     # Global indices are unique across mesh devices.
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_scores_all = torch_scores_per_device.unsqueeze(0).repeat(num_devices, 1, 1)
-    torch_expected_idx = SamplingOp.golden(
-        torch_scores_all.reshape(1, -1), torch_indices_all.reshape(1, -1), k=1, p=1.0
+    torch_expected_idx = LMHeadSampling.golden(
+        torch_a.float(),
+        torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
+        indices=torch_indices_all,
+        k=1,
+        p=1.0,
     )
 
     input_a_mem_config = ttnn.MemoryConfig(

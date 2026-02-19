@@ -25,6 +25,8 @@ CB Layout:
 """
 
 
+import torch
+
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
@@ -56,18 +58,41 @@ class LMHeadSampling:
     """
 
     @staticmethod
-    def golden(input_tensor, vocab_tensor):
+    def golden(input_tensor, vocab_tensor, indices: torch.Tensor | None = None, k: int = 1, p: float = 1.0):
         """
-        PyTorch reference implementation of matmul for validation.
+        PyTorch reference implementation for fused LM-head + sampling golden.
 
         Args:
             input_tensor: Input tensor (torch.Tensor) [M, K]
             vocab_tensor: Vocab tensor (torch.Tensor) [K, N]
+            indices: Optional indices tensor used by fused sampling. If provided,
+                golden returns sampled index tensor [1, 1]. If omitted, returns scores.
+            k: Sampling k; currently only k=1 supported when indices is provided.
+            p: Top-p threshold (unused for k=1 path).
 
         Returns:
-            Output tensor [M, N]
+            - If indices is None: output scores tensor [M, N]
+            - If indices is provided: sampled index tensor [1, 1] (uint32)
         """
-        return input_tensor @ vocab_tensor
+        scores = input_tensor @ vocab_tensor
+
+        if k != 1:
+            raise NotImplementedError("LMHeadSampling fused golden currently supports only k=1")
+
+        # p is intentionally unused in k=1 path; keep for API compatibility.
+        _ = p
+
+        scores_f32 = scores.float().reshape(-1)
+        indices_i64 = indices.to(torch.int64).reshape(-1)
+        if scores_f32.numel() != indices_i64.numel():
+            raise ValueError(
+                f"scores and indices must have the same number of elements, got {scores_f32.numel()} and {indices_i64.numel()}"
+            )
+
+        max_score = torch.max(scores_f32)
+        tied_mask = scores_f32 == max_score
+        selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
+        return selected_index.reshape(1, 1)
 
     @staticmethod
     def op(
