@@ -224,7 +224,7 @@ def test_matmul_dram_sharded_single_device(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8), (8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "M, K, N",
     [

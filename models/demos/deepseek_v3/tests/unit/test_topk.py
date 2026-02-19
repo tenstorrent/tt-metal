@@ -78,7 +78,7 @@ def test_topk_single_device(shape, dtype, device):
 
 
 @pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8), (8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape",
     [
