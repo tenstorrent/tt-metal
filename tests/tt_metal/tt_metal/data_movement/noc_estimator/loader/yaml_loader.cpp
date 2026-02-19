@@ -6,7 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <iostream>
 
-namespace tt::noc_estimator::loader {
+namespace tt::tt_metal::noc_estimator::loader {
 
 using namespace common;
 
@@ -38,7 +38,8 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
                 .num_transactions = get_or_default<uint32_t>(key_node, "num_transactions", DEFAULT_NUM_TRANSACTIONS),
                 .num_subordinates = get_or_default<uint32_t>(key_node, "num_subordinates", DEFAULT_NUM_SUBORDINATES),
                 .same_axis = get_or_default<bool>(key_node, "same_axis", DEFAULT_SAME_AXIS),
-                .linked = get_or_default<bool>(key_node, "linked", DEFAULT_LINKED)};
+                .stateful = get_or_default<bool>(key_node, "stateful", DEFAULT_STATEFUL),
+                .loopback = get_or_default<bool>(key_node, "loopback", DEFAULT_LOOPBACK)};
 
             common::LatencyData latency_data;
             latency_data.latencies = entry["latencies"].as<std::vector<double>>();
@@ -57,4 +58,4 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
     return result;
 }
 
-}  // namespace tt::noc_estimator::loader
+}  // namespace tt::tt_metal::noc_estimator::loader

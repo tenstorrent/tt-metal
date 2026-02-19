@@ -7,7 +7,7 @@
 #include <limits>
 #include <set>
 
-namespace tt::noc_estimator::common {
+namespace tt::tt_metal::noc_estimator::common {
 
 // Quadratic interpolation for better accuracy when possible
 double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>& sizes, uint32_t transaction_size) {
@@ -180,10 +180,10 @@ bool has_matching_data(const GroupKey& key, const std::map<GroupKey, LatencyData
     return false;
 }
 
-// Only allow relaxation of linked and same_axis parameters
+// Only allow relaxation of same_axis, stateful, and loopback parameters
 // Other parameters (memory, mechanism, pattern, arch) must match exactly
-static const char* RELAX_PARAM_NAMES[] = {"linked", "same_axis"};
-static constexpr std::size_t RELAX_PARAM_COUNT = 2;
+static const char* RELAX_PARAM_NAMES[] = {"same_axis", "stateful", "loopback"};
+static constexpr std::size_t RELAX_PARAM_COUNT = 3;
 
 // Check if two keys match, ignoring parameters where mask bit is set
 // All other parameters must match exactly
@@ -194,10 +194,13 @@ static bool matches_with_mask(const GroupKey& a, const GroupKey& b, uint32_t ign
     }
 
     // Check relaxable parameters
-    if (!(ignore_mask & (1 << 0)) && a.linked != b.linked) {
+    if (!(ignore_mask & (1 << 0)) && a.same_axis != b.same_axis) {
         return false;
     }
-    if (!(ignore_mask & (1 << 1)) && a.same_axis != b.same_axis) {
+    if (!(ignore_mask & (1 << 1)) && a.stateful != b.stateful) {
+        return false;
+    }
+    if (!(ignore_mask & (1 << 2)) && a.loopback != b.loopback) {
         return false;
     }
     return true;
@@ -233,4 +236,4 @@ double find_with_relaxation(
     return 0.0;
 }
 
-}  // namespace tt::noc_estimator::common
+}  // namespace tt::tt_metal::noc_estimator::common

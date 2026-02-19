@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace tt::noc_estimator {
+namespace tt::tt_metal::noc_estimator {
 
 static constexpr const char* DEFAULT_YAML_PATH =
     "tests/tt_metal/tt_metal/data_movement/noc_estimator/noc_latencies.yaml";
@@ -52,7 +52,8 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
         .num_transactions = params.num_transactions_per_barrier,
         .num_subordinates = params.num_subordinates,
         .same_axis = params.same_axis,
-        .linked = params.linked};
+        .stateful = params.stateful,
+        .loopback = params.loopback};
 
     double num_transactions_d = static_cast<double>(params.num_transactions);
 
@@ -102,4 +103,4 @@ double estimate_noc_latency(const NocEstimatorParams& params) {
     return estimate_noc_performance(params).latency_cycles;
 }
 
-}  // namespace tt::noc_estimator
+}  // namespace tt::tt_metal::noc_estimator

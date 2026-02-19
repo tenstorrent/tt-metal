@@ -5,7 +5,7 @@
 #include "data_extractor.hpp"
 #include <map>
 
-namespace tt::noc_estimator::offline {
+namespace tt::tt_metal::noc_estimator::offline {
 
 common::LatencyData extract_latencies(const std::vector<DataPoint>& points) {
     common::LatencyData result;
@@ -47,4 +47,4 @@ common::LatencyData extract_latencies(const std::vector<DataPoint>& points) {
     return result;
 }
 
-}  // namespace tt::noc_estimator::offline
+}  // namespace tt::tt_metal::noc_estimator::offline

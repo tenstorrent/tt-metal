@@ -7,7 +7,7 @@
 #include <fstream>
 #include <iostream>
 
-namespace tt::noc_estimator::offline {
+namespace tt::tt_metal::noc_estimator::offline {
 
 using namespace common;
 
@@ -39,8 +39,11 @@ bool save_latency_data_to_yaml(
         if (key.same_axis != DEFAULT_SAME_AXIS) {
             out << YAML::Key << "same_axis" << YAML::Value << key.same_axis;
         }
-        if (key.linked != DEFAULT_LINKED) {
-            out << YAML::Key << "linked" << YAML::Value << key.linked;
+        if (key.stateful != DEFAULT_STATEFUL) {
+            out << YAML::Key << "stateful" << YAML::Value << key.stateful;
+        }
+        if (key.loopback != DEFAULT_LOOPBACK) {
+            out << YAML::Key << "loopback" << YAML::Value << key.loopback;
         }
         if (static_cast<int>(key.arch) != DEFAULT_ARCH) {
             out << YAML::Key << "arch" << YAML::Value << static_cast<int>(key.arch);
@@ -82,4 +85,4 @@ bool save_latency_data_to_yaml(
     return true;
 }
 
-}  // namespace tt::noc_estimator::offline
+}  // namespace tt::tt_metal::noc_estimator::offline

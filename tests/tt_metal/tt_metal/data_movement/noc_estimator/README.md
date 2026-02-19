@@ -7,7 +7,7 @@ Estimates NOC bandwidth and latency for various data movement patterns on Tensto
 ```cpp
 #include "noc_estimator.hpp"
 
-using namespace tt::noc_estimator;
+using namespace tt::tt_metal::noc_estimator;
 
 // Set up your parameters
 NocEstimatorParams params{
@@ -37,7 +37,8 @@ double bandwidth = result.bandwidth_bytes_per_cycle;
 | transaction_size_bytes | uint32_t | 512 | Size of each transaction in bytes |
 | num_subordinates | uint32_t | 1 | Number of destination cores (for *_ALL patterns) |
 | same_axis | bool | false | Whether src and dst have one shared axis |
-| linked | bool | false | Use linked multicast (multicast only) |
+| stateful | bool | false | Whether the transfer uses stateful mode |
+| loopback | bool | false | Whether loopback is enabled |
 
 ### Patterns
 
@@ -49,11 +50,16 @@ double bandwidth = result.bandwidth_bytes_per_cycle;
 | ONE_TO_ALL | Write: 1 source -> N destinations |
 | ALL_TO_ALL | N sources -> N destinations |
 | ALL_FROM_ALL | Read: N sources -> N destinations |
+| ONE_TO_ROW | Write: 1 source -> N destinations (row) |
+| ROW_TO_ROW | Write: N sources (row) -> N destinations (row) |
+| ONE_TO_COLUMN | Write: 1 source -> N destinations (column) |
+| COLUMN_TO_COLUMN | Write: N sources (column) -> N destinations (column) |
 
 ### Mechanism
 
 - UNICAST: Individual transactions to each destination
 - MULTICAST: Hardware multicast (one transaction to multiple destinations)
+- MULTICAST_LINKED: Hardware multicast with loopback enabled
 
 ## Examples
 
@@ -94,12 +100,11 @@ NocEstimate result = estimate_noc_performance(params);
 ### Linked multicast
 ```cpp
 NocEstimatorParams params{
-    .mechanism = NocMechanism::MULTICAST,
+    .mechanism = NocMechanism::MULTICAST_LINKED,
     .pattern = NocPattern::ONE_TO_ALL,
     .num_transactions = 16,
     .transaction_size_bytes = 2048,
-    .num_subordinates = 4,
-    .linked = true
+    .num_subordinates = 4
 };
 NocEstimate result = estimate_noc_performance(params);
 ```

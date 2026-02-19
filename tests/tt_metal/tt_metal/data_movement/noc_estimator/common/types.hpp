@@ -7,15 +7,26 @@
 #include <vector>
 #include <cstdint>
 
-namespace tt::noc_estimator::common {
+namespace tt::tt_metal::noc_estimator::common {
 
 enum class Architecture { WORMHOLE_B0, BLACKHOLE };
 
-enum class NocMechanism { UNICAST, MULTICAST };
+enum class NocMechanism { UNICAST, MULTICAST, MULTICAST_LINKED };
 
 enum class MemoryType { L1, DRAM };
 
-enum class NocPattern { ONE_FROM_ONE, ONE_TO_ONE, ONE_FROM_ALL, ONE_TO_ALL, ALL_TO_ALL, ALL_FROM_ALL };
+enum class NocPattern {
+    ONE_FROM_ONE,
+    ONE_TO_ONE,
+    ONE_FROM_ALL,
+    ONE_TO_ALL,
+    ALL_TO_ALL,
+    ALL_FROM_ALL,
+    ONE_TO_ROW,
+    ROW_TO_ROW,
+    ONE_TO_COLUMN,
+    COLUMN_TO_COLUMN
+};
 
 // Standard transaction sizes (stored once in YAML header)
 const std::vector<uint32_t> STANDARD_TRANSACTION_SIZES = {
@@ -33,7 +44,8 @@ constexpr int DEFAULT_ARCH = 0;       // WORMHOLE_B0
 constexpr uint32_t DEFAULT_NUM_TRANSACTIONS = 1;
 constexpr uint32_t DEFAULT_NUM_SUBORDINATES = 1;
 constexpr bool DEFAULT_SAME_AXIS = false;
-constexpr bool DEFAULT_LINKED = false;
+constexpr bool DEFAULT_STATEFUL = false;
+constexpr bool DEFAULT_LOOPBACK = false;
 
 // Key for grouping data points (all parameters except transaction_size)
 struct GroupKey {
@@ -44,7 +56,8 @@ struct GroupKey {
     uint32_t num_transactions;
     uint32_t num_subordinates;
     bool same_axis;
-    bool linked;
+    bool stateful;
+    bool loopback;
 
     // Operators are needed for std::map containers
     bool operator<(const GroupKey& other) const {
@@ -69,19 +82,24 @@ struct GroupKey {
         if (same_axis != other.same_axis) {
             return same_axis < other.same_axis;
         }
-        return linked < other.linked;
+        if (stateful != other.stateful) {
+            return stateful < other.stateful;
+        }
+        return loopback < other.loopback;
     }
 
     bool operator==(const GroupKey& other) const {
         return mechanism == other.mechanism && pattern == other.pattern && memory == other.memory &&
                arch == other.arch && num_transactions == other.num_transactions &&
-               num_subordinates == other.num_subordinates && same_axis == other.same_axis && linked == other.linked;
+               num_subordinates == other.num_subordinates && same_axis == other.same_axis &&
+               stateful == other.stateful && loopback == other.loopback;
     }
 
     // Check if non-numeric fields match (for interpolation)
     bool matches_non_numeric(const GroupKey& other) const {
         return mechanism == other.mechanism && pattern == other.pattern && memory == other.memory &&
-               arch == other.arch && same_axis == other.same_axis && linked == other.linked;
+               arch == other.arch && same_axis == other.same_axis && stateful == other.stateful &&
+               loopback == other.loopback;
     }
 };
 
@@ -102,4 +120,4 @@ struct NumericFields {
     static constexpr std::size_t count = 2;  // Number of numeric fields
 };
 
-}  // namespace tt::noc_estimator::common
+}  // namespace tt::tt_metal::noc_estimator::common
