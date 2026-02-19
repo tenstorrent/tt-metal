@@ -314,6 +314,7 @@ void bind_sdpa(nb::module_& mod) {
             use_column_major_ccl (bool, optional): If True, allocate CCL worker cores in column-major order.
                 This places CCL workers in a column (useful when reserving the last column for CCL).
                 If False (default), uses row-major allocation. Defaults to False.
+            is_causal (bool): Whether to use causal attention masking. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -351,7 +352,8 @@ void bind_sdpa(nb::module_& mod) {
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                CoreCoord ccl_core_grid_offset,
-               bool use_column_major_ccl) {
+               bool use_column_major_ccl,
+               bool is_causal) {
                 auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                                      : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
                 auto outputs = self(
@@ -374,6 +376,7 @@ void bind_sdpa(nb::module_& mod) {
                     topology,
                     subdevice_id,
                     ccl_core_grid_offset,
+                    is_causal,
                     scale,
                     compute_kernel_config,
                     strategy);
@@ -401,7 +404,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("topology"),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("ccl_core_grid_offset"),
-            nb::arg("use_column_major_ccl") = false});
+            nb::arg("use_column_major_ccl") = false,
+            nb::arg("is_causal").noconvert() = true});
 
     const auto* mla_doc =
         R"doc(

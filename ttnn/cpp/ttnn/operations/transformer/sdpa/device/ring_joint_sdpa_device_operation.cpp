@@ -103,6 +103,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto L = joint_q_shape[2];
     const auto DH = q_shape[3];
 
+    TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
+
     TT_FATAL(
         k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
         "Batch sizes must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
@@ -266,6 +268,7 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         input_tensors,
         args.joint_strategy,
         args.scale,
+        args.is_causal,
         args.logical_n,
         args.ring_size,
         args.compute_kernel_config,
@@ -300,6 +303,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::Topology topology,
     const CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const bool is_causal,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
@@ -344,6 +348,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     auto operation_attributes = OperationType::operation_attributes_t(
         joint_strategy,
         scale,
+        is_causal,
         logical_n,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
