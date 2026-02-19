@@ -4,9 +4,11 @@
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, List, Optional, Union
 
 import torch
+import yaml
 from loguru import logger
 
 import ttnn
@@ -14,6 +16,11 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
 
+_CONFIG_PATH = Path(__file__).parent / "prefetcher_config.yaml"
+with open(_CONFIG_PATH) as f:
+    ARCH_CONFIG = yaml.safe_load(f)
+
+# Model configurations for which DRAM prefetcher is supported
 VERIFIED_MODEL_CONFIGS = {
     "Llama-3.2-1B": {"dim": 2048, "hidden_dim": 8192, "n_heads": 32, "n_kv_heads": 8},
     "Llama-3.2-3B": {"dim": 3072, "hidden_dim": 8192, "n_heads": 24, "n_kv_heads": 8},
@@ -36,16 +43,16 @@ def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     Returns:
         dict: {(sender_x, sender_y): [(rx, ry), ...]} mapping
     """
-    # Senders in DRAM bank order: left col 0 (rows 9,1,7,3), right col 8 (rows 0,2,6,4)
-    left_senders = [(0, r) for r in [9, 1, 7, 3]]
-    right_senders = [(8, r) for r in [0, 2, 6, 4]]
+    cfg = ARCH_CONFIG["blackhole"]
+    left_y = cfg["bank_ordered_y_coords"]["left"]
+    right_y = cfg["bank_ordered_y_coords"]["right"]
+    left_senders = [(0, r) for r in left_y]
+    right_senders = [(8, r) for r in right_y]
     mapping = {}
     for sx, sy in left_senders:
-        # Left senders: receivers on same row, columns 1 to receivers_per_sender
         mapping[(sx, sy)] = [(x, sy) for x in range(1, num_receivers_per_sender + 1)]
     for sx, sy in right_senders:
-        # Right senders: receivers on same row, columns 0-7 (skip 8), then 9-10 if needed
-        cols = [x for x in range(8) if x != sx] + list(range(9, 11))  # 0-7 excluding sender, plus 9-10
+        cols = [x for x in range(8) if x != sx] + list(range(9, 11))
         mapping[(sx, sy)] = [(x, sy) for x in cols[:num_receivers_per_sender]]
     return mapping
 
@@ -99,36 +106,15 @@ class PrefetcherCoreConfig:
     Otherwise, uses default architecture-specific sender/receiver layout.
     """
 
-    ARCH_CONFIG = {
-        "blackhole": {
-            "dram_banks": [1, 3, 2, 0, 5, 7, 6, 4],
-            "sender_cols": {"left": 0, "right": 7},
-            "sender_rows": {
-                "left": {"active": [0, 3, 7, 9], "inactive": [1, 2, 4, 5, 6, 8]},
-                "right": {"active": [1, 4, 6, 9], "inactive": [0, 2, 3, 5, 7, 8]},
-            },
-            "receiver_cols": {"left": (1, 7), "right": (8, 11)},
-        },
-        "wormhole": {
-            "dram_banks": [1, 2, 3, 0, 4, 6, 9, 10, 11, 8, 7, 5],
-            "sender_cols": {"left": 0, "right": 4},
-            "sender_rows": {
-                "left": {"active": [0, 4, 5, 9], "inactive": [1, 2, 3, 6, 7, 8]},
-                "right": {"active": [0, 1, 2, 4, 5, 6, 7, 9], "inactive": [3, 8]},
-            },
-            "receiver_cols": {"left": (1, 4), "right": (5, 7)},
-        },
-    }
-
     num_receiver_cores: int
     mesh_device: ttnn.MeshDevice
     receiver_mapping_override: Optional[dict] = None  # {(x,y): [(rx,ry), ...]}
 
     def __post_init__(self):
-        cfg = self.ARCH_CONFIG["blackhole" if is_blackhole() else "wormhole"]
+        cfg = ARCH_CONFIG["blackhole" if is_blackhole() else "wormhole"]
         self._dram_banks = [ttnn.CoreCoord(b, 0) for b in cfg["dram_banks"]]
         self._sender_cols, self._sender_rows = cfg["sender_cols"], cfg["sender_rows"]
-        self._receiver_cols = cfg["receiver_cols"]
+        self._receiver_cols = {k: tuple(v) for k, v in cfg["receiver_cols"].items()}
         self._use_override = self.receiver_mapping_override is not None
 
         # Process override: keys become senders, values become receivers
