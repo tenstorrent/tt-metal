@@ -79,13 +79,19 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 // to run a CCL over the unit-meshes.
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
 
+enum class CoreAllocationStrategy {
+    ROW_MAJOR = 0,  // Fill row by row (existing behavior)
+    COLUMN_MAJOR = 1 // Fill column by column (new for CCL efficiency)
+};
+
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
 class EriscDatamoverBuilder;
 
