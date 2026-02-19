@@ -600,6 +600,15 @@ class MasterConfigLoader:
             if not orientation_str:
                 raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
 
+            # Convert orientation string to integer for C++ from_json
+            # ROW_MAJOR = 0, COL_MAJOR = 1
+            if "ROW_MAJOR" in orientation_str:
+                orientation_int = 0
+            elif "COL_MAJOR" in orientation_str:
+                orientation_int = 1
+            else:
+                raise ValueError(f"Unknown orientation: {orientation_str}")
+
             # Determine memory layout type
             if "WIDTH_SHARDED" in memory_layout:
                 memory_layout_str = "WIDTH_SHARDED"
@@ -610,14 +619,14 @@ class MasterConfigLoader:
             else:
                 raise ValueError(f"Unknown sharded layout: {memory_layout}")
 
-            # Return serializable dict format (grid_list already validated)
+            # Return serializable dict format with orientation as integer
             return {
                 "type": "ttnn._ttnn.tensor.MemoryConfig",
                 "data": {
                     "buffer_type": buffer_type_str,
                     "memory_layout": memory_layout_str,
                     "created_with_nd_shard_spec": False,
-                    "shard_spec": {"grid": grid_list, "shape": shard_shape, "orientation": orientation_str},
+                    "shard_spec": {"grid": grid_list, "shape": shard_shape, "orientation": orientation_int},
                 },
             }
 
