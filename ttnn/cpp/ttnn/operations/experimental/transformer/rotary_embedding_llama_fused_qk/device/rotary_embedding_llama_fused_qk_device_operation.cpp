@@ -12,13 +12,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
-
-RotaryEmbeddingLlamaFusedQKDeviceOperation::program_factory_t
-RotaryEmbeddingLlamaFusedQKDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return RotaryEmbeddingLlamaFusedQKProgramFactory{};
-}
-
 void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& q_input_tensor = tensor_args.q_input;

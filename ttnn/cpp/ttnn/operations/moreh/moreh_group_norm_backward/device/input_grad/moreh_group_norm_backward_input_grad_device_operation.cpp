@@ -54,12 +54,6 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     TT_FATAL(rstd.logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-MorehGroupNormBackwardInputGradOperation::program_factory_t
-MorehGroupNormBackwardInputGradOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MorehGroupNormBackwardInputGradFactory();
-}
-
 void MorehGroupNormBackwardInputGradOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
