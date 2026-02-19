@@ -12,7 +12,7 @@ import yaml
 from loguru import logger
 
 
-def generate_slice_to_pcie_device_mapping(mapping_file, host_vector, test_executable_path=None):
+def generate_slice_to_pcie_device_mapping(mapping_file, host_vector, test_executable_path=None, mpi_user=None):
     # Use optional input, then env (e.g. CI where build lives on workers), then default
     test_executable = Path(
         test_executable_path
@@ -25,7 +25,10 @@ def generate_slice_to_pcie_device_mapping(mapping_file, host_vector, test_execut
         logger.error(f"Test executable not found at {test_executable}")
         logger.info("Please build with: ./build_metal.sh --build-tests")
         sys.exit(1)
-    host_vector_str = ",".join(host_vector)
+    if mpi_user:
+        host_vector_str = ",".join(f"{mpi_user}@{h}" for h in host_vector)
+    else:
+        host_vector_str = ",".join(host_vector)
     MAPPING_GENERATION_CMD = [
         "mpirun",
         "--np",
@@ -107,7 +110,7 @@ def generate_rank_file(pipeline_config):
             f.write(f"rank {stage}={host} slot=0-31\n")
 
 
-def generate_pipeline_config_files(pipeline_config_file, test_executable_path=None):
+def generate_pipeline_config_files(pipeline_config_file, test_executable_path=None, mpi_user=None):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
 
@@ -122,7 +125,7 @@ def generate_pipeline_config_files(pipeline_config_file, test_executable_path=No
     # Metal generates the list of PCIe devices per physical slice in this file
     # when generate_slice_to_pcie_device_mapping is called
     physical_mapping_file = "slice_to_pcie_device_mapping.yaml"
-    generate_slice_to_pcie_device_mapping(physical_mapping_file, host_vector, test_executable_path)
+    generate_slice_to_pcie_device_mapping(physical_mapping_file, host_vector, test_executable_path, mpi_user)
     # Using the generated list of PCIe devices per slice and the stage to physical
     # slice mapping, generate rank bindings for the pipeline
     generate_rank_bindings(config, physical_mapping_file)
@@ -140,5 +143,11 @@ if __name__ == "__main__":
         default=None,
         help="Path to test_physical_discovery executable (e.g. when build lives on remote workers in CI)",
     )
+    parser.add_argument(
+        "--mpi-user",
+        type=str,
+        default=None,
+        help="SSH user for mpirun (e.g. 'user' to connect as user@host instead of current user)",
+    )
     args = parser.parse_args()
-    generate_pipeline_config_files(args.pipeline_config_file, args.physical_discovery_test_path)
+    generate_pipeline_config_files(args.pipeline_config_file, args.physical_discovery_test_path, args.mpi_user)
