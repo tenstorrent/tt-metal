@@ -27,7 +27,6 @@ def test_maskformer_swin_b_pcc(device, reset_seeds, monkeypatch, backbone_tile_m
     monkeypatch.setenv("MASKFORMER_TT_DISABLE_CORE_GRID", "0")
     monkeypatch.setenv("MASKFORMER_TT_DISABLE_MATMUL_PC", "0")
     monkeypatch.setenv("MASKFORMER_TT_DISABLE_DECODER_TT_CACHE", "0")
-    monkeypatch.setenv("MASKFORMER_TT_RETURN_TT_DECODER", "1")
     monkeypatch.setenv("MASKFORMER_TT_USE_NATIVE_GROUP_NORM", "1")
     monkeypatch.setenv("MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS", "1")
 

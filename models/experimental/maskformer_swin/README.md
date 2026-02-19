@@ -79,6 +79,20 @@ python -m models.experimental.maskformer_swin.demo.runner \
   --output-dir generated/maskformer_swin/stage3_opt/demo_outputs
 ```
 
+Optional TT-path debug/verification output (confirms backbone, pixel decoder, and transformer decoder tensors stay on TT):
+
+```bash
+MASKFORMER_TT_DEBUG_RUNNER=1 \
+python -m models.experimental.maskformer_swin.demo.runner \
+  --image models/sample_data/demo.jpeg \
+  --weights facebook/maskformer-swin-base-coco \
+  --device wormhole_n300 \
+  --height 320 --width 320 \
+  --optimization-stage stage1 \
+  --tt-repeats 1 \
+  --output-dir generated/maskformer_swin/stage1_baseline/tt_path_validation
+```
+
 ## PCC test (vs Torch reference)
 
 ```bash
@@ -95,6 +109,8 @@ Notes:
 
 ```bash
 PYTHONPATH=$(pwd)/ttnn \
+TT_METAL_LOGS_PATH=/tmp/tt_logs \
+TT_METAL_INSPECTOR=0 \
 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
 TT_METAL_PROFILER_MID_RUN_DUMP=1 \
 ./tools/tracy/profile_this.py \
@@ -112,6 +128,8 @@ TT_METAL_PROFILER_MID_RUN_DUMP=1 \
 
 The extracted CSV is written to:
 - `generated/maskformer_swin/stage3_opt/perf_sheet/Ops_Perf.csv`
+- Repro command is saved at:
+  - `generated/maskformer_swin/stage3_opt/perf_sheet/command.txt`
 
 ## Measured performance (N300)
 
@@ -120,10 +138,15 @@ Measured on **N300** with a single 320x320 image (`models/sample_data/demo.jpeg`
 - `generated/maskformer_swin/stage2_opt/perf.json`
 - `generated/maskformer_swin/stage3_opt/perf.json`
 
-Summary (mean latency over 5 runs; includes device synchronize and host<->device transfers for inputs/outputs):
-- Stage 1: `1244.78 ms` (`generated/maskformer_swin/stage1_baseline/metrics.json`)
-- Stage 2: `1126.97 ms` (`generated/maskformer_swin/stage2_opt/metrics.json`)
-- Stage 3: `1038.47 ms` (`generated/maskformer_swin/stage3_opt/metrics.json`)
+Summary (mean latency over 5 runs; includes full TT forward + explicit device synchronize in the timed loop):
+- Stage 1: `1354.33 ms`
+- Stage 2: `1295.94 ms` (4.31% faster vs stage1)
+- Stage 3: `1149.33 ms` (15.14% faster vs stage1, 11.31% faster vs stage2)
+
+640x640 stage1 sanity (single run):
+- `generated/maskformer_swin/stage1_640_sanity/perf_640.json`
+- latency: `2299.33 ms`
+- outputs: `generated/maskformer_swin/stage1_640_sanity/demo_outputs/`
 
 ## COCO evaluation (accuracy)
 
@@ -164,6 +187,16 @@ python -m models.experimental.maskformer_swin.demo.runner \
   --coco-max-images 200 \
   --coco-report generated/maskformer_swin/stage1_baseline/coco_eval/report_200.json
 ```
+
+Example measured outputs from these runs:
+- 50 images (`generated/maskformer_swin/stage1_baseline/coco_eval/report_50.json`)
+  - mIoU: `0.3870658237494878`
+  - PQ: `0.3301817310014115`
+  - avg latency: `1332.2610265185358 ms`
+- 200 images (`generated/maskformer_swin/stage1_baseline/coco_eval/report_200.json`)
+  - mIoU: `0.4691255001343233`
+  - PQ: `0.3826408539122837`
+  - avg latency: `1272.736109829275 ms`
 
 Outputs:
 - Report JSON at `.../coco_eval/report_*.json`

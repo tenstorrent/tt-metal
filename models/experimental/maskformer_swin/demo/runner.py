@@ -28,7 +28,7 @@ from ..tt.backbone_swin import MaskFormerSwinBackbone
 from ..tt.heads import MaskFormerHeads, MaskFormerHeadsConfig
 from ..tt.pixel_decoder import MaskFormerPixelDecoder, PixelDecoderConfig
 from ..tt.transformer_decoder import MaskFormerTransformerDecoder, TransformerDecoderConfig
-from ..tt.ttnn_compat import require_ttnn
+from ..tt.ttnn_compat import require_ttnn, ttnn
 from ..tt.weights import (
     WeightConversionConfig,
     convert_state_dict_to_tt,
@@ -56,8 +56,6 @@ _OPT_STAGE_ENV = {
         "MASKFORMER_TT_DISABLE_MATMUL_PC": "1",
         # Keep host-side precompute (positional/query embeddings) amortized/cached.
         "MASKFORMER_TT_DISABLE_DECODER_TT_CACHE": "0",
-        # Keep the model end-to-end on device (avoid TT->torch->TT detours between decoder and heads).
-        "MASKFORMER_TT_RETURN_TT_DECODER": "1",
         # Pixel decoder: use native group norm + cache prepared conv2d weights for practical bring-up runtimes.
         "MASKFORMER_TT_USE_NATIVE_GROUP_NORM": "1",
         "MASKFORMER_TT_USE_MOREH_GROUP_NORM": "0",
@@ -84,7 +82,6 @@ _OPT_STAGE_ENV = {
         "MASKFORMER_TT_DISABLE_CORE_GRID": "0",
         "MASKFORMER_TT_DISABLE_MATMUL_PC": "0",
         "MASKFORMER_TT_DISABLE_DECODER_TT_CACHE": "0",
-        "MASKFORMER_TT_RETURN_TT_DECODER": "1",
         "MASKFORMER_TT_USE_NATIVE_GROUP_NORM": "1",
         "MASKFORMER_TT_USE_MOREH_GROUP_NORM": "0",
         "MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS": "1",
@@ -115,12 +112,14 @@ _OPT_STAGE_ENV = {
         "MASKFORMER_TT_DISABLE_CORE_GRID": "0",
         "MASKFORMER_TT_DISABLE_MATMUL_PC": "0",
         "MASKFORMER_TT_DISABLE_DECODER_TT_CACHE": "0",
-        "MASKFORMER_TT_RETURN_TT_DECODER": "1",
         "MASKFORMER_TT_USE_NATIVE_GROUP_NORM": "1",
         "MASKFORMER_TT_USE_MOREH_GROUP_NORM": "0",
         "MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS": "1",
     },
 }
+
+_DEFAULT_L1_SMALL_SIZE = 32768
+_DEFAULT_TOPK_INSTANCE_MASKS = 8
 
 
 @dataclass
@@ -139,12 +138,6 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Hugging Face model id or local checkpoint directory.",
     )
     parser.add_argument("--device", type=str, default="wormhole_n300", help="Target Tenstorrent device label.")
-    parser.add_argument(
-        "--l1-small-size",
-        type=int,
-        default=32768,
-        help="Device L1 small allocation size; lower values can reduce CB/L1 clashes.",
-    )
     parser.add_argument("--height", type=int, default=None, help="Resize height (e.g. 320).")
     parser.add_argument("--width", type=int, default=None, help="Resize width (e.g. 320).")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
@@ -155,14 +148,7 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Optimization profile to apply via runtime env flags.",
     )
 
-    parser.add_argument("--save", type=Path, default=None, help="Optional semantic overlay PNG path.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional output directory for demo artifacts.")
-    parser.add_argument(
-        "--topk-instance-masks",
-        type=int,
-        default=8,
-        help="Top-K binary instance masks to export under output-dir.",
-    )
 
     parser.add_argument("--dump-perf", type=Path, default=None, help="Path to write perf JSON.")
     parser.add_argument("--dump-perf-header", type=Path, default=None, help="Path to write perf header JSON.")
@@ -194,9 +180,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     tt = require_ttnn("run MaskFormer Swin-B on device")
     device = None
     try:
-        open_kwargs = {"device_id": 0}
-        if args.l1_small_size is not None:
-            open_kwargs["l1_small_size"] = int(args.l1_small_size)
+        open_kwargs = {"device_id": 0, "l1_small_size": _DEFAULT_L1_SMALL_SIZE}
         try:
             device = tt.open_device(**open_kwargs)
         except TypeError:
@@ -223,11 +207,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                 image=image,
                 outputs=outputs,
                 id2label=id2label,
-                topk_instance_masks=max(int(args.topk_instance_masks), 0),
+                topk_instance_masks=_DEFAULT_TOPK_INSTANCE_MASKS,
             )
-
-        if args.save is not None:
-            _save_overlay(args.save, processor, image, outputs)
 
         if args.dump_perf is not None or args.dump_perf_header is not None:
             if args.dump_perf is not None:
@@ -355,29 +336,63 @@ class _MaskFormerRunner:
         self.transformer_decoder = transformer_decoder
         self.heads = heads
         self.decoder_return_tt = decoder_return_tt
+        if not self.decoder_return_tt:
+            raise ValueError("MaskFormer runner requires TT decoder outputs to keep decoder->heads fully on TT.")
+        if getattr(self.heads, "_tt_class_weight", None) is None:
+            raise RuntimeError("MaskFormer heads TT weights are not loaded; CPU fallback path is disallowed.")
+
+    @staticmethod
+    def _is_tt_tensor(tensor: object) -> bool:
+        if isinstance(tensor, torch.Tensor):
+            return False
+        if ttnn is None:
+            return False
+        if hasattr(tensor, "storage_type") and hasattr(ttnn, "StorageType"):
+            try:
+                if tensor.storage_type() == ttnn.StorageType.DEVICE:
+                    return True
+            except Exception:
+                pass
+        return hasattr(tensor, "get_layout")
+
+    def _assert_tt_tensor(self, name: str, tensor: object) -> None:
+        if not self._is_tt_tensor(tensor):
+            raise RuntimeError(f"{name} is not a TT device tensor (got {type(tensor)!r}).")
 
     def forward(self, pixel_values: torch.Tensor, *, device: object) -> InferenceOutputs:
         debug = os.environ.get("MASKFORMER_TT_DEBUG_RUNNER", "0").strip() == "1"
+        validate_tt_path = os.environ.get("MASKFORMER_TT_VALIDATE_TT_PATH", "1").strip() != "0"
         sync_per_module = os.environ.get("MASKFORMER_TT_SYNC_PER_MODULE", "0").strip() == "1"
         tt = require_ttnn("sync MaskFormer per-module") if sync_per_module else None
         start_ts = time.perf_counter()
         if debug:
             print("[maskformer][runner] forward begin")
         features, _ = self.backbone.forward(pixel_values)
+        if validate_tt_path:
+            if not isinstance(features, (list, tuple)) or len(features) != 4:
+                raise RuntimeError(f"Backbone returned unexpected feature container: {type(features)!r}")
+            for idx, feat in enumerate(features):
+                self._assert_tt_tensor(f"backbone.features[{idx}]", feat)
         if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
             tt.synchronize_device(device)
         if debug:
             print(f"[maskformer][runner] backbone done t={time.perf_counter() - start_ts:.2f}s")
         mask_features, _ = self.pixel_decoder.forward(features)
+        if validate_tt_path:
+            self._assert_tt_tensor("pixel_decoder.mask_features", mask_features)
         if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
             tt.synchronize_device(device)
         if debug:
             print(f"[maskformer][runner] pixel_decoder done t={time.perf_counter() - start_ts:.2f}s")
         decoder_last, _, _ = self.transformer_decoder.forward_tt(features[-1], return_tt_tensor=self.decoder_return_tt)
+        if validate_tt_path:
+            self._assert_tt_tensor("transformer_decoder.last_hidden", decoder_last)
         if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
             tt.synchronize_device(device)
         if debug:
             print(f"[maskformer][runner] transformer_decoder done t={time.perf_counter() - start_ts:.2f}s")
+            if validate_tt_path:
+                print("[maskformer][runner] validated TT path for backbone/pixel_decoder/transformer_decoder")
         class_logits, mask_logits = self.heads.forward(decoder_last, mask_features)
         if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
             tt.synchronize_device(device)
@@ -420,7 +435,7 @@ def _build_runner(ref_config: Dict[str, object], state_dict: Dict[str, object], 
     heads = MaskFormerHeads(config=heads_cfg, device=device)
     heads.load_weights(state_dict)
 
-    decoder_return_tt = os.environ.get("MASKFORMER_TT_RETURN_TT_DECODER", "1") == "1"
+    decoder_return_tt = True
     return _MaskFormerRunner(
         backbone=backbone,
         pixel_decoder=pixel_decoder,
@@ -528,19 +543,6 @@ def _make_hf_output(outputs: InferenceOutputs):
         class_queries_logits=outputs.class_logits,
         masks_queries_logits=outputs.mask_logits,
     )
-
-
-def _save_overlay(output_path: Path, processor, image, outputs: InferenceOutputs) -> None:
-    mf_output = _make_hf_output(outputs)
-    segmentation = processor.post_process_semantic_segmentation(mf_output, target_sizes=[image.size[::-1]])[0]
-    segmentation = segmentation.cpu().to(torch.int64)
-    num_classes = int(outputs.class_logits.shape[-1])
-    palette = _build_palette(num_classes + 1)
-    overlay = _segmentation_to_image(segmentation, palette).resize(image.size, Image.NEAREST)
-    blended = Image.blend(image.convert("RGBA"), overlay.convert("RGBA"), alpha=0.5)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    blended.save(output_path)
-    print(f"[maskformer] Saved overlay to {output_path}")
 
 
 def _save_demo_artifacts(
@@ -859,7 +861,9 @@ def _run_coco_eval(
         except Exception:
             pq = None
 
-    avg_latency_ms = float(sum(inference_latencies_ms) / len(inference_latencies_ms)) if inference_latencies_ms else None
+    avg_latency_ms = (
+        float(sum(inference_latencies_ms) / len(inference_latencies_ms)) if inference_latencies_ms else None
+    )
     throughput = (1000.0 / avg_latency_ms) if avg_latency_ms and avg_latency_ms > 0 else None
 
     result = {
