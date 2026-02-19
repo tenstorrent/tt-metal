@@ -41,10 +41,10 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
 }
 
 // output is [token, k, hidden]
-template <uint32_t TokensPerDevice, uint32_t Experts>
+template <uint32_t TokensPerDevice, uint32_t ClusterExperts>
 inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t expert_offset) {
     uint32_t t_idx = t % TokensPerDevice;
-    return t_idx * Experts + expert_offset;
+    return t_idx * ClusterExperts + expert_offset;
 }
 }  // namespace detail
 
@@ -92,22 +92,17 @@ void kernel_main() {
     constexpr auto output_ta_args = TensorAccessorArgs<5>();
 
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
-    constexpr uint8_t replicate_group_devices =
-        num_devices / (replicate_axis == ReplicateGroup::COLS ? mesh_cols : mesh_rows);
+    constexpr uint32_t replicate_factor = (replicate_axis == ReplicateGroup::COLS) ? mesh_cols : mesh_rows;
+    constexpr uint8_t replicate_group_devices = num_devices / replicate_factor;
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t device_begin_idx = replicate_axis == ReplicateGroup::COLS ? col : row * mesh_cols;
-    constexpr uint32_t device_end_idx =
-        (replicate_axis == ReplicateGroup::COLS)
-            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
-            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
-    constexpr uint32_t device_stride = replicate_axis == ReplicateGroup::COLS ? mesh_cols : 1;
-    constexpr uint32_t Replicate_Group = (replicate_axis == ReplicateGroup::COLS) ? mesh_rows : mesh_cols;
+    constexpr uint32_t replicate_group_index = (replicate_axis == ReplicateGroup::COLS) ? row : col;
 
     constexpr uint32_t num_local_experts = experts / num_devices;
+    constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
-    constexpr uint32_t device_expert_offset = linearized_mesh_coord * num_local_experts;
+    constexpr uint32_t cluster_expert_offset = replicate_group_index * num_local_experts;
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -196,7 +191,7 @@ void kernel_main() {
 
             // figure out output page index, noc address.
             const uint32_t output_page_idx =
-                detail::get_output_page_idx<tokens_per_device, experts>(st, device_expert_offset + e);
+                detail::get_output_page_idx<tokens_per_device, num_cluster_experts>(st, cluster_expert_offset + e);
 
             const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
                                               dt * source_token_segment_buffer_size_bytes;

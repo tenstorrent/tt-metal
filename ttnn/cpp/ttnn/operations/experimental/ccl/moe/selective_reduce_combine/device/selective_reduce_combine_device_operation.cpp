@@ -14,11 +14,7 @@
 namespace ttnn::experimental::prim {
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    TT_FATAL(
-        operation_attributes.axis.has_value() && operation_attributes.axis.value() == 1,
-        "Only cluster axis==1 is supported");
-}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -37,9 +33,10 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
 
     const auto& axis = operation_attributes.axis;
     const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
-    const uint32_t experts_per_cluster = experts / num_devices_cluster;
+    const uint32_t experts_per_cluster = experts / num_clusters;
 
     auto output_shape = ttnn::Shape({total_tokens_per_device, experts_per_cluster, hidden_size});
 

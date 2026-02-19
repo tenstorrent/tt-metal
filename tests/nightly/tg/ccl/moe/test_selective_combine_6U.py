@@ -194,8 +194,9 @@ def gen_output_ref(
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
 
     num_local_experts = experts // devices
+    num_cluster_experts = experts // cluster_factor
     hidden_size = dense_input_contribs_tensor.shape[-1]
-    output_ref_tensor = torch.zeros(batch * seq * cluster_factor, experts, hidden_size).bfloat16()
+    output_ref_tensor = torch.zeros(batch * seq * cluster_factor, num_cluster_experts, hidden_size).bfloat16()
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
 
     token_parallel_block_size = batch // token_parallel_core_dim
@@ -219,14 +220,15 @@ def gen_output_ref(
                     continue
 
                 global_e_idx = rec_d * num_local_experts + local_e_idx
+                cluster_e_idx = (m1 if cluster_axis == 1 else m0) * num_local_experts + local_e_idx
 
                 if local_reduce:
                     reduction_buffer += dense_input_contribs_tensor[global_e_idx, device_dense_idxs[local_e_idx]]
                 else:
-                    output_ref_tensor[global_batch * seq + s, global_e_idx] = dense_input_contribs_tensor[
+                    output_ref_tensor[global_batch * seq + s, cluster_e_idx] = dense_input_contribs_tensor[
                         global_e_idx, device_dense_idxs[local_e_idx]
                     ]
-                    output_data_map[global_batch * seq + s, global_e_idx] = 1
+                    output_data_map[global_batch * seq + s, cluster_e_idx] = 1
 
                 if device_blocked_dense_counts[local_e_idx] == block_counts[global_e_idx][-1] - 1:
                     use_idx = device_dense_idxs[local_e_idx] or 1
@@ -558,6 +560,7 @@ def _run_test(
 ):
     mesh_shape = tuple(mesh_device.shape)
     devices = math.prod(mesh_shape)
+    cluster_experts = experts // mesh_shape[1 - cluster_axis]
     assert experts % devices == 0
 
     (
@@ -599,7 +602,7 @@ def _run_test(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    output_tensor = torch.zeros([batch * seq, experts, hidden_size], dtype=torch.bfloat16)
+    output_tensor = torch.zeros([batch * seq, cluster_experts, hidden_size], dtype=torch.bfloat16)
     tt_output_tensor = ttnn.from_torch(
         output_tensor,
         device=mesh_device,
