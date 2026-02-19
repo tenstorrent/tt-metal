@@ -1252,7 +1252,10 @@ void kernel_main() {
         // Initialize prev buffers (sum=0, out=0, max=-inf) for this Q chunk.
         // Always writes to A-variant CBs since normalization of the previous Q chunk
         // consumed the A-variants (or they were never written for q=0).
-        InitPrevBuffers<Sq_chunk_t, head_dim_t>(cb_sum_A, cb_out_A, cb_max_A, cb_neginf);
+        {
+            DeviceZoneScopedN("DUMMY:InitPrevBuffers");
+            InitPrevBuffers<Sq_chunk_t, head_dim_t>(cb_sum_A, cb_out_A, cb_max_A, cb_neginf);
+        }
 
         sdpa_inner_loop<
             Sq_chunk_t,
@@ -1276,11 +1279,14 @@ void kernel_main() {
         // Pop max (no longer needed)
         cb_pop_front(cb_final_max, Sq_chunk_t);
 
-        // Normalize: out = out / sum
-        matmul_reduce_inplace<Sq_chunk_t>(cb_col_identity, cb_final_sum);
-        recip_block_inplace(cb_final_sum, Sq_chunk_t);
-        normalize_output<Sq_chunk_t, head_dim_t>(cb_final_out, cb_final_sum, cb_normalized_out);
-        // cb_normalized_out has the final normalized output for the writer to drain.
+        {
+            DeviceZoneScopedN("Final output normalization");
+            // Normalize: out = out / sum
+            matmul_reduce_inplace<Sq_chunk_t>(cb_col_identity, cb_final_sum);
+            recip_block_inplace(cb_final_sum, Sq_chunk_t);
+            normalize_output<Sq_chunk_t, head_dim_t>(cb_final_out, cb_final_sum, cb_normalized_out);
+            // cb_normalized_out has the final normalized output for the writer to drain.
+        }
     }
 
     // Pop the permanent -inf tile now that all Q chunks are done
