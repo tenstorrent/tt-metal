@@ -179,14 +179,8 @@ void kernel_main() {
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>
         full_size_channel_worker_interface_zero;
 
-    // cheap type cast
-    union {
-        uint32_t addr;
-        size_t uladdr;
-    } tmp;
-    tmp.addr = get_stream_scratch_register_address<0>();
-
-    *(reinterpret_cast<volatile tt_reg_ptr uint32_t*>(connection_handshake_address)) = tmp.uladdr;
+    size_t const uladdr = static_cast<size_t>(get_stream_scratch_register_address<0>());
+    *(reinterpret_cast<volatile tt_reg_ptr uint32_t*>(connection_handshake_address)) = uladdr;
 
     setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
         &full_size_channels[0],
