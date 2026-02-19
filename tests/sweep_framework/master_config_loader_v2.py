@@ -714,7 +714,40 @@ class MasterConfigLoader:
                 while f"arg{arg_idx}" in positional_args:
                     arg_value = positional_args[f"arg{arg_idx}"]
 
-                    # Try to extract as tensor
+                    # Special case: List of tensors (e.g., concat)
+                    if isinstance(arg_value, list) and len(arg_value) > 0 and isinstance(arg_value[0], dict):
+                        # Check if it's a list of tensors
+                        all_tensors = all(
+                            isinstance(item, dict) and item.get("type") == "ttnn.Tensor" for item in arg_value
+                        )
+                        if all_tensors:
+                            # It's a list of tensors - build list of tensor specs
+                            tensor_list = []
+                            for tensor_dict in arg_value:
+                                tensor_config = self._extract_tensor_config(tensor_dict)
+                                if tensor_config:
+                                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                                    parsed_layout = self.parse_layout(tensor_config.layout)
+                                    parsed_mem_config = self.parse_memory_config(
+                                        tensor_config.memory_config, tensor_config.shape
+                                    )
+                                    if parsed_mem_config is None:
+                                        raise ValueError(f"Memory config parsing returned None for tensor in list")
+                                    tensor_list.append(
+                                        {
+                                            "shape": tuple(tensor_config.shape),
+                                            "dtype": parsed_dtype,
+                                            "layout": parsed_layout,
+                                            "memory_config": parsed_mem_config,
+                                            "tensor_placement": tensor_config.tensor_placement,
+                                        }
+                                    )
+                            # Store the list of tensor specs as arg0 (for concat, etc.)
+                            config_dict[f"arg{arg_idx}"] = tensor_list
+                            arg_idx += 1
+                            continue
+
+                    # Try to extract as single tensor
                     tensor_config = self._extract_tensor_config(arg_value)
                     if tensor_config:
                         # It's a tensor - parse and store
@@ -750,8 +783,11 @@ class MasterConfigLoader:
                 logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
                 continue
 
-            # Skip if no tensors found
-            if not positional_tensors:
+            # Skip if no tensors found (unless we have arg0/arg1/etc with list-of-tensors)
+            has_list_args = any(
+                key.startswith("arg") and isinstance(config_dict.get(key), list) for key in config_dict.keys()
+            )
+            if not positional_tensors and not has_list_args:
                 continue
 
             # Add positional tensor parameters with consistent naming
@@ -764,7 +800,16 @@ class MasterConfigLoader:
                 config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                 config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
 
-            config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
+            # Set output_memory_config from first tensor if available
+            if positional_tensors:
+                config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
+            elif has_list_args:
+                # For list-of-tensors args (like concat), try to get memory_config from first item
+                for key, value in config_dict.items():
+                    if key.startswith("arg") and isinstance(value, list) and len(value) > 0:
+                        if isinstance(value[0], dict) and "memory_config" in value[0]:
+                            config_dict["output_memory_config"] = value[0]["memory_config"]
+                            break
 
             # Process named keyword arguments
             # Named tensor kwargs preserve their semantic names (e.g., weight, bias_tensor)

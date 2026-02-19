@@ -2,41 +2,46 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
 TIMEOUT = 120
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("linear", all_cases=False)
+model_traced_params = loader.get_suite_parameters("linear")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(32, 32)],  # Input shape (m, k)
-        "weight_shape": [(32, 32)],  # Weight shape (k, n) - will be transposed internally
-        "bias_shape": [(32,)],  # Bias shape (n,)
+        "input_a_shape": [(32, 32)],  # Input shape (m, k)
         "input_a_dtype": [ttnn.bfloat16],
-        "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_shape": [(32, 32)],  # Weight shape (k, n)
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "bias_shape": [(32,)],  # Bias shape (n,) - optional
+        "bias_dtype": [ttnn.bfloat16],
+        "bias_layout": [ttnn.TILE_LAYOUT],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [True],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
@@ -45,40 +50,74 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture.
+    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    """
+    mesh_shape = get_mesh_shape()
+
+    if mesh_shape:
+        # Create mesh device based on env var
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        # Single device (default)
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
-    weight_shape,
-    bias_shape,
+    input_a_shape,  # Input shape (m, k)
     input_a_dtype,
-    input_b_dtype,
     input_a_layout,
-    input_b_layout,
     input_a_memory_config,
+    input_b_shape,  # Weight shape (k, n)
+    input_b_dtype,
+    input_b_layout,
     input_b_memory_config,
-    transpose_a,
-    transpose_b,
-    has_bias,
+    bias_shape=None,  # Optional bias shape (n,)
+    bias_dtype=None,
+    bias_layout=None,
+    bias_memory_config=None,
+    transpose_a=False,
+    transpose_b=False,
+    storage_type="StorageType::DEVICE",
+    memory_config=None,  # Alternative memory_config parameter
+    dtype=None,  # Output dtype
+    core_grid=None,  # Core grid configuration
+    program_config=None,  # Program configuration
+    compute_kernel_config=None,  # Compute kernel configuration
+    activation=None,  # Activation function
     *,
     device,
-    **kwargs,
+    **kwargs,  # Accept placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple shapes for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape_a = tuple(input_shape)
-    else:
-        shape_a = input_shape
+    # Extract kwargs
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
 
-    if isinstance(weight_shape, (tuple, list)):
-        shape_b = tuple(weight_shape)
-    else:
-        shape_b = weight_shape
+    # Check if device is a mesh device (from fixture)
+    is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
 
-    if isinstance(bias_shape, (tuple, list)):
-        shape_bias = tuple(bias_shape)
-    else:
-        shape_bias = bias_shape
+    # V2 format provides separate shapes
+    shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    shape_b = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
 
     # Create random tensors
     torch_a = torch.randn(*shape_a, dtype=torch.float32)
@@ -90,9 +129,39 @@ def run(
     # Create bias tensor if needed
     torch_bias = None
     ttnn_bias = None
-    if has_bias and shape_bias is not None:
+    has_bias = bias_shape is not None and bias_shape != tuple()
+
+    if has_bias:
+        shape_bias = tuple(bias_shape) if isinstance(bias_shape, (list, tuple)) else bias_shape
         torch_bias = torch.randn(*shape_bias, dtype=torch.float32) if shape_bias != tuple() else torch.randn(())
-        ttnn_bias = ttnn.from_torch(torch_bias, layout=input_a_layout, device=device)
+
+        # Check if storage_type is HOST
+        is_host = storage_type and "HOST" in str(storage_type)
+
+        # Create bias tensor with mesh support if needed
+        if not is_host:
+            if is_mesh_device and bias_tensor_placement:
+                ttnn_bias = create_tensor_on_mesh(
+                    torch_bias,
+                    device,
+                    bias_dtype if bias_dtype else input_a_dtype,
+                    bias_layout if bias_layout else input_a_layout,
+                    input_a_memory_config,
+                    bias_tensor_placement,
+                )
+            else:
+                ttnn_bias = ttnn.from_torch(
+                    torch_bias,
+                    dtype=bias_dtype if bias_dtype else input_a_dtype,
+                    layout=bias_layout if bias_layout else input_a_layout,
+                    device=device,
+                )
+        else:
+            ttnn_bias = ttnn.from_torch(
+                torch_bias,
+                dtype=bias_dtype if bias_dtype else input_a_dtype,
+                layout=bias_layout if bias_layout else input_a_layout,
+            )
 
     # Golden output using PyTorch
     # Use matmul for multi-dimensional tensors (like traced 4D configs)
@@ -110,18 +179,63 @@ def run(
             torch_weight_for_linear = torch_weight.transpose(-1, -2)
         torch_output_tensor = torch.nn.functional.linear(torch_a, torch_weight_for_linear, torch_bias)
 
-    # Create TTNN tensors
-    ttnn_a = ttnn.from_torch(
-        torch_a, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
-    )
-    ttnn_b = ttnn.from_torch(
-        torch_b, dtype=input_b_dtype, layout=input_b_layout, device=device, memory_config=input_b_memory_config
-    )
+    # Check if storage_type is HOST
+    is_host = storage_type and "HOST" in str(storage_type)
+
+    # Create input tensor A
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            # Use mesh with placement
+            ttnn_a = create_tensor_on_mesh(
+                torch_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            # Regular single-device tensor
+            ttnn_a = ttnn.from_torch(
+                torch_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+    else:
+        # Host storage
+        ttnn_a = ttnn.from_torch(torch_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Create weight tensor B
+    if not is_host:
+        if is_mesh_device and input_b_tensor_placement:
+            # Use mesh with placement
+            ttnn_b = create_tensor_on_mesh(
+                torch_b,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_b_tensor_placement,
+            )
+        else:
+            # Regular single-device tensor
+            ttnn_b = ttnn.from_torch(
+                torch_b,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=input_b_memory_config,
+            )
+    else:
+        # Host storage
+        ttnn_b = ttnn.from_torch(torch_b, dtype=input_b_dtype, layout=input_b_layout)
 
     # Run TTNN linear
     start_time = start_measuring_time()
     output_tensor = ttnn.linear(ttnn_a, ttnn_b, bias=ttnn_bias, transpose_a=transpose_a, transpose_b=transpose_b)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
