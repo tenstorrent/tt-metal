@@ -371,10 +371,11 @@ uint64_t Kernel::compute_hash() const {
     }
     // named_compile_time_args_ is unordered_map; sort by key for consistent hash.
     std::vector<std::string> named_keys;
+    named_keys.reserve(this->named_compile_time_args_.size());
     for (const auto& [k, v] : this->named_compile_time_args_) {
         named_keys.push_back(k);
     }
-    std::sort(named_keys.begin(), named_keys.end());
+    std::ranges::sort(named_keys);
     for (const auto& key : named_keys) {
         hasher.update(key);
         hasher.update(static_cast<uint64_t>(this->named_compile_time_args_.at(key)));

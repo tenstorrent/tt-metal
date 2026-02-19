@@ -124,6 +124,8 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
         hasher.update(tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id));
     }
 
+    hasher.update(MetalContext::instance().rtoptions().get_compile_hash_string());
+
     return hasher.digest();
 }
 
@@ -183,15 +185,9 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
     uint64_t build_key = compute_build_key(device_id, num_hw_cqs);
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
-    const size_t fw_compile_hash = static_cast<size_t>(
-        tt::stable_hash_string(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string()));
     const uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     device_id_to_build_env_[device_id].build_env.init(
-        build_key,
-        fw_compile_hash,
-        tt::tt_metal::MetalContext::instance().get_cluster().arch(),
-        max_cbs,
-        device_kernel_defines);
+        build_key, tt::tt_metal::MetalContext::instance().get_cluster().arch(), max_cbs, device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
         create_build_state(device_id_to_build_env_[device_id].build_env, true);
     device_id_to_build_env_[device_id].kernel_build_states =
@@ -262,7 +258,8 @@ BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
 
 void BuildEnvManager::build_firmware(ChipId device_id) {
     ZoneScoped;
-    jit_build_subset(get_device_build_env(device_id).firmware_build_states, nullptr);
+    const auto& build_env = get_device_build_env(device_id);
+    jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
 }
 
 // Get build environment info for all devices

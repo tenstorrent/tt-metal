@@ -96,7 +96,6 @@ JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
     uint64_t build_key,
-    size_t fw_compile_hash,
     tt::ARCH arch,
     uint32_t max_cbs,
     const std::map<std::string, std::string>& device_kernel_defines) {
@@ -307,10 +306,7 @@ void JitBuildEnv::init(
     hasher.update(defines_.begin(), defines_.end());
     build_key_ = hasher.digest();
 
-    // Firmware build path is a combination of build_key and fw_compile_hash
-    // If either change, the firmware build path will change and FW will be rebuilt
-    // if it's not already in MetalContext::firmware_built_keys_
-    this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key_, fw_compile_hash);
+    this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
 }
 

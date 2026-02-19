@@ -165,15 +165,11 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
-    // Also account for watcher/dprint enabled in hash because they enable additional code to
-    // be compiled into the kernel.
+    // watcher/dprint enabled are accounted for in the build key.
     tt::FNV1a hasher;
     hasher.update(build_key);
     hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
     hasher.update(kernel->compute_hash());
-    const std::string& compile_hash_string =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string();
-    hasher.update(compile_hash_string);
     size_t compile_hash = static_cast<size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG
