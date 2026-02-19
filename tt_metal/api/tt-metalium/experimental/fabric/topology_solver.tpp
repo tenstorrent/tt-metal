@@ -23,7 +23,34 @@ namespace tt::tt_fabric {
 // AdjacencyGraph template method implementations
 template <typename NodeId>
 AdjacencyGraph<NodeId>::AdjacencyGraph(const AdjacencyMap& adjacency_map) : adj_map_(adjacency_map) {
-    for (const auto& [node, neighbors] : adjacency_map) {
+    rebuild_nodes_cache();
+}
+
+template <typename NodeId>
+AdjacencyGraph<NodeId>::AdjacencyGraph(
+    const AdjacencyMap& adjacency_map,
+    const std::vector<CardinalConnectionType>& cardinal_connections)
+    : adj_map_(adjacency_map), cardinal_connections_(cardinal_connections) {
+    // Ensure all nodes referenced in cardinal connections exist in adj_map_
+    for (const auto& conn : cardinal_connections_) {
+        for (const auto& node : conn.group_a) {
+            if (adj_map_.find(node) == adj_map_.end()) {
+                adj_map_[node] = {};
+            }
+        }
+        for (const auto& node : conn.group_b) {
+            if (adj_map_.find(node) == adj_map_.end()) {
+                adj_map_[node] = {};
+            }
+        }
+    }
+    rebuild_nodes_cache();
+}
+
+template <typename NodeId>
+void AdjacencyGraph<NodeId>::rebuild_nodes_cache() {
+    nodes_cache_.clear();
+    for (const auto& [node, neighbors] : adj_map_) {
         nodes_cache_.push_back(node);
     }
 }
@@ -42,6 +69,32 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(const NodeId& n
     // Return empty vector if node not found
     static const std::vector<NodeId> empty_vec;
     return empty_vec;
+}
+
+template <typename NodeId>
+const std::vector<typename AdjacencyGraph<NodeId>::CardinalConnectionType>&
+AdjacencyGraph<NodeId>::get_cardinal_connections() const {
+    return cardinal_connections_;
+}
+
+template <typename NodeId>
+void AdjacencyGraph<NodeId>::add_cardinal_connection(
+    const std::vector<NodeId>& group_a,
+    const std::vector<NodeId>& group_b,
+    size_t num_connections) {
+    cardinal_connections_.push_back({group_a, group_b, num_connections});
+    // Ensure nodes from groups exist in adj_map_
+    for (const auto& node : group_a) {
+        if (adj_map_.find(node) == adj_map_.end()) {
+            adj_map_[node] = {};
+        }
+    }
+    for (const auto& node : group_b) {
+        if (adj_map_.find(node) == adj_map_.end()) {
+            adj_map_[node] = {};
+        }
+    }
+    rebuild_nodes_cache();
 }
 
 template <typename NodeId>
@@ -66,6 +119,15 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name) 
             }
         }
         ss << std::endl;
+    }
+
+    if (!cardinal_connections_.empty()) {
+        ss << "Cardinal connections:" << std::endl;
+        for (size_t i = 0; i < cardinal_connections_.size(); ++i) {
+            const auto& c = cardinal_connections_[i];
+            ss << fmt::format("  [{}] group_a size={}, group_b size={}, num_connections={}", i, c.group_a.size(), c.group_b.size(), c.num_connections)
+               << std::endl;
+        }
     }
     ss << "========================================" << std::endl;
     log_info(tt::LogFabric, "{}", ss.str());
