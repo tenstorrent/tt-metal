@@ -151,14 +151,13 @@ public:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Validate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor, making sure that they match
-    bool validate_preformed_groups_from_physical_system_descriptor(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
-
-    // Same as above but populates errors_out when validation fails (for testing/inspection)
-    bool validate_preformed_groups_from_physical_system_descriptor(
+    // Validate a single grouping from PhysicalSystemDescriptor, making sure that it matches
+    // errors_out can be provided to get detailed error messages (optional, can be nullptr)
+    static bool validate_grouping_with_psd(
+        const PhysicalGroupingDescriptor& pgd,
+        const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::vector<std::string>* errors_out) const;
+        std::vector<std::string>* errors_out = nullptr);
 
     // Node metadata for flattened mesh nodes
     // Generic enough to be used throughout the flattened mesh representation
