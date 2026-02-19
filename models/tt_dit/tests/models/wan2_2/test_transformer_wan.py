@@ -361,7 +361,10 @@ def test_wan_transformer_inner_step(
         is_fsdp=is_fsdp,
         num_layers=1,
     )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    start = time.time()
+    tt_model.load_torch_state_dict(torch_model.state_dict(), on_host=True)
+    end = time.time()
+    logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     # Create inputs
     torch.manual_seed(0)
