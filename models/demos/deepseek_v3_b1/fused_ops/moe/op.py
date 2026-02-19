@@ -662,6 +662,15 @@ class MoeRoutedExpertOp:
         rmsnorm_gamma_tensor,
         epsilon=1e-6,
         use_hardcoded_expert_index=False,
+        # Semaphore IDs (caller-provided, see MoeOp for top-level definitions)
+        mcast_data_sender_semaphore_id=0,
+        mcast_data_receiver_semaphore_id=1,
+        gather_noc0_receiver_semaphore_id=1,
+        gather_noc1_receiver_semaphore_id=1,
+        expert_scale_mcast_receiver_semaphore_id=5,
+        residual_mcast_receiver_semaphore_id=2,
+        index_mcast_receiver_semaphore_id=6,
+        down_proj_mcast_receiver_semaphore_id=7,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values."""
 
@@ -695,16 +704,7 @@ class MoeRoutedExpertOp:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
 
-        # ==================================================================
-        # Semaphore IDs
-        # ==================================================================
-        mcast_data_sender_semaphore_id = 0
-        mcast_data_receiver_semaphore_id = 1
-        gather_noc0_receiver_semaphore_id = 2
-        gather_noc1_receiver_semaphore_id = 3
-        expert_scale_mcast_sender_semaphore_id = 0  # Reuse sender semaphore
-        expert_scale_mcast_receiver_semaphore_id = 4
-        residual_mcast_receiver_semaphore_id = 5
+        expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender semaphore
 
         # ==================================================================
         # CB indices
@@ -881,8 +881,7 @@ class MoeRoutedExpertOp:
         gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_proj_cb_index, expert_index_tensor)
         index_tile = expert_index_tensor.get_tile()
         index_tile_size = index_tile.get_tile_size(expert_index_tensor.dtype)
-        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender sem 0 (read-only VALID source)
-        index_mcast_receiver_semaphore_id = 14  # Dedicated (avoid reuse of sem 1)
+        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender semaphore
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
@@ -979,7 +978,7 @@ class MoeRoutedExpertOp:
             dst_cb=down_proj_mcast_dst_cb,
             dst_tensor=down_proj_mcast_output_tensor,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
-            receiver_semaphore_id=15,  # Dedicated (avoid reuse of sem 1)
+            receiver_semaphore_id=down_proj_mcast_receiver_semaphore_id,
             data_size_bytes=down_proj_mcast_data_size_bytes,
         )
 
@@ -1809,17 +1808,17 @@ class MoeSharedExpertOp:
         mcast_grid,
         k_parallel=8,
         n_parallel=8,
-        # Semaphore IDs (overridable, defaults match MoE layout)
-        ag_receiver_semaphore_id=6,
-        bg_receiver_semaphore_id=7,
-        ag_noc1_receiver_semaphore_id=8,
-        bg_noc1_receiver_semaphore_id=9,
+        # Semaphore IDs (overridable, defaults match MoeOp layout)
+        ag_receiver_semaphore_id=2,
+        bg_receiver_semaphore_id=3,
+        ag_noc1_receiver_semaphore_id=2,
+        bg_noc1_receiver_semaphore_id=3,
         shared_mcast_sender_semaphore_id=0,
-        shared_mcast_receiver_semaphore_id=10,
-        output_gather_noc0_receiver_semaphore_id=11,
-        output_gather_noc1_receiver_semaphore_id=12,
+        shared_mcast_receiver_semaphore_id=3,
+        output_gather_noc0_receiver_semaphore_id=4,
+        output_gather_noc1_receiver_semaphore_id=4,
         output_mcast_sender_semaphore_id=0,
-        output_mcast_receiver_semaphore_id=13,
+        output_mcast_receiver_semaphore_id=4,
     ):
         """
         Compute shared expert dimensions and build _MoeSharedExpertContext.
@@ -2288,6 +2287,23 @@ class MoeOp:
     single unified kernel invocation.
     """
 
+    # Semaphore IDs (top-level definition)
+    # Gather sems overlap with mcast receiver sems (different physical cores).
+    # noc1_num_senders=0 for all gathers, so only noc0 sem is used.
+    MCAST_SENDER_SEM = 0
+    MCAST_DATA_RECEIVER_SEM = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER_SEM on sender core
+    DOWN_PROJ_GATHER_SEM = 1  # sender core
+    RESIDUAL_MCAST_RECEIVER_SEM = 2  # mcast grid; overlaps with AG_GATHER_SEM on sender core
+    AG_GATHER_SEM = 2  # sender core
+    SHARED_DOWN_MCAST_RECEIVER_SEM = 3  # mcast grid; overlaps with BG_GATHER_SEM on sender core
+    BG_GATHER_SEM = 3  # sender core
+    SHARED_OUTPUT_MCAST_RECEIVER_SEM = 4  # mcast grid; overlaps with OUTPUT_GATHER_SEM on sender core
+    OUTPUT_GATHER_SEM = 4  # sender core
+    # MoE-only mcast receivers (separate, not overlapped)
+    EXPERT_SCALE_MCAST_RECEIVER_SEM = 5
+    INDEX_MCAST_RECEIVER_SEM = 6
+    DOWN_PROJ_MCAST_RECEIVER_SEM = 7
+
     # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
     # ------------------------------------------------------------------
@@ -2715,6 +2731,15 @@ class MoeOp:
             rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
             epsilon=epsilon,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
+            # Semaphore IDs from top-level
+            mcast_data_sender_semaphore_id=MoeOp.MCAST_SENDER_SEM,
+            mcast_data_receiver_semaphore_id=MoeOp.MCAST_DATA_RECEIVER_SEM,
+            gather_noc0_receiver_semaphore_id=MoeOp.DOWN_PROJ_GATHER_SEM,
+            gather_noc1_receiver_semaphore_id=MoeOp.DOWN_PROJ_GATHER_SEM,
+            expert_scale_mcast_receiver_semaphore_id=MoeOp.EXPERT_SCALE_MCAST_RECEIVER_SEM,
+            residual_mcast_receiver_semaphore_id=MoeOp.RESIDUAL_MCAST_RECEIVER_SEM,
+            index_mcast_receiver_semaphore_id=MoeOp.INDEX_MCAST_RECEIVER_SEM,
+            down_proj_mcast_receiver_semaphore_id=MoeOp.DOWN_PROJ_MCAST_RECEIVER_SEM,
         )
 
         # ==================================================================
@@ -2748,6 +2773,17 @@ class MoeOp:
             mcast_grid=routed_ctx.mcast_grid,
             k_parallel=shared_k_parallel,
             n_parallel=shared_n_parallel,
+            # Semaphore IDs from top-level
+            ag_receiver_semaphore_id=MoeOp.AG_GATHER_SEM,
+            bg_receiver_semaphore_id=MoeOp.BG_GATHER_SEM,
+            ag_noc1_receiver_semaphore_id=MoeOp.AG_GATHER_SEM,
+            bg_noc1_receiver_semaphore_id=MoeOp.BG_GATHER_SEM,
+            shared_mcast_sender_semaphore_id=MoeOp.MCAST_SENDER_SEM,
+            shared_mcast_receiver_semaphore_id=MoeOp.SHARED_DOWN_MCAST_RECEIVER_SEM,
+            output_gather_noc0_receiver_semaphore_id=MoeOp.OUTPUT_GATHER_SEM,
+            output_gather_noc1_receiver_semaphore_id=MoeOp.OUTPUT_GATHER_SEM,
+            output_mcast_sender_semaphore_id=MoeOp.MCAST_SENDER_SEM,
+            output_mcast_receiver_semaphore_id=MoeOp.SHARED_OUTPUT_MCAST_RECEIVER_SEM,
         )
 
         # ==================================================================
@@ -2767,91 +2803,48 @@ class MoeOp:
         per_core_descs += shared_per_core
 
         # ==================================================================
-        # Semaphore descriptors
+        # Semaphore descriptors (8 unique IDs: 0-7)
+        # Gather sems overlap with mcast receiver sems (different physical cores).
+        # MoE-only mcast receivers (5-7) are separate.
         # ==================================================================
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.mcast_data_sender_semaphore_id,
+                id=MoeOp.MCAST_SENDER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.mcast_data_receiver_semaphore_id,
+                id=MoeOp.MCAST_DATA_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.gather_noc0_receiver_semaphore_id,
+                id=MoeOp.RESIDUAL_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.gather_noc1_receiver_semaphore_id,
+                id=MoeOp.SHARED_DOWN_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.expert_scale_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-        ]
-        # Shared expert gather semaphores
-        semaphore_descriptors += [
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.ag_receiver_semaphore_id,
+                id=MoeOp.SHARED_OUTPUT_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=shared_ctx.bg_receiver_semaphore_id,
+                id=MoeOp.EXPERT_SCALE_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=shared_ctx.ag_noc1_receiver_semaphore_id,
+                id=MoeOp.INDEX_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=shared_ctx.bg_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.shared_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            # Shared expert output gather semaphores
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_gather_noc0_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_gather_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=routed_ctx.residual_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            # Dedicated mcast receiver semaphores (avoid reuse of sem 1)
-            ttnn.SemaphoreDescriptor(
-                id=routed_ctx.index_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=routed_ctx.down_proj_mcast_params["receiver_semaphore_id"],
+                id=MoeOp.DOWN_PROJ_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
