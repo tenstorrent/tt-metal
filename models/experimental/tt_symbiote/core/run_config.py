@@ -1030,10 +1030,6 @@ class TracedRun(NormalRun):
 
         logger.debug(f"Capturing trace for {module.module_name}")
 
-        # Warm-up
-        _ = module.forward(*func_args, **func_kwargs)
-        ttnn.synchronize_device(device)
-
         # Allocate persistent input buffers
         trace_inputs = []
         trace_func_args = []
@@ -1058,10 +1054,13 @@ class TracedRun(NormalRun):
                 trace_inputs.append(None)
                 trace_func_args.append(arg)
 
+        # Warm-up
+        _ = module.forward(*func_args, **func_kwargs)
         # Capture
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
         trace_output = module.forward(*trace_func_args, **func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+        ttnn.synchronize_device(device)
 
         entry = TraceEntry(
             trace_id=trace_id,
