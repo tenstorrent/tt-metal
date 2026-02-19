@@ -12,11 +12,16 @@ import yaml
 from loguru import logger
 
 
-def generate_slice_to_pcie_device_mapping(mapping_file, host_vector):
-    # Use absolute path to the test executable
-    test_executable = Path("build/test/tt_metal/tt_fabric/test_physical_discovery")
+def generate_slice_to_pcie_device_mapping(mapping_file, host_vector, test_executable_path=None):
+    # Use optional input, then env (e.g. CI where build lives on workers), then default
+    test_executable = Path(
+        test_executable_path
+        or os.environ.get("TT_PHYSICAL_DISCOVERY_TEST_PATH")
+        or "build/test/tt_metal/tt_fabric/test_physical_discovery"
+    )
 
-    if not test_executable.exists():
+    explicit_path = test_executable_path or os.environ.get("TT_PHYSICAL_DISCOVERY_TEST_PATH")
+    if not explicit_path and not test_executable.exists():
         logger.error(f"Test executable not found at {test_executable}")
         logger.info("Please build with: ./build_metal.sh --build-tests")
         sys.exit(1)
@@ -95,7 +100,7 @@ def generate_rank_file(pipeline_config):
             f.write(f"rank {stage}={host} slot=0-31\n")
 
 
-def generate_pipeline_config_files(pipeline_config_file):
+def generate_pipeline_config_files(pipeline_config_file, test_executable_path=None):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
 
@@ -110,7 +115,7 @@ def generate_pipeline_config_files(pipeline_config_file):
     # Metal generates the list of PCIe devices per physical slice in this file
     # when generate_slice_to_pcie_device_mapping is called
     physical_mapping_file = "slice_to_pcie_device_mapping.yaml"
-    generate_slice_to_pcie_device_mapping(physical_mapping_file, host_vector)
+    generate_slice_to_pcie_device_mapping(physical_mapping_file, host_vector, test_executable_path)
     # Using the generated list of PCIe devices per slice and the stage to physical
     # slice mapping, generate rank bindings for the pipeline
     generate_rank_bindings(config, physical_mapping_file)
@@ -122,5 +127,11 @@ def generate_pipeline_config_files(pipeline_config_file):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate pipeline config files for blitz decode")
     parser.add_argument("pipeline_config_file", type=str, help="Path to the pipeline config YAML file")
+    parser.add_argument(
+        "--physical-discovery-test-path",
+        type=str,
+        default=None,
+        help="Path to test_physical_discovery executable (e.g. when build lives on remote workers in CI)",
+    )
     args = parser.parse_args()
-    generate_pipeline_config_files(args.pipeline_config_file)
+    generate_pipeline_config_files(args.pipeline_config_file, args.physical_discovery_test_path)
