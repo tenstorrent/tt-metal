@@ -182,7 +182,6 @@ def run(
     # Deallocate L1 tensors from the last denoising iteration before VAE
     ttnn_latent_model_input.deallocate(True)
     ttnn_output.deallocate(True)
-    noise_pred.deallocate(True)
     ttnn_latents.deallocate(True)
     for e in ttnn_scheduler.ets:
         e.deallocate(True)
