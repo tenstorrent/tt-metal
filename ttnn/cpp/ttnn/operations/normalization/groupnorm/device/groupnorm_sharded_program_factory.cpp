@@ -553,6 +553,9 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     } else {
         writer_mcast_sender_compile_time_args.push_back(TILE_HW * datum_size_bytes);
     }
+    writer_mcast_sender_compile_time_args.push_back(
+        num_rows_per_batch_per_core * num_datum_row_per_group);                                  // reduce_factor_w
+    writer_mcast_sender_compile_time_args.push_back(num_cores_per_batch * num_cores_per_group);  // reduce_factor_c
 
     // Append TensorAccessorArgs for sharded writer kernel
     tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
@@ -575,10 +578,6 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
                        "welford_writer_unary_sharded_gn_rm_gb_v2.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_sharded_gn_rm_gb_v2.cpp");
-    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
-        {"reduce_factor_w", num_rows_per_batch_per_core * num_datum_row_per_group},
-        {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
-    };
 
     auto writer_kernels_id = CreateKernel(
         program,
@@ -588,8 +587,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
             .compile_args = writer_mcast_sender_compile_time_args,
-            .defines = writer_defines,
-            .named_compile_args = writer_named_compile_time_args});
+            .defines = writer_defines});
     // defines
     std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
@@ -995,8 +993,6 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t input_mask_tile_start_id = 0;
     for (auto core : core_coords) {
         std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(0);  // placeholder (scaler moved to CT args)
-        writer_mcast_sender_args.push_back(0);  // placeholder (scaler moved to CT args)
         writer_mcast_sender_args.push_back(e.u);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);
@@ -1062,16 +1058,16 @@ void GroupNormShardedProgramFactory::override_runtime_arguments(
         auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
         if (gamma.has_value()) {
-            runtime_args[3] = gamma.value().buffer()->address();
+            runtime_args[1] = gamma.value().buffer()->address();
         }
         if (beta.has_value()) {
-            runtime_args[4] = beta.value().buffer()->address();
+            runtime_args[2] = beta.value().buffer()->address();
         }
         if (mask.has_value()) {
-            runtime_args[5] = mask.value().buffer()->address();
+            runtime_args[3] = mask.value().buffer()->address();
         }
         if (negative_mask.has_value()) {
-            runtime_args[6] = negative_mask.value().buffer()->address();
+            runtime_args[4] = negative_mask.value().buffer()->address();
         }
     }
 }

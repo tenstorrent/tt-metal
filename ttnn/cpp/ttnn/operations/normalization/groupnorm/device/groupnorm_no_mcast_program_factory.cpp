@@ -520,6 +520,13 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_2);
 
+    uint32_t reduce_factor_w_group_1 = num_rows_per_batch_per_core_group_1 * num_channels_per_group;
+    uint32_t reduce_factor_c_group_1 = num_cores_per_batch * num_cores_per_group;
+    // When equal_batches_per_core, group_2 is unused (empty CoreRangeSet) but the kernel
+    // still gets compiled — use non-zero placeholders to avoid static_assert failures.
+    uint32_t reduce_factor_w_group_2 = std::max(1u, num_rows_per_batch_per_core_group_2 * num_channels_per_group);
+    uint32_t reduce_factor_c_group_2 = std::max(1u, num_cores_per_batch * num_cores_per_group);
+
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
         {"fuse_gamma", gamma.has_value()},
@@ -543,6 +550,8 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         {"block_w", block_wt},
         {"block_hw", block_ht_group_1 * block_wt},
         {"groupnorm_mode", groupnorm_mode},
+        {"reduce_factor_w", reduce_factor_w_group_1},
+        {"reduce_factor_c", reduce_factor_c_group_1},
     };
 
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_2 = {
@@ -568,6 +577,8 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         {"block_w", block_wt},
         {"block_hw", block_ht_group_2 * block_wt},
         {"groupnorm_mode", groupnorm_mode},
+        {"reduce_factor_w", reduce_factor_w_group_2},
+        {"reduce_factor_c", reduce_factor_c_group_2},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -915,22 +926,6 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     std::vector<KernelHandle> reader_sender_kernel_ids;
     std::vector<KernelHandle> reader_receiver_kernel_ids;
 
-    float winv_group_1 = 1.0f / std::sqrt(num_rows_per_batch_per_core_group_1 * num_channels_per_group);
-    bfloat16 bfloat_winv_value_group_1 = bfloat16::truncate(winv_group_1);
-    uint32_t packed_winv_value_group_1 =
-        pack_two_bfloat16_into_uint32({bfloat_winv_value_group_1, bfloat_winv_value_group_1});
-    float winv_group_2 = winv_group_1;
-    bfloat16 bfloat_winv_value_group_2 = bfloat_winv_value_group_1;
-    uint32_t packed_winv_value_group_2 = packed_winv_value_group_1;
-    if (num_batches_per_core_group_2 > 0) {
-        winv_group_2 = 1.0f / std::sqrt(num_rows_per_batch_per_core_group_2 * num_channels_per_group);
-        bfloat_winv_value_group_2 = bfloat16::truncate(winv_group_2);
-        packed_winv_value_group_2 =
-            pack_two_bfloat16_into_uint32({bfloat_winv_value_group_2, bfloat_winv_value_group_2});
-    }
-    float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);
-    bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
-    uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     union {
         float f;
         uint32_t u;
@@ -1067,12 +1062,6 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         }
 
         std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(packed_cinv_value);
-        if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
-            writer_mcast_sender_args.push_back(packed_winv_value_group_1);
-        } else {
-            writer_mcast_sender_args.push_back(packed_winv_value_group_2);
-        }
         writer_mcast_sender_args.push_back(e.u);
         writer_mcast_sender_args.push_back(out_dram_addr);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
@@ -1130,15 +1119,15 @@ void GroupNormNoMcastProgramFactory::override_runtime_arguments(
         auto writer_kernel_id = shared_vars.writer_kernel_ids.at(i);
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
-        writer_runtime_args[3] = dst_buffer;
+        writer_runtime_args[1] = dst_buffer;
         if (gamma.has_value()) {
-            writer_runtime_args[4] = gamma.value().buffer()->address();
+            writer_runtime_args[2] = gamma.value().buffer()->address();
         }
         if (beta.has_value()) {
-            writer_runtime_args[5] = beta.value().buffer()->address();
+            writer_runtime_args[3] = beta.value().buffer()->address();
         }
         if (mask.has_value()) {
-            writer_runtime_args[6] = mask.value().buffer()->address();
+            writer_runtime_args[4] = mask.value().buffer()->address();
         }
     }
 

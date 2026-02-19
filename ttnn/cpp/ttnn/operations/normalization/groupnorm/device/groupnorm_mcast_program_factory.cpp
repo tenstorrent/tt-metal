@@ -849,8 +849,6 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         }
 
         std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(0);  // placeholder (scaler moved to CT args)
-        writer_mcast_sender_args.push_back(0);  // placeholder (scaler moved to CT args)
         writer_mcast_sender_args.push_back(e.u);
         writer_mcast_sender_args.push_back(out_dram_addr);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
@@ -903,15 +901,15 @@ void GroupNormMcastProgramFactory::override_runtime_arguments(
         auto writer_kernel_id = shared_vars.writer_kernel_ids.at(i);
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
-        writer_runtime_args[3] = dst_buffer;
+        writer_runtime_args[1] = dst_buffer;
         if (gamma.has_value()) {
-            writer_runtime_args[4] = gamma.value().buffer()->address();
+            writer_runtime_args[2] = gamma.value().buffer()->address();
         }
         if (beta.has_value()) {
-            writer_runtime_args[5] = beta.value().buffer()->address();
+            writer_runtime_args[3] = beta.value().buffer()->address();
         }
         if (mask.has_value()) {
-            writer_runtime_args[6] = mask.value().buffer()->address();
+            writer_runtime_args[4] = mask.value().buffer()->address();
         }
     }
 

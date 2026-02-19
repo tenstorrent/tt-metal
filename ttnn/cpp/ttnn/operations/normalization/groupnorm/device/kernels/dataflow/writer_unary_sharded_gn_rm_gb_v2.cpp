@@ -36,20 +36,22 @@ void kernel_main() {
     constexpr uint32_t block_w = get_compile_time_arg_val(9);
 
     constexpr uint32_t size = get_compile_time_arg_val(10);
+    constexpr uint32_t reduce_factor_w = get_compile_time_arg_val(11);
+    constexpr uint32_t reduce_factor_c = get_compile_time_arg_val(12);
 
-    constexpr auto gamma_args = TensorAccessorArgs<11>();
+    constexpr auto gamma_args = TensorAccessorArgs<13>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(4);
-    const uint32_t input_mask_addr = get_arg_val<uint32_t>(5);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(2);
+    const uint32_t input_mask_addr = get_arg_val<uint32_t>(3);
 
     // Used only if negative mask is passed in kernel, i.e. if define FUSE_NEGATIVE_MASK is defined
-    const uint32_t input_negative_mask_addr = get_arg_val<uint32_t>(6);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(7);
-    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(8);
-    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(9);
+    const uint32_t input_negative_mask_addr = get_arg_val<uint32_t>(4);
+    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(5);
+    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
+    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
@@ -105,7 +107,6 @@ void kernel_main() {
 
             if (i == 0 and b == 0) {
                 constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-                constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     cb_in_2,
                     ckernel::PoolType::AVG,
@@ -117,7 +118,6 @@ void kernel_main() {
 
                 if constexpr (is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
-                    constexpr uint32_t reduce_factor_c = get_named_compile_time_arg_val("reduce_factor_c");
                     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                         cb_in_4,
                         ckernel::PoolType::AVG,
@@ -126,7 +126,7 @@ void kernel_main() {
                 }
 
                 constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
-                const uint32_t eps = get_arg_val<uint32_t>(2);
+                const uint32_t eps = get_arg_val<uint32_t>(0);
                 generate_bcast_col_scalar(eps_cb_id, eps);
 
                 if constexpr (fuse_gamma) {
