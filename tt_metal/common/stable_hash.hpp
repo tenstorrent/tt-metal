@@ -10,10 +10,10 @@
 namespace tt {
 
 // Stable hash for cache paths and persistence. std::hash is not guaranteed to be
-// stable across runs or implementations; FNV1a is deterministic.
-// https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+// stable across runs or implementations.
 class FNV1a {
 public:
+    // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
     static constexpr uint64_t FNV_PRIME = 0x100000001b3;
     static constexpr uint64_t FNV_OFFSET = 0xcbf29ce484222325;
 

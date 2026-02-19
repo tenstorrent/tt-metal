@@ -302,9 +302,9 @@ void JitBuildEnv::init(
     tt::FNV1a hasher;
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
-    hasher.update(cflags_.begin(), cflags_.end());
-    hasher.update(lflags_.begin(), lflags_.end());
-    hasher.update(defines_.begin(), defines_.end());
+    hasher.update(cflags_);
+    hasher.update(lflags_);
+    hasher.update(defines_);
     build_key_ = hasher.digest();
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
