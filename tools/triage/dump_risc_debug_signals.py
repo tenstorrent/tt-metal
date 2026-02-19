@@ -18,7 +18,7 @@ Owner:
 
 import json
 import os
-from triage import ScriptConfig, run_script, log_check_location
+from triage import ScriptConfig, log_warning, run_script, log_check_location
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -74,7 +74,8 @@ def collect_debug_bus_signals(
             continue
 
         try:
-            raise RiscHaltError(risc_name, location)
+            if risc_name == "brisc":
+                raise RiscHaltError(risc_name, location)
             with risc_debug.ensure_halted():
                 pass
         except RiscHaltError:
@@ -103,12 +104,6 @@ def collect_debug_bus_signals(
             group_sample = debug_bus.read_signal_group(group_name, l1_address)
             # Read the raw 128-bit value from l1_address
             debug_bus_data[group_name] = f"0x{group_sample.raw_data:032x}"
-
-        log_check_location(
-            location,
-            False,
-            f"Failed to halt cores: {', '.join(failed_riscs)}",
-        )
 
         # Return only the core data - location/device info comes from PerBlockCheckResult
         return {
@@ -160,9 +155,10 @@ def run(args, context: Context):
             )
 
         if all_debug_bus_data:
-            output_path = "debug_bus_signals.json"
+            output_path = os.getenv("TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT", "debug_bus_signals.json")
             with open(output_path, "w") as f:
                 json.dump(all_debug_bus_data, f, indent=2)
+            log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")
 
     return None
 
