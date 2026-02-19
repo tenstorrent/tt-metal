@@ -233,6 +233,11 @@ static Tensor reduce_impl(
                     int reduce_dim = i_dim;
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
+                        // The transpose creates a new tensor whose padding regions need to be filled
+                        // with the neutral value for the reduction operation.
+                        if (output_tensor.layout() == TILE_LAYOUT) {
+                            output_tensor = ttnn::fill_implicit_tile_padding(output_tensor, pad_value);
+                        }
                         reduce_dim = rank - 2;
                     }
                     if (use_reduce_type) {
@@ -258,6 +263,11 @@ static Tensor reduce_impl(
                     }
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
+                        // For multi-dim reductions, the transposed tensor may be used in subsequent
+                        // reduction iterations, so we need to fill its padding as well.
+                        if (output_tensor.layout() == TILE_LAYOUT) {
+                            output_tensor = ttnn::fill_implicit_tile_padding(output_tensor, pad_value);
+                        }
                     }
                 }
             }
