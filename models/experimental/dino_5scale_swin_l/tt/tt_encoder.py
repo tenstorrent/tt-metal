@@ -532,6 +532,7 @@ class TtDINOEncoder:
                 valid_ratios=valid_ratios,
                 reference_points=reference_points,
             )
+            ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Encoder layer {i} done.")
 
         return query
