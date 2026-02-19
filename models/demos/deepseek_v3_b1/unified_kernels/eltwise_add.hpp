@@ -105,8 +105,9 @@ struct EltwiseAdd {
     // ========================================================================
     // Op - the actual operation, templated on CTArgs and IsActiveCore
     // PopInputs: If true (default), pops input CBs after compute.
+    // PopOutput: If true, pops output CB after push (for looping).
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool PopInputs = true>
+    template <typename CTArgs, bool IsActiveCore, bool PopInputs = true, bool PopOutput = false>
     class Op {
     public:
         void operator()() {
@@ -133,7 +134,8 @@ struct EltwiseAdd {
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
-            compute_kernel_hw_startup(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_in1);
+            pack_reconfig_data_format<true>(CTArgs::cb_out);
             add_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
             // Wait for cb_in0 (down_proj output)
@@ -171,9 +173,12 @@ struct EltwiseAdd {
             // Restore cb_in1 read pointer (tensor-backed CB, no pop needed)
             UNPACK(({ update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr); }));
 
-            // Pop cb_in0 if requested (cb_in1 is tensor-backed, just restore pointer)
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
+                cb_pop_front(CTArgs::cb_in1, CTArgs::cb_in1_wait_tiles);
+            }
+            if constexpr (PopOutput) {
+                cb_pop_front(CTArgs::cb_out, num_tiles);
             }
 #endif
         }

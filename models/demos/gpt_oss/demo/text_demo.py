@@ -189,7 +189,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded, long_context_mode",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded, long_context_mode, stop_at_eos",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -204,6 +204,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -218,6 +219,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -232,6 +234,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -246,6 +249,7 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_prefill_trace
             True,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
@@ -261,7 +265,24 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             True,  # users_row_sharded
             True,  # long_context_mode - single user per row gets all page blocks
+            True,  # stop_at_eos
         ),
+        # Long-context mode: short prefill, long decode
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts (128 token prompt)
+            1,  # data_parallel
+            128,  # batch_size (32 per row, but only 1 real user per row)
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len (128k tokens)
+            130000,  # max_generated_tokens (reduced for long context)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # 2048 blocks for 128k
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace
+            True,  # users_row_sharded
+            True,  # long_context_mode - single user per row gets all page blocks
+            False,  # stop_at_eos
+        )
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
         #     1,  # data_parallel
@@ -319,6 +340,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_4k",
         "batch128",
         "long_context_128k",
+        "long_context_short_prefill_long_decode"
         # "prefill_8k",
         # "prefill_16k",
         # "prefill_32k",
@@ -343,6 +365,7 @@ def test_gpt_oss_demo(
     enable_prefill_trace,
     users_row_sharded,
     long_context_mode,
+    stop_at_eos,
     is_ci_env,
     state_dict,
 ):
@@ -571,8 +594,7 @@ def test_gpt_oss_demo(
                     prefilled_token[user_id] = tokenizer.eos_token_id
 
             logger.info(f"Prefill finished for {num_real_users} real users")
-            logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
-        else:
+        elif users_row_sharded:
             # Row-parallel batched prefill: process 4 users at once (one per mesh row)
             # This gives ~4x speedup over sequential per-user prefill
             num_rows = mesh_device.shape[0]
@@ -869,7 +891,36 @@ def test_gpt_oss_demo(
                 profiler.end(f"inference_prefill", iteration=batch_idx)
                 logger.info(f"Row-parallel batched prefill finished ({num_prefill_iters} iterations)")
 
-            logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
+        else:
+            # Standard sequential prefill (batch_size < num_rows)
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            generator.prefill_forward_text(
+                input_tokens_prefill_pt[:1],
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
+
+            logger.info(f"Starting prefill...")
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
+            )
+            prefilled_token = torch.argmax(logits, dim=-1)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info(f"Prefill finished")
+
+        logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
         # Initialize generation state like tt_transformers
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
@@ -903,7 +954,7 @@ def test_gpt_oss_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Decode forward (matching tt_transformers call)
-            logits, _ = generator.decode_forward_text(
+            logits, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_decode_trace,
@@ -939,11 +990,13 @@ def test_gpt_oss_demo(
                 user_tok = out_tok[user].item()
                 if user_tok != tokenizer.eos_token_id and user_done[user] == False:
                     all_outputs[user].append(user_tok)
-                else:
+                elif stop_at_eos:
                     user_done[user] = True
                     logger.debug(f"User {user} finished decoding at iteration {iteration}")
                     if all(user_done):
                         users_decoding = False
+                else:
+                    all_outputs[user].append(user_tok)
 
             iteration += 1
 

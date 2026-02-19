@@ -117,8 +117,10 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr);
     volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_next_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 4);
-    volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+    volatile tt_l1_ptr uint32_t* k_write_curr_ptr_shared =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 8);
+    volatile tt_l1_ptr uint32_t* k_write_next_ptr_shared =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 12);
 
     // Set up receiver_ready semaphore for double-buffer synchronization
     // Receivers signal sender when they've reserved CB space (ensuring consistent addresses)
@@ -149,8 +151,6 @@ void kernel_main() {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             uint32_t k_write_ptr = get_write_ptr(cb_k_in);
 
-            *k_write_ptr_shared = k_write_ptr;
-
             if (is_mcast_sender) {
                 // Sender reads from ND-sharded DRAM
                 // (Writer/BRISC will wait for receivers before multicast for double-buffer safety)
@@ -169,6 +169,7 @@ void kernel_main() {
                 uint32_t pages_completed = 0;
 
                 noc_semaphore_wait(ncrisc_brisc_sync_curr_ptr, 0);
+                *k_write_curr_ptr_shared = k_write_ptr;
                 for (uint32_t i = 0; i < NUM_TRIDS && pages_issued < k_num_pages; ++i) {
                     noc_async_read_set_trid(curr_trid);
                     noc_async_read_one_packet_with_state_with_trid(src_base_addr, src_offset, dst_addr, curr_trid);
@@ -196,6 +197,7 @@ void kernel_main() {
                 }
 
                 std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);
+                std::swap(k_write_curr_ptr_shared, k_write_next_ptr_shared);
             } else {
                 // Step 2: Receiver signals sender that CB is reserved (address is ready)
                 DeviceZoneScopedN("mcast-receiver-signal-ready");

@@ -44,11 +44,6 @@ void MorehArangeOperation::validate_inputs(
     }
 }
 
-MorehArangeOperation::program_factory_t MorehArangeOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void MorehArangeOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
