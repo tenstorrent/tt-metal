@@ -101,6 +101,10 @@ constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
 constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE = 0;
 constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
 
+// Per-processor "shared globals ready" signal for Quasar DM kernel startup (dm.cc sets WAIT; thread 0 in dmk sets GO).
+constexpr uint8_t SHARED_GLOBALS_READY_WAIT = 0;
+constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
+
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
     volatile uint32_t stack_save;
@@ -396,6 +400,7 @@ struct mailboxes_t {
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
+    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for the compute kernel.
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
