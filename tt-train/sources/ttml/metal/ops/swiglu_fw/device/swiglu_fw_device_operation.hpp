@@ -13,10 +13,10 @@
 namespace ttml::metal::ops::swiglu_fw::device {
 
 struct SwiGLUForwardDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
+    using operation_attributes_t = ttml::metal::ops::swiglu_fw::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::ops::swiglu_fw::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::ops::swiglu_fw::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::swiglu_fw::device::tensor_return_value_t;
     using program_factory_t = std::variant<SwiGLUForwardProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
