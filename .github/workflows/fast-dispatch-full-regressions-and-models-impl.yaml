@@ -210,12 +210,12 @@ jobs:
           card: ${{ matrix.card }}
       - name: Upload Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         with:
           path: ${{ github.workspace }}/generated/profiler/reports
           prefix: "tracy_ops_${{ matrix.test-config.model }}_${{ matrix.card }}_"
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -268,7 +268,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
           run_args: ${{ matrix.test-config.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
@@ -333,12 +333,12 @@ jobs:
           card: ${{ matrix.card }}
       - name: Upload Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         with:
           path: /work/generated/profiler/reports
           prefix: "tracy_ops_${{ matrix.test-config.model }}_${{ matrix.card }}_"
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
