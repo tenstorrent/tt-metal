@@ -7,7 +7,8 @@
 from torch import nn
 import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 class TTNNLayerNorm(TTNNModule):
@@ -93,3 +94,58 @@ class TTNNRMSNorm(TTNNModule):
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.torch_layer.variance_epsilon)
         return x
+
+
+@trace_enabled
+class TTNNDistributedRMSNorm(TTNNModule):
+    """
+    Distributed RMSNorm implementation that performs the reduction across devices in the forward pass.
+
+    """
+
+    @classmethod
+    def from_torch(cls, rms_norm: "RMSNorm"):
+        """Create from PyTorch RMSNorm."""
+        if rms_norm.weight is None:
+            print(f"Warning: RMSNorm layer {rms_norm} has no weight. Using standard RMSNorm.")
+            return rms_norm
+        new_layer_norm = cls()
+        new_layer_norm._fallback_torch_layer = rms_norm
+        return new_layer_norm
+
+    def move_weights_to_device_impl(self):
+        """Move weights to TTNN device."""
+        dim = self.torch_layer.weight.shape[0]
+        self.weight_distributed = ttnn.as_tensor(
+            self.torch_layer.weight.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // 32, 32]),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
+        )
+        self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, inp):
+        original_shape = inp.shape
+        if len(original_shape) == 3:
+            inp = ttnn.unsqueeze(inp, 1)  # Add batch dimension for RMSNorm
+        # Run distributed rmsnorm part 1
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
+        # AllGather stats
+        tt_stats = ttnn.experimental.all_gather_async(
+            tt_stats,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+        # Run distributed rmsnorm part 2
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp,
+            tt_stats,
+            epsilon=self.torch_layer.variance_epsilon,
+            weight=self.weight_distributed,
+        )
+        tt_stats.deallocate(True)
+
+        return tt_out
