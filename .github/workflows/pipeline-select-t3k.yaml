@@ -38,7 +38,6 @@ on:
           - unet shallow
           - qwen25_vl
           - gemma3-small
-          - deepseek
       t3000-demo:
         description: "Demo tests: Select 'all', specific model or 'disabled'"
         type: choice
