@@ -243,17 +243,34 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
         }
     }
 
+    std::unordered_map<std::string, uint32_t> reader_named_compile_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+    };
+    if (in0_needs_intermediate_cb_read) {
+        reader_named_compile_args["cb_in0_intermediate"] = tt::CBIndex::c_8;
+    }
+
     tt::tt_metal::KernelHandle mm_kernel_in0_reader_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, mm_kernel_in0_reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, mm_kernel_in0_reader_defines, reader_named_compile_args));
+
+    std::unordered_map<std::string, uint32_t> writer_named_compile_args = {
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_out", tt::CBIndex::c_4},
+    };
+    if (in1_needs_intermediate_cb_read) {
+        writer_named_compile_args["cb_in1_intermediate"] = tt::CBIndex::c_9;
+    }
 
     tt::tt_metal::KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(
+            reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines, writer_named_compile_args));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w
@@ -296,6 +313,17 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
+    // Named compile args for compute kernels (CB indices)
+    std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_intermed0", tt::CBIndex::c_5},
+    };
+    if (in0_transpose_tile) {
+        compute_named_compile_args["cb_in0_transposed"] = tt::CBIndex::c_10;
+    }
+
     // Create compute kernel
     tt_metal::CreateKernel(
         program,
@@ -306,7 +334,8 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = compute_named_compile_args});
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_kernel_args_group_2 = {
             in0_block_w,             // in0_block_w
@@ -341,7 +370,8 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
-                .defines = mm_kernel_defines});
+                .defines = mm_kernel_defines,
+                .named_compile_args = compute_named_compile_args});
     }
 
     // Create circular buffers
