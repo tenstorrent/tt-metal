@@ -36,7 +36,7 @@ TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
     Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
     EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
 
-    EXPECT_ANY_THROW(cpu(input_host_tensor));
+    EXPECT_NO_THROW(cpu(input_host_tensor));
 }
 
 TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
