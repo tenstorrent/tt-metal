@@ -39,10 +39,15 @@ def dequantize_tensor(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape
     padded_shape = tuple(inv_scale.shape[i] * block_shape[i] for i in range(tensor.ndim))
     original_slices = tuple(slice(0, size) for size in original_shape)
 
+    # When input is already float32, `tensor.float()` may alias the original storage. We clone in
+    # that case before in-place math to avoid mutating caller-owned tensors (this impacted DeepSeek
+    # module tests that pass tensors from `reference_model.state_dict()`).
     out = tensor.float()
+    out = out.clone() if out.data_ptr() == tensor.data_ptr() else out
+
+    # Only allocate a padded buffer when block coverage extends past the
+    # original tensor shape (tail blocks on non-divisible dimensions).
     if padded_shape != original_shape:
-        # Only allocate a padded buffer when block coverage extends past the
-        # original tensor shape (tail blocks on non-divisible dimensions).
         padded = torch.zeros(padded_shape, dtype=out.dtype)
         padded[original_slices] = out
         out = padded
