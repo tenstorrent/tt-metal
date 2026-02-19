@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: ["ttnn - Run sweeps"]
     types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       run_id:
@@ -32,20 +33,21 @@ jobs:
           RUN_TYPE=""
           RUN_ID=""
           RUN_NUMBER=""
+          EVENT_TYPE=""
           CONCLUSION=""
           SOURCE_GIT_SHA=""
           SOURCE_GIT_BRANCH=""
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # Manual trigger - always notify
+            # Manual trigger - fetch source run details and apply same gating as workflow_run
             RUN_ID="${{ github.event.inputs.run_id }}"
-            SHOULD_NOTIFY="true"
 
             # Get workflow run details
             WORKFLOW_INFO=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} 2>/dev/null || echo "{}")
             CONCLUSION=$(echo "$WORKFLOW_INFO" | jq -r '.conclusion // "unknown"')
             RUN_NAME=$(echo "$WORKFLOW_INFO" | jq -r '.name // ""')
             RUN_NUMBER=$(echo "$WORKFLOW_INFO" | jq -r '.run_number // ""')
+            EVENT_TYPE=$(echo "$WORKFLOW_INFO" | jq -r '.event // ""')
             SOURCE_GIT_SHA=$(echo "$WORKFLOW_INFO" | jq -r '.head_sha // ""')
             SOURCE_GIT_BRANCH=$(echo "$WORKFLOW_INFO" | jq -r '.head_branch // ""')
 
@@ -60,7 +62,14 @@ jobs:
               RUN_TYPE="nightly"
             fi
 
-            echo "Manual trigger for run $RUN_ID (type: $RUN_TYPE, conclusion: $CONCLUSION)"
+            echo "Manual trigger for run $RUN_ID (type: $RUN_TYPE, event: $EVENT_TYPE, branch: $SOURCE_GIT_BRANCH, conclusion: $CONCLUSION)"
+
+            if [[ "$RUN_TYPE" == "lead_models" ]] && [[ "$EVENT_TYPE" == "schedule" ]] && [[ "$SOURCE_GIT_BRANCH" == "main" ]]; then
+              SHOULD_NOTIFY="true"
+              echo "Qualified run detected - will send notification"
+            else
+              echo "Skipping: requires lead_models + schedule + main (got type=$RUN_TYPE, event=$EVENT_TYPE, branch=$SOURCE_GIT_BRANCH)"
+            fi
 
           elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
             # Triggered by workflow_run event
@@ -85,17 +94,12 @@ jobs:
               RUN_TYPE="nightly"
             fi
 
-            # Only notify for lead_models runs (scheduled or manual)
-            if [[ "$RUN_TYPE" == "lead_models" ]]; then
-              # Check if it's a scheduled run or workflow_dispatch
-              if [[ "$EVENT_TYPE" == "schedule" ]] || [[ "$EVENT_TYPE" == "workflow_dispatch" ]]; then
-                SHOULD_NOTIFY="true"
-                echo "Lead models run detected - will send notification"
-              else
-                echo "Skipping: lead_models but not scheduled/manual (event: $EVENT_TYPE)"
-              fi
+            # Only notify for scheduled lead_models runs on main
+            if [[ "$RUN_TYPE" == "lead_models" ]] && [[ "$EVENT_TYPE" == "schedule" ]] && [[ "$SOURCE_GIT_BRANCH" == "main" ]]; then
+              SHOULD_NOTIFY="true"
+              echo "Scheduled lead models run on main detected - will send notification"
             else
-              echo "Skipping: not a lead_models run (type: $RUN_TYPE)"
+              echo "Skipping: requires lead_models + schedule + main (got type=$RUN_TYPE, event=$EVENT_TYPE, branch=$SOURCE_GIT_BRANCH)"
             fi
           fi
 
@@ -135,4 +139,4 @@ jobs:
       - name: Skip notification
         if: steps.check.outputs.should_notify != 'true'
         run: |
-          echo "Notification skipped - not a lead_models scheduled/manual run"
+          echo "Notification skipped - only scheduled lead_models runs on main are notified"
