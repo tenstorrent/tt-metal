@@ -26,7 +26,7 @@ FullLikeDeviceOperation::program_factory_t FullLikeDeviceOperation::select_progr
 void FullLikeDeviceOperation::validate(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    // Currently ther program factory only supports these 3 datatypes:
+    // Currently the program factory only supports these 3 datatypes:
     TT_FATAL(
         operation_attributes.dtype == DataType::BFLOAT16 || operation_attributes.dtype == DataType::INT32 ||
             operation_attributes.dtype == DataType::FLOAT32,
