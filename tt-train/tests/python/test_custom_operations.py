@@ -346,14 +346,6 @@ class TestCustomOperationsWithDevice:
     These tests require a Tenstorrent device to be available.
     """
 
-    @pytest.fixture(autouse=True)
-    def setup_device(self):
-        """Set up device for tests."""
-        auto_ctx = ttml.autograd.AutoContext.get_instance()
-        auto_ctx.open_device()
-        yield
-        auto_ctx.close_device()
-
     def test_simple_scale_operation_forward(self):
         """Test a simple scale operation forward pass."""
 

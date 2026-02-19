@@ -349,7 +349,7 @@ uv pip install -e .
 SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
 
 TTML_SRC_DIR="$SCRIPT_DIR/tt-train/sources/ttml"
-TTML_BUILD_DIR="$SCRIPT_DIR/build/tt-train/sources/ttml"
+TTML_BUILD_DIR="$SCRIPT_DIR/build/ttml"
 
 # Add ttml Python source code, if available
 if [ -d "$TTML_SRC_DIR" ]; then
@@ -360,12 +360,13 @@ else
 fi
 
 # Add the built _ttml C++ extension (.so file), if available
+# Symlink the ttml directory which contains the built _ttml C++ extension (.so file), if available
 # Uses the 'build' symlink which points to the active build directory (e.g., build_Release)
-if [ -d "$TTML_BUILD_DIR" ]; then
-    echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
-    echo "  Created: $SITE_PACKAGES/_ttml.pth"
+if [ -d "$TTML_BUILD_DIR" ] && [ ! -e "$SITE_PACKAGES/ttml" ]; then
+    ln -s "$TTML_BUILD_DIR" "$SITE_PACKAGES/ttml"
+    echo "  Created symlink: $SITE_PACKAGES/ttml"
 else
-    echo "  Skipping _ttml.pth creation (directory not found: $TTML_BUILD_DIR)"
+    echo "  Skipping ttml creation (directory not found: $TTML_BUILD_DIR)"
 fi
 # Do not install hooks when this is a worktree
 if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
