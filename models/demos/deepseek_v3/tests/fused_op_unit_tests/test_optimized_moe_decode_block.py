@@ -639,6 +639,7 @@ def test_optimized_moe_decode_block(
 
     devices = mesh_shape[0] * mesh_shape[1]
     dispatch_devices = mesh_shape[cluster_axis]
+    rs_devices = devices // dispatch_devices
     batch = batches_per_device * dispatch_devices
     total_tokens = batch * seq
     tokens_per_device = batch // dispatch_devices
@@ -931,6 +932,43 @@ def test_optimized_moe_decode_block(
     logger.info(f"Done creating persistent dispatch output tensors")
 
     ############################################
+    # set post combine memory configs
+    ############################################
+    tilized_combine_output_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    fast_reduce_output_memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(
+            ttnn.Shape([1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+    # NOTE: use DRAM here so we can run multiple iterations
+    # rs_output_memory_config = ttnn.MemoryConfig(
+    #     ttnn.BufferType.L1,
+    #     ttnn.NdShardSpec(
+    #         ttnn.Shape([1, 32, 32]),
+    #         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))]),
+    #         ttnn.ShardOrientation.ROW_MAJOR,
+    #         ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    #     ),
+    # )
+    rs_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    ############################################
     # run op
     ############################################
     logger.info(f"Begin running op iterations")
@@ -1070,10 +1108,54 @@ def test_optimized_moe_decode_block(
 
         # logger.info("KKKKK")
         # ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        # logger.info(f"Final Shape: {tt_combine_output.shape}")
+
+        # logger.info("Tilized Compute Input")
+        # logger.info(f"Input: {tt_combine_output.shape}")
+
         # logger.info("LLLLL")
 
-        return tt_combine_output
+        tt_tilized_compute_output = ttnn.tilize(
+            tt_combine_output, memory_config=tilized_combine_output_memory_config, use_multicore=True
+        )
+
+        # logger.info("MMMMM")
+        # ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+
+        # logger.info("Fast Reduce Input")
+        # logger.info(f"Input: {tt_tilized_compute_output.shape}")
+
+        # logger.info("NNNNN")
+
+        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+            tt_tilized_compute_output,
+            dim=0,
+            split_size=int(tt_tilized_compute_output.shape[-1] // rs_devices),
+            output_memory_config=fast_reduce_output_memory_config,
+        )
+
+        # logger.info("OOOOO")
+        # ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+
+        # logger.info("Reduce Scatter Input")
+        # logger.info(f"Single Slice: {tt_fast_reduce_output_tensors[0].shape}")
+
+        # logger.info("PPPPP")
+
+        tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
+            tt_fast_reduce_output_tensors,
+            output_memory_config=rs_output_memory_config,
+            dim=-1,
+            num_links=4,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+        )
+
+        # logger.info("QQQQQ")
+        # ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+        logger.info(f"Final Output Shape: {tt_final_output.shape}")
+        # logger.info("RRRRR")
+
+        return tt_final_output
 
     tt_output_tensors = []
     if enable_trace:
