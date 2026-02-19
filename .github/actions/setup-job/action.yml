@@ -114,6 +114,7 @@ runs:
         echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}" >> $GITHUB_ENV
         echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV
         echo "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT=/work/debug_bus_signals.json" >> $GITHUB_ENV
+      shell: bash
 
     - name: Upload debug bus signals (if generated)
       if: ${{ !cancelled() }}
@@ -122,4 +123,3 @@ runs:
         name: debug_bus_signals
         path: TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT
         if-no-files-found: ignore
-      shell: bash
