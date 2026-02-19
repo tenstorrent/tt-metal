@@ -89,7 +89,7 @@ def generate_slice_to_pcie_device_mapping(
         sys.exit(1)
 
 
-def generate_rank_bindings(pipeline_config, physical_mapping_file):
+def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_metal_home=None):
     with open(physical_mapping_file, "r") as f:
         slice_to_pcie_device_mapping = yaml.safe_load(f)
 
@@ -116,6 +116,17 @@ def generate_rank_bindings(pipeline_config, physical_mapping_file):
         "rank_bindings": rank_bindings,
         "mesh_graph_desc_path": pipeline_config["mesh_graph_desc_path"],
     }
+
+    # When workers have tt-metal at a different path than the runner, override
+    # TT_MESH_GRAPH_DESC_PATH via global_env so workers resolve the correct absolute path.
+    # tt-run validates mesh_graph_desc_path against the local (runner) filesystem,
+    # but global_env overrides the env var that actually reaches the workers.
+    if worker_tt_metal_home:
+        mgd_path = pipeline_config["mesh_graph_desc_path"]
+        rank_binding_configs["global_env"] = {
+            "TT_MESH_GRAPH_DESC_PATH": str(Path(worker_tt_metal_home) / mgd_path),
+        }
+
     with open(pipeline_config["rank_binding_file"], "w") as f:
         yaml.dump(rank_binding_configs, f, default_flow_style=False, sort_keys=False)
 
@@ -129,7 +140,12 @@ def generate_rank_file(pipeline_config):
 
 
 def generate_pipeline_config_files(
-    pipeline_config_file, test_executable_path=None, mpi_user=None, skip_mpi_net_filter=False, hostfile=None
+    pipeline_config_file,
+    test_executable_path=None,
+    mpi_user=None,
+    skip_mpi_net_filter=False,
+    hostfile=None,
+    worker_tt_metal_home=None,
 ):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
@@ -168,7 +184,7 @@ def generate_pipeline_config_files(
     )
     # Using the generated list of PCIe devices per slice and the stage to physical
     # slice mapping, generate rank bindings for the pipeline
-    generate_rank_bindings(config, physical_mapping_file)
+    generate_rank_bindings(config, physical_mapping_file, worker_tt_metal_home)
 
     # Using the stage to physical slice mapping, generate the rank file for the pipeline
     generate_rank_file(config)
@@ -200,6 +216,13 @@ if __name__ == "__main__":
         default=None,
         help="File with one hostname per line. Overrides hosts in pipeline config (matched by order of appearance).",
     )
+    parser.add_argument(
+        "--worker-tt-metal-home",
+        type=str,
+        default=None,
+        help="Absolute path to tt-metal on workers (e.g. /home/user/tt-metal). "
+        "Used to override TT_MESH_GRAPH_DESC_PATH when workers have a different filesystem layout than the runner.",
+    )
     args = parser.parse_args()
     generate_pipeline_config_files(
         args.pipeline_config_file,
@@ -207,4 +230,5 @@ if __name__ == "__main__":
         args.mpi_user,
         args.skip_mpi_net_filter,
         args.hostfile,
+        args.worker_tt_metal_home,
     )

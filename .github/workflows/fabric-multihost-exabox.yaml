@@ -141,6 +141,7 @@ jobs:
             --mpi-user user \
             --skip-mpi-net-filter \
             --hostfile /ci/ttrun/hostfile \
+            --worker-tt-metal-home /home/user/tt-metal \
             models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
           tt-run --skip-executable-check \
             --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
