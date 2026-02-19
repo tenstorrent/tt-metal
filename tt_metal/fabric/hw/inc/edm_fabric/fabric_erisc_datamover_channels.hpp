@@ -748,22 +748,40 @@ struct StaticSizedSenderChannelWorkerInterface
 
     template <bool enable_noc_flush = true>
     FORCE_INLINE void notify_worker_of_read_counter_update_impl() {
-        //noc_inline_dw_write<InlineWriteDst::L1, true, enable_noc_flush>(
-        noc_inline_dw_write<InlineWriteDst::REG, true>(
-            this->cached_worker_semaphore_address,
-            local_read_counter.counter,
-            0xf,
-            WORKER_HANDSHAKE_NOC,
-            NOC_UNICAST_WRITE_VC,
-            read_counter_update_src_address);
+        if constexpr(std::is_same_v<std::remove_const_t<ConnectionSemaphorePtrType>, volatile tt_l1_ptr uint32_t*>) {
+            // For L1, we need to flush the updated read counter to ensure visibility to the worker
+            noc_inline_dw_write<InlineWriteDst::L1, true>(
+                this->cached_worker_semaphore_address,
+                local_read_counter.counter,
+                0xf,
+                WORKER_HANDSHAKE_NOC,
+                NOC_UNICAST_WRITE_VC,
+                read_counter_update_src_address);
+        }
+        else {
+            // For REG, we can skip the flush since it's a direct register write}
+            noc_inline_dw_write<InlineWriteDst::REG, true>(
+                this->cached_worker_semaphore_address,
+                local_read_counter.counter,
+                0xf,
+                WORKER_HANDSHAKE_NOC,
+                NOC_UNICAST_WRITE_VC,
+                read_counter_update_src_address);
+        }
     }
 
     template <bool enable_deadlock_avoidance>
     FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
-        noc_inline_dw_write<InlineWriteDst::REG, true>(
-            this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
-    }
+        if constexpr(std::is_same_v<std::remove_const_t<ConnectionSemaphorePtrType>, volatile tt_l1_ptr uint32_t*>) {
+            noc_inline_dw_write<InlineWriteDst::L1, true>(
+                this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
+        }
+        else {
+            noc_inline_dw_write<InlineWriteDst::REG, true>(
+                this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
+        }
+}
 
     // Write counter management methods
     template <bool SKIP_CONNECTION_LIVENESS_CHECK>
