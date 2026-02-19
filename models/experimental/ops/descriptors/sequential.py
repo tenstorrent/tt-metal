@@ -978,142 +978,60 @@ def _read_kernel_source(kernel_desc: "ttnn.KernelDescriptor") -> Tuple[str, Opti
     return "", None
 
 
-def _prefix_phase_names_in_source(source: str, phase_idx: int, names: List[str]) -> str:
-    """Prefix phase-specific names (functions + globals) in source code.
+_KERNEL_MAIN_SEARCH_RE = re.compile(r"\bvoid\s+kernel_main\s*\(")
+_SKIP_LINE_PREFIXES = ("#include", "#define", "#pragma", "#undef")
 
-    Applied to each phase's kernel body to ensure references to
-    phase-specific functions and variables use the prefixed names
-    that match the prefixed declarations in the merged pre-main.
 
-    Every phase (including phase 0) gets prefixed.  Replacements are
-    scoped to code only — identifiers inside string literals and
-    comments are left unchanged.
+def _extract_pre_main_text(source: str) -> str:
+    """Extract pre-main code from source, excluding preprocessor directives.
+
+    Returns everything before ``kernel_main()`` that is not a preprocessor
+    directive line (``#include``, ``#define``, ``#pragma``, ``#undef``).
     """
-    if not names:
-        return source
-    for name in names:
-        source = cpp_parser.replace_in_code_only(source, name, f"phase{phase_idx}_{name}")
-    return source
+    match = _KERNEL_MAIN_SEARCH_RE.search(source)
+    pre_main_text = source[: match.start()] if match else source
+
+    lines = []
+    for line in pre_main_text.split("\n"):
+        stripped = line.strip()
+        if any(stripped.startswith(p) for p in _SKIP_LINE_PREFIXES):
+            continue
+        lines.append(line)
+
+    return "\n".join(lines).strip()
 
 
-def _collect_all_pre_main_code(
+def _extract_phase_pre_main(
     sources_with_indices: List[Tuple[int, str]],
-) -> Tuple[str, Dict[int, str], Dict[int, List[str]]]:
-    """Merge pre-main code from all phases with per-phase name isolation.
+    phase_headers: Dict[int, List[Tuple[str, str]]],
+) -> Tuple[List[str], Dict[int, str]]:
+    """Extract pre-main text for each phase, split by scope.
 
-    Uses tree-sitter (via cpp_parser) to categorize top-level blocks
-    before kernel_main into *shared* or *phase-specific*:
-
-    **Shared** (deduped across phases, no define wrapper needed):
-      - Namespace blocks: dedup by signature (first occurrence wins).
-      - Single-line declarations (namespace aliases, ``using``,
-        ``typedef``): dedup by exact normalized content.
-
-    **Phase-specific** (prefixed with ``phaseN_``, wrapped by caller
-    with per-phase ``#define``/``#undef`` blocks):
-      - Free function definitions (``ALWI``, ``FORCE_INLINE``, etc.):
-        each phase gets its own copy with the function name prefixed.
-      - Global/static variables: each phase gets its own copy with
-        the variable name prefixed.
-      - Preprocessor conditional blocks (``#ifdef``/``#if``/``#ifndef``):
-        preserved as-is but with inner function/variable names prefixed.
-        Each phase gets its own copy.
-
-    ALL phases (including phase 0) get prefixed.  This eliminates:
-      - Silent first-wins drops when two phases define the same function
-        with different bodies.
-      - Redefinition errors when an included header also defines a
-        function that appears inline in another phase's pre-main.
+    Content from inlined headers goes to **file scope** (deduplicated by
+    resolved path across phases).  Original source pre-main goes to **phase
+    scope** inside ``namespace phase_N``.
 
     Returns:
-        A tuple of (shared_pre_main, per_phase_pre_main, phase_names):
-        - shared_pre_main: namespace blocks, using declarations, etc.
-        - per_phase_pre_main: dict mapping phase_idx -> prefixed code.
-          Callers wrap each with ``#define``/``#undef`` for that phase.
-        - phase_names: dict mapping phase_idx -> list of original names
-          that were prefixed.  Callers apply the same prefixing to each
-          phase's kernel body.
+        file_scope_blocks: Deduplicated header content for file scope.
+        phase_pre_main: Per-phase pre-main text from original source.
     """
-    if not sources_with_indices:
-        return "", {}, {}
+    # File scope: deduplicated header content by resolved path
+    header_path_seen: Set[str] = set()
+    file_scope_blocks: List[str] = []
+    for phase_idx, _ in sources_with_indices:
+        for resolved_path, content in phase_headers.get(phase_idx, []):
+            if resolved_path not in header_path_seen:
+                header_path_seen.add(resolved_path)
+                content_stripped = content.strip()
+                if content_stripped:
+                    file_scope_blocks.append(content_stripped)
 
-    shared_blocks: List[str] = []
-    per_phase_blocks: Dict[int, List[str]] = {}
-    seen_signatures: Set[str] = set()
-    seen_shared_content: Set[str] = set()
-    seen_phase_content: Dict[int, Set[str]] = {}
-    phase_names: Dict[int, List[str]] = {}
-
+    # Phase scope: original source pre-main minus preprocessor directives
+    phase_pre_main: Dict[int, str] = {}
     for phase_idx, source in sources_with_indices:
-        blocks = cpp_parser.categorize_pre_main(source)
-        seen_phase_content.setdefault(phase_idx, set())
+        phase_pre_main[phase_idx] = _extract_pre_main_text(source)
 
-        for block in blocks:
-            normalized = cpp_parser.normalize_block(block.text)
-            if not normalized:
-                continue
-
-            # --- Phase-specific: preprocessor conditional blocks ---
-            if block.kind == "preproc_block":
-                text = block.text
-                names = block.inner_names or []
-                for name in names:
-                    text = re.sub(
-                        rf"\b{re.escape(name)}\b",
-                        f"phase{phase_idx}_{name}",
-                        text,
-                    )
-                    phase_names.setdefault(phase_idx, []).append(name)
-                prefixed_norm = cpp_parser.normalize_block(text)
-                if prefixed_norm not in seen_phase_content[phase_idx]:
-                    seen_phase_content[phase_idx].add(prefixed_norm)
-                    per_phase_blocks.setdefault(phase_idx, []).append(text)
-                continue
-
-            # --- Phase-specific: global/static variables ---
-            if block.kind == "variable" and block.name:
-                prefixed = re.sub(
-                    rf"\b{re.escape(block.name)}\b",
-                    f"phase{phase_idx}_{block.name}",
-                    block.text,
-                )
-                phase_names.setdefault(phase_idx, []).append(block.name)
-                prefixed_norm = cpp_parser.normalize_block(prefixed)
-                if prefixed_norm not in seen_phase_content[phase_idx]:
-                    seen_phase_content[phase_idx].add(prefixed_norm)
-                    per_phase_blocks.setdefault(phase_idx, []).append(prefixed)
-                continue
-
-            # --- Phase-specific: free function definitions ---
-            if block.kind == "function" and block.name:
-                prefixed = re.sub(
-                    rf"\b{re.escape(block.name)}\b",
-                    f"phase{phase_idx}_{block.name}",
-                    block.text,
-                )
-                phase_names.setdefault(phase_idx, []).append(block.name)
-                prefixed_norm = cpp_parser.normalize_block(prefixed)
-                if prefixed_norm not in seen_phase_content[phase_idx]:
-                    seen_phase_content[phase_idx].add(prefixed_norm)
-                    per_phase_blocks.setdefault(phase_idx, []).append(prefixed)
-                continue
-
-            # --- Shared: namespace blocks ---
-            if block.kind == "namespace":
-                sig = block.text.split("{")[0].strip() if "{" in block.text else normalized
-                if sig not in seen_signatures:
-                    seen_signatures.add(sig)
-                    shared_blocks.append(block.text)
-            else:
-                # --- Shared: namespace_alias, using, struct, template, other ---
-                if normalized not in seen_shared_content:
-                    seen_shared_content.add(normalized)
-                    shared_blocks.append(block.text)
-
-    shared_pre_main = "\n\n".join(shared_blocks)
-    per_phase_pre_main = {idx: "\n\n".join(blocks) for idx, blocks in per_phase_blocks.items()}
-
-    return shared_pre_main, per_phase_pre_main, phase_names
+    return file_scope_blocks, phase_pre_main
 
 
 # =============================================================================
@@ -1128,7 +1046,7 @@ def _prefix_named_args_in_source(source: str, phase_idx: int) -> str:
 
     def replace_named_arg(match):
         name = match.group(1)
-        return f'get_named_compile_time_arg_val("phase{phase_idx}_{name}")'
+        return f'get_named_compile_time_arg_val("phase_{phase_idx}_{name}")'
 
     return re.sub(
         r'get_named_compile_time_arg_val\("([^"]+)"\)',
@@ -1172,12 +1090,13 @@ def _offset_compile_time_args_in_source(source: str, phase_idx: int, ct_arg_offs
 
 
 def _emit_rt_arg_wrapper(phase_idx: int, rt_offset: int) -> List[str]:
-    """Emit the wrapper function definition for phase N>0.
+    """Emit the RT arg wrapper function definition for a phase.
 
-    Emitted once at file scope (before any #define) so the wrapper body
-    references the real get_arg_val.
+    Emitted once at file scope (before any #define redirect) so the
+    wrapper body references the real ``get_arg_val``.  All phases
+    (including phase 0) get a wrapper for uniform treatment.
     """
-    wrapper_name = f"__phase{phase_idx}_get_arg_val"
+    wrapper_name = f"phase_{phase_idx}_get_arg_val"
     return [
         f"template <typename T>",
         f"FORCE_INLINE T {wrapper_name}(int arg_idx) {{",
@@ -1188,7 +1107,7 @@ def _emit_rt_arg_wrapper(phase_idx: int, rt_offset: int) -> List[str]:
 
 def _emit_rt_arg_define(phase_idx: int) -> str:
     """Emit #define to redirect get_arg_val to the phase wrapper."""
-    return f"#define get_arg_val __phase{phase_idx}_get_arg_val"
+    return f"#define get_arg_val phase_{phase_idx}_get_arg_val"
 
 
 def _emit_rt_arg_undef() -> str:
@@ -1200,24 +1119,561 @@ def _transform_phase_source(
     source: str,
     phase_idx: int,
     ct_arg_offset: int = 0,
-    phase_names: Optional[List[str]] = None,
 ) -> str:
-    """Apply all transformations for a phase's kernel body.
+    """Apply compile-time arg transformations to a phase's source.
 
-    Args:
-        source: Kernel body source code.
-        phase_idx: Phase index.
-        ct_arg_offset: Compile-time arg offset for this phase.
-        phase_names: Names (functions + globals) that were prefixed in
-            pre-main and must also be prefixed in the kernel body.
+    Transforms applied:
+      1. Named CT arg prefixing (``get_named_compile_time_arg_val("X")``
+         → ``get_named_compile_time_arg_val("phase_N_X")``).
+      2. Positional CT arg offsetting (``get_compile_time_arg_val(N)``
+         → ``get_compile_time_arg_val(N + offset)``).
+
+    Runtime arg offsetting is handled by ``#define``/``#undef`` redirect
+    of ``get_arg_val`` (see ``_emit_rt_arg_define``).  Name isolation
+    is handled by C++ namespace wrapping — no prefixing needed.
     """
     source = _prefix_named_args_in_source(source, phase_idx)
     source = _offset_compile_time_args_in_source(source, phase_idx, ct_arg_offset)
-    # Runtime arg offsetting is now handled by #define/#undef redirect of
-    # get_arg_val (see _emit_rt_arg_define/_emit_rt_arg_undef), not by
-    # source-level regex rewriting.
-    source = _prefix_phase_names_in_source(source, phase_idx, phase_names or [])
     return source
+
+
+def _generate_phase_namespace(
+    phase_idx: int,
+    pre_main: str,
+    kernel_source: str,
+    defines: List[Tuple[str, str]],
+    ct_arg_offset: int,
+) -> List[str]:
+    """Generate a complete namespace block for one phase.
+
+    All phases (including phase 0) are treated uniformly.  Emits::
+
+        #define ... (per-phase defines)
+        #define get_arg_val phase_N_get_arg_val
+        namespace phase_N {
+            <pre_main transformed>
+            void run() {
+                <transformed kernel body>
+            }
+        } // namespace phase_N
+        #undef get_arg_val
+        #undef ... (per-phase defines)
+
+    The original ``kernel_main()`` body is extracted and placed in
+    ``run()`` to avoid the JIT build system's multiple-kernel_main
+    check.  The outer ``kernel_main()`` calls ``phase_N::run()``.
+    Both pre-main code and kernel body receive compile-time arg
+    transformations (positional offsetting + named arg prefixing).
+    Name isolation is handled by the C++ namespace.
+    """
+    ns_name = f"phase_{phase_idx}"
+    lines: List[str] = []
+
+    lines.append(f"// ---- Phase {phase_idx} ----")
+
+    # Per-phase defines (outside namespace — preprocessor is namespace-unaware)
+    if defines:
+        lines.extend(_emit_define_lines(defines))
+
+    # RT arg redirect (all phases, including phase 0)
+    lines.append(_emit_rt_arg_define(phase_idx))
+
+    # Open namespace
+    lines.append(f"namespace {ns_name} {{")
+    lines.append("")
+
+    # Pre-main code (transformed for CT arg offsets + named arg prefixes)
+    if pre_main.strip():
+        transformed_pre_main = _transform_phase_source(pre_main, phase_idx, ct_arg_offset)
+        lines.append(transformed_pre_main)
+        lines.append("")
+
+    # Transform the kernel body source (CT arg offsets + named arg prefixes)
+    body = cpp_parser.extract_kernel_body(kernel_source)
+    transformed = _transform_phase_source(body, phase_idx, ct_arg_offset)
+
+    lines.append("void run() {")
+    for line in transformed.split("\n"):
+        lines.append(f"    {line}")
+    lines.append("}")
+
+    # Close namespace
+    lines.append("")
+    lines.append(f"}} // namespace {ns_name}")
+
+    # Undef RT arg redirect
+    lines.append(_emit_rt_arg_undef())
+
+    # Undef per-phase defines
+    if defines:
+        lines.extend(_emit_undef_lines(defines))
+
+    lines.append("")
+    return lines
+
+
+def _build_barrier_dispatch(
+    multi_barrier: MultiBarrierSpec,
+    rebind_info: Dict[int, List[Tuple[int, int, int]]],
+    sources: List[Tuple[int, str]],
+) -> List[Dict[str, Any]]:
+    """Build dispatch table for barrier transitions.
+
+    Each entry maps a ``done`` counter value to the segment and rebinds
+    needed for that transition.  The ``done`` counter is incremented by
+    ``barrier::phase::wait()`` before ``barrier::phase::reset()`` runs.
+
+    Returns list of dicts with keys:
+        done_val: value of ``done`` when this transition fires
+        seg_idx: which segment to sync
+        next_phase_idx: phase whose rebinds to apply (None for trailing)
+        rebinds: list of (slot_idx, addr, size) for CB rebinding
+    """
+    dispatch: List[Dict[str, Any]] = []
+    for idx in range(len(sources) - 1):
+        phase_idx = sources[idx][0]
+        next_phase_idx = sources[idx + 1][0]
+        done_val = idx + 1
+        if phase_idx in multi_barrier.transition_map:
+            seg_idx, _ = multi_barrier.transition_map[phase_idx]
+            dispatch.append(
+                {
+                    "done_val": done_val,
+                    "seg_idx": seg_idx,
+                    "next_phase_idx": next_phase_idx,
+                    "rebinds": rebind_info.get(next_phase_idx, []),
+                }
+            )
+    # Trailing barrier (after last phase, e.g. for parent sync in OpGraph)
+    last_phase_idx = sources[-1][0]
+    if last_phase_idx in multi_barrier.transition_map:
+        seg_idx, _ = multi_barrier.transition_map[last_phase_idx]
+        dispatch.append(
+            {
+                "done_val": len(sources),
+                "seg_idx": seg_idx,
+                "next_phase_idx": None,
+                "rebinds": [],
+            }
+        )
+    return dispatch
+
+
+def _generate_rebind_lines(
+    rebinds: List[Tuple[int, int, int]],
+    next_phase_idx: int,
+    indent: str,
+    for_compute: bool = False,
+) -> List[str]:
+    """Generate C++ rebind code for use inside barrier::phase::reset().
+
+    Args:
+        rebinds: List of (slot_idx, addr, size) tuples.
+        next_phase_idx: Phase whose CTA names to use for rebind addresses.
+        indent: Indentation prefix for each generated line.
+        for_compute: If True, apply ``>> 4`` shift for TRISC addresses.
+    """
+    shift = " >> 4" if for_compute else ""
+    lines: List[str] = []
+    for slot_idx, _, _ in rebinds:
+        prefix = f"phase_{next_phase_idx}_cb{slot_idx}"
+        lines.append(f"{indent}{{")
+        lines.append(
+            f'{indent}    constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr"){shift};'
+        )
+        lines.append(
+            f'{indent}    constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size"){shift};'
+        )
+        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_rd_ptr = new_addr;")
+        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_wr_ptr = new_addr;")
+        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_size = new_size;")
+        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_limit = new_addr + new_size;")
+        lines.append(f"{indent}}}")
+    return lines
+
+
+def _generate_barrier_namespace_riscv0(
+    sweep_cb_indices: List[int],
+    multi_barrier: MultiBarrierSpec,
+    rebind_info: Dict[int, List[Tuple[int, int, int]]],
+    op_semaphore_info: List[Tuple[int, int]],
+    sources: List[Tuple[int, str]],
+) -> List[str]:
+    """Generate ``namespace barrier {{ }}`` for RISCV0 (reader/BRISC).
+
+    BRISC coordinates the barrier:
+      - ``phase::wait()``: noc_async_full_barrier, wait for compute+writer done
+      - ``phase::reset()``: reset CBs, reset op sems, rebind, segment sync
+      - ``segment_N::sync()``: multicast arrive/release barrier across cores
+    """
+    lines: List[str] = []
+    num_segments = len(multi_barrier.segments)
+    dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
+
+    lines.append("// ---- Barrier infrastructure ----")
+    lines.append("namespace barrier {")
+    lines.append("")
+    lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
+    lines.append("")
+
+    # 1. reset_cbs() — BRISC-side CB reset
+    lines.append("// BRISC-side CB reset: equalize stream registers + reset pointers to CB start.")
+    lines.append("FORCE_INLINE void reset_cbs() {")
+    for cb_idx in sweep_cb_indices:
+        lines.append(f"    {{")
+        lines.append(f"        uint16_t remaining = (uint16_t)(*get_cb_tiles_received_ptr({cb_idx}))")
+        lines.append(f"                          - (uint16_t)(*get_cb_tiles_acked_ptr({cb_idx}));")
+        lines.append(f"        volatile tt_reg_ptr uint32_t* acked_ptr = (volatile tt_reg_ptr uint32_t*)")
+        lines.append(f"            ((uint32_t)(uintptr_t)get_cb_tiles_acked_ptr({cb_idx}));")
+        lines.append(f"        for (uint16_t i = 0; i < remaining; i++) {{")
+        lines.append(f"            acked_ptr[0] += 1;")
+        lines.append(f"        }}")
+        lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+        lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
+        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
+        lines.append(f"    }}")
+    lines.append("}")
+    lines.append("")
+
+    # 2. Segment namespaces (multicast barrier)
+    # RT arg layout: [compute_done, writer_done, seg0_arrive, seg0_release, seg1_arrive, ...]
+    for seg_idx in range(num_segments):
+        s = f"seg{seg_idx}"
+        arrive_offset = 2 + seg_idx * 2
+        release_offset = 3 + seg_idx * 2
+        lines.append(f"namespace segment_{seg_idx} {{")
+        lines.append(f'    constexpr uint32_t num_cores = get_named_compile_time_arg_val("{s}_num_cores");')
+        lines.append(f'    constexpr uint32_t core0_phys_x = get_named_compile_time_arg_val("{s}_core0_phys_x");')
+        lines.append(f'    constexpr uint32_t core0_phys_y = get_named_compile_time_arg_val("{s}_core0_phys_y");')
+        lines.append(f'    constexpr uint32_t mcast_start_x = get_named_compile_time_arg_val("{s}_mcast_start_x");')
+        lines.append(f'    constexpr uint32_t mcast_start_y = get_named_compile_time_arg_val("{s}_mcast_start_y");')
+        lines.append(f'    constexpr uint32_t mcast_end_x = get_named_compile_time_arg_val("{s}_mcast_end_x");')
+        lines.append(f'    constexpr uint32_t mcast_end_y = get_named_compile_time_arg_val("{s}_mcast_end_y");')
+        lines.append(f"    uint32_t call_count;")
+        lines.append(f"    volatile tt_l1_ptr uint32_t* arrive;")
+        lines.append(f"    volatile tt_l1_ptr uint32_t* release;")
+        lines.append(f"")
+        lines.append(f"    FORCE_INLINE void init() {{")
+        lines.append(f"        call_count = 0;")
+        lines.append(f"        arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append(f"            get_arg_val<uint32_t>(rt_offset + {arrive_offset}));")
+        lines.append(f"        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append(f"            get_arg_val<uint32_t>(rt_offset + {release_offset}));")
+        lines.append(f"    }}")
+        lines.append(f"")
+        lines.append(f"    FORCE_INLINE void sync() {{")
+        lines.append(f"        if constexpr (num_cores > 1) {{")
+        lines.append(
+            f"            uint64_t core0_arrive_noc_addr = get_noc_addr(core0_phys_x, core0_phys_y, (uint32_t)arrive);"
+        )
+        lines.append(f"            noc_semaphore_inc(core0_arrive_noc_addr, 1);")
+        lines.append(f"            bool is_core_0 = (my_x[0] == core0_phys_x && my_y[0] == core0_phys_y);")
+        lines.append(f"            if (is_core_0) {{")
+        lines.append(f"                noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));")
+        lines.append(f"                *release = call_count + 1;")
+        lines.append(f"                uint64_t mcast_addr = get_noc_multicast_addr(")
+        lines.append(f"                    mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, (uint32_t)release);")
+        lines.append(
+            f"                noc_semaphore_set_multicast_loopback_src((uint32_t)release, mcast_addr, num_cores);"
+        )
+        lines.append(f"                noc_async_write_barrier();")
+        lines.append(f"            }} else {{")
+        lines.append(f"                noc_semaphore_wait_min(release, call_count + 1);")
+        lines.append(f"            }}")
+        lines.append(f"        }} else {{")
+        lines.append(f"            *release = call_count + 1;")
+        lines.append(f"        }}")
+        lines.append(f"        call_count++;")
+        lines.append(f"    }}")
+        lines.append(f"}} // namespace segment_{seg_idx}")
+        lines.append("")
+
+    # 3. Phase namespace (wait + reset)
+    lines.append("namespace phase {")
+    lines.append("    uint32_t done;")
+    lines.append("    volatile tt_l1_ptr uint32_t* compute_done;")
+    lines.append("    volatile tt_l1_ptr uint32_t* writer_done;")
+    lines.append("")
+    lines.append("    FORCE_INLINE void wait() {")
+    lines.append("        done++;")
+    lines.append("        noc_async_full_barrier();")
+    lines.append("        noc_semaphore_wait_min(compute_done, done);")
+    lines.append("        noc_semaphore_wait_min(writer_done, done);")
+    lines.append("    }")
+    lines.append("")
+    lines.append("    FORCE_INLINE void reset() {")
+    lines.append("        reset_cbs();")
+    # Op semaphore reset (all transitions)
+    if op_semaphore_info:
+        lines.append("        // Reset op semaphores")
+        for sem_id, initial_value in op_semaphore_info:
+            lines.append(
+                f"        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_value};"
+            )
+    # Dispatch: rebind + segment sync
+    for entry in dispatch:
+        done_val = entry["done_val"]
+        seg_idx = entry["seg_idx"]
+        rebinds = entry["rebinds"]
+        next_phase_idx = entry["next_phase_idx"]
+        lines.append(f"        if (done == {done_val}) {{")
+        if rebinds and next_phase_idx is not None:
+            lines.extend(_generate_rebind_lines(rebinds, next_phase_idx, "            "))
+        lines.append(f"            segment_{seg_idx}::sync();")
+        lines.append(f"        }}")
+    lines.append("    }")
+    lines.append("} // namespace phase")
+    lines.append("")
+
+    # 4. init()
+    lines.append("FORCE_INLINE void init() {")
+    lines.append("    phase::done = 0;")
+    lines.append("    phase::compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+    lines.append("        get_arg_val<uint32_t>(rt_offset));")
+    lines.append("    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+    lines.append("        get_arg_val<uint32_t>(rt_offset + 1));")
+    for seg_idx in range(num_segments):
+        lines.append(f"    segment_{seg_idx}::init();")
+    lines.append("}")
+    lines.append("")
+
+    lines.append("} // namespace barrier")
+    lines.append("")
+    return lines
+
+
+def _generate_barrier_namespace_riscv1(
+    sweep_cb_indices: List[int],
+    multi_barrier: MultiBarrierSpec,
+    rebind_info: Dict[int, List[Tuple[int, int, int]]],
+    sources: List[Tuple[int, str]],
+) -> List[str]:
+    """Generate ``namespace barrier {{ }}`` for RISCV1 (writer/NCRISC).
+
+    Writer signals done and spins on release:
+      - ``phase::wait()``: noc_async_write_barrier, signal writer_done
+      - ``phase::reset()``: segment sync (spin on release), resync CBs, rebind
+      - ``segment_N::sync()``: spin-wait on release semaphore
+    """
+    lines: List[str] = []
+    num_segments = len(multi_barrier.segments)
+    dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
+
+    lines.append("// ---- Barrier infrastructure ----")
+    lines.append("namespace barrier {")
+    lines.append("")
+    lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
+    lines.append("")
+
+    # 1. resync_cbs() — NCRISC CB pointer reset
+    if sweep_cb_indices:
+        lines.append("// Resync NCRISC local CB pointers to CB start between phases.")
+        lines.append("FORCE_INLINE void resync_cbs() {")
+        for cb_idx in sweep_cb_indices:
+            lines.append(f"    {{")
+            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
+            lines.append(f"    }}")
+        lines.append("}")
+        lines.append("")
+
+    # 2. Segment namespaces (spin-wait on release)
+    # RT arg layout: [writer_done, seg0_release, seg1_release, ...]
+    for seg_idx in range(num_segments):
+        release_offset = 1 + seg_idx
+        lines.append(f"namespace segment_{seg_idx} {{")
+        lines.append(f"    uint32_t call_count;")
+        lines.append(f"    volatile tt_l1_ptr uint32_t* release;")
+        lines.append(f"")
+        lines.append(f"    FORCE_INLINE void init() {{")
+        lines.append(f"        call_count = 0;")
+        lines.append(f"        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append(f"            get_arg_val<uint32_t>(rt_offset + {release_offset}));")
+        lines.append(f"    }}")
+        lines.append(f"")
+        lines.append(f"    FORCE_INLINE void sync() {{")
+        lines.append(f"        while (*release < call_count + 1) {{ }}")
+        lines.append(f"        call_count++;")
+        lines.append(f"    }}")
+        lines.append(f"}} // namespace segment_{seg_idx}")
+        lines.append("")
+
+    # 3. Phase namespace
+    lines.append("namespace phase {")
+    lines.append("    uint32_t done;")
+    lines.append("    volatile tt_l1_ptr uint32_t* writer_done;")
+    lines.append("")
+    lines.append("    FORCE_INLINE void wait() {")
+    lines.append("        done++;")
+    lines.append("        noc_async_write_barrier();")
+    lines.append("        *writer_done = done;")
+    lines.append("    }")
+    lines.append("")
+    lines.append("    FORCE_INLINE void reset() {")
+    # Segment sync dispatch
+    for entry in dispatch:
+        lines.append(f"        if (done == {entry['done_val']}) {{")
+        lines.append(f"            segment_{entry['seg_idx']}::sync();")
+        lines.append(f"        }}")
+    # Resync CBs
+    if sweep_cb_indices:
+        lines.append("        resync_cbs();")
+    # Rebind dispatch
+    has_rebinds = any(entry["rebinds"] for entry in dispatch)
+    if has_rebinds:
+        for entry in dispatch:
+            if entry["rebinds"]:
+                lines.append(f"        if (done == {entry['done_val']}) {{")
+                lines.extend(_generate_rebind_lines(entry["rebinds"], entry["next_phase_idx"], "            "))
+                lines.append(f"        }}")
+    lines.append("    }")
+    lines.append("} // namespace phase")
+    lines.append("")
+
+    # 4. init()
+    lines.append("FORCE_INLINE void init() {")
+    lines.append("    phase::done = 0;")
+    lines.append("    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+    lines.append("        get_arg_val<uint32_t>(rt_offset));")
+    for seg_idx in range(num_segments):
+        lines.append(f"    segment_{seg_idx}::init();")
+    lines.append("}")
+    lines.append("")
+
+    lines.append("} // namespace barrier")
+    lines.append("")
+    return lines
+
+
+def _generate_barrier_namespace_compute(
+    sweep_cb_indices: List[int],
+    multi_barrier: MultiBarrierSpec,
+    rebind_info: Dict[int, List[Tuple[int, int, int]]],
+    sources: List[Tuple[int, str]],
+) -> List[str]:
+    """Generate ``namespace barrier {{ }}`` for compute (TRISC0/TRISC2).
+
+    Compute signals done and spins on release:
+      - ``phase::wait()``: signal compute_done
+      - ``phase::reset()``: segment sync (spin on release), resync CBs, rebind (>> 4)
+      - ``segment_N::sync()``: spin-wait on release semaphore
+    """
+    lines: List[str] = []
+    num_segments = len(multi_barrier.segments)
+    dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
+
+    lines.append("// ---- Barrier infrastructure ----")
+    lines.append("namespace barrier {")
+    lines.append("")
+    lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
+    lines.append("")
+
+    # 1. resync_cbs() — compute-side CB state resync
+    if sweep_cb_indices:
+        lines.append("// Resync compute-side local CB state after BRISC reset.")
+        lines.append("// TRISC0: sync tiles_acked + reset fifo_rd_ptr to CB start.")
+        lines.append("// TRISC2: sync tiles_received + reset fifo_wr_ptr to CB start.")
+        lines.append("FORCE_INLINE void resync_cbs() {")
+        lines.append("#ifdef TRISC_UNPACK")
+        for cb_idx in sweep_cb_indices:
+            lines.append(f"    {{")
+            lines.append(
+                f"        uint16_t stream_acked = (uint16_t)reg_read((uint32_t)get_cb_tiles_acked_ptr({cb_idx}));"
+            )
+            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_acked = stream_acked;")
+            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
+            lines.append(f"    }}")
+        lines.append("#endif")
+        lines.append("#ifdef TRISC_PACK")
+        for cb_idx in sweep_cb_indices:
+            lines.append(f"    {{")
+            lines.append(
+                f"        uint16_t stream_received = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr({cb_idx}));"
+            )
+            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_received = stream_received;")
+            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_tile_ptr = 0;")
+            lines.append(f"    }}")
+        lines.append("#endif")
+        lines.append("}")
+        lines.append("")
+
+    # 2. Segment namespaces (spin-wait on release)
+    # RT arg layout: [compute_done, seg0_release, seg1_release, ...]
+    for seg_idx in range(num_segments):
+        release_offset = 1 + seg_idx
+        lines.append(f"namespace segment_{seg_idx} {{")
+        lines.append(f"    uint32_t call_count;")
+        lines.append(f"    volatile tt_l1_ptr uint32_t* release;")
+        lines.append(f"")
+        lines.append(f"    FORCE_INLINE void init() {{")
+        lines.append(f"        call_count = 0;")
+        lines.append(f"        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append(f"            get_arg_val<uint32_t>(rt_offset + {release_offset}));")
+        lines.append(f"    }}")
+        lines.append(f"")
+        lines.append(f"    FORCE_INLINE void sync() {{")
+        lines.append(f"        while (*release < call_count + 1) {{ }}")
+        lines.append(f"        call_count++;")
+        lines.append(f"    }}")
+        lines.append(f"}} // namespace segment_{seg_idx}")
+        lines.append("")
+
+    # 3. Phase namespace
+    lines.append("namespace phase {")
+    lines.append("    uint32_t done;")
+    lines.append("    volatile tt_l1_ptr uint32_t* compute_done;")
+    lines.append("")
+    lines.append("    FORCE_INLINE void wait() {")
+    lines.append("        done++;")
+    lines.append("        *compute_done = done;")
+    lines.append("    }")
+    lines.append("")
+    lines.append("    FORCE_INLINE void reset() {")
+    # Segment sync dispatch
+    for entry in dispatch:
+        lines.append(f"        if (done == {entry['done_val']}) {{")
+        lines.append(f"            segment_{entry['seg_idx']}::sync();")
+        lines.append(f"        }}")
+    # Resync CBs
+    if sweep_cb_indices:
+        lines.append("        resync_cbs();")
+    # Rebind dispatch (with >> 4 shift for compute)
+    has_rebinds = any(entry["rebinds"] for entry in dispatch)
+    if has_rebinds:
+        lines.append("#ifndef TRISC_MATH")
+        for entry in dispatch:
+            if entry["rebinds"]:
+                lines.append(f"        if (done == {entry['done_val']}) {{")
+                lines.extend(
+                    _generate_rebind_lines(entry["rebinds"], entry["next_phase_idx"], "            ", for_compute=True)
+                )
+                lines.append(f"        }}")
+        lines.append("#endif")
+    lines.append("    }")
+    lines.append("} // namespace phase")
+    lines.append("")
+
+    # 4. init()
+    lines.append("FORCE_INLINE void init() {")
+    lines.append("    phase::done = 0;")
+    lines.append("    phase::compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+    lines.append("        get_arg_val<uint32_t>(rt_offset));")
+    for seg_idx in range(num_segments):
+        lines.append(f"    segment_{seg_idx}::init();")
+    lines.append("}")
+    lines.append("")
+
+    lines.append("} // namespace barrier")
+    lines.append("")
+    return lines
 
 
 # =============================================================================
@@ -1335,7 +1791,7 @@ def _generate_rebind_code(
         # TRISC1 (math) doesn't have cb_interface linked in — skip it
         lines.append("#ifndef TRISC_MATH")
     for slot_idx, _, _ in rebinds:
-        prefix = f"phase{phase_idx}_cb{slot_idx}"
+        prefix = f"phase_{phase_idx}_cb{slot_idx}"
         lines.append(f"    {{")
         lines.append(
             f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr"){shift};'
@@ -1369,18 +1825,16 @@ def _generate_fused_riscv0_source(
     multi_barrier: Optional[MultiBarrierSpec] = None,
     rt_arg_offsets: Optional[Dict[int, int]] = None,
 ) -> Optional[str]:
-    """Generate fused RISCV_0 (reader/BRISC) kernel source with two-level barrier sync.
+    """Generate fused RISCV_0 (reader/BRISC) kernel source.
 
-    Between phases, the RISCV_0 processor acts as the barrier coordinator:
-      1. Wait for local compute + writer to signal done (L1 flag spin)
-      2. Reset residual tiles from ALL CBs on BRISC
-      3. Global barrier across cores (sets global_release which also serves
-         as the phase release signal for compute/writer)
-
-    The BRISC reset updates stream register tiles_acked but NOT TRISC0's
-    local copy.  Compute must resync after being released (see compute source).
+    Uses C++ namespace wrapping for phase isolation and barrier infrastructure.
+    Each phase's source goes into ``namespace phase_N { ... }`` with its
+    body in ``run()``.  The outer ``kernel_main()`` calls
+    ``phase_N::run()`` with ``barrier::phase::wait()`` /
+    ``barrier::phase::reset()`` between phases.
     """
     reader_sources = []
+    phase_headers: Dict[int, List[Tuple[str, str]]] = {}
 
     for i, pk in enumerate(phase_kernels):
         kernel = pk.get(role_key)
@@ -1389,17 +1843,18 @@ def _generate_fused_riscv0_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        source = cpp_parser.inline_local_includes(source, kernel_dir)
+        headers, source = cpp_parser.inline_local_includes(source, kernel_dir)
+        phase_headers[i] = headers
         reader_sources.append((i, source))
 
     if not reader_sources:
         return None
 
-    all_sources = [s for _, s in reader_sources]
-    includes = cpp_parser.collect_includes(all_sources)
-    source_defines = cpp_parser.collect_defines(all_sources)
-    uniform_defines, per_phase_defines = _categorize_phase_defines(phase_kernels, role_key)
-    shared_pre_main, per_phase_pre_main, phase_names = _collect_all_pre_main_code(reader_sources)
+    all_combined = ["\n".join(c for _, c in phase_headers.get(i, [])) + "\n" + s for i, s in reader_sources]
+    includes = cpp_parser.collect_includes(all_combined)
+    source_defines = cpp_parser.collect_defines(all_combined)
+    must_match_defines, per_phase_defines = _collect_phase_defines(phase_kernels, role_key)
+    file_scope_blocks, pre_mains = _extract_phase_pre_main(reader_sources, phase_headers)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1409,233 +1864,63 @@ def _generate_fused_riscv0_source(
         f"// Auto-generated fused reader kernel - {len(reader_sources)} phases",
         "",
     ]
-    lines.extend(_emit_define_lines(uniform_defines))
+
+    # File-scope: MUST_MATCH defines + source defines + includes
+    lines.extend(_emit_define_lines(must_match_defines))
     lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
     lines.append("")
-    if shared_pre_main.strip():
-        lines.append(shared_pre_main)
-        lines.append("")
 
-    # Emit RT arg wrapper function definitions at file scope (before any #define)
+    # File-scope: namespace blocks from inlined headers (must stay at global scope)
+    if file_scope_blocks:
+        for block in file_scope_blocks:
+            lines.append(block)
+            lines.append("")
+
+    # RT arg wrappers at file scope (all phases, uniform treatment)
     if rt_arg_offsets:
         for phase_idx, _ in reader_sources:
-            if phase_idx > 0 and phase_idx in rt_arg_offsets:
+            if phase_idx in rt_arg_offsets:
                 lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
         lines.append("")
 
-    # Per-phase pre-main code, each wrapped with that phase's varying defines
-    # and RT arg redirect so helper functions get the offset too
-    for phase_idx, _ in reader_sources:
-        phase_code = per_phase_pre_main.get(phase_idx, "")
-        if not phase_code.strip():
-            continue
-        varying = per_phase_defines.get(phase_idx, [])
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_define(phase_idx))
-        if varying:
-            lines.extend(_emit_define_lines(varying))
-        lines.append(phase_code)
-        if varying:
-            lines.extend(_emit_undef_lines(varying))
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_undef())
-        lines.append("")
+    # Phase namespaces
+    for phase_idx, raw_source in reader_sources:
+        pre_main = pre_mains.get(phase_idx, "")
+        defines = per_phase_defines.get(phase_idx, [])
+        ct_offset = ct_arg_offsets.get(phase_idx, 0)
+        lines.extend(_generate_phase_namespace(phase_idx, pre_main, raw_source, defines, ct_offset))
 
-    is_multi_phase = len(reader_sources) > 1
     needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
+    # Barrier namespace
     if needs_barrier:
-        # Barrier named compile-time args
-        lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
-
-        # Per-segment compile-time constants
-        for seg_idx in range(len(multi_barrier.segments)):
-            s = f"seg{seg_idx}"
-            lines.append(f'constexpr uint32_t __{s}_num_cores = get_named_compile_time_arg_val("{s}_num_cores");')
-            lines.append(f'constexpr uint32_t __{s}_core0_phys_x = get_named_compile_time_arg_val("{s}_core0_phys_x");')
-            lines.append(f'constexpr uint32_t __{s}_core0_phys_y = get_named_compile_time_arg_val("{s}_core0_phys_y");')
-            lines.append(
-                f'constexpr uint32_t __{s}_mcast_start_x = get_named_compile_time_arg_val("{s}_mcast_start_x");'
+        lines.extend(
+            _generate_barrier_namespace_riscv0(
+                sweep_cb_indices, multi_barrier, rebind_info or {}, op_semaphore_info or [], reader_sources
             )
-            lines.append(
-                f'constexpr uint32_t __{s}_mcast_start_y = get_named_compile_time_arg_val("{s}_mcast_start_y");'
-            )
-            lines.append(f'constexpr uint32_t __{s}_mcast_end_x = get_named_compile_time_arg_val("{s}_mcast_end_x");')
-            lines.append(f'constexpr uint32_t __{s}_mcast_end_y = get_named_compile_time_arg_val("{s}_mcast_end_y");')
-        lines.append("")
+        )
 
-        # BRISC-side CB reset: equalize stream registers + reset pointers to CB start.
-        # Uses direct tt_reg_ptr stream register increment (no cb_pop_front dependency).
-        # The stream controller requires per-tile increments — bulk acked += N hangs.
-        lines.append("// BRISC-side CB reset: equalize stream registers + reset pointers to CB start.")
-        lines.append("FORCE_INLINE void __cb_reset_to_empty() {")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(f"        uint16_t remaining = (uint16_t)(*get_cb_tiles_received_ptr({cb_idx}))")
-            lines.append(f"                          - (uint16_t)(*get_cb_tiles_acked_ptr({cb_idx}));")
-            lines.append(f"        volatile tt_reg_ptr uint32_t* acked_ptr = (volatile tt_reg_ptr uint32_t*)")
-            lines.append(f"            ((uint32_t)(uintptr_t)get_cb_tiles_acked_ptr({cb_idx}));")
-            lines.append(f"        for (uint16_t i = 0; i < remaining; i++) {{")
-            lines.append(f"            acked_ptr[0] += 1;")
-            lines.append(f"        }}")
-            lines.append(f"        // Reset BRISC local pointers to CB start")
-            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
-            lines.append(f"    }}")
-        lines.append("}")
-        lines.append("")
-
-        # Per-segment global barrier functions
-        for seg_idx in range(len(multi_barrier.segments)):
-            s = f"seg{seg_idx}"
-            lines.append(f"// Barrier segment {seg_idx}: global barrier across segment cores.")
-            lines.append(
-                f"FORCE_INLINE void __barrier_{s}(uint32_t call_idx, "
-                f"volatile tt_l1_ptr uint32_t* arrive, volatile tt_l1_ptr uint32_t* release) {{"
-            )
-            lines.append(f"    if constexpr (__{s}_num_cores > 1) {{")
-            lines.append(
-                f"        uint64_t core0_arrive_noc_addr = get_noc_addr(__{s}_core0_phys_x, __{s}_core0_phys_y, (uint32_t)arrive);"
-            )
-            lines.append(f"        noc_semaphore_inc(core0_arrive_noc_addr, 1);")
-            lines.append(f"")
-            lines.append(f"        bool is_core_0 = (my_x[0] == __{s}_core0_phys_x && my_y[0] == __{s}_core0_phys_y);")
-            lines.append(f"        if (is_core_0) {{")
-            lines.append(f"            noc_semaphore_wait_min(arrive, __{s}_num_cores * (call_idx + 1));")
-            lines.append(f"            *release = call_idx + 1;")
-            lines.append(
-                f"            uint64_t mcast_addr = get_noc_multicast_addr("
-                f"__{s}_mcast_start_x, __{s}_mcast_start_y, __{s}_mcast_end_x, __{s}_mcast_end_y, (uint32_t)release);"
-            )
-            lines.append(
-                f"            noc_semaphore_set_multicast_loopback_src((uint32_t)release, mcast_addr, __{s}_num_cores);"
-            )
-            lines.append(f"            noc_async_write_barrier();")
-            lines.append(f"        }} else {{")
-            lines.append(f"            noc_semaphore_wait_min(release, call_idx + 1);")
-            lines.append(f"        }}")
-            lines.append(f"    }} else {{")
-            lines.append(f"        *release = call_idx + 1;")
-            lines.append(f"    }}")
-            lines.append(f"}}")
-            lines.append("")
-
-    # Generate phase functions
-    for phase_idx, raw_source in reader_sources:
-        body = cpp_parser.extract_kernel_body(raw_source)
-        offset = ct_arg_offsets.get(phase_idx, 0)
-        pnames = phase_names.get(phase_idx, [])
-        transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
-
-        varying = per_phase_defines.get(phase_idx, [])
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_define(phase_idx))
-        lines.append(f"// Phase {phase_idx} reader")
-        lines.append(f"FORCE_INLINE void phase{phase_idx}_reader() {{")
-        if varying:
-            for dl in _emit_define_lines(varying):
-                lines.append(f"    {dl}")
-        for line in transformed.split("\n"):
-            lines.append(f"    {line}")
-        if varying:
-            for ul in _emit_undef_lines(varying):
-                lines.append(f"    {ul}")
-        lines.append("}")
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_undef())
-        lines.append("")
-
-    # Generate kernel_main
+    # kernel_main
     lines.append("void kernel_main() {")
-
-    if is_multi_phase:
-        lines.append("    // Read barrier L1 flag addresses from runtime args")
-        lines.append("    const uint32_t __compute_done_addr = get_arg_val<uint32_t>(__barrier_rt_offset);")
-        lines.append("    const uint32_t __writer_done_addr = get_arg_val<uint32_t>(__barrier_rt_offset + 1);")
-        lines.append(
-            "    volatile tt_l1_ptr uint32_t* __compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__compute_done_addr);"
-        )
-        lines.append(
-            "    volatile tt_l1_ptr uint32_t* __writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__writer_done_addr);"
-        )
-        # Per-segment arrive/release pointers
-        for seg_idx in range(len(multi_barrier.segments)):
-            s = f"seg{seg_idx}"
-            off = 2 + seg_idx * 2
-            lines.append(f"    const uint32_t __{s}_arrive_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});")
-            lines.append(
-                f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off + 1});"
-            )
-            lines.append(
-                f"    volatile tt_l1_ptr uint32_t* __{s}_arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_arrive_addr);"
-            )
-            lines.append(
-                f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
-            )
+    if needs_barrier:
+        lines.append("    barrier::init();")
         lines.append("")
 
-    rebind_info = rebind_info or {}
-
-    first = True
-    for phase_idx, _ in reader_sources:
-        if not first and needs_barrier:
-            transition_idx = phase_idx - 1
-            if transition_idx in multi_barrier.transition_map:
-                lines.append("")
-                lines.append(f"    // === Barrier: Phase {phase_idx - 1} -> Phase {phase_idx} ===")
-                lines.append("    // Invariant: BRISC (reader) coordinates all inter-phase cleanup.")
-                lines.append("    // Order: noc_barrier -> wait compute/writer done -> reset CBs ->")
-                lines.append("    //         reset semaphores -> rebind CB addrs -> global barrier.")
-                lines.append("    // Compute/writer must NOT touch CBs until global_release is set.")
-                lines.append("    noc_async_full_barrier();")
-                lines.append("")
-                lines.append(f"    // Wait for local compute + writer to finish Phase {phase_idx - 1}")
-                lines.append(f"    noc_semaphore_wait_min(__compute_done, {phase_idx});")
-                lines.append(f"    noc_semaphore_wait_min(__writer_done, {phase_idx});")
-                lines.append("")
-                lines.append("    // Reset residual tiles from ALL CBs")
-                lines.append("    __cb_reset_to_empty();")
-                lines.append("")
-                # Reset op semaphores to their initial values so next phase starts clean
-                if op_semaphore_info:
-                    lines.append("    // Reset op semaphores to initial values (as if each phase runs standalone)")
-                    for sem_id, initial_val in op_semaphore_info:
-                        lines.append(
-                            f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_val};"
-                        )
-                    lines.append("")
-                # Rebind CB addresses before global barrier (so BRISC has correct state)
-                rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=False)
-                if rebind_lines:
-                    lines.extend(rebind_lines)
-                    lines.append("")
-                seg_idx, call_idx = multi_barrier.transition_map[transition_idx]
-                s = f"seg{seg_idx}"
-                lines.append(f"    // Global barrier segment {seg_idx}, call {call_idx}")
-                lines.append(f"    __barrier_{s}({call_idx}, __{s}_arrive, __{s}_release);")
-                lines.append("")
-        lines.append(f"    phase{phase_idx}_reader();")
-        first = False
-
-    # Trailing barrier: after the last phase, if there's a pending transition
-    # (e.g. empty leaf branch participating in an ancestor's barrier)
+    has_trailing = False
     if needs_barrier:
         last_phase_idx = reader_sources[-1][0]
-        trailing_transition = last_phase_idx
-        if trailing_transition in multi_barrier.transition_map:
-            seg_idx, call_idx = multi_barrier.transition_map[trailing_transition]
-            s = f"seg{seg_idx}"
-            lines.append("")
-            lines.append(f"    // === Trailing barrier after Phase {last_phase_idx} ===")
-            lines.append("    noc_async_full_barrier();")
-            lines.append(f"    noc_semaphore_wait_min(__compute_done, {last_phase_idx + 1});")
-            lines.append(f"    noc_semaphore_wait_min(__writer_done, {last_phase_idx + 1});")
-            lines.append("    __cb_reset_to_empty();")
-            lines.append(f"    __barrier_{s}({call_idx}, __{s}_arrive, __{s}_release);")
+        has_trailing = last_phase_idx in multi_barrier.transition_map
+
+    for count, (phase_idx, _) in enumerate(reader_sources):
+        lines.append(f"    phase_{phase_idx}::run();")
+        is_last = count == len(reader_sources) - 1
+        if needs_barrier and (not is_last or has_trailing):
+            lines.append("    barrier::phase::wait();")
+            lines.append("    barrier::phase::reset();")
+            if not is_last:
+                lines.append("")
 
     lines.append("}")
     lines.append("")
@@ -1653,14 +1938,14 @@ def _generate_fused_riscv1_source(
     multi_barrier: Optional[MultiBarrierSpec] = None,
     rt_arg_offsets: Optional[Dict[int, int]] = None,
 ) -> Optional[str]:
-    """Generate fused RISCV_1 (writer/NCRISC) kernel source with L1 flag barrier sync.
+    """Generate fused RISCV_1 (writer/NCRISC) kernel source.
 
-    Between phases, the writer:
-      1. Signals done by writing phase+1 to writer_done L1 flag
-      2. Spins on global_release L1 flag (plain volatile read, no NOC APIs)
-      3. Resyncs NCRISC local CB pointers to CB start
+    Uses C++ namespace wrapping for phase isolation and barrier infrastructure.
+    Writer signals done via ``barrier::phase::wait()`` and spins on release
+    via ``barrier::phase::reset()`` -> ``barrier::segment_N::sync()``.
     """
     writer_sources = []
+    phase_headers: Dict[int, List[Tuple[str, str]]] = {}
 
     for i, pk in enumerate(phase_kernels):
         kernel = pk.get(role_key)
@@ -1669,17 +1954,18 @@ def _generate_fused_riscv1_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        source = cpp_parser.inline_local_includes(source, kernel_dir)
+        headers, source = cpp_parser.inline_local_includes(source, kernel_dir)
+        phase_headers[i] = headers
         writer_sources.append((i, source))
 
     if not writer_sources:
         return None
 
-    all_sources = [s for _, s in writer_sources]
-    includes = cpp_parser.collect_includes(all_sources)
-    source_defines = cpp_parser.collect_defines(all_sources)
-    uniform_defines, per_phase_defines = _categorize_phase_defines(phase_kernels, role_key)
-    shared_pre_main, per_phase_pre_main, phase_names = _collect_all_pre_main_code(writer_sources)
+    all_combined = ["\n".join(c for _, c in phase_headers.get(i, [])) + "\n" + s for i, s in writer_sources]
+    includes = cpp_parser.collect_includes(all_combined)
+    source_defines = cpp_parser.collect_defines(all_combined)
+    must_match_defines, per_phase_defines = _collect_phase_defines(phase_kernels, role_key)
+    file_scope_blocks, pre_mains = _extract_phase_pre_main(writer_sources, phase_headers)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1689,150 +1975,56 @@ def _generate_fused_riscv1_source(
         f"// Auto-generated fused writer kernel - {len(writer_sources)} phases",
         "",
     ]
-    lines.extend(_emit_define_lines(uniform_defines))
+
+    lines.extend(_emit_define_lines(must_match_defines))
     lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
     lines.append("")
-    if shared_pre_main.strip():
-        lines.append(shared_pre_main)
-        lines.append("")
 
-    # Emit RT arg wrapper function definitions at file scope (before any #define)
+    # File-scope: namespace blocks from inlined headers
+    if file_scope_blocks:
+        for block in file_scope_blocks:
+            lines.append(block)
+            lines.append("")
+
     if rt_arg_offsets:
         for phase_idx, _ in writer_sources:
-            if phase_idx > 0 and phase_idx in rt_arg_offsets:
+            if phase_idx in rt_arg_offsets:
                 lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
         lines.append("")
 
-    # Per-phase pre-main code, each wrapped with that phase's varying defines
-    # and RT arg redirect so helper functions get the offset too
-    for phase_idx, _ in writer_sources:
-        phase_code = per_phase_pre_main.get(phase_idx, "")
-        if not phase_code.strip():
-            continue
-        varying = per_phase_defines.get(phase_idx, [])
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_define(phase_idx))
-        if varying:
-            lines.extend(_emit_define_lines(varying))
-        lines.append(phase_code)
-        if varying:
-            lines.extend(_emit_undef_lines(varying))
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_undef())
-        lines.append("")
+    for phase_idx, raw_source in writer_sources:
+        pre_main = pre_mains.get(phase_idx, "")
+        defines = per_phase_defines.get(phase_idx, [])
+        ct_offset = ct_arg_offsets.get(phase_idx, 0)
+        lines.extend(_generate_phase_namespace(phase_idx, pre_main, raw_source, defines, ct_offset))
 
-    is_multi_phase = len(writer_sources) > 1
     needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
     if needs_barrier:
-        lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
-        lines.append("")
-
-    # Generate NCRISC CB state resync function (resets local pointers to CB start).
-    if sweep_cb_indices and needs_barrier:
-        lines.append("// Resync NCRISC local CB pointers to CB start between phases.")
-        lines.append("FORCE_INLINE void __resync_ncrisc_cb_state() {")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
-            lines.append(f"    }}")
-        lines.append("}")
-        lines.append("")
-
-    # Generate phase functions
-    for phase_idx, raw_source in writer_sources:
-        body = cpp_parser.extract_kernel_body(raw_source)
-        offset = ct_arg_offsets.get(phase_idx, 0)
-        pnames = phase_names.get(phase_idx, [])
-        transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
-
-        varying = per_phase_defines.get(phase_idx, [])
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_define(phase_idx))
-        lines.append(f"// Phase {phase_idx} writer")
-        lines.append(f"FORCE_INLINE void phase{phase_idx}_writer() {{")
-        if varying:
-            for dl in _emit_define_lines(varying):
-                lines.append(f"    {dl}")
-        for line in transformed.split("\n"):
-            lines.append(f"    {line}")
-        if varying:
-            for ul in _emit_undef_lines(varying):
-                lines.append(f"    {ul}")
-        lines.append("}")
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_undef())
-        lines.append("")
-
-    # Generate kernel_main
-    lines.append("void kernel_main() {")
-
-    if needs_barrier:
-        lines.append("    // Read barrier L1 flag addresses from runtime args")
-        lines.append("    const uint32_t __writer_done_addr = get_arg_val<uint32_t>(__barrier_rt_offset);")
-        lines.append(
-            "    volatile tt_l1_ptr uint32_t* __writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__writer_done_addr);"
+        lines.extend(
+            _generate_barrier_namespace_riscv1(sweep_cb_indices, multi_barrier, rebind_info or {}, writer_sources)
         )
-        # Per-segment release pointers
-        for seg_idx in range(len(multi_barrier.segments)):
-            s = f"seg{seg_idx}"
-            off = 1 + seg_idx
-            lines.append(f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});")
-            lines.append(
-                f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
-            )
+
+    lines.append("void kernel_main() {")
+    if needs_barrier:
+        lines.append("    barrier::init();")
         lines.append("")
 
-    rebind_info = rebind_info or {}
-
-    num_writers = len(writer_sources)
-    for count, (phase_idx, _) in enumerate(writer_sources):
-        lines.append(f"    phase{phase_idx}_writer();")
-        if count < num_writers - 1 and needs_barrier:
-            transition_idx = phase_idx
-            if transition_idx in multi_barrier.transition_map:
-                next_phase_idx = writer_sources[count + 1][0]
-                lines.append("")
-                lines.append(f"    // Ensure all async NOC writes from Phase {phase_idx} are complete")
-                lines.append("    noc_async_write_barrier();")
-                lines.append(f"    // Signal done for Phase {phase_idx}")
-                lines.append(f"    *__writer_done = {phase_idx + 1};")
-                lines.append("")
-                seg_idx, call_idx = multi_barrier.transition_map[transition_idx]
-                s = f"seg{seg_idx}"
-                lines.append(f"    // Wait for segment {seg_idx} release (call {call_idx})")
-                lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
-                lines.append("")
-                # Resync NCRISC local CB pointers to CB start
-                if sweep_cb_indices:
-                    lines.append("    // Resync NCRISC CB pointers to start")
-                    lines.append("    __resync_ncrisc_cb_state();")
-                    lines.append("")
-                # Rebind CB addresses after barrier wait
-                rebind_lines = _generate_rebind_code(
-                    rebind_info.get(next_phase_idx, []), next_phase_idx, for_compute=False
-                )
-                if rebind_lines:
-                    lines.extend(rebind_lines)
-                    lines.append("")
-
-    # Trailing barrier: after the last phase, if there's a pending transition
+    has_trailing = False
     if needs_barrier:
         last_phase_idx = writer_sources[-1][0]
-        trailing_transition = last_phase_idx
-        if trailing_transition in multi_barrier.transition_map:
-            seg_idx, call_idx = multi_barrier.transition_map[trailing_transition]
-            s = f"seg{seg_idx}"
-            lines.append("")
-            lines.append(f"    // === Trailing barrier after Phase {last_phase_idx} ===")
-            lines.append("    noc_async_write_barrier();")
-            lines.append(f"    *__writer_done = {last_phase_idx + 1};")
-            lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
+        has_trailing = last_phase_idx in multi_barrier.transition_map
+
+    for count, (phase_idx, _) in enumerate(writer_sources):
+        lines.append(f"    phase_{phase_idx}::run();")
+        is_last = count == len(writer_sources) - 1
+        if needs_barrier and (not is_last or has_trailing):
+            lines.append("    barrier::phase::wait();")
+            lines.append("    barrier::phase::reset();")
+            if not is_last:
+                lines.append("")
 
     lines.append("}")
     lines.append("")
@@ -1850,21 +2042,18 @@ def _generate_fused_compute_source(
     multi_barrier: Optional[MultiBarrierSpec] = None,
     rt_arg_offsets: Optional[Dict[int, int]] = None,
 ) -> Optional[str]:
-    """Generate fused compute kernel with L1 flag barrier sync.
+    """Generate fused compute kernel source.
 
-    Between phases, compute:
-      1. Signals done by writing phase+1 to compute_done L1 flag
-      2. Spins on global_release L1 flag (plain volatile read, no NOC APIs)
-      3. Resyncs TRISC0 local CB state with stream registers
-
-    Step 3 is critical: BRISC reset (in reader) updates the hardware stream
-    register tiles_acked but NOT TRISC0's local copy.  Without resync,
-    compute sees stale tiles_acked and reads garbage.
+    Uses C++ namespace wrapping for phase isolation and barrier infrastructure.
+    Compute signals done via ``barrier::phase::wait()`` and spins on release
+    via ``barrier::phase::reset()`` -> ``barrier::segment_N::sync()``.
+    TRISC0/TRISC2 resync their local CB state after BRISC reset.
     """
     if ct_arg_offsets is None:
         ct_arg_offsets = {}
 
     compute_sources = []
+    phase_headers: Dict[int, List[Tuple[str, str]]] = {}
 
     for i, pk in enumerate(phase_kernels):
         kernel = pk.get(role_key)
@@ -1873,17 +2062,18 @@ def _generate_fused_compute_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        source = cpp_parser.inline_local_includes(source, kernel_dir)
+        headers, source = cpp_parser.inline_local_includes(source, kernel_dir)
+        phase_headers[i] = headers
         compute_sources.append((i, source))
 
     if not compute_sources:
         return None
 
-    all_sources = [s for _, s in compute_sources]
-    includes = cpp_parser.collect_includes(all_sources)
-    source_defines = cpp_parser.collect_defines(all_sources)
-    uniform_defines, per_phase_defines = _categorize_phase_defines(phase_kernels, role_key)
-    shared_pre_main, per_phase_pre_main, phase_names = _collect_all_pre_main_code(compute_sources)
+    all_combined = ["\n".join(c for _, c in phase_headers.get(i, [])) + "\n" + s for i, s in compute_sources]
+    includes = cpp_parser.collect_includes(all_combined)
+    source_defines = cpp_parser.collect_defines(all_combined)
+    must_match_defines, per_phase_defines = _collect_phase_defines(phase_kernels, role_key)
+    file_scope_blocks, pre_mains = _extract_phase_pre_main(compute_sources, phase_headers)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1893,167 +2083,58 @@ def _generate_fused_compute_source(
         f"// Auto-generated fused compute kernel - {len(compute_sources)} phases",
         "",
     ]
-    lines.extend(_emit_define_lines(uniform_defines))
+
+    lines.extend(_emit_define_lines(must_match_defines))
     lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
     lines.append("")
-    if shared_pre_main.strip():
-        lines.append(shared_pre_main)
-        lines.append("")
 
-    # Emit RT arg wrapper function definitions at file scope (before any #define)
+    # File-scope: namespace blocks from inlined headers
+    if file_scope_blocks:
+        for block in file_scope_blocks:
+            lines.append(block)
+            lines.append("")
+
     if rt_arg_offsets:
         for phase_idx, _ in compute_sources:
-            if phase_idx > 0 and phase_idx in rt_arg_offsets:
+            if phase_idx in rt_arg_offsets:
                 lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
         lines.append("")
 
-    # Per-phase pre-main code, each wrapped with that phase's varying defines
-    # and RT arg redirect so helper functions get the offset too
-    for phase_idx, _ in compute_sources:
-        phase_code = per_phase_pre_main.get(phase_idx, "")
-        if not phase_code.strip():
-            continue
-        varying = per_phase_defines.get(phase_idx, [])
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_define(phase_idx))
-        if varying:
-            lines.extend(_emit_define_lines(varying))
-        lines.append(phase_code)
-        if varying:
-            lines.extend(_emit_undef_lines(varying))
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_undef())
-        lines.append("")
+    for phase_idx, raw_source in compute_sources:
+        pre_main = pre_mains.get(phase_idx, "")
+        defines = per_phase_defines.get(phase_idx, [])
+        ct_offset = ct_arg_offsets.get(phase_idx, 0)
+        lines.extend(_generate_phase_namespace(phase_idx, pre_main, raw_source, defines, ct_offset))
 
-    is_multi_phase = len(compute_sources) > 1
     needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
     if needs_barrier:
-        lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
-        lines.append("")
-
-    # Generate compute-side CB state resync function.
-    # After BRISC's __cb_reset_to_empty(), stream registers are equalized and
-    # BRISC pointers are at CB start. TRISC0 and TRISC2 need to sync their
-    # local state and reset pointers to CB start as well.
-    if sweep_cb_indices and needs_barrier:
-        lines.append("// Resync compute-side local CB state after BRISC reset.")
-        lines.append("// TRISC0: sync tiles_acked + reset fifo_rd_ptr to CB start.")
-        lines.append("// TRISC2: sync tiles_received + reset fifo_wr_ptr to CB start.")
-        lines.append("FORCE_INLINE void __resync_cb_state_after_sweep() {")
-        lines.append("#ifdef TRISC_UNPACK")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(
-                f"        uint16_t stream_acked = (uint16_t)reg_read((uint32_t)get_cb_tiles_acked_ptr({cb_idx}));"
+        lines.extend(
+            _generate_barrier_namespace_compute(
+                sweep_cb_indices or [], multi_barrier, rebind_info or {}, compute_sources
             )
-            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_acked = stream_acked;")
-            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
-            lines.append(f"    }}")
-        lines.append("#endif")
-        lines.append("#ifdef TRISC_PACK")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(
-                f"        uint16_t stream_received = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr({cb_idx}));"
-            )
-            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_received = stream_received;")
-            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_tile_ptr = 0;")
-            lines.append(f"    }}")
-        lines.append("#endif")
-        lines.append("}")
-        lines.append("")
-
-    # Generate phase functions
-    for phase_idx, raw_source in compute_sources:
-        body = cpp_parser.extract_kernel_body(raw_source)
-        offset = ct_arg_offsets.get(phase_idx, 0)
-        pnames = phase_names.get(phase_idx, [])
-        transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
-
-        varying = per_phase_defines.get(phase_idx, [])
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_define(phase_idx))
-        lines.append(f"// Phase {phase_idx} compute")
-        lines.append(f"FORCE_INLINE void phase{phase_idx}_compute() {{")
-        if varying:
-            for dl in _emit_define_lines(varying):
-                lines.append(f"    {dl}")
-        for line in transformed.split("\n"):
-            lines.append(f"    {line}")
-        if varying:
-            for ul in _emit_undef_lines(varying):
-                lines.append(f"    {ul}")
-        lines.append("}")
-        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
-            lines.append(_emit_rt_arg_undef())
-        lines.append("")
-
-    # Generate kernel_main
-    lines.append("void kernel_main() {")
-
-    if needs_barrier:
-        lines.append("    // Read barrier L1 flag addresses from runtime args")
-        lines.append("    const uint32_t __compute_done_addr = get_arg_val<uint32_t>(__barrier_rt_offset);")
-        lines.append(
-            "    volatile tt_l1_ptr uint32_t* __compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__compute_done_addr);"
         )
-        # Per-segment release pointers
-        for seg_idx in range(len(multi_barrier.segments)):
-            s = f"seg{seg_idx}"
-            off = 1 + seg_idx
-            lines.append(f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});")
-            lines.append(
-                f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
-            )
+
+    lines.append("void kernel_main() {")
+    if needs_barrier:
+        lines.append("    barrier::init();")
         lines.append("")
 
-    rebind_info = rebind_info or {}
-
-    first = True
-    for count, (phase_idx, _) in enumerate(compute_sources):
-        if not first and needs_barrier:
-            transition_idx = phase_idx - 1
-            if transition_idx in multi_barrier.transition_map:
-                lines.append("")
-                lines.append(f"    // Signal done for Phase {phase_idx - 1}")
-                lines.append(f"    *__compute_done = {phase_idx};")
-                lines.append("")
-                seg_idx, call_idx = multi_barrier.transition_map[transition_idx]
-                s = f"seg{seg_idx}"
-                lines.append(f"    // Wait for segment {seg_idx} release (call {call_idx})")
-                lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
-                lines.append("")
-                if sweep_cb_indices:
-                    lines.append("    // Resync TRISC0 local CB state (tiles_acked, fifo_rd_ptr)")
-                    lines.append("    __resync_cb_state_after_sweep();")
-                    lines.append("")
-                # Rebind CB addresses after resync (all TRISC instances, with >> 4 shift)
-                rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=True)
-                if rebind_lines:
-                    lines.extend(rebind_lines)
-                    lines.append("")
-        lines.append(f"    phase{phase_idx}_compute();")
-        first = False
-
-    # Trailing barrier: after the last phase, if there's a pending transition
+    has_trailing = False
     if needs_barrier:
         last_phase_idx = compute_sources[-1][0]
-        trailing_transition = last_phase_idx
-        if trailing_transition in multi_barrier.transition_map:
-            seg_idx, call_idx = multi_barrier.transition_map[trailing_transition]
-            s = f"seg{seg_idx}"
-            lines.append("")
-            lines.append(f"    // === Trailing barrier after Phase {last_phase_idx} ===")
-            lines.append(f"    *__compute_done = {last_phase_idx + 1};")
-            lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
+        has_trailing = last_phase_idx in multi_barrier.transition_map
+
+    for count, (phase_idx, _) in enumerate(compute_sources):
+        lines.append(f"    phase_{phase_idx}::run();")
+        is_last = count == len(compute_sources) - 1
+        if needs_barrier and (not is_last or has_trailing):
+            lines.append("    barrier::phase::wait();")
+            lines.append("    barrier::phase::reset();")
+            if not is_last:
+                lines.append("")
 
     lines.append("}")
     lines.append("")
@@ -2276,7 +2357,7 @@ def _merge_named_compile_time_args(
             if i == 0:
                 merged.append((name, actual_value))
             else:
-                merged.append((f"phase{i}_{name}", actual_value))
+                merged.append((f"phase_{i}_{name}", actual_value))
 
     # Add barrier runtime arg offset
     if barrier_rt_offset is not None:
@@ -2312,24 +2393,22 @@ def _merge_compile_time_args(
 _MUST_MATCH_DEFINES = frozenset({"REDUCE_OP", "REDUCE_DIM", "BCAST_LLKOP", "BCAST_DIM"})
 
 
-def _categorize_phase_defines(
+def _collect_phase_defines(
     phase_kernels: List[Dict[str, Any]],
     kernel_type: str,
 ) -> Tuple[List[Tuple[str, str]], Dict[int, List[Tuple[str, str]]]]:
-    """Categorize defines from all phases into uniform and per-phase.
+    """Collect defines: MUST_MATCH at file scope, everything else per-phase.
 
-    Uniform defines (same name+value in ALL phases) are emitted once as
-    ``#define`` lines at the top of the generated source.  Varying defines
-    (different value or present in only some phases) are emitted per-phase
-    with ``#define``/``#undef`` pairs around each phase's code.
-
-    ``_MUST_MATCH_DEFINES`` are validated for consistency and treated as
-    uniform.
+    MUST_MATCH defines (``REDUCE_OP``, ``REDUCE_DIM``, etc.) are validated
+    for consistency and returned for file-scope emission.  ALL other defines
+    are returned per-phase for ``#define``/``#undef`` wrapping around each
+    phase's namespace.  No uniform/varying optimization — simplicity over
+    minimal ``#define`` count.
 
     Returns:
-        (uniform, per_phase) where:
-        - uniform: list of (name, value) for defines identical across all phases
-        - per_phase: dict mapping phase_index -> list of (name, value) for that phase
+        (must_match, per_phase) where:
+        - must_match: list of (name, value) for defines emitted at file scope
+        - per_phase: dict mapping phase_index -> list of (name, value)
 
     Raises:
         ValueError: If a MUST_MATCH define has inconsistent values across phases.
@@ -2347,60 +2426,35 @@ def _categorize_phase_defines(
                 defs[name] = value
         per_phase_defs[i] = defs
 
-    # Collect all define names across all phases
-    all_names: Set[str] = set()
-    for defs in per_phase_defs.values():
-        all_names.update(defs.keys())
-
-    # Classify each define name
-    uniform: List[Tuple[str, str]] = []
-    seen_uniform: Set[str] = set()
-    varying_names: Set[str] = set()
-    must_match_values: Dict[str, Tuple[str, int]] = {}  # name -> (value, first_phase)
-
-    for name in sorted(all_names):
-        # Collect (value, phase_idx) for phases that have this define
-        occurrences = [(defs[name], idx) for idx, defs in per_phase_defs.items() if name in defs]
-
-        if name in _MUST_MATCH_DEFINES:
-            # Validate consistency
-            for value, phase_idx in occurrences:
-                if name in must_match_values:
-                    prev_val, prev_phase = must_match_values[name]
-                    if value != prev_val:
-                        raise ValueError(
-                            f"Define '{name}' has inconsistent values across phases: "
-                            f"phase {prev_phase} has '{prev_val}', phase {phase_idx} has '{value}'. "
-                            f"These defines must have identical values in all fused phases "
-                            f"because they are referenced by LLK headers at include time."
-                        )
-                else:
-                    must_match_values[name] = (value, phase_idx)
-            # Treat as uniform
-            if occurrences and name not in seen_uniform:
-                uniform.append((name, occurrences[0][0]))
-                seen_uniform.add(name)
-            continue
-
-        # Check if uniform: present in ALL phases with same value
-        if len(occurrences) == len(per_phase_defs):
-            values = {v for v, _ in occurrences}
-            if len(values) == 1:
-                uniform.append((name, occurrences[0][0]))
-                seen_uniform.add(name)
+    # Validate MUST_MATCH defines and collect them for file scope
+    must_match: List[Tuple[str, str]] = []
+    must_match_seen: Dict[str, Tuple[str, int]] = {}  # name -> (value, first_phase)
+    for idx, defs in per_phase_defs.items():
+        for name, value in defs.items():
+            if name not in _MUST_MATCH_DEFINES:
                 continue
+            if name in must_match_seen:
+                prev_val, prev_phase = must_match_seen[name]
+                if value != prev_val:
+                    raise ValueError(
+                        f"Define '{name}' has inconsistent values across phases: "
+                        f"phase {prev_phase} has '{prev_val}', phase {idx} has '{value}'. "
+                        f"These defines must have identical values in all fused phases "
+                        f"because they are referenced by LLK headers at include time."
+                    )
+            else:
+                must_match_seen[name] = (value, idx)
+                must_match.append((name, value))
 
-        # Varying: present in only some phases, or different values
-        varying_names.add(name)
-
-    # Build per-phase varying define lists
+    # All non-MUST_MATCH defines go per-phase
+    must_match_names = set(must_match_seen.keys())
     per_phase: Dict[int, List[Tuple[str, str]]] = {}
     for idx, defs in per_phase_defs.items():
-        phase_varying = [(name, defs[name]) for name in sorted(varying_names) if name in defs]
-        if phase_varying:
-            per_phase[idx] = phase_varying
+        phase_defs = [(n, v) for n, v in sorted(defs.items()) if n not in must_match_names]
+        if phase_defs:
+            per_phase[idx] = phase_defs
 
-    return uniform, per_phase
+    return must_match, per_phase
 
 
 def _emit_define_lines(defines: List[Tuple[str, str]]) -> List[str]:
@@ -2740,7 +2794,7 @@ def _build_fused_descriptor(
         # Add rebind named compile-time args (addr + size for each CB that changes)
         for phase_idx, rebinds in rebind_info.items():
             for slot_idx, addr, size in rebinds:
-                prefix = f"phase{phase_idx}_cb{slot_idx}"
+                prefix = f"phase_{phase_idx}_cb{slot_idx}"
                 named_ct_args.append((f"{prefix}_rebind_addr", addr))
                 named_ct_args.append((f"{prefix}_rebind_size", size))
 
@@ -2765,10 +2819,10 @@ def _build_fused_descriptor(
         desc.core_ranges = role_core_ranges
         desc.compile_time_args = ct_args
         desc.named_compile_time_args = named_ct_args
-        # Only uniform defines go to the compiler as -D flags.
-        # Varying defines are handled by #define/#undef in the generated source.
-        uniform_defs, _ = _categorize_phase_defines(phase_kernels, role_key)
-        desc.defines = uniform_defs
+        # Only MUST_MATCH defines go to the compiler as -D flags.
+        # All other defines are handled by #define/#undef in the generated source.
+        must_match_defs, _ = _collect_phase_defines(phase_kernels, role_key)
+        desc.defines = must_match_defs
         desc.runtime_args = rt_args
         desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, role_key)
         desc.config = role_config
