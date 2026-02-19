@@ -498,7 +498,7 @@ class Generator(WarmupForwardMixin):
         Uses dummy embeddings and rotation matrices to avoid depending on real data.
         """
 
-        warmup_seq_lens = [128, 1024, 2048, 4096]
+        warmup_seq_lens = [128, 1024, 2048, 4096, 8192, 16384]
         max_warmup = min(self.model_args.max_prefill_chunk_size, self.model_args.max_seq_len)
         warmup_seq_lens = [s for s in warmup_seq_lens if s <= max_warmup]
 
