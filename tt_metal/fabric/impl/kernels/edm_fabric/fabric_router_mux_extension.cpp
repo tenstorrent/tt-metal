@@ -278,11 +278,7 @@ void kernel_main() {
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER, volatile tt_reg_ptr uint32_t*>
         worker_channel_interface_zero;
 
-    union {
-        uint32_t addr;
-        size_t uladdr;
-    } tmp;
-    tmp.addr = get_stream_scratch_register_address<0>();
+    size_t uladdr = static_cast<size_t>(get_stream_scratch_register_address<0>());
 
     setup_channel<NUM_BUFFERS_WORKER>(
         &worker_channels[0],
@@ -292,7 +288,7 @@ void kernel_main() {
         BUFFER_SIZE_WORKER,
         worker_channel_base_address,
         worker_connection_info_address,
-        tmp.uladdr,
+        uladdr,
         worker_flow_control_address,
         StreamId{worker_stream_ids[0]},
         worker_is_persistent[0] == 1);
