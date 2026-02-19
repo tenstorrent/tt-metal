@@ -145,11 +145,7 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
 }
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto_desc_path) :
-    cluster_(null_cluster),
-    distributed_context_(nullptr),
-    hal_(nullptr),
-    target_device_type_(TargetDevice::Silicon),
-    all_hostnames_unique_(true) {
+    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr), target_device_type_(TargetDevice::Silicon) {
     // Deserialize the proto descriptor and move all its members directly
     // This avoids discovery and merge operations for mock proto descriptors
     PhysicalSystemDescriptor proto_desc =
