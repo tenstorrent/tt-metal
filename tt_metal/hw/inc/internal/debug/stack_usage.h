@@ -6,7 +6,7 @@
 
 #include "watcher_common.h"
 #include "dev_mem_map.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 
 // We don't control the stack size for active erisc, and share the stack with base FW, so don't implement for ERISC.
 #if defined(WATCHER_ENABLED) && \

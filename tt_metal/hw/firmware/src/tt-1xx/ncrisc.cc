@@ -14,7 +14,7 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 #include "tdma_xmov.h"
 
 #include "api/debug/waypoint.h"

@@ -16,7 +16,7 @@
 #include <utility>
 
 #include "hostdev/dev_msgs.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>

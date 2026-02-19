@@ -6,7 +6,7 @@
 
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/dev_msgs.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 
 #include "hostdevcommon/dprint_common.h"
 // Returns the buffer address for current thread+core. Differs for NC/BR/ER/TR0-2.

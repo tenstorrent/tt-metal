@@ -22,7 +22,7 @@
 #include "internal/circular_buffer_interface.h"
 
 #include "internal/debug/watcher_common.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "internal/debug/stack_usage.h"
 

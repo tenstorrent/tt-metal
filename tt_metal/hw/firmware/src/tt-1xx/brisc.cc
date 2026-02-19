@@ -23,7 +23,7 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 #include "dev_mem_map.h"
 #include "noc_overlay_parameters.h"
 

@@ -8,7 +8,6 @@
 
 #include "internal/dataflow_buffer_interface.h"
 #include "internal/circular_buffer_interface.h"  // for cb_addr_shift
-#include "internal/cpu_index.h"
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/remapper_api.hpp"
@@ -28,7 +27,15 @@ extern RemapperAPI g_remapper_configurator;
 namespace experimental {
 
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    uint64_t hartid;
+#ifdef COMPILE_FOR_TRISC
+    std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
+    // Building up g_dfb_interface is not at granularity of trisc in a Neo so only need Neo ID here
+    // The initialization structs track producers/consumers for a given DFB and they would only be used by one of the unpacker or packer
+    hartid = 8 + neo_id;
+#else
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+#endif
     uint16_t hart_bit = 1 << hartid;
 
     uint32_t num_dfbs =

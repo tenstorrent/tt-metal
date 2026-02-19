@@ -6,7 +6,7 @@
 // #include "risc_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/debug/watcher_common.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "internal/dataflow_buffer_init.h"

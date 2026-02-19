@@ -9,7 +9,7 @@
 #include "internal/risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/watcher_common.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "internal/debug/watcher_common.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 

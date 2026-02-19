@@ -12,7 +12,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 #include "core_config.h"
 
 #include "api/debug/waypoint.h"

@@ -24,7 +24,7 @@
     defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 
 #include "internal/dataflow/dataflow_cmd_bufs.h"
 #include "hostdev/dev_msgs.h"

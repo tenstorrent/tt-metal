@@ -13,7 +13,7 @@
 #include "stream_io_map.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"

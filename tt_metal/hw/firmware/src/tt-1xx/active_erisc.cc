@@ -25,7 +25,7 @@
 #include "internal/ethernet/erisc.h"
 
 #include "internal/debug/watcher_common.h"
-#include "internal/cpu_index.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 
 uint8_t noc_index;
