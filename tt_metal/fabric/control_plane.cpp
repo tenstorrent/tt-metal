@@ -462,6 +462,10 @@ void ControlPlane::init_control_plane(
     const auto& rtoptions = this->rtoptions_.get();
     auto fabric_config = this->get_fabric_config();
 
+    // Numbert of hosts
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
@@ -493,7 +497,7 @@ void ControlPlane::init_control_plane(
         const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
         if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, false);
+            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
             fixed_asic_position_pinnings.insert(
                 fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
         }
@@ -518,9 +522,6 @@ void ControlPlane::init_control_plane(
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    int world_size = *global_context->size();
-    int rank = *global_context->rank();
     std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
@@ -556,12 +557,15 @@ void ControlPlane::init_control_plane_auto_discovery() {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
 
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+
     // NOTE: This algorithm is only supported for single host systems for now
     TT_FATAL(
-        *distributed_context->size() == 1,
+        world_size == 1,
         "Auto discovery is only supported for single host systems, since you are running on a {} process,"
         " please specify a rank binding file via the tt-run argument --rank-binding argument",
-        *distributed_context->size());
+        world_size);
 
     // Initialize physical system descriptor
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
@@ -592,7 +596,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
     if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, true);
+        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
         // Merge galaxy pinnings with existing pinnings (e.g., the hard pin above)
         fixed_asic_position_pinnings.insert(
             fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
@@ -610,9 +614,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    int world_size = *global_context->size();
-    int rank = *global_context->rank();
     std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
