@@ -9,6 +9,7 @@
 #include "noc_parameters.h"
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"
+#include "internal/cpu_index.h"
 #include "api/debug/assert.h"
 
 #if defined(COMPILE_FOR_BRISC)
@@ -19,7 +20,7 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(internal_::get_hw_thread_idx());
 #elif defined(COMPILE_FOR_TRISC)
 // TRISC is not a data movement processor. This is just so it compiles
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
