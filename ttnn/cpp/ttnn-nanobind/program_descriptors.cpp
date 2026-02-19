@@ -379,8 +379,7 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
-            "Byte offset from buffer base address for CB placement (default 0)");
-            "Collection of format descriptors for different sections of the buffer")
+            "Byte offset from buffer base address for CB placement (default 0)")
         .def(
             "has_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
