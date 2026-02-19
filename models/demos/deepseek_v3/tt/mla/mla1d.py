@@ -314,7 +314,7 @@ class MLA1D(AbstractModule):
                     (0, -2),  # Shard along input dim
                     mesh_device,
                     qkv_a_dram_memory_config,
-                    (0, 0, 192),  # Pad n from 2112 to 2304 (multiple of 384)
+                    (0, 0, 0),
                 ),
             },
         }
@@ -1627,7 +1627,6 @@ class MLA1D(AbstractModule):
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
-        tt_q_kv = ttnn.to_memory_config(tt_q_kv, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
@@ -1668,7 +1667,6 @@ class MLA1D(AbstractModule):
         # 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV Norm
-        # 1,1,32,512 8x2 [32,32]
         tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
         # 1,1,32,512 8x2 [32,32]
         tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -1747,8 +1745,7 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
         # 1,1,32,3072, L1 interleaved
         # Reshape
-        tt_q = ttnn.untilize(tt_q)
-        tt_q = ttnn.to_memory_config(
+        tt_q = ttnn.untilize(
             tt_q,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
