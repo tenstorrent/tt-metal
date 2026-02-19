@@ -70,8 +70,6 @@ class DINOStagedForward:
             all_feats = neck_out
         else:
             all_feats = [neck_out]
-        batch = all_feats[0].shape[0]
-        channels = all_feats[0].shape[1]
         spatial_shapes_list = []
         level_start_index_list = [0]
         flat_list = []

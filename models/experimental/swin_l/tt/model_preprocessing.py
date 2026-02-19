@@ -132,7 +132,6 @@ def load_backbone_weights(
     params["stages"] = {}
     for s in range(4):
         dim = embed_dim * (2**s)
-        heads = num_heads[s]
         params["stages"][s] = {"blocks": {}}
 
         for b in range(depths[s]):
