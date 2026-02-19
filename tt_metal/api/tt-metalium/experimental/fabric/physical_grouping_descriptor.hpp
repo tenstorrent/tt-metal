@@ -94,17 +94,20 @@ public:
     // Main matching algorithm: Find valid groupings for MGD instances
     // Returns a nested map: instance_type -> instance_name -> vector of valid GroupingInfo matches
     // There can be multiple valid groupings for each MGD instance
+    // If physical_system_descriptor is provided, Phase 2 (MESH) results are filtered to only include
+    // groupings that validate successfully against the PSD
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
-    get_valid_groupings_for_mgd(const MeshGraphDescriptor& mesh_graph_descriptor) const;
+    get_valid_groupings_for_mgd(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr) const;
 
-    // Validate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor, making sure that they match
-    bool validate_preformed_groups_from_physical_system_descriptor(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
-
-    // Same as above but populates errors_out when validation fails (for testing/inspection)
-    bool validate_preformed_groups_from_physical_system_descriptor(
+    // Validate a single grouping from PhysicalSystemDescriptor, making sure that it matches
+    // errors_out can be provided to get detailed error messages (optional, can be nullptr)
+    static bool validate_grouping_with_psd(
+        const PhysicalGroupingDescriptor& pgd,
+        const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::vector<std::string>* errors_out) const;
+        std::vector<std::string>* errors_out = nullptr);
 
     // Node metadata for flattened mesh nodes
     // Generic enough to be used throughout the flattened mesh representation
