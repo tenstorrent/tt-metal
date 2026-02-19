@@ -41,9 +41,16 @@ def generate_slice_to_pcie_device_mapping(mapping_file, host_vector, test_execut
         "--bind-to",
         "none",
         "--tag-output",
-        str(test_executable),
-        "--gtest_filter=*Generate2x4SliceToPCIeDeviceMapping*",
     ]
+    # When using a remote/CI path, pass lib and runtime root so workers can load libtt_metal.so
+    if explicit_path and test_executable.is_absolute():
+        build_dir = test_executable.parent.parent.parent.parent  # .../build/test/tt_metal/tt_fabric
+        runtime_root = build_dir.parent
+        ld_library_path = build_dir / "lib"
+        MAPPING_GENERATION_CMD.extend(
+            ["-x", f"LD_LIBRARY_PATH={ld_library_path}", "-x", f"TT_METAL_RUNTIME_ROOT={runtime_root}"]
+        )
+    MAPPING_GENERATION_CMD.extend([str(test_executable), "--gtest_filter=*Generate2x4SliceToPCIeDeviceMapping*"])
 
     logger.info(f"Running: {' '.join(MAPPING_GENERATION_CMD)}")
 
