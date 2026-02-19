@@ -77,8 +77,15 @@ def _env_flag(name: str, default: bool) -> bool:
 def _maybe_sdpa_program_config(seq_q: int, seq_k: int, grid: Tuple[int, int]) -> Optional[Any]:
     if ttnn is None or not hasattr(ttnn, "SDPAProgramConfig"):
         return None
-    q_chunk = max(64, min(128, seq_q))
-    k_chunk = max(128, min(256, seq_k))
+    tile = 32
+
+    def _round_up(value: int, multiple: int) -> int:
+        return ((value + multiple - 1) // multiple) * multiple
+
+    # SDPA requires chunk sizes to be multiples of TILE_WIDTH (32). Prefer conservative chunk sizes that
+    # work well for MaskFormer query lengths (typically 100) while remaining valid for all sequence sizes.
+    q_chunk = _round_up(max(64, min(128, int(seq_q))), tile)
+    k_chunk = _round_up(max(128, min(256, int(seq_k))), tile)
     return _init_with_signature(
         ttnn.SDPAProgramConfig,
         {
