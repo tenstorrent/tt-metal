@@ -163,6 +163,11 @@ struct kernel_config_msg_t {
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
 
+    // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel; values fit in 8 bits)
+    // The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of 16 bytes for the pair).
+    volatile uint8_t num_kernel_threads[MaxProcessorsForThreadingVariables];
+    volatile uint8_t kernel_thread_id[MaxProcessorsForThreadingVariables];
+
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
 
