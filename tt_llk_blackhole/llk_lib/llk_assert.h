@@ -31,6 +31,8 @@
 
 #else
 
-#define LLK_ASSERT(condition, message) ((void)(condition), (void)(message))
+// sizeof creates an unevaluated context: the condition is fully compiled
+// (type-checked, name-resolved) but never executed at runtime.
+#define LLK_ASSERT(condition, message) ((void)sizeof((condition)))
 
 #endif // ENABLE_LLK_ASSERT
