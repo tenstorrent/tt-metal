@@ -45,15 +45,6 @@ inline void zero_dst_reg(const uint32_t i) {
     fill_tile(i, zero);
 }
 
-// Create and push a zero tile to the specified circular buffer
-inline void push_zero_tile(const uint32_t cb_id) {
-    constexpr uint32_t DST_REG_ID = 0;
-    tile_regs_acquire();
-    zero_dst_reg(DST_REG_ID);
-    tile_regs_commit();
-    pack_and_push(DST_REG_ID, cb_id);
-}
-
 inline void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
     // NOTE:
     // Packs two blocks from consecutive registers to two output circular buffers.
