@@ -342,14 +342,6 @@ class TestCustomOperationsWithDevice:
     These tests require a Tenstorrent device to be available.
     """
 
-    @pytest.fixture(autouse=True)
-    def setup_device(self):
-        """Set up device for tests."""
-        auto_ctx = ttml.autograd.AutoContext.get_instance()
-        auto_ctx.open_device()
-        yield
-        auto_ctx.close_device()
-
     def test_simple_scale_operation_forward(self):
         """Test a simple scale operation forward pass."""
 
@@ -455,6 +447,7 @@ class TestCustomOperationsWithDevice:
         # Create input tensor with shape suitable for tile layout
         input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
         input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+        input_tensor.set_requires_grad(True)
 
         # Forward pass
         output = DoubleOp.apply(input_tensor)
@@ -583,6 +576,8 @@ class TestCustomOperationsWithDevice:
 
         x_tensor = ttml.autograd.Tensor.from_numpy(x_data)
         y_tensor = ttml.autograd.Tensor.from_numpy(y_data)
+        x_tensor.set_requires_grad(True)
+        y_tensor.set_requires_grad(True)
 
         # Forward pass: (x + y) * scale = (2 + 3) * 2 = 10
         output = AddAndScale.apply(x_tensor, y_tensor, 2.0)
@@ -623,6 +618,7 @@ class TestCustomOperationsWithDevice:
         # Create input tensor
         input_data = np.ones((1, 1, 32, 32), dtype=np.float32) * 3.0
         input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+        input_tensor.set_requires_grad(True)
 
         # Forward pass: input * scale = 3.0 * 2.0 = 6.0
         output = ScaleOp.apply(input_tensor, 2.0)
@@ -726,11 +722,17 @@ class TestCustomOperationsWithDevice:
         input_py = ttml.autograd.Tensor.from_numpy(input_data)
         weight_py = ttml.autograd.Tensor.from_numpy(weight_data)
         bias_py = ttml.autograd.Tensor.from_numpy(bias_data)
+        input_py.set_requires_grad(True)
+        weight_py.set_requires_grad(True)
+        bias_py.set_requires_grad(True)
 
         # Create ttml tensors for C++ implementation (same data)
         input_cpp = ttml.autograd.Tensor.from_numpy(input_data)
         weight_cpp = ttml.autograd.Tensor.from_numpy(weight_data)
         bias_cpp = ttml.autograd.Tensor.from_numpy(bias_data)
+        input_cpp.set_requires_grad(True)
+        weight_cpp.set_requires_grad(True)
+        bias_cpp.set_requires_grad(True)
 
         # Python implementation forward + backward
         output_py = PythonLinearOp.apply(input_py, weight_py, bias_py)
@@ -876,10 +878,14 @@ class TestCustomOperationsWithDevice:
         # Create tensors for Python implementation
         qs_py = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
         kvs_py = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
+        qs_py.set_requires_grad(True)
+        kvs_py.set_requires_grad(True)
 
         # Create tensors for C++ implementation
         qs_cpp = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
         kvs_cpp = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
+        qs_cpp.set_requires_grad(True)
+        kvs_cpp.set_requires_grad(True)
 
         # Python implementation forward + create loss for backward
         q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(qs_py, kvs_py, num_heads, num_groups)
@@ -939,6 +945,7 @@ class TestCustomOperationsWithDevice:
 
         qs = ttml.autograd.Tensor.from_numpy(qs_data)
         kvs = ttml.autograd.Tensor.from_numpy(kvs_data)
+        qs.set_requires_grad(True)
 
         # Forward pass
         q, k, v = PythonGroupedHeadsCreationOp.apply(qs, kvs, num_heads, num_groups)

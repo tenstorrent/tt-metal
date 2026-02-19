@@ -15,6 +15,7 @@ import math
 from typing import Optional
 
 import numpy as np
+import ttnn
 
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
@@ -66,10 +67,11 @@ class LinearRegression(AbstractModuleBase):
         init_k = init_scale if init_scale is not None else math.sqrt(1.0 / in_features)
 
         # Create weight tensor: shape [1, 1, out_features, in_features]
+        # Use BFLOAT16 to match C++ LinearLayer
         # Parameter wrapper automatically registers this via __setattr__
         weight_shape = (1, 1, out_features, in_features)
         weight_np = np.random.uniform(low=-init_k, high=init_k, size=weight_shape).astype(np.float32)
-        weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np)
+        weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np, new_type=ttnn.DataType.BFLOAT16)
         self.weight = Parameter(weight_tensor)
 
         # Create bias tensor if needed: shape [1, 1, 1, out_features]
@@ -77,7 +79,7 @@ class LinearRegression(AbstractModuleBase):
         if bias:
             bias_shape = (1, 1, 1, out_features)
             bias_np = np.random.uniform(low=-init_k, high=init_k, size=bias_shape).astype(np.float32)
-            bias_tensor = ttml.autograd.Tensor.from_numpy(bias_np)
+            bias_tensor = ttml.autograd.Tensor.from_numpy(bias_np, new_type=ttnn.DataType.BFLOAT16)
             self.bias = Parameter(bias_tensor)
         else:
             # Set to None explicitly - won't be registered as parameter

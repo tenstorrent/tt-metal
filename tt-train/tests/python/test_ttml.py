@@ -318,7 +318,7 @@ class TestCppOptimizersWithPythonModules:
                 super().__init__()
                 # Create a parameter tensor and register it
                 weight_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
-                weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np)
+                weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np, new_type=ttnn.DataType.BFLOAT16)
                 self.weight = Parameter(weight_tensor)
 
             def __call__(self, x):
@@ -434,7 +434,7 @@ class TestCppOptimizersWithPythonModules:
             def __init__(self):
                 super().__init__()
                 w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
-                self.inner_weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+                self.inner_weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np, new_type=ttnn.DataType.BFLOAT16))
 
             def __call__(self, x):
                 return ttml.ops.binary.mul(x, self.inner_weight.tensor)
@@ -443,7 +443,7 @@ class TestCppOptimizersWithPythonModules:
             def __init__(self):
                 super().__init__()
                 w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
-                self.outer_weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+                self.outer_weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np, new_type=ttnn.DataType.BFLOAT16))
                 self.inner = InnerModule()  # Nested submodule
 
             def __call__(self, x):
@@ -697,7 +697,7 @@ class TestModuleList:
             def __init__(self):
                 super().__init__()
                 w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
-                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np, new_type=ttnn.DataType.BFLOAT16))
 
             def forward(self, x):
                 return ttml.ops.binary.mul(x, self.weight.tensor)
