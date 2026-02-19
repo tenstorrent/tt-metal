@@ -14,7 +14,6 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
-#include "common/stable_hash.hpp"
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "firmware_capability.hpp"

@@ -6,8 +6,6 @@
 
 #include <cstddef>
 #include <cstring>
-#include <functional>
-#include <string>
 
 #include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/assert.hpp>

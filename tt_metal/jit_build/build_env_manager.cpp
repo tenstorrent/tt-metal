@@ -8,10 +8,8 @@
 #include <enchantum/enchantum.hpp>
 #include <cmath>
 #include <tracy/Tracy.hpp>
-#include <bitset>
 #include <cstddef>
 #include <map>
-#include <optional>
 #include <string>
 #include <variant>
 
@@ -23,7 +21,6 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
-#include "jit_build/jit_build_utils.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
