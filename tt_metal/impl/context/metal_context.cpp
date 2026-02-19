@@ -20,6 +20,7 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -338,6 +339,18 @@ void MetalContext::initialize(
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
 // undefined behavior. Do not create threads in this function or any functions it calls.
+void MetalContext::reinitialize_dispatch_managers() {
+    // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
+    // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config_, num_hw_cqs_);
+    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs_);
+}
+
+void MetalContext::set_fast_dispatch_mode(bool enable) {
+    rtoptions().set_fast_dispatch(enable);
+    reinitialize_dispatch_managers();
+}
+
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -406,6 +419,16 @@ void MetalContext::teardown() {
     control_plane_.reset();
 
     noc_debug_state_.reset();
+
+    // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
+    // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
+    // when context is re-initialized).
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
 
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
@@ -1186,7 +1209,7 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
-    // Create a dummp allocator to generatoe the bank/noc tables. Specifically, these depend on l1_bank_remap.
+    // Create a dummy allocator to generate the bank/noc tables. Specifically, these depend on l1_bank_remap.
     auto config = L1BankingAllocator::generate_config(
         device_id,
         num_hw_cqs_,
@@ -1196,24 +1219,25 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
         l1_bank_remap_);
     const auto allocator = L1BankingAllocator(config);
     const auto& soc_d = cluster_->get_soc_desc(device_id);
+
+    // Compute all tables in local variables first (no shared state accessed)
     const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);
-    dram_bank_offset_map_[device_id].clear();
-    dram_bank_offset_map_[device_id].resize(num_dram_banks);
+    std::vector<int32_t> local_dram_offsets(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
+        local_dram_offsets[bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
     }
+
     const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
+    std::vector<int32_t> local_l1_offsets(num_l1_banks);
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-    l1_bank_offset_map_[device_id].clear();
-    l1_bank_offset_map_[device_id].resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         l1_noc_coord_per_bank[bank_id] = cluster_->get_virtual_coordinate_from_logical_coordinates(
             device_id, allocator.get_logical_core_from_bank_id(bank_id), CoreType::WORKER);
-        l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
+        local_l1_offsets[bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
     }
 
-    dram_bank_to_noc_xy_[device_id].clear();
-    dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
+    std::vector<uint16_t> local_dram_bank_to_noc_xy;
+    local_dram_bank_to_noc_xy.reserve(hal_->get_num_nocs() * num_dram_banks);
     bool noc_translation_enabled = cluster_->get_target_device_type() != tt::TargetDevice::Mock &&
                                    cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
@@ -1231,20 +1255,29 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
                 noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y);
             }
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
-            dram_bank_to_noc_xy_[device_id].push_back(xy);
+            local_dram_bank_to_noc_xy.push_back(xy);
         }
     }
 
-    l1_bank_to_noc_xy_[device_id].clear();
-    l1_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
+    std::vector<uint16_t> local_l1_bank_to_noc_xy;
+    local_l1_bank_to_noc_xy.reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (const auto& noc_coord : l1_noc_coord_per_bank) {
             auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
-            l1_bank_to_noc_xy_[device_id].push_back(xy);
+            local_l1_bank_to_noc_xy.push_back(xy);
         }
+    }
+
+    // Now lock and commit all computed values to shared state atomically
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        dram_bank_offset_map_[device_id] = std::move(local_dram_offsets);
+        l1_bank_offset_map_[device_id] = std::move(local_l1_offsets);
+        dram_bank_to_noc_xy_[device_id] = std::move(local_dram_bank_to_noc_xy);
+        l1_bank_to_noc_xy_[device_id] = std::move(local_l1_bank_to_noc_xy);
     }
 }
 
@@ -1253,22 +1286,30 @@ void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
 
-    worker_logical_col_to_virtual_col_[device_id].clear();
-    worker_logical_row_to_virtual_row_[device_id].clear();
-    worker_logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
-    worker_logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
+    // Compute in local vectors first (no lock needed)
+    std::vector<uint8_t> local_col_map;
+    std::vector<uint8_t> local_row_map;
+    local_col_map.reserve(tensix_grid_size.x);
+    local_row_map.reserve(tensix_grid_size.y);
 
     for (size_t x = 0; x < tensix_grid_size.x; x++) {
-        worker_logical_col_to_virtual_col_[device_id].push_back(
+        local_col_map.push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .x);
     }
     for (size_t y = 0; y < tensix_grid_size.y; y++) {
-        worker_logical_row_to_virtual_row_[device_id].push_back(
+        local_row_map.push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
+    }
+
+    // Lock only for final commit to shared maps
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        worker_logical_col_to_virtual_col_[device_id] = std::move(local_col_map);
+        worker_logical_row_to_virtual_row_[device_id] = std::move(local_row_map);
     }
 }
 
@@ -1293,6 +1334,7 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     if (end_core.has_value()) {
         // Multicast to all tensix cores in the range [virtual_core, end_core]
         auto start_core = virtual_core;
+
         cluster_->noc_multicast_write(
             dram_bank_to_noc_xy_[device_id].data(),
             dram_to_noc_sz_in_bytes,
