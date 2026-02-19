@@ -4,8 +4,8 @@
 
 import torch
 import pytest
-from functools import partial
 import ttnn
+from functools import partial
 
 
 @pytest.mark.parametrize(
@@ -70,7 +70,7 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         assert kind == "mean"
         tt_npu = ttnn.mean(tt_input)
 
-    tt_output = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_output = tt_npu.cpu().to_torch()
     comparison_fn = torch.equal
     if kind == "mean":
         comparison_fn = partial(torch.isclose, atol=1e-1, rtol=1e-2)

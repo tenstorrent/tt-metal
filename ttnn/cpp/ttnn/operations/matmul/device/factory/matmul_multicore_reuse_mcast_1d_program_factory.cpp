@@ -553,7 +553,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_writer_defines});
+            .defines = mm_kernel_in0_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in0_sharded", tt::CBIndex::c_2},
+                {"cb_l1_array", tt::CBIndex::c_6},
+                {"cb_sparsity", tt::CBIndex::c_6},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+            }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
@@ -570,7 +577,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines});
+                    .defines = mm_kernel_in0_sender_writer_defines,
+                    .named_compile_args = {
+                        {"cb_in0", tt::CBIndex::c_0},
+                        {"cb_in0_sharded", tt::CBIndex::c_2},
+                        {"cb_l1_array", tt::CBIndex::c_6},
+                    }});
         }
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -584,7 +596,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines});
+                    .defines = mm_kernel_in0_sender_writer_defines,
+                    .named_compile_args = {
+                        {"cb_in0", tt::CBIndex::c_0},
+                        {"cb_in0_sharded", tt::CBIndex::c_2},
+                        {"cb_l1_array", tt::CBIndex::c_6},
+                    }});
         }
     }
 
@@ -597,7 +614,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args});
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -608,7 +628,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+            }});
 
     // Compute kernel compile time args
 
@@ -658,7 +685,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1401,7 +1438,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_defines});
+            .defines = mm_kernel_in0_sender_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in0_sharded", tt::CBIndex::c_2},
+                {"cb_sparsity", tt::CBIndex::c_6},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+            }});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -1411,7 +1454,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+            }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_mcast_receivers.num_cores() > 0) {
@@ -1424,7 +1474,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_defines});
+                .defines = mm_kernel_in1_receiver_writer_defines,
+                .named_compile_args = {
+                    {"cb_in1", tt::CBIndex::c_1},
+                    {"cb_bias", tt::CBIndex::c_3},
+                    {"cb_out", tt::CBIndex::c_4},
+                }});
     }
 
     // Compute kernel compile time args
@@ -1477,7 +1532,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -2079,8 +2144,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         (std::uint32_t)batch,       // batch
         (std::uint32_t)ring_size,   // ring_size
         (std::uint32_t)in0_signal_semaphore_id,
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src2_cb_index,
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -2095,10 +2158,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         (std::uint32_t)in1_block_page_size_last,
         (std::uint32_t)in1_block_width_num_pages,
         (std::uint32_t)in1_shard_width_in_dram,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)sync_cb_index,
-        (std::uint32_t)sync_cb2_index,
-        (std::uint32_t)remote_cb_index,
         (std::uint32_t)fused_op_signaler.has_value(),
     };
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
@@ -2131,18 +2190,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         untilize_out,             // untilize_out
         in1_is_dram_interleaved,  // in1_is_dram_interleaved
         in1_is_dram_sharded,      // in1_is_dram_sharded
-        src0_cb_index,
-        src1_cb_index,
-        src2_cb_index,
-        sync_cb_index,
-        sync_cb2_index,
     };
-    compute_kernel_args.push_back(compute_kernel_args.size() + 1);  // The CT index of the output_cbs
+    std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
+        {"cb_in0", src0_cb_index},
+        {"cb_in1", src1_cb_index},
+        {"cb_in2", src2_cb_index},
+        {"cb_sync", sync_cb_index},
+        {"cb_sync2", sync_cb2_index},
+    };
     for (uint32_t i = 0; i < num_output_cb; ++i) {
-        compute_kernel_args.push_back(output_cb_indices[i]);
+        compute_named_compile_args["cb_mm_out_" + std::to_string(i)] = output_cb_indices[i];
     }
     for (uint32_t i = 0; i < num_output_cb; ++i) {
-        compute_kernel_args.push_back(interm_cb_indices[i]);
+        compute_named_compile_args["cb_mm_partials_" + std::to_string(i)] = interm_cb_indices[i];
     }
 
     /* Kernel defines */
@@ -2196,7 +2256,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .noc_mode = noc_mode,
-            .compile_args = in0_sender_compile_time_args});
+            .compile_args = in0_sender_compile_time_args,
+            .named_compile_args = {{"cb_in0", src0_cb_index}, {"cb_in2", src2_cb_index}}});
     // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -2207,7 +2268,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .noc = in1_noc,
             .noc_mode = noc_mode,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_in1_kernel_defines});
+            .defines = mm_in1_kernel_defines,
+            .named_compile_args = {
+                {"cb_in1", src1_cb_index},
+                {"cb_sync", sync_cb_index},
+                {"cb_sync2", sync_cb2_index},
+                {"cb_remote", remote_cb_index}}});
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
@@ -2219,7 +2285,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = compute_named_compile_args});
 
     // for all the cores in the rect grid, we send one rt arg to determine if they are worker core
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);

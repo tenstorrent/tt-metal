@@ -24,7 +24,9 @@ from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertO
 @pytest.mark.parametrize(
     "K_gate, N_per_core, weights_dtype",
     [
-        (7168, 64, ttnn.bfloat8_b),  # Full MLP: K_gate=7168, K_down=256, N=7168
+        pytest.param(
+            7168, 64, ttnn.bfloat8_b, marks=pytest.mark.skip_post_commit
+        ),  # Full MLP: K_gate=7168, K_down=256, N=7168
         pytest.param(
             2048, 64, ttnn.bfloat8_b, marks=pytest.mark.skip_post_commit
         ),  # Mid: K_gate=2048, K_down=256, N=7168
