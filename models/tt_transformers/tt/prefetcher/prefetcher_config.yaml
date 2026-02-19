@@ -1,7 +1,7 @@
 # Prefetcher configuration for Wormhole and Blackhole devices
 # Legend:
 # - dram_banks: DRAM banks are ordered in column major order by Y coordinates
-# - bank_ordered_y_coords: The Y coordinates of the prefetchersenders ordered in increasing Bank ID
+# - bank_ordered_y_coords: The Y coordinates of the prefetcher senders ordered in increasing Bank ID
 # - sender_cols: The X coordinates of the prefetcher senders
 # - sender_rows: The Y coordinates of the prefetcher senders
 # - receiver_cols: The range of X coordinates of the prefetcher receivers

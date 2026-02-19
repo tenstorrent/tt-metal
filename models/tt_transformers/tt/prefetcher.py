@@ -16,11 +16,13 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
 
-_CONFIG_PATH = Path(__file__).parent / "prefetcher_config.yaml"
+# Prefetcher yaml config file describes the sender/receiver core placements
+_CONFIG_PATH = Path(__file__).parent / "prefetcher/prefetcher_config.yaml"
 with open(_CONFIG_PATH) as f:
     ARCH_CONFIG = yaml.safe_load(f)
 
 # Model configurations for which DRAM prefetcher is supported
+# TODO: to be removed when model support matrix is unified in tt-transformers
 VERIFIED_MODEL_CONFIGS = {
     "Llama-3.2-1B": {"dim": 2048, "hidden_dim": 8192, "n_heads": 32, "n_kv_heads": 8},
     "Llama-3.2-3B": {"dim": 3072, "hidden_dim": 8192, "n_heads": 24, "n_kv_heads": 8},
