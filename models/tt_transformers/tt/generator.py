@@ -353,7 +353,7 @@ class Generator:
                 self.model[model_id].sampling.apply_prefill_state(
                     sampling_params=per_request_params,
                     prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
-                    empty_slots=[user_id],
+                    empty_slots=[user_id % max_batch_size_per_model],
                 )
 
             if enable_trace_current_prompt:
