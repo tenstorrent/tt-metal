@@ -172,18 +172,14 @@ void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
     }
-    if (in0_needs_intermediate_cb_read) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in0_single_tile_size, tt::CBIndex::c_8, in0_data_format, in0_single_tile_size, in0_tile));
+
+    if (src1_sharded) {
+        UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
     }
 
-    // Optional transpose CB
-    if (in0_transpose_tile) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(in0_CB_size, tt::CBIndex::c_10, in0_data_format, in0_single_tile_size, in0_tile));
+    if (out_sharded) {
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     }
-
-    return program_descriptor;
 }
 
 CoreRangeSet MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range(IDevice* device) {
