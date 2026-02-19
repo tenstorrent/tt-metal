@@ -531,13 +531,10 @@ class MasterConfigLoader:
         return True
 
     def parse_memory_config(self, memory_config: Dict, tensor_shape: list = None) -> Any:
-        """Convert memory config dict to ttnn memory config
+        """Convert memory config dict to serializable format for test vectors
 
         Parses both INTERLEAVED and SHARDED memory configs from the master JSON.
-        Now properly handles shard_spec with grid, shape, and orientation.
-
-        Raises exceptions on parsing errors instead of falling back to defaults,
-        making it easier to identify and fix issues.
+        Returns a serializable dict that can be deserialized later to MemoryConfig objects.
 
         Args:
             memory_config: Memory config dictionary from master JSON
@@ -546,9 +543,12 @@ class MasterConfigLoader:
         Raises:
             ValueError: If memory config is invalid or incomplete
         """
-        # If empty or missing, return default
+        # If empty or missing, return default in serializable format
         if not memory_config or not isinstance(memory_config, dict):
-            return ttnn.DRAM_MEMORY_CONFIG
+            return {
+                "type": "ttnn._ttnn.tensor.MemoryConfig",
+                "data": {"buffer_type": "DRAM", "memory_layout": "INTERLEAVED", "created_with_nd_shard_spec": False},
+            }
 
         buffer_type = memory_config.get("buffer_type")
         memory_layout = memory_config.get("memory_layout")
@@ -559,18 +559,24 @@ class MasterConfigLoader:
         if not memory_layout:
             raise ValueError(f"Missing memory_layout in memory_config: {memory_config}")
 
-        # Map buffer types - fail if unknown
+        # Normalize buffer_type string
         if "DRAM" in buffer_type:
-            buffer_type_ttnn = ttnn.BufferType.DRAM
+            buffer_type_str = "DRAM"
         elif "L1" in buffer_type:
-            buffer_type_ttnn = ttnn.BufferType.L1
+            buffer_type_str = "L1"
         else:
             raise ValueError(f"Unknown buffer_type: {buffer_type}")
 
-        # Parse INTERLEAVED configs
+        # Parse INTERLEAVED configs - return serializable dict
         if "INTERLEAVED" in memory_layout:
-            memory_layout_ttnn = ttnn.TensorMemoryLayout.INTERLEAVED
-            return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
+            return {
+                "type": "ttnn._ttnn.tensor.MemoryConfig",
+                "data": {
+                    "buffer_type": buffer_type_str,
+                    "memory_layout": "INTERLEAVED",
+                    "created_with_nd_shard_spec": False,
+                },
+            }
 
         # Parse SHARDED configs
         elif "SHARDED" in memory_layout:
@@ -594,48 +600,26 @@ class MasterConfigLoader:
             if not orientation_str:
                 raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
 
-            # Create CoreRangeSet from grid
-            # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
-            core_ranges = set()
-            for range_dict in grid_list:
-                start = range_dict.get("start")
-                end = range_dict.get("end")
-
-                if not start or not end:
-                    raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
-                if "x" not in start or "y" not in start:
-                    raise ValueError(f"Invalid grid start (missing x/y): {start}")
-                if "x" not in end or "y" not in end:
-                    raise ValueError(f"Invalid grid end (missing x/y): {end}")
-
-                core_range = ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
-                core_ranges.add(core_range)
-
-            shard_grid = ttnn.CoreRangeSet(core_ranges)
-
-            # Map orientation
-            if orientation_str == "COL_MAJOR":
-                orientation = ttnn.ShardOrientation.COL_MAJOR
-            elif orientation_str == "ROW_MAJOR":
-                orientation = ttnn.ShardOrientation.ROW_MAJOR
-            else:
-                raise ValueError(f"Unknown orientation: {orientation_str}")
-
-            # Create ShardSpec
-            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
-
-            # Map memory layout
+            # Determine memory layout type
             if "WIDTH_SHARDED" in memory_layout:
-                memory_layout_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                memory_layout_str = "WIDTH_SHARDED"
             elif "HEIGHT_SHARDED" in memory_layout:
-                memory_layout_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                memory_layout_str = "HEIGHT_SHARDED"
             elif "BLOCK_SHARDED" in memory_layout:
-                memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                memory_layout_str = "BLOCK_SHARDED"
             else:
                 raise ValueError(f"Unknown sharded layout: {memory_layout}")
 
-            # Create and return sharded memory config
-            return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
+            # Return serializable dict format (grid_list already validated)
+            return {
+                "type": "ttnn._ttnn.tensor.MemoryConfig",
+                "data": {
+                    "buffer_type": buffer_type_str,
+                    "memory_layout": memory_layout_str,
+                    "created_with_nd_shard_spec": False,
+                    "shard_spec": {"grid": grid_list, "shape": shard_shape, "orientation": orientation_str},
+                },
+            }
 
         else:
             raise ValueError(f"Unknown memory_layout: {memory_layout}")

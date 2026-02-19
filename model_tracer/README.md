@@ -318,7 +318,7 @@ python3 tests/sweep_framework/sweeps_runner.py \
   --module-name model_traced.add_model_traced \
   --suite model_traced \
   --vector-source vectors_export \
-  --result-dest results_export
+  --result-dest results_export --summary
 ```
 
 ---
