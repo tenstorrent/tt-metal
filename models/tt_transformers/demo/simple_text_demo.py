@@ -742,10 +742,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
-@pytest.mark.parametrize(
-    "use_prefetcher",
-    ([False]),
-)
+# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -753,6 +750,10 @@ def prepare_generator_args(
         lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=["performance", "accuracy"],
+)
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -1125,7 +1126,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits, log_probs = generator.decode_forward_text(
+            logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,

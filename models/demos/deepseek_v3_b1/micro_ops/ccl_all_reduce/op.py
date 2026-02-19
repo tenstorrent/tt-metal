@@ -218,7 +218,6 @@ class DeepseekMinimalAllReduce:
 
                 dst_num_hops = 1
                 num_connections = 1
-                using_persistent_buffers = 1 if persistent_output_tensor is not None else 0
                 has_residual = 1 if residual_tensor_mesh is not None else 0
 
                 # === NAMED COMPILE TIME ARGS ===
@@ -244,7 +243,6 @@ class DeepseekMinimalAllReduce:
                     ("remote_receiver_noc_y", remote_receiver_noc_y),
                     ("dst_num_hops", dst_num_hops),
                     ("num_connections", num_connections),
-                    ("using_persistent_buffer", using_persistent_buffers),
                 ]
 
                 # Receiver kernel: NCRISC (reader) + TRISC (compute)
@@ -258,7 +256,6 @@ class DeepseekMinimalAllReduce:
                     ("num_standard_tiles", num_standard_tiles),
                     ("cb_residual", compute_cb_residual),
                     ("has_residual", has_residual),
-                    ("using_persistent_buffer", using_persistent_buffers),
                 ]
 
                 receiver_trisc_ct_args = [

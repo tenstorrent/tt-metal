@@ -13,8 +13,7 @@ from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3Mo
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.rope import RotarySetup
 
 
@@ -61,14 +60,11 @@ def test_attention_inference(
     reset_seeds,
     ensure_gc,
 ):
+    mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    base_model_name = os.getenv("HF_MODEL")
-    if "gemma-3" in base_model_name:
-        model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    else:
-        model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
@@ -97,7 +93,6 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
     )
-
     transformation_mats = rope_setup.get_both_trans_mats()
 
     page_table_tt = None
@@ -172,10 +167,9 @@ def test_attention_inference(
         )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
         tt_attention_input = pt_attention_input.clone()
-
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            model_args.get_attn_input_mem_config(mode),
             force_replicated=False if model_args.is_galaxy else True,
         )
 
@@ -186,7 +180,7 @@ def test_attention_inference(
             attention_input,
             current_pos_tensor,
             rot_mats=rot_mats,
-            mode="decode",
+            mode=mode,
             page_table=page_table_tt,
         )
         # multi-device attention module returns replicated output

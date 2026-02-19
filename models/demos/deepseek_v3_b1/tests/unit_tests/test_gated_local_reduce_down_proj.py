@@ -35,7 +35,9 @@ from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertO
         ),  # 2 collections of 8, K=256, N=3584
         pytest.param(2, 128, 32, ttnn.bfloat8_b, marks=pytest.mark.skip_post_commit),  # 2 collections of 4, K=128
         pytest.param(4, 256, 32, ttnn.bfloat8_b, marks=pytest.mark.skip_post_commit),  # 4 collections of 8, K=256
-        (2, 256, 64, ttnn.bfloat8_b),  # 2 collections, larger output N=7168
+        pytest.param(
+            2, 256, 64, ttnn.bfloat8_b, marks=pytest.mark.skip_post_commit
+        ),  # 2 collections, larger output N=7168
         (2, 256, 64, ttnn.bfloat4_b),  # bfloat4 weights
         (8, 256, 64, ttnn.bfloat8_b),  # 8 collections, 64+64 A/B grid, N=7168
     ],

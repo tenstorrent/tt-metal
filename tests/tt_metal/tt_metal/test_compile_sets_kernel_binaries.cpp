@@ -25,7 +25,6 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -184,7 +183,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                     kernel_name);
             }
         }
-        detail::ClearKernelCache();
+        jit_build_cache_clear();
         std::vector<Program> new_programs;
         for (int i = 0; i < num_devices_; i++) {
             auto& device = devices_[i];
