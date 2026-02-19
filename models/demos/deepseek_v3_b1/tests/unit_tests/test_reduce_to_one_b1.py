@@ -340,7 +340,7 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
 )
 def test_reduce_to_one_2d(bh_2d_mesh_device):
     """Test reduce_to_one with 2D fabric."""
-    run_reduce_to_one(bh_2d_mesh_device, num_iterations=4)
+    run_reduce_to_one(bh_2d_mesh_device, num_iterations=100)
 
 
 # === Trace Tests ===
