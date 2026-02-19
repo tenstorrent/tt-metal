@@ -6,11 +6,17 @@ Usage:
   python3 analyze_d2h_throughput.py --latency   latency_results.csv
 """
 
-import argparse, sys, numpy as np, pandas as pd
+import argparse
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+CYCLES_PER_US = 1350.0
 
 
 def human_bytes(n):
@@ -24,11 +30,23 @@ def human_bytes(n):
 # ── data loading ─────────────────────────────────────────────────────────────
 
 
-def load_throughput_csv(path):
-    """Load throughput benchmark CSV. Handles commas in MeshCoordinate."""
+def _read_split_rows(path):
     with open(path) as f:
         header = f.readline().strip()
         rows = [l.strip().split(",") for l in f if l.strip()]
+    return header, rows
+
+
+def _to_dataframe(rows, cols, numeric_cols):
+    df = pd.DataFrame([r[: len(cols)] for r in rows], columns=cols)
+    for c in numeric_cols:
+        df[c] = pd.to_numeric(df[c])
+    return df
+
+
+def load_throughput_csv(path):
+    """Load throughput benchmark CSV. Handles commas in MeshCoordinate."""
+    header, rows = _read_split_rows(path)
 
     hcols = [h.strip() for h in header.split(",")]
     if "throughput_gbps" in hcols:
@@ -64,9 +82,7 @@ def load_throughput_csv(path):
             "avg_per_page_cycles",
         ]
 
-    df = pd.DataFrame([r[:nc] for r in rows], columns=cols)
-    for c in cols:
-        df[c] = pd.to_numeric(df[c])
+    df = _to_dataframe(rows, cols, cols)
 
     if "data_size" not in df:
         df["data_size"] = (df.total_data / df.num_iterations).astype(int)
@@ -77,9 +93,7 @@ def load_throughput_csv(path):
 
 def load_latency_csv(path):
     """Load latency benchmark CSV (pcie_socket_data_ping output)."""
-    with open(path) as f:
-        header = f.readline().strip()
-        rows = [l.strip().split(",") for l in f if l.strip()]
+    _, rows = _read_split_rows(path)
 
     cols = [
         "page_size",
@@ -94,18 +108,12 @@ def load_latency_csv(path):
         "min_cycles",
         "max_cycles",
     ]
-    nc = len(cols)
-    df = pd.DataFrame([r[:nc] for r in rows], columns=cols)
-    for c in cols:
-        df[c] = pd.to_numeric(df[c])
-    return df
+    return _to_dataframe(rows, cols, cols)
 
 
 def load_h2d_latency_csv(path):
     """Load H2D latency benchmark CSV (h2d_socket_data_ping output with h2d_mode column)."""
-    with open(path) as f:
-        header = f.readline().strip()
-        rows = [l.strip().split(",") for l in f if l.strip()]
+    _, rows = _read_split_rows(path)
 
     cols = [
         "page_size",
@@ -121,19 +129,13 @@ def load_h2d_latency_csv(path):
         "min_cycles",
         "max_cycles",
     ]
-    nc = len(cols)
-    df = pd.DataFrame([r[:nc] for r in rows], columns=cols)
-    for c in cols[:-1]:  # All except h2d_mode
-        if c != "h2d_mode":
-            df[c] = pd.to_numeric(df[c])
-    return df
+    numeric_cols = [c for c in cols if c != "h2d_mode"]
+    return _to_dataframe(rows, cols, numeric_cols)
 
 
 def load_h2d_throughput_csv(path):
     """Load H2D throughput benchmark CSV (with h2d_mode column)."""
-    with open(path) as f:
-        header = f.readline().strip()
-        rows = [l.strip().split(",") for l in f if l.strip()]
+    _, rows = _read_split_rows(path)
 
     cols = [
         "page_size",
@@ -148,12 +150,8 @@ def load_h2d_throughput_csv(path):
         "avg_per_page_cycles",
         "throughput_gbps",
     ]
-    nc = len(cols)
-    df = pd.DataFrame([r[:nc] for r in rows], columns=cols)
-    for c in cols:
-        if c != "h2d_mode":
-            df[c] = pd.to_numeric(df[c])
-    return df
+    numeric_cols = [c for c in cols if c != "h2d_mode"]
+    return _to_dataframe(rows, cols, numeric_cols)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -232,7 +230,7 @@ def tp_print_report(df):
     for _, r in agg2.sort_values("page_size").iterrows():
         print(
             f"  {human_bytes(r.page_size):>6} {r.avg_per_page_us:>10.3f} "
-            f"{r.avg_per_page_us*1350:>10.0f} {r.throughput_gbps:>8.3f}"
+            f"{r.avg_per_page_us * CYCLES_PER_US:>10.0f} {r.throughput_gbps:>8.3f}"
         )
 
 
@@ -548,7 +546,7 @@ def h2d_tp_print_report(df):
             r = r.iloc[0]
             print(
                 f"  {human_bytes(r.page_size):>6} {mode:>14} {r.avg_per_page_us:>10.3f} "
-                f"{r.avg_per_page_us*1350:>10.0f} {r.throughput_gbps:>8.3f}"
+                f"{r.avg_per_page_us * CYCLES_PER_US:>10.0f} {r.throughput_gbps:>8.3f}"
             )
 
 
@@ -852,11 +850,22 @@ def run_h2d_latency(path):
 # -- D2H ping ----
 
 
+def _resolve_input_path(path):
+    return Path(path).expanduser().resolve()
+
+
+def _resolve_d2h_ping_iteration_csv(path):
+    p = _resolve_input_path(path)
+    return p / "ping_iterations.csv" if p.is_dir() else p
+
+
 def ping_plot_timeseries(path="ping_iterations.csv", out="d2h_ping_timeseries.png"):
+    in_csv = _resolve_d2h_ping_iteration_csv(path)
+    out_path = in_csv.parent / out
     try:
-        df = pd.read_csv(path)
+        df = pd.read_csv(in_csv)
     except FileNotFoundError:
-        print(f"  Warning: {path} not found")
+        print(f"  Warning: {in_csv} not found")
         return
 
     fig, ax = plt.subplots(figsize=(12, 5))
@@ -867,33 +876,34 @@ def ping_plot_timeseries(path="ping_iterations.csv", out="d2h_ping_timeseries.pn
     ax.grid(alpha=0.3)
     ax.legend(fontsize=10)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"\n  Saved {out}")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out_path}")
 
 
 def ping_export_csv(path="ping_iterations.csv", out="d2h_ping_summary.csv"):
+    in_csv = _resolve_d2h_ping_iteration_csv(path)
+    out_path = in_csv.parent / out
     try:
-        df = pd.read_csv(path)
-        df.to_csv(out, index=False, float_format="%.4f")
-        print(f"  Saved {out} ({len(df)} iterations)")
+        df = pd.read_csv(in_csv)
+        df.to_csv(out_path, index=False, float_format="%.4f")
+        print(f"  Saved {out_path} ({len(df)} iterations)")
     except FileNotFoundError:
-        print(f"  Warning: {path} not found, skipping CSV export")
+        print(f"  Warning: {in_csv} not found, skipping CSV export")
 
 
 def run_ping(path):
-    ping_plot_timeseries()
-    ping_export_csv()
+    ping_plot_timeseries(path)
+    ping_export_csv(path)
 
 
 # -- H2D ping ----
 
 
 def h2d_ping_plot(csv_dir, out="h2d_ping_timeseries.png"):
-    import os
-
+    csv_dir = _resolve_input_path(csv_dir)
     modes = {"HOST_PUSH": None, "DEVICE_PULL": None}
     for mode in modes:
-        p = os.path.join(csv_dir, f"h2d_ping_iterations_{mode}.csv")
+        p = csv_dir / f"h2d_ping_iterations_{mode}.csv"
         try:
             modes[mode] = pd.read_csv(p)
         except FileNotFoundError:
@@ -903,7 +913,7 @@ def h2d_ping_plot(csv_dir, out="h2d_ping_timeseries.png"):
     if not present:
         return
 
-    out = os.path.join(csv_dir, out)
+    out_path = csv_dir / out
     fig, ax = plt.subplots(figsize=(12, 5))
     for mode, df in present.items():
         ax.plot(df.iteration, df.latency_us, "o-", ms=3, lw=1, alpha=0.7, label=mode)
@@ -918,16 +928,15 @@ def h2d_ping_plot(csv_dir, out="h2d_ping_timeseries.png"):
     ax.grid(alpha=0.3)
     ax.legend(fontsize=9)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"\n  Saved {out}")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out_path}")
 
 
 def h2d_ping_export_csv(csv_dir, out="h2d_ping_summary.csv"):
-    import os
-
+    csv_dir = _resolve_input_path(csv_dir)
     dfs = []
     for mode in ["HOST_PUSH", "DEVICE_PULL"]:
-        p = os.path.join(csv_dir, f"h2d_ping_iterations_{mode}.csv")
+        p = csv_dir / f"h2d_ping_iterations_{mode}.csv"
         try:
             df = pd.read_csv(p)
             df["h2d_mode"] = mode
@@ -937,16 +946,15 @@ def h2d_ping_export_csv(csv_dir, out="h2d_ping_summary.csv"):
     if not dfs:
         print("  Warning: no H2D ping iteration files found")
         return
-    out = os.path.join(csv_dir, out)
+    out_path = csv_dir / out
     combined = pd.concat(dfs, ignore_index=True)
-    combined.to_csv(out, index=False, float_format="%.4f")
-    print(f"  Saved {out} ({len(combined)} rows)")
+    combined.to_csv(out_path, index=False, float_format="%.4f")
+    print(f"  Saved {out_path} ({len(combined)} rows)")
 
 
 def run_h2d_ping(path):
-    import os
-
-    csv_dir = os.path.dirname(os.path.abspath(path))
+    p = _resolve_input_path(path)
+    csv_dir = p if p.is_dir() else p.parent
     h2d_ping_plot(csv_dir)
     h2d_ping_export_csv(csv_dir)
 
