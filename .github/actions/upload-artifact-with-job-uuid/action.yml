@@ -29,6 +29,6 @@ runs:
     - name: Upload triage debug bus signals
       uses: actions/upload-artifact@v4
       with:
-        name: "debug_bus_signals_${{ job.job_id }}_${{ github.run_id }}"
+        name: "debug_bus_signals_${{ steps.generate-artifact-name.outputs.artifact-name }}"
         path: ${{ env.TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT }}
         if-no-files-found: ignore
