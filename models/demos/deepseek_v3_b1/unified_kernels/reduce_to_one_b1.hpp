@@ -25,6 +25,7 @@
 #if defined(COMPILE_FOR_BRISC)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -150,6 +151,7 @@ struct ReduceToOneB1 {
         uint32_t dst_sem_addr;
         uint32_t output_base_addr;
         uint32_t shard_idx;
+        uint32_t socket_config_addr;  // For ROOT1 socket sending
     };
 
     // Writer (BRISC) runtime args for fabric cores - handled dynamically via build_from_args
@@ -242,7 +244,6 @@ struct ReduceToOneB1 {
             // BRISC - Writer: sends data via fabric or NOC
             // ================================================================
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-
             if constexpr (CTArgs::is_fabric_core) {
                 // Fabric core: forward worker packets via fabric
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
@@ -294,17 +295,52 @@ struct ReduceToOneB1 {
             const uint32_t my_noc_x = my_x[0];
             const uint32_t my_noc_y = my_y[0];
 
-            // ROOT1: gather final results to output core
+            // ROOT1: send final results via socket (if D2H enabled) or NOC gather
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                uint32_t dst_addr = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
-                uint64_t dst_noc_addr = get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr);
-
                 // Wait for compute to finish
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
 
-                noc_async_write(src_addr, dst_noc_addr, CTArgs::payload_size_bytes);
+                uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
+                uint64_t dst_noc_addr_0 =
+                    get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
+
+                // Always write to output tensor via NOC
+                noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
                 noc_async_write_barrier();
+
+                // Send to D2H socket if enabled (socket_config_addr != 0)
+                if (args.socket_config_addr != 0) {
+                    // Create socket sender interface
+                    SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
+                    set_sender_socket_page_size(sender_socket, CTArgs::payload_size_bytes);
+
+                    // Reserve space in socket
+                    socket_reserve_pages(sender_socket, 1);
+
+                    // Get downstream encoding
+                    sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+
+                    // Write to downstream socket
+                    noc_async_write(
+                        src_addr,
+                        get_noc_addr(
+                            downstream_enc.d2d.downstream_noc_x,
+                            downstream_enc.d2d.downstream_noc_y,
+                            sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
+                        CTArgs::payload_size_bytes);
+
+                    // Push to downstream and notify
+                    socket_push_pages(sender_socket, 1);
+                    socket_notify_receiver(sender_socket);
+                    noc_async_writes_flushed();
+
+                    socket_barrier(sender_socket);
+                    noc_async_write_barrier();
+                }
+
+                // Pop from CB
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 return;
             }
