@@ -28,7 +28,7 @@ void kernel_main() {
 
     uint64_t pcie_base_addr = (static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr;
 
-    noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+    constexpr uint32_t max_noc_burst_bytes = NOC_MAX_BURST_SIZE;
 
     // Warmup: 5 untimed iterations to flush cold-cache effects
     // It really helps reduce the slowest outliers
@@ -36,8 +36,19 @@ void kernel_main() {
     for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
         socket_reserve_pages(sender_socket, 1);
         uint64_t pcie_data_addr = pcie_base_addr + sender_socket.write_ptr;
-        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            noc_index, data_addr, pcie_xy_enc, pcie_data_addr, page_size, 1);
+        uint32_t page_src_addr = data_addr;
+        uint64_t page_dst_addr = pcie_data_addr;
+        uint32_t page_bytes_remaining = page_size;
+        while (page_bytes_remaining) {
+            uint32_t chunk_bytes =
+                (page_bytes_remaining > max_noc_burst_bytes) ? max_noc_burst_bytes : page_bytes_remaining;
+            noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+            noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+                noc_index, page_src_addr, pcie_xy_enc, page_dst_addr, chunk_bytes, 1);
+            page_src_addr += chunk_bytes;
+            page_dst_addr += chunk_bytes;
+            page_bytes_remaining -= chunk_bytes;
+        }
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
         socket_barrier(sender_socket);
@@ -48,8 +59,19 @@ void kernel_main() {
 
         socket_reserve_pages(sender_socket, 1);
         uint64_t pcie_data_addr = pcie_base_addr + sender_socket.write_ptr;
-        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            noc_index, data_addr, pcie_xy_enc, pcie_data_addr, page_size, 1);
+        uint32_t page_src_addr = data_addr;
+        uint64_t page_dst_addr = pcie_data_addr;
+        uint32_t page_bytes_remaining = page_size;
+        while (page_bytes_remaining) {
+            uint32_t chunk_bytes =
+                (page_bytes_remaining > max_noc_burst_bytes) ? max_noc_burst_bytes : page_bytes_remaining;
+            noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+            noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+                noc_index, page_src_addr, pcie_xy_enc, page_dst_addr, chunk_bytes, 1);
+            page_src_addr += chunk_bytes;
+            page_dst_addr += chunk_bytes;
+            page_bytes_remaining -= chunk_bytes;
+        }
         socket_push_pages(sender_socket, 1);
 
         socket_notify_receiver(sender_socket);
