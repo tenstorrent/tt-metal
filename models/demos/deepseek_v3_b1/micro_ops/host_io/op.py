@@ -63,7 +63,6 @@ class SocketInterface:
         if downstream_socket is not None:
             self.downstream_socket = downstream_socket
         else:
-            print(f"Create downstream socket connection between {recv_core_coord} and {downstream_core_coord}")
             socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
@@ -558,7 +557,6 @@ class HostInterface:
                 for cb in d2h_cb_descriptors
                 if not any(fd.buffer_index in h2d_cb_ids for fd in cb.format_descriptors)
             ]
-            print(f"Combined CB descriptors: {combined_cbs}")
             h2d_program = ttnn.ProgramDescriptor(
                 kernels=[h2d_kernel, d2h_kernel],
                 semaphores=[],
