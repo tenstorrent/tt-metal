@@ -12,7 +12,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface, SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 
 
@@ -256,15 +257,11 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
     fwd_core_13 = ttnn.MeshCoreCoord(end_device_coord, entry_core_coord)
     d2h_core = ttnn.MeshCoreCoord(end_device_coord, exit_core_coord)
 
-    print("Mesh Device Shape: ", mesh_device.shape)
     logger.info("Creating and Running Host Interface")
-
-    print("Start Device ID: ", mesh_device.get_device_id(start_device_coord))
-    print("End Device ID: ", mesh_device.get_device_id(end_device_coord))
 
     h2d_socket = ttnn.H2DSocket(mesh_device, h2d_core, ttnn.BufferType.L1, fifo_size, h2d_mode)
     d2h_socket = ttnn.D2HSocket(mesh_device, d2h_core, fifo_size)
-    print("Creating Host Interface")
+
     host_io = HostInterface(
         h2d_socket,
         d2h_socket,
@@ -274,7 +271,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         h2d_downstream_core=fwd_core_0,
         d2h_upstream_core=fwd_core_13,
     )
-    print("Creating Socket Interface 1")
     socket_interface_1 = SocketInterface(
         tensor_size_bytes,
         fifo_size,
@@ -285,7 +281,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         downstream_core_coord=fwd_core_2,
         mesh_device=mesh_device,
     )
-    print("Creating Socket Interface 2")
     socket_interface_2 = SocketInterface(
         tensor_size_bytes,
         fifo_size,
@@ -296,7 +291,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         downstream_core_coord=fwd_core_4,
         mesh_device=mesh_device,
     )
-    print("Creating Socket Interface 3")
     socket_interface_3 = SocketInterface(
         tensor_size_bytes,
         fifo_size,
@@ -307,7 +301,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         downstream_core_coord=fwd_core_6,
         mesh_device=mesh_device,
     )
-    print("Creating Socket Interface 4")
     socket_interface_4 = SocketInterface(
         tensor_size_bytes,
         fifo_size,
@@ -318,7 +311,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         downstream_core_coord=fwd_core_8,
         mesh_device=mesh_device,
     )
-    print("Creating Socket Interface 5")
     socket_interface_5 = SocketInterface(
         tensor_size_bytes,
         fifo_size,
@@ -329,7 +321,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         downstream_core_coord=fwd_core_10,
         mesh_device=mesh_device,
     )
-    print("Creating Socket Interface 6")
     socket_interface_6 = SocketInterface(
         tensor_size_bytes,
         fifo_size,
@@ -340,7 +331,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         downstream_core_coord=fwd_core_12,
         mesh_device=mesh_device,
     )
-    print("Creating Socket Interface 7")
     socket_interface_7 = SocketInterface(
         tensor_size_bytes,
         fifo_size,
