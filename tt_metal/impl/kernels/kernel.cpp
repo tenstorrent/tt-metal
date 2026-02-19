@@ -384,7 +384,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(it->second));
     }
     hasher.update(this->kernel_src_.source_);
-    hasher.update(this->common_runtime_args_.begin(), this->common_runtime_args_.end());
+    hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     hasher.update(this->config_hash());
     return hasher.digest();
 }
