@@ -7,6 +7,7 @@
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
@@ -102,6 +103,10 @@ public:
     // Switch from mock mode to real hardware (requires all devices to be closed)
     void reinitialize_for_real_hardware();
 
+    // Set fast dispatch mode and automatically reinitialize dispatch managers
+    // This ensures dispatch/compute core allocations stay in sync with the mode
+    void set_fast_dispatch_mode(bool enable);
+
     // Control plane accessors
     void initialize_control_plane();
     tt::tt_fabric::ControlPlane& get_control_plane();
@@ -159,6 +164,10 @@ private:
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
+
+    // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
+    // This updates cached dispatch/compute core allocations to match current dispatch mode
+    void reinitialize_dispatch_managers();
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();
@@ -216,6 +225,9 @@ private:
 
     // Mutex to protect reinitialization operations (switching between mock and real hardware)
     std::mutex reinitialization_mutex_;
+
+    // Mutex to protect bank-to-NOC table generation (called concurrently during device initialization)
+    mutable std::mutex bank_to_noc_tables_mutex_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
