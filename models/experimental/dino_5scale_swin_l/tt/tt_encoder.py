@@ -45,7 +45,6 @@ def multi_scale_deformable_attn_uniad_style(
     """
     bs = sampling_locations_torch.shape[0]
     num_queries = sampling_locations_torch.shape[1]
-    num_levels = sampling_locations_torch.shape[3]
     num_points = sampling_locations_torch.shape[4]
 
     split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
