@@ -13,9 +13,21 @@
 #define MEM_PORT_CACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define MEM_PORT_NONCACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define PERIPH_PORT_BASE_ADDR (uint64_t)TT_CLUSTER_CTRL_REG_MAP_BASE_ADDR
+
+// L2 Cache Controller Flush Registers
+//
+// The two flush registers use DIFFERENT address encodings:
+//   - FLUSH64 (0x04010200): Takes the raw byte address
+//   - FLUSH32 (0x04010240): Takes (byte_address >> 4)
+//
+// Example: To flush cache line containing address 0x19000:
+//   FLUSH64: write 0x19000
+//   FLUSH32: write 0x1900  (0x19000 >> 4)
+//
 #define L2_FLUSH_ADDR (uint64_t)TT_CACHE_CONTROLLER_FLUSH64_REG_ADDR
-#define L2_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_INVALIDATE64_REG_ADDR
-#define L2_FULL_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_FULLINVALIDATE_REG_ADDR
+#define L2_FLUSH32_ADDR (uint64_t)TT_CACHE_CONTROLLER_FLUSH32_REG_ADDR  // NOTE: takes (addr >> 4)
+#define L2_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_INVALIDATE64_REG_ADDR  // NOT implemented in HW
+#define L2_FULL_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_FULLINVALIDATE_REG_ADDR  // NOT implemented in HW
 
 #define WRITE_REG32(addr, val) ((*((volatile uint32_t*)(uintptr_t)(addr))) = (val))
 #define READ_REG32(addr) (*((volatile uint32_t*)(uintptr_t)(addr)))
