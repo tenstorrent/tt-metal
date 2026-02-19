@@ -159,13 +159,14 @@ bool CheckInitMagicCleared(ChipId device_id, const CoreCoord& virtual_core, int 
 }  // namespace
 
 namespace tt::tt_metal {
+
+// Base class for DPrintServer implementations.
+// Contains all common state and logic; subclasses only override peek_one_risc_non_blocking.
 class DPrintServer::Impl {
 public:
-    // Constructor/destructor, reads dprint options from RTOptions.
     Impl(llrt::RunTimeOptions& rtoptions);
-    ~Impl();
+    virtual ~Impl();
 
-    // Implementation of DPrintServer public functions
     void set_mute(bool mute_print_server) { mute_print_server_ = mute_print_server; }
     void await();
     void attach_devices();
@@ -174,7 +175,11 @@ public:
     bool reads_dispatch_cores(ChipId device_id) { return device_reads_dispatch_cores_[device_id]; }
     bool hang_detected() { return server_killed_due_to_hang_; }
 
-private:
+protected:
+    // Polls one core for any new print data and outputs it. Returns true if some data was read.
+    // Old DPRINT iterates over per-RISC buffers; new DEVICE_PRINT reads a single per-core buffer.
+    virtual bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) = 0;
+
     // Flag for main thread to signal the print server thread to stop.
     std::atomic<bool> stop_print_server_ = false;
     // Flag for muting the print server. This doesn't disable reading print data from the device,
@@ -196,7 +201,7 @@ private:
     ofstream* outfile_ = nullptr;  // non-cout
     ostream* stream_ = nullptr;    // either == outfile_ or is &cout
 
-    // Parser instances for each risc (handles parsing state, intermediate buffering, and line prefixing)
+    // Parser instances for each risc (handles parsing state, intermediate buffering, and line prefixing).
     std::map<RiscKey, std::unique_ptr<DPrintParser>, RiscKeyComparator> risc_to_parser_;
 
     // For printing each risc's dprint to a separate file, a map from {device id, core, risc index} to files.
@@ -218,12 +223,6 @@ private:
     // function is the main loop for the print server thread.
     void poll_print_data();
 
-    // Peeks a specified risc for any debug prints present in the buffer, printing the contents
-    // out to host-side stream. Returns true if some data was read out, and false if no new
-    // print data was present on the device.
-    bool peek_one_risc_non_blocking(
-        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter);
-
     // Transfers data from all parser intermediate streams to output stream and flushes it.
     void transfer_all_streams_to_output(ChipId device_id);
 
@@ -236,6 +235,36 @@ private:
     void attach_device(ChipId device_id);
     void detach_device(ChipId device_id);
 };
+
+// Original DPRINT implementation: reads DPRINT buffers written by device kernels.
+class DPrintImpl : public DPrintServer::Impl {
+public:
+    DPrintImpl(llrt::RunTimeOptions& rtoptions) : DPrintServer::Impl(rtoptions) {}
+
+protected:
+    // Iterates over all RISCs on the core, calling peek_one_risc_non_blocking for each.
+    bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;
+
+private:
+    // Reads the DPRINT buffer for a single RISC and outputs any new data.
+    bool peek_one_risc_non_blocking(
+        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter);
+};
+
+// New DEVICE_PRINT implementation (stub - to be implemented).
+class DevicePrintImpl : public DPrintServer::Impl {
+public:
+    DevicePrintImpl(llrt::RunTimeOptions& rtoptions) : DPrintServer::Impl(rtoptions) {}
+
+protected:
+    // Reads the single per-core DEVICE_PRINT buffer and outputs any new data.
+    bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;
+};
+
+bool DevicePrintImpl::poll_one_core(
+    ChipId /*device_id*/, const umd::CoreDescriptor& /*logical_core*/, bool /*new_data_this_iter*/) {
+    return false;
+}
 
 DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     // Read risc mask + log file from rtoptions
@@ -612,7 +641,21 @@ void DPrintServer::Impl::clear_log_file() {
     }
 }  // clear_log_file
 
-bool DPrintServer::Impl::peek_one_risc_non_blocking(
+bool DPrintImpl::poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) {
+    auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        device_id, logical_core.coord, logical_core.type);
+    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+    uint32_t risc_count = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+    bool new_data = false;
+    for (int risc_index = 0; risc_index < risc_count; risc_index++) {
+        if (RiscEnabled(programmable_core_type, risc_index)) {
+            new_data |= peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter || new_data);
+        }
+    }
+    return new_data;
+}  // poll_one_core
+
+bool DPrintImpl::peek_one_risc_non_blocking(
     ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool /*new_data_this_iter*/) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
     CoreCoord virtual_core =
@@ -721,32 +764,22 @@ void DPrintServer::Impl::poll_print_data() {
             }
             device_intermediate_streams_force_flush_lock_.unlock();
             for (auto& logical_core : device_and_cores.second) {
-                auto virtual_core =
-                    MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                        device_id, logical_core.coord, logical_core.type);
-                auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-                uint32_t risc_count = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
-                for (int risc_index = 0; risc_index < risc_count; risc_index++) {
-                    if (RiscEnabled(programmable_core_type, risc_index)) {
-                        try {
-                            new_data_this_iter |=
-                                peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter);
-                        } catch (std::runtime_error& e) {
-                            // Depending on if test mode is enabled, catch and stop server, or
-                            // re-throw the exception.
-                            if (rtoptions.get_test_mode_enabled()) {
-                                server_killed_due_to_hang_ = true;
-                                device_to_core_range_lock_.unlock();
-                                return;  // Stop the print loop
-                            }  // Re-throw for instant exit
-                            throw e;
-                        }
+                try {
+                    new_data_this_iter |= poll_one_core(device_id, logical_core, new_data_this_iter);
+                } catch (std::runtime_error& e) {
+                    // Depending on if test mode is enabled, catch and stop server, or
+                    // re-throw the exception.
+                    if (rtoptions.get_test_mode_enabled()) {
+                        server_killed_due_to_hang_ = true;
+                        device_to_core_range_lock_.unlock();
+                        return;  // Stop the print loop
+                    }  // Re-throw for instant exit
+                    throw e;
+                }
 
-                        // If this read detected a print hang, stop processing prints.
-                        if (server_killed_due_to_hang_) {
-                            return;
-                        }
-                    }
+                // If this read detected a print hang, stop processing prints.
+                if (server_killed_due_to_hang_) {
+                    return;
                 }
             }
         }
@@ -805,7 +838,17 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
 }  // get_output_stream
 
 // Wrapper class functions
-DPrintServer::DPrintServer(llrt::RunTimeOptions& rtoptions) : impl_(std::make_unique<Impl>(rtoptions)) {}
+DPrintServer::DPrintServer(llrt::RunTimeOptions& rtoptions) {
+    if (rtoptions.get_use_device_print()) {
+        impl_ = std::make_unique<DevicePrintImpl>(rtoptions);
+    } else {
+        log_warning(
+            tt::LogMetal,
+            "DPRINT is deprecated and will be removed in a future release. "
+            "Please migrate to DEVICE_PRINT by setting TT_METAL_DEVICE_PRINT=1.");
+        impl_ = std::make_unique<DPrintImpl>(rtoptions);
+    }
+}
 DPrintServer::~DPrintServer() = default;
 void DPrintServer::set_mute(bool mute_print_server) { impl_->set_mute(mute_print_server); }
 void DPrintServer::await() { impl_->await(); }
