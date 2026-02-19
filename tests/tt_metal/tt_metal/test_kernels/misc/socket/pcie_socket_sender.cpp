@@ -21,24 +21,39 @@ void kernel_main() {
     uint32_t outstanding_data_size = data_size;
     set_sender_socket_page_size(sender_socket, page_size);
 
-    uint32_t data_addr = local_l1_buffer_addr;
+    uint32_t measurement_start = measurement_buffer_addr;
+    uint64_t start_timestamp = get_timestamp();
+    constexpr uint32_t max_noc_burst_bytes = NOC_MAX_BURST_SIZE;
 
-    while (outstanding_data_size) {
-        socket_reserve_pages(sender_socket, 1);
-        noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
-        // write_ptr is a relative offset, add downstream_fifo_addr to get the full low 32-bit address
-        uint64_t pcie_data_addr = ((static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
-                                  sender_socket.write_ptr;
-        noc_write_page_chunked(
-            pcie_xy_enc,
-            data_addr,
-            (static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr + sender_socket.write_ptr,
-            page_size);
-        data_addr += page_size;
-        outstanding_data_size -= page_size;
-        noc_async_write_barrier();
-        socket_push_pages(sender_socket, 1);
-        socket_notify_receiver(sender_socket);
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        uint32_t data_addr = local_l1_buffer_addr;
+        uint32_t outstanding_data_size = data_size;
+        while (outstanding_data_size) {
+            socket_reserve_pages(sender_socket, 1);
+            // write_ptr is a relative offset, add downstream_fifo_addr to get the full low 32-bit address
+            uint64_t pcie_data_addr =
+                ((static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
+                sender_socket.write_ptr;
+
+            uint32_t page_src_addr = data_addr;
+            uint64_t page_dst_addr = pcie_data_addr;
+            uint32_t page_bytes_remaining = page_size;
+            while (page_bytes_remaining) {
+                uint32_t chunk_bytes =
+                    (page_bytes_remaining > max_noc_burst_bytes) ? max_noc_burst_bytes : page_bytes_remaining;
+                noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+                noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+                    noc_index, page_src_addr, pcie_xy_enc, page_dst_addr, chunk_bytes, 1);
+                page_src_addr += chunk_bytes;
+                page_dst_addr += chunk_bytes;
+                page_bytes_remaining -= chunk_bytes;
+            }
+
+            data_addr += page_size;
+            outstanding_data_size -= page_size;
+            socket_push_pages(sender_socket, 1);
+            socket_notify_receiver(sender_socket);
+        }
     }
     socket_barrier(sender_socket);
     // Write updated socket configs to the L1 config buffer (were cached on stack during kernel execution)
