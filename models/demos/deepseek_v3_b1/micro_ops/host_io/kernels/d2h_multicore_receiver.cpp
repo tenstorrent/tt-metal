@@ -64,18 +64,20 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
     uint32_t current_socket_idx = 0;
+    uint32_t bytes_accumulated = 0;
+    bool data_pushed = false;
 
     socket_reserve_pages(sender_socket, 1);
 
     // Collect data from all upstream sockets into a single 14KB page
-    for (uint32_t i = 0; i < num_upstream_sockets; i++) {
+    while (true) {
         // Wait for pages in current upstream socket with termination checks
         if (!socket_wait_for_pages_with_termination(receiver_sockets[current_socket_idx], 1, termination_semaphore)) {
             break;
         }
 
         uint32_t read_addr = receiver_sockets[current_socket_idx].read_ptr;
-        uint32_t skt_offset = current_socket_idx * upstream_page_size;  // Offset in D2H socket for this upstream socket
+        uint32_t skt_offset = bytes_accumulated;
 
         // Write to D2H socket at the appropriate offset
         noc_async_wide_write_any_len_with_state(
@@ -91,13 +93,29 @@ void kernel_main() {
         noc_async_writes_flushed();
         socket_notify_sender(receiver_sockets[current_socket_idx]);
 
-        // Move to next socket in round-robin
+        invalidate_l1_cache();
+
+        // Update accumulation
+        bytes_accumulated += upstream_page_size;
         current_socket_idx = (current_socket_idx + 1) % num_upstream_sockets;
+
+        // Push when we've accumulated a full D2H page
+        if (bytes_accumulated >= page_size) {
+            socket_push_pages(sender_socket, 1);
+            socket_notify_receiver(sender_socket);
+            data_pushed = true;
+            bytes_accumulated = 0;
+
+            // Reserve next page if continuing
+            socket_reserve_pages(sender_socket, 1);
+        }
     }
 
-    // Push to D2H socket and notify
-    socket_push_pages(sender_socket, 1);
-    socket_notify_receiver(sender_socket);
+    // Push any remaining data if we broke out of loop before filling a complete page
+    if (bytes_accumulated > 0 && !data_pushed) {
+        socket_push_pages(sender_socket, 1);
+        socket_notify_receiver(sender_socket);
+    }
 
     invalidate_l1_cache();
 
