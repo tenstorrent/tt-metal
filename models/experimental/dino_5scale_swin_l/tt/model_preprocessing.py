@@ -4,16 +4,14 @@
 """
 Weight loading and preprocessing for DINO-5scale (neck, encoder, decoder).
 
-Backbone weights and attention masks are loaded from the shared swin_l module:
-  from models.experimental.swin_l.tt import load_backbone_weights, compute_attn_masks
+Backbone weights and attention masks are loaded from the shared swin_l module
+via models.experimental.swin_l.tt (see tt/__init__.py for re-exports).
 """
 
 from typing import Dict, Tuple
 
 import torch
 import ttnn
-
-from models.experimental.swin_l.tt import load_backbone_weights, compute_attn_masks  # noqa: F401
 
 
 def _get(sd: dict, key: str) -> torch.Tensor:
