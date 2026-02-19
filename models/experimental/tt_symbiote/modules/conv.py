@@ -12,6 +12,7 @@ from models.tt_cnn.tt.builder import Conv2dConfiguration, MaxPool2dConfiguration
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.activation import TTNNReLU
 from models.experimental.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):
@@ -133,6 +134,7 @@ class NHWCConvBNActivationPytorch(nn.Module):
         return x
 
 
+@trace_enabled
 class TTNNConv2dNHWC(TTNNModule):
     """TTNN-accelerated Conv layer."""
 
@@ -357,25 +359,44 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         batch_size, input_height, input_width, _ = input_tensor.shape
-        config = Conv2dConfiguration(
-            input_height=input_height,
-            input_width=input_width,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            groups=self.groups,
-            dilation=self.dilation,
-            weight=self.tt_weight,
-            bias=self.tt_bias,
-            slice_strategy=self.slice_config,
-            activation=ttnn.UnaryOpType.RELU,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=True,
+        hash = (
+            input_height,
+            input_width,
+            self.in_channels,
+            self.out_channels,
+            batch_size,
+            self.kernel_size,
+            self.stride,
+            self.padding,
+            self.groups,
+            self.dilation,
+            self.tt_weight,
+            self.tt_bias,
+            self.slice_config,
         )
-        layer = TtConv2d(config, input_tensor.device())
+        if hash in TTNNConv2dNHWC.CACHED_TTCNN:
+            layer = TTNNConv2dNHWC.CACHED_TTCNN[hash]
+        else:
+            config = Conv2dConfiguration(
+                input_height=input_height,
+                input_width=input_width,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                batch_size=batch_size,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                groups=self.groups,
+                dilation=self.dilation,
+                weight=self.tt_weight,
+                bias=self.tt_bias,
+                slice_strategy=self.slice_config,
+                activation=ttnn.UnaryOpType.RELU,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                fp32_dest_acc_en=True,
+            )
+            layer = TtConv2d(config, input_tensor.device())
+            TTNNConv2dNHWC.CACHED_TTCNN[hash] = layer
         if reshape_output:
             out, h_w = layer(input_tensor, return_output_dim=reshape_output)
             out = self.reshape(out, [batch_size, h_w[0], h_w[1], -1])
