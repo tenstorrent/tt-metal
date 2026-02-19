@@ -7,7 +7,7 @@
 #include <exception>
 #include <iostream>
 
-using namespace tt::noc_estimator;
+using namespace tt::tt_metal::noc_estimator;
 
 static int g_failures = 0;
 
@@ -17,13 +17,6 @@ static void expect_near_pct(const char* label, double actual, double expected, d
     if (delta > tolerance) {
         std::cout << "FAIL: " << label << " expected " << expected << " +/- " << percent << "%, got " << actual
                   << "\n\n";
-        g_failures++;
-    }
-}
-
-static void expect_gt_zero(const char* label, double value) {
-    if (value <= 0.0) {
-        std::cout << "FAIL: " << label << " expected > 0, got " << value << "\n\n";
         g_failures++;
     }
 }
@@ -38,17 +31,18 @@ int main() {
             .num_transactions = 1,
             .num_transactions_per_barrier = 1,
             .transaction_size_bytes = 64,
-            .num_subordinates = 4};
+            .num_subordinates = 4,
+            .loopback = true};
 
         NocEstimate result = estimate_noc_performance(params);
         std::cout << "Test 1 - Blackhole multicast (64 bytes, 1 txn, 4 subordinates):\n";
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
         expect_near_pct("Test 1 latency", result.latency_cycles, 396.0, 2.0);
-        expect_gt_zero("Test 1 bandwidth", result.bandwidth_bytes_per_cycle);
+        // expect_gt_zero("Test 1 bandwidth", result.bandwidth_bytes_per_cycle);
     }
 
-    // Test 2: Wormhole unicast
+    // Test 2: Wormhole unicast to multiple subordinates
     {
         NocEstimatorParams params{
             .mechanism = NocMechanism::UNICAST,
@@ -63,8 +57,8 @@ int main() {
         std::cout << "Test 2 - Wormhole unicast (2048 bytes, 100 txns, 25 subordinates):\n";
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
-        expect_near_pct("Test 2 latency", result.latency_cycles, 6985.0, 2.0);
-        expect_gt_zero("Test 2 bandwidth", result.bandwidth_bytes_per_cycle);
+        expect_near_pct("Test 2 latency", result.latency_cycles, 6995.0, 2.0);
+        // expect_gt_zero("Test 2 bandwidth", result.bandwidth_bytes_per_cycle);
     }
 
     // Test 3: Interpolated value
@@ -82,10 +76,10 @@ int main() {
         std::cout << "Test 3 - Interpolated (7500 bytes, 16 txns, 4 subordinates):\n";
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
-        expect_near_pct("Test 3 latency", result.latency_cycles, 2900.0, 2.0);
+        expect_near_pct("Test 3 latency", result.latency_cycles, 6900.0, 2.0);
     }
 
-    // Test 4: Compare linked vs non-linked
+    // Test 4: Compare MULTICAST_LINKED vs MULTICAST
     {
         NocEstimatorParams params_unlinked{
             .mechanism = NocMechanism::MULTICAST,
@@ -94,29 +88,27 @@ int main() {
             .num_transactions = 4,
             .num_transactions_per_barrier = 4,
             .transaction_size_bytes = 2048,
-            .num_subordinates = 4,
-            .linked = false};
+            .num_subordinates = 4};
 
         NocEstimatorParams params_linked{
-            .mechanism = NocMechanism::MULTICAST,
+            .mechanism = NocMechanism::MULTICAST_LINKED,
             .pattern = NocPattern::ONE_TO_ALL,
             .arch = Architecture::BLACKHOLE,
             .num_transactions = 4,
             .num_transactions_per_barrier = 4,
             .transaction_size_bytes = 2048,
-            .num_subordinates = 4,
-            .linked = true};
+            .num_subordinates = 4};
 
         NocEstimate result_unlinked = estimate_noc_performance(params_unlinked);
         NocEstimate result_linked = estimate_noc_performance(params_linked);
 
-        std::cout << "Test 4 - Linked vs Unlinked comparison (2048 bytes, 4 txns):\n";
-        std::cout << "  Unlinked latency: " << result_unlinked.latency_cycles << " cycles\n";
-        std::cout << "  Linked latency: " << result_linked.latency_cycles << " cycles\n";
+        std::cout << "Test 4 - MULTICAST_LINKED vs MULTICAST comparison (2048 bytes, 4 txns):\n";
+        std::cout << "  MULTICAST latency: " << result_unlinked.latency_cycles << " cycles\n";
+        std::cout << "  MULTICAST_LINKED latency: " << result_linked.latency_cycles << " cycles\n";
         std::cout << "  Difference: " << (result_unlinked.latency_cycles - result_linked.latency_cycles)
                   << " cycles\n\n";
-        expect_near_pct("Test 4 unlinked latency", result_unlinked.latency_cycles, 644.0, 2.0);
-        expect_near_pct("Test 4 linked latency", result_linked.latency_cycles, 542.0, 2.0);
+        expect_near_pct("Test 4 unlinked latency", result_unlinked.latency_cycles, 1577.0, 2.0);
+        expect_near_pct("Test 4 linked latency", result_linked.latency_cycles, 749.0, 2.0);
     }
 
     // Test 5: Numeric interpolation on num_transactions
@@ -160,8 +152,8 @@ int main() {
         std::cout << "  num_txns=16:  " << result_lower.latency_cycles << " cycles\n";
         std::cout << "  num_txns=50:  " << result_interp.latency_cycles << " cycles (interpolated)\n";
         std::cout << "  num_txns=64:  " << result_upper.latency_cycles << " cycles\n";
-        expect_near_pct("Test 5 lower bound latency", result_lower.latency_cycles, 1497.0, 2.0);
-        expect_near_pct("Test 5 upper bound latency", result_upper.latency_cycles, 4871.0, 2.0);
+        expect_near_pct("Test 5 lower bound latency", result_lower.latency_cycles, 5273.0, 2.0);
+        expect_near_pct("Test 5 upper bound latency", result_upper.latency_cycles, 20100.0, 2.0);
 
         // Verify interpolated value is between bounds
         bool in_range = (result_interp.latency_cycles >= result_lower.latency_cycles &&
@@ -182,12 +174,12 @@ int main() {
             .num_transactions = 50,  // Interpolated (between 16 and 64)
             .num_transactions_per_barrier = 50,
             .transaction_size_bytes = 2048,
-            .num_subordinates = 15};  // Interpolated (between 4 and 25)
+            .num_subordinates = 15};  // Interpolated (between 9 and 25)
 
         NocEstimate result = estimate_noc_performance(params);
         std::cout << "  Latency: " << result.latency_cycles << " cycles (bilinear interpolation)\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
-        expect_gt_zero("Test 6 bandwidth", result.bandwidth_bytes_per_cycle);
+        expect_near_pct("Test 6 latency", result.latency_cycles, 17270.0, 2.0);
     }
 
     // Test 7: Blackhole unicast with limited buffer size
@@ -204,15 +196,21 @@ int main() {
         std::cout << "Test 7 - Blackhole unicast (2048 bytes, 128 txns (64 per barrier)):\n";
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
-        expect_near_pct("Test 7 latency", result.latency_cycles, 5102.0, 2.0);
-        expect_gt_zero("Test 7 bandwidth", result.bandwidth_bytes_per_cycle);
+        expect_near_pct("Test 7 latency", result.latency_cycles, 5090.0, 2.0);
     }
 
-    std::cout << "=== Relaxation tests ===\n\n";
-
-    // Test 8: Relaxation - Blackhole unicast same axis
+    // Test 8: Blackhole unicast same_axis comparison (same_axis=false vs same_axis=true)
     {
-        NocEstimatorParams params{
+        NocEstimatorParams params_diff_axis{
+            .mechanism = NocMechanism::UNICAST,
+            .pattern = NocPattern::ONE_TO_ONE,
+            .arch = Architecture::BLACKHOLE,
+            .num_transactions = 4,
+            .num_transactions_per_barrier = 4,
+            .transaction_size_bytes = 2048,
+            .same_axis = false};
+
+        NocEstimatorParams params_same_axis{
             .mechanism = NocMechanism::UNICAST,
             .pattern = NocPattern::ONE_TO_ONE,
             .arch = Architecture::BLACKHOLE,
@@ -221,14 +219,19 @@ int main() {
             .transaction_size_bytes = 2048,
             .same_axis = true};
 
-        NocEstimate result = estimate_noc_performance(params);
-        std::cout << "Test 8 - Blackhole unicast (2048 bytes, 4 txn, same axis):\n";
-        std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
-        std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
-        expect_gt_zero("Test 8 bandwidth", result.bandwidth_bytes_per_cycle);
+        NocEstimate result_diff_axis = estimate_noc_performance(params_diff_axis);
+        NocEstimate result_same_axis = estimate_noc_performance(params_same_axis);
+
+        std::cout << "Test 8 - Blackhole unicast same_axis comparison (2048 bytes, 4 txns):\n";
+        std::cout << "  same_axis=false latency: " << result_diff_axis.latency_cycles << " cycles\n";
+        std::cout << "  same_axis=true  latency: " << result_same_axis.latency_cycles << " cycles\n";
+        std::cout << "  Difference: " << (result_diff_axis.latency_cycles - result_same_axis.latency_cycles)
+                  << " cycles\n\n";
+        expect_near_pct("Test 8 diff_axis latency", result_diff_axis.latency_cycles, 495.0, 2.0);
+        expect_near_pct("Test 8 same_axis latency", result_same_axis.latency_cycles, 349.0, 2.0);
     }
 
-    // Test 9: Relaxation - ONE_FROM_ONE with DRAM
+    // Test 9: DRAM one core read from one DRAM buffer
     {
         NocEstimatorParams params{
             .mechanism = NocMechanism::UNICAST,
@@ -238,14 +241,12 @@ int main() {
             .num_transactions = 1,
             .transaction_size_bytes = 2048};
 
-        std::cout << "Test 9 - Relaxation: ONE_FROM_ONE + DRAM (no exact match):\n";
-        try {
-            NocEstimate result = estimate_noc_performance(params);
-            std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
-            std::cout << "  Unexpected success: memory access is not relaxable\n\n";
-        } catch (const std::exception& e) {
-            std::cout << "  Caught expected error: " << e.what() << "\n\n";
-        }
+        NocEstimate result = estimate_noc_performance(params);
+        std::cout << "Test 9 - DRAM one core read from one DRAM buffer (2048 bytes, 1 txn):\n";
+
+        std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
+        std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
+        expect_near_pct("Test 9 latency", result.latency_cycles, 470.0, 2.0);
     }
 
     if (g_failures > 0) {

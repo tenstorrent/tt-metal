@@ -4,7 +4,7 @@
 
 #include "data_processor.hpp"
 
-namespace tt::noc_estimator::offline {
+namespace tt::tt_metal::noc_estimator::offline {
 std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std::vector<DataPoint>& data_points) {
     std::map<common::GroupKey, std::vector<DataPoint>> groups;
 
@@ -17,7 +17,8 @@ std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std
             .num_transactions = point.num_transactions,
             .num_subordinates = point.num_subordinates,
             .same_axis = point.same_axis,
-            .linked = point.linked,
+            .stateful = point.stateful,
+            .loopback = point.loopback,
         };
 
         groups[key].push_back(point);
@@ -26,4 +27,4 @@ std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std
     return groups;
 }
 
-}  // namespace tt::noc_estimator::offline
+}  // namespace tt::tt_metal::noc_estimator::offline

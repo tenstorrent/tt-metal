@@ -9,7 +9,7 @@
 #include <map>
 #include "../common/types.hpp"
 
-namespace tt::noc_estimator::offline {
+namespace tt::tt_metal::noc_estimator::offline {
 
 // Represents a single row of performance data from CSV
 struct DataPoint {
@@ -21,7 +21,8 @@ struct DataPoint {
     uint32_t transaction_size_bytes = 0;
     uint32_t num_subordinates = 1;
     bool same_axis = false;
-    bool linked = false;
+    bool stateful = false;
+    bool loopback = false;
     double latency_cycles = 0.0;
 };
 
@@ -41,13 +42,14 @@ private:
     // Canonical column names
     static constexpr const char* COL_MECHANISM = "Mechanism";
     static constexpr const char* COL_PATTERN = "Pattern";
-    static constexpr const char* COL_MEMORY = "Memory Type";
+    static constexpr const char* COL_MEMORY = "Memory type";
     static constexpr const char* COL_ARCH = "Architecture";
     static constexpr const char* COL_NUM_TRANSACTIONS = "Number of Transactions";
     static constexpr const char* COL_TRANSACTION_SIZE = "Transaction Size (bytes)";
-    static constexpr const char* COL_NUM_SUBORDINATES = "Num Subordinates";
-    static constexpr const char* COL_SAME_AXIS = "Same Axis";
-    static constexpr const char* COL_LINKED = "Linked";
+    static constexpr const char* COL_NUM_SUBORDINATES = "Number of subordinates";
+    static constexpr const char* COL_SAME_AXIS = "Same axis";
+    static constexpr const char* COL_STATEFUL = "Stateful";
+    static constexpr const char* COL_LOOPBACK = "Loopback";
     static constexpr const char* COL_LATENCY = "Latency (cycles)";
 
     bool parse_header(const std::string& line);
@@ -55,4 +57,4 @@ private:
     std::vector<std::string> split_csv_line(const std::string& line);
 };
 
-}  // namespace tt::noc_estimator::offline
+}  // namespace tt::tt_metal::noc_estimator::offline

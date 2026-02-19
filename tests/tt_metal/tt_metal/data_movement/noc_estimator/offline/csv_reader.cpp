@@ -8,7 +8,7 @@
 #include <iostream>
 #include <algorithm>
 
-namespace tt::noc_estimator::offline {
+namespace tt::tt_metal::noc_estimator::offline {
 
 static std::string to_lower(const std::string& str) {
     std::string result = str;
@@ -111,13 +111,20 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
 
         it = column_map_.find(COL_SAME_AXIS);
         if (it != column_map_.end() && it->second < tokens.size()) {
-            point.same_axis = (stoi(tokens[it->second]) != 0);
+            std::string same_axis_lower = to_lower(tokens[it->second]);
+            point.same_axis = (same_axis_lower == "true");
         }
 
-        it = column_map_.find(COL_LINKED);
+        it = column_map_.find(COL_STATEFUL);
         if (it != column_map_.end() && it->second < tokens.size()) {
-            std::string linked_lower = to_lower(tokens[it->second]);
-            point.linked = (linked_lower == "true");
+            std::string stateful_lower = to_lower(tokens[it->second]);
+            point.stateful = (stateful_lower == "true");
+        }
+
+        it = column_map_.find(COL_LOOPBACK);
+        if (it != column_map_.end() && it->second < tokens.size()) {
+            std::string loopback_lower = to_lower(tokens[it->second]);
+            point.loopback = (loopback_lower == "true");
         }
 
         it = column_map_.find(COL_ARCH);
@@ -133,6 +140,8 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
             std::string mech_lower = to_lower(tokens[it->second]);
             if (mech_lower == "multicast") {
                 point.mechanism = common::NocMechanism::MULTICAST;
+            } else if (mech_lower == "multicast_linked") {
+                point.mechanism = common::NocMechanism::MULTICAST_LINKED;
             }
         }
 
@@ -159,6 +168,14 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
                 point.pattern = common::NocPattern::ALL_TO_ALL;
             } else if (pattern_lower == "all_from_all") {
                 point.pattern = common::NocPattern::ALL_FROM_ALL;
+            } else if (pattern_lower == "one_to_row") {
+                point.pattern = common::NocPattern::ONE_TO_ROW;
+            } else if (pattern_lower == "row_to_row") {
+                point.pattern = common::NocPattern::ROW_TO_ROW;
+            } else if (pattern_lower == "one_to_column") {
+                point.pattern = common::NocPattern::ONE_TO_COLUMN;
+            } else if (pattern_lower == "column_to_column") {
+                point.pattern = common::NocPattern::COLUMN_TO_COLUMN;
             }
         }
 
@@ -169,4 +186,4 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
     }
 }
 
-}  // namespace tt::noc_estimator::offline
+}  // namespace tt::tt_metal::noc_estimator::offline

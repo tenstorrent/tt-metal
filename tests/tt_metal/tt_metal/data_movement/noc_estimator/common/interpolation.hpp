@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace tt::noc_estimator::common {
+namespace tt::tt_metal::noc_estimator::common {
 
 // Interpolate latency for a given transaction size from LatencyData
 double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>& sizes, uint32_t transaction_size);
@@ -32,4 +32,4 @@ double find_with_relaxation(
     const std::map<GroupKey, LatencyData>& entries,
     std::string& relaxed_param);
 
-}  // namespace tt::noc_estimator::common
+}  // namespace tt::tt_metal::noc_estimator::common

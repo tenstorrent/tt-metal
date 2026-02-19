@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "common/types.hpp"
 
-namespace tt::noc_estimator {
+namespace tt::tt_metal::noc_estimator {
 
 // Use common enums to avoid duplication
 using Architecture = common::Architecture;
@@ -25,7 +25,8 @@ struct NocEstimatorParams {
     uint32_t transaction_size_bytes = 512;
     uint32_t num_subordinates = 1;
     bool same_axis = false;
-    bool linked = false;
+    bool stateful = false;
+    bool loopback = false;
 };
 
 // Estimation result
@@ -41,4 +42,4 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params);
 double estimate_noc_bandwidth(const NocEstimatorParams& params);
 double estimate_noc_latency(const NocEstimatorParams& params);
 
-}  // namespace tt::noc_estimator
+}  // namespace tt::tt_metal::noc_estimator
