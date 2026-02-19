@@ -342,43 +342,25 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
 }
 
 /**
- * in0_cb += in1_cb
+ * out_cb[row] += in0_cb[row] * bcast_cols(in1_cb[row])
+ *
+ * Computes the product and L1-accumulates it onto out_cb at the absolute position.
+ * out_cb must be in RESERVED (not pushed) state — this writes into the reserved region
+ * using pack_tile<true> with L1 accumulate, which is the correct CB protocol.
+ *
+ * This replaces the old mul_tiles_bcast_cols_inplace + add_block_inplace pair, which
+ * incorrectly used pack_tile<true> to overwrite already-pushed CB data.
  */
 template <uint32_t SBH>
-void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t q_subblock) {
+void mul_bcast_cols_l1_acc(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock) {
     constexpr uint32_t tiles_per_row = SBH;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
 
-    add_tiles_init(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
-    cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
-
-    tile_regs_acquire();
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        uint32_t src_tile_index = global_row_base + i;
-        add_tiles(in0_cb, in1_cb, src_tile_index, src_tile_index, i /*dst_index*/);
-    }
-    tile_regs_commit();
-
-    tile_regs_wait();
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        pack_tile<true>(i, in0_cb, global_row_base + i);  // Pack back to original position in in0_cb
-    }
-    tile_regs_release();
-}
-
-template <uint32_t SBH>
-void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t q_subblock) {
-    /**
-     * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
-     * and bcast cols of in1_cb.
-     */
-    constexpr uint32_t tiles_per_row = SBH;
-    const uint32_t global_row_base = q_subblock * tiles_per_row;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
+    PACK((llk_pack_reconfig_l1_acc(1)));
     tile_regs_acquire();
     for (uint32_t i = 0; i < tiles_per_row; i++) {
         uint32_t src_tile_index = global_row_base + i;
@@ -388,9 +370,10 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t q_s
 
     tile_regs_wait();
     for (uint32_t i = 0; i < tiles_per_row; i++) {
-        pack_tile<true>(i, in0_cb, global_row_base + i);  // Pack back to original position in in0_cb
+        pack_tile<true>(i, out_cb, global_row_base + i);  // L1 accumulate into reserved out_cb
     }
     tile_regs_release();
+    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 template <uint32_t SBH, uint32_t SBW>
@@ -1030,10 +1013,11 @@ void sdpa_inner_loop(
                         q_num_subblocks - 1,
                         1);
 
-                    // Push last softmax'd row, free prev row buffer, push accumulated sums
+                    // Push last softmax'd row, free prev row buffer
                     cb_push_back(cb_qkt_im, row_tiles);
                     cb_pop_front(alias_prev_qkt_row, row_tiles);
-                    cb_push_back(alias_cur_sum, Sq_chunk_t);
+                    // NOTE: alias_cur_sum stays in RESERVED state (not pushed).
+                    // SALAD will L1-accumulate corrected prev_sum onto it, then push at end.
 
                     // 4. matmul second half with L1 accumulate
                     PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1076,7 +1060,7 @@ void sdpa_inner_loop(
                     }
                     cb_push_back(cb_qkt_im, row_tiles);
                     cb_pop_front(alias_prev_qkt_row, row_tiles);
-                    cb_push_back(alias_cur_sum, Sq_chunk_t);
+                    // alias_cur_sum stays RESERVED — pushed after SALAD corrections
 
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                     uint32_t v_index_offset = 0;
@@ -1146,19 +1130,18 @@ void sdpa_inner_loop(
                 }
 
                 // 3. Rest of SALAD for PREVIOUS row
+                // cur_sum[row] += prev_sum[row] * bcast_cols(exp_max_diff[row])
+                // L1 accumulate onto cur_sum which is still in RESERVED state.
                 {
-                    MATH(DPRINT << "Mul tiles bcast cols for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_MUL_TILES");
-                    mul_tiles_bcast_cols_inplace<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
+                    MATH(DPRINT << "SALAD sum correction for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_2("S_SUM_CORR");
+                    mul_bcast_cols_l1_acc<sbh>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum, salad_row);
                 }
+                // cur_out[row] += prev_out[row] * bcast_cols(exp_max_diff[row])
+                // L1 accumulate onto cur_out which is also in RESERVED state.
                 {
-                    MATH(DPRINT << "Add tiles inplace for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_ADD_TILES");
-                    add_block_inplace<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
-                }
-                {
-                    MATH(DPRINT << "Element-wise mul of Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_MUL_BLOCK");
+                    MATH(DPRINT << "SALAD out correction for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_2("S_OUT_CORR");
                     mul_block_bcast_cols_acc<sbh, head_dim_t>(
                         alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
                 }
@@ -1179,10 +1162,12 @@ void sdpa_inner_loop(
                 sub_exp_first_col_blocks<scale_fp32, sbh>(alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
                 cb_push_back(cb_exp_max_diff, sbh);
 
-                mul_tiles_bcast_cols_inplace<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
-                add_block_inplace<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
+                mul_bcast_cols_l1_acc<sbh>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum, salad_row);
                 mul_block_bcast_cols_acc<sbh, head_dim_t>(alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
             }
+
+            // Push cur_sum (was in RESERVED state throughout SALAD corrections)
+            cb_push_back(alias_cur_sum, Sq_chunk_t);
 
             // Single full push of alias_cur_out — wr_ptr wraps to base
             cb_push_back(alias_cur_out, qktv_output_num_tiles);
@@ -1283,6 +1268,7 @@ void kernel_main() {
             DeviceZoneScopedN("Final output normalization");
             // Normalize: out = out / sum
             matmul_reduce_inplace<Sq_chunk_t>(cb_col_identity, cb_final_sum);
+
             recip_block_inplace(cb_final_sum, Sq_chunk_t);
             normalize_output<Sq_chunk_t, head_dim_t>(cb_final_out, cb_final_sum, cb_normalized_out);
             // cb_normalized_out has the final normalized output for the writer to drain.
