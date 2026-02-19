@@ -2,14 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
+from typing import List, Union
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors.op_descriptor import FusedOp, OpDescriptor
 
 
-def launch(op_descriptors: List[OpDescriptor]) -> List[List["ttnn.Tensor"]]:
+def launch(op_descriptors: List[Union[OpDescriptor, FusedOp]]) -> List[List["ttnn.Tensor"]]:
     """
     Launch a composite operation from multiple op descriptors.
 
