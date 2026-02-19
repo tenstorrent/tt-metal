@@ -69,7 +69,15 @@ def generate_slice_to_pcie_device_mapping(
     # Copy it back from the first host.
     if not os.path.exists(mapping_file) and mpi_user:
         remote_host = f"{mpi_user}@{host_vector[0]}"
-        scp_cmd = ["scp", f"{remote_host}:{mapping_file}", mapping_file]
+        scp_cmd = [
+            "scp",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            f"{remote_host}:{mapping_file}",
+            mapping_file,
+        ]
         logger.info(f"Copying mapping file from worker: {' '.join(scp_cmd)}")
         scp_result = subprocess.run(scp_cmd)
         if scp_result.returncode != 0:
