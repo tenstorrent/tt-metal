@@ -258,9 +258,6 @@ class PreSDPA:
         bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
         num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
 
-        # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
-        bcast_pkt_cb = 31  # Packet buffer for CCL broadcast
-
         # Interpret N 1x32 tiles as full 32x32 or 16x32 tiles
         # eg. [1, 7168] = 7 full 32x32 tiles
         # eg. [1, 1536] = 3 half 16x32 tiles
@@ -499,6 +496,8 @@ class PreSDPA:
         cb_page_size = tile_size
 
         # CB indices (grouped by stage)
+        # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
+        bcast_pkt_cb = 35  # Packet buffer for CCL broadcast
         input_cb = 0
         gamma_cb = 1
         rmsnorm_output_cb = 2
@@ -1162,19 +1161,6 @@ class PreSDPA:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB: CCL broadcast packet buffer
-                bcast_pkt_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=bcast_pkt_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-                bcast_pkt_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=num_tiles * cb_page_size,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[bcast_pkt_cb_format],
-                )
-
                 # CB: Gamma (created from sharded tensor)
                 gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor_device)
                 # Update the tile descriptor in the format descriptor
@@ -1189,12 +1175,31 @@ class PreSDPA:
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm2_tile_descriptor
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm2_page_size
 
-                # CB: RMSNorm output buffer — overlap with kv_cache L1 buffer
-                # at offset 0 B. This CB is consumed before SDPA runs.
+                # CBs overlapped with sdpa_kv_cache L1 buffer (consumed before SDPA runs)
+                sdpa_kv_cache_running_offset = 0
+
+                # CB: CCL broadcast packet buffer
+                bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    bcast_pkt_cb,
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset,
+                    total_size=num_tiles * cb_page_size,
+                )
+                bcast_pkt_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=bcast_pkt_cb,
+                        data_format=data_format,
+                        page_size=cb_page_size,
+                        tile=tile_descriptor,
+                    )
+                ]
+                sdpa_kv_cache_running_offset += bcast_pkt_cb_descriptor.total_size
+
+                # CB: RMSNorm output buffer
                 rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm_output_cb,
                     sdpa_kv_cache_buffer_device,
-                    address_offset=0,  # 0 B (only CB being overlapped with sdpa_kv_cache_buffer)
+                    address_offset=sdpa_kv_cache_running_offset,
                     total_size=num_tiles * cb_page_size,
                 )
                 rmsnorm_output_cb_descriptor.format_descriptors = [
@@ -1954,8 +1959,12 @@ class PreSDPA:
                 if not skip_ccl and num_connections > 0:
                     # Find the BRISC (writer) kernel whose core_ranges includes worker_core
                     for idx, kernel in enumerate(program.kernels):
-                        if kernel.core_ranges.contains(worker_core) and isinstance(
-                            kernel.config, ttnn.WriterConfigDescriptor
+                        if kernel.core_ranges.contains(worker_core) and (
+                            isinstance(kernel.config, ttnn.WriterConfigDescriptor)
+                            or (
+                                isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
+                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_0
+                            )
                         ):
                             writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
                             fabric_args = ttnn.setup_routing_plane_connection(
