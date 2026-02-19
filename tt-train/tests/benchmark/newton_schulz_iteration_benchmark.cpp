@@ -794,9 +794,50 @@ BenchResult bench_composite_ttnn_n_iters(
     };
 }
 
+BenchResult bench_newton_schulz_traced_n_iters(
+    const BenchShape& shape,
+    const std::shared_ptr<ttnn::device::MeshDevice>& device,
+    const ttnn::Tensor& x,
+    float a,
+    float b,
+    float c,
+    int n_iters,
+    int device_id) {
+    auto* dev_ptr = device.get();
+
+    // Warmup
+    for (int i = 0; i < 2; ++i) {
+        auto out = ttml::metal::newton_schulz(x, a, b, c, n_iters, /*use_trace=*/true);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        out.deallocate();
+    }
+
+    constexpr int num_measurements = 20;
+    std::chrono::duration<double> total_time{};
+    for (int i = 0; i < num_measurements; ++i) {
+        auto start = std::chrono::high_resolution_clock::now();
+        auto out = ttml::metal::newton_schulz(x, a, b, c, n_iters, /*use_trace=*/true);
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        total_time += std::chrono::high_resolution_clock::now() - start;
+        out.deallocate();
+    }
+
+    double avg_s = total_time.count() / num_measurements;
+    uint64_t M = shape.M;
+    uint64_t K = shape.K;
+    double flops = n_iters * total_flops(M, K);
+    return BenchResult{
+        .impl_name = "newton_schulz+trace x" + std::to_string(n_iters),
+        .time_us = avg_s * 1e6,
+        .tflops = flops / 1e12 / avg_s,
+        .utilization_pct = compute_utilization(avg_s, n_iters * total_matmul_flops(M, K), device, device_id),
+    };
+}
+
 void BM_NewtonSchulzNIters(benchmark::State& state) {
     const int device_id = 0;
-    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/1048576);
+    auto device =
+        ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/4 * 1048576);
     device->enable_program_cache();
 
     const float a = 0.9F, b = 0.5F, c = 0.3F;
@@ -809,6 +850,7 @@ void BM_NewtonSchulzNIters(benchmark::State& state) {
 
             std::vector<BenchResult> results;
             results.push_back(bench_newton_schulz_n_iters(shape, device, x, a, b, c, N_ITERS, device_id));
+            results.push_back(bench_newton_schulz_traced_n_iters(shape, device, x, a, b, c, N_ITERS, device_id));
             results.push_back(bench_composite_ttnn_n_iters(shape, device, x, a, b, c, N_ITERS, device_id));
 
             PrintComparisonTable(shape.name + " x" + std::to_string(N_ITERS), results);

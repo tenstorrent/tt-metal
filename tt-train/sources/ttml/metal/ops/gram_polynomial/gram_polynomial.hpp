@@ -39,12 +39,15 @@ ttnn::Tensor newton_schulz_iteration(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 // Multiple Newton-Schulz iterations: repeatedly apply X' = aX + (cG^2 + bG)X
+// When use_trace=true, captures two traces (ping-pong) and replays them, eliminating
+// per-iteration host overhead. Requires trace_region_size > 0 when opening the device.
 ttnn::Tensor newton_schulz(
     const ttnn::Tensor& x_tensor,
     float a,
     float b,
     float c,
     int num_iterations,
+    bool use_trace = false,
     const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
