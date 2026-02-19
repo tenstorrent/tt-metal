@@ -229,6 +229,7 @@ int main(int argc, char** argv) {
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");
 
+                std::cout << "built test" << built_test.senders[0].device;
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
 

@@ -46,6 +46,7 @@ ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_pat
 DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
     if (node.IsScalar()) {
         ChipId chip_id = parse_scalar<ChipId>(node);
+        log_info(tt::LogTest, "[PARSE_YAML] Parsed scalar device: ChipId={}", chip_id);
         return chip_id;
     }
     if (node.IsSequence() && node.size() == 2) {
@@ -53,6 +54,7 @@ DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& nod
         if (node[1].IsScalar()) {
             // Format: [mesh_id, chip_id]
             ChipId chip_id = parse_scalar<ChipId>(node[1]);
+            log_info(tt::LogTest, "[PARSE_YAML] Parsed array device: [MeshId={}, ChipId={}]", mesh_id.get(), chip_id);
             return std::make_pair(mesh_id, chip_id);
         }
         if (node[1].IsSequence()) {

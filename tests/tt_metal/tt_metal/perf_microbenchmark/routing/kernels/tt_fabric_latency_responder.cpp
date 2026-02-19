@@ -48,6 +48,8 @@ void kernel_main() {
         dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     }
 
+    DPRINT << "R: TEST 1 - dst_device_id=" << dst_device_id << " dst_mesh_id=" << dst_mesh_id << ENDL();
+
     // Build fabric connection for sending response back
     auto fabric_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
@@ -58,6 +60,8 @@ void kernel_main() {
     auto* sem_inc_packet_header = PacketHeaderPool::allocate_header();
 
     // Setup packet headers for routing back to sender
+    DPRINT << "R: Setting up routing - is_2d_fabric=" << (uint32_t)is_2d_fabric << " dst_device=" << dst_device_id
+           << " dst_mesh=" << dst_mesh_id << ENDL();
     if constexpr (!is_2d_fabric) {
         // 1D routing: use Low Latency header with hop count
         fabric_set_unicast_route<false>((LowLatencyPacketHeader*)payload_packet_header, num_hops_back_to_sender);
@@ -73,6 +77,8 @@ void kernel_main() {
     // Write to sender's receive buffer (not responder's buffer)
     auto dest_semaphore_noc_addr = safe_get_noc_addr(sender_noc_x, sender_noc_y, semaphore_address, 0);
     auto dest_payload_noc_addr = safe_get_noc_addr(sender_noc_x, sender_noc_y, sender_receive_buffer_address, 0);
+    DPRINT << "R: NOC setup - sender_noc=" << sender_noc_x << "," << sender_noc_y << " sem_addr=" << semaphore_address
+           << ENDL();
 
     // Setup NOC command headers
     if constexpr (enable_fused_payload_with_sync) {
@@ -98,6 +104,7 @@ void kernel_main() {
         *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
     };
 
+    DPRINT << "R: TEST 1" << ENDL();
     // Store response elapsed times in timestamp buffer
     volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(timestamp_buffer_address);
     // Clear result buffer before writing elapsed times to avoid reading stale data
@@ -108,9 +115,13 @@ void kernel_main() {
     *responder_receive_ptr = 0;
     // Warmup: respond to flush packet
     {
+        DPRINT << "R: About to wait for sender packet..." << ENDL();
         wait_for_semaphore_then_reset(1);
+        DPRINT << "R: Received sender packet, sending ack..." << ENDL();
         send_seminc_packet();
+        DPRINT << "R: Warmup complete" << ENDL();
     }
+    DPRINT << "R: Entering main loop" << ENDL();
 
     // Main response loop
     // Wait for incoming packets and immediately send ack back
@@ -118,6 +129,7 @@ void kernel_main() {
     // indicates our previous response packet was flushed through the system
     for (size_t sample_idx = 0; sample_idx < num_samples; sample_idx++) {
         // Wait for incoming packet from sender
+        DPRINT << "R: TEST 3" << ENDL();
         if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
             noc_semaphore_wait(responder_receive_ptr, sample_idx + 1);
         } else {
@@ -125,6 +137,7 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
         }
 
+        DPRINT << "R: TEST 5" << ENDL();
         // Capture start timestamp after receiving packet
         uint64_t start_timestamp = get_timestamp();
 
@@ -148,6 +161,7 @@ void kernel_main() {
                     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
             }
         }
+        DPRINT << "R: TEST 6" << ENDL();
 
         // Capture end timestamp after sending response
         uint64_t end_timestamp = get_timestamp();

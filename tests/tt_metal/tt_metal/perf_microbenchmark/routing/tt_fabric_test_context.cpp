@@ -682,6 +682,7 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         receiver_idx++;
     }
 
+    std::cout << "add traffic config sender: " << sender_config.src_node_id.chip_id;
     if (fixture_->is_local_fabric_node_id(src_node_id)) {
         const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
         auto& src_test_device = this->test_devices_.at(src_coord);

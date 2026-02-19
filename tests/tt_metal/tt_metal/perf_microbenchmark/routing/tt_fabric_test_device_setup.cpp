@@ -380,6 +380,13 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
     // Determine direction for fabric connection
     const auto dst_node_id = config.dst_node_ids[0];
 
+    log_info(
+        tt::LogTest,
+        "[ADD_CONFIG] TestSender::add_config called - src_node_id={} dst_node_id={} on logical_core={}",
+        config.src_node_id.chip_id,
+        dst_node_id.chip_id,
+        this->logical_core_);
+
     // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
     // but the routing tables cause packets to fail to reach the destination properly in some cases,
     // due to torus links. In this case, we use node IDs instead of hops.
@@ -407,6 +414,8 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
         config.link_id);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key);
+
+    log_info(tt::LogTest, "[ADD_CONFIG] Config added to configs_ vector, size now={}", this->configs_.size());
 }
 
 bool TestSender::validate_results(std::vector<uint32_t>& data) const {
@@ -648,6 +657,14 @@ ConnectionKey TestDevice::register_fabric_connection(
 }
 
 void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
+    log_info(
+        tt::LogTest,
+        "[DEVICE] TestDevice::add_sender_traffic_config on node_id={} core={} - config src_node_id={} dst_node_id={}",
+        this->fabric_node_id_.chip_id,
+        logical_core,
+        config.src_node_id.chip_id,
+        config.dst_node_ids[0].chip_id);
+
     if (!this->senders_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SENDER, logical_core);
     }
@@ -1339,6 +1356,7 @@ void TestDevice::create_latency_sender_kernel(
         // 1D: add hop count
         rt_args.push_back(num_hops);
     } else {
+        std::cout << "S: dest_node node:" << dest_node.chip_id << std::endl;
         // 2D: add device and mesh IDs (for Hybrid Mesh routing)
         rt_args.push_back(dest_node.chip_id);
         rt_args.push_back(dest_node.mesh_id.get());
@@ -1440,6 +1458,7 @@ void TestDevice::create_latency_responder_kernel(
         // 1D: add hop count back to sender
         rt_args.push_back(num_hops_back);
     } else {
+        std::cout << "R: sender node:" << sender_node.chip_id << std::endl;
         // 2D: add device and mesh IDs for sender (for Hybrid Mesh routing)
         rt_args.push_back(sender_node.chip_id);
         rt_args.push_back(sender_node.mesh_id.get());

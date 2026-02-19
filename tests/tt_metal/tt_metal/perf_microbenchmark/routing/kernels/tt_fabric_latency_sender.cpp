@@ -62,6 +62,8 @@ void kernel_main() {
     auto* sem_inc_packet_header = PacketHeaderPool::allocate_header();
 
     // Setup packet headers for routing
+    DPRINT << "S: Setting up routing - is_2d_fabric=" << (uint32_t)is_2d_fabric << " dst_device=" << dst_device_id
+           << " dst_mesh=" << dst_mesh_id << ENDL();
     if constexpr (!is_2d_fabric) {
         // 1D routing: use Low Latency header with hop count
         fabric_set_unicast_route<false>((LowLatencyPacketHeader*)payload_packet_header, num_hops_to_responder);
@@ -78,6 +80,8 @@ void kernel_main() {
     auto dest_semaphore_noc_addr = safe_get_noc_addr(responder_noc_x, responder_noc_y, semaphore_address, 0);
     auto dest_payload_noc_addr =
         safe_get_noc_addr(responder_noc_x, responder_noc_y, responder_receive_buffer_address, 0);
+    DPRINT << "S: NOC setup - responder_noc=" << (uint32_t)responder_noc_x << "," << (uint32_t)responder_noc_y
+           << " sem_addr=" << semaphore_address << ENDL();
 
     // Setup NOC command headers
     if constexpr (enable_fused_payload_with_sync) {
@@ -106,6 +110,8 @@ void kernel_main() {
             (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
     };
 
+    DPRINT << "S: Starting warmup..." << ENDL();
+
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
         noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
         *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
@@ -113,9 +119,14 @@ void kernel_main() {
 
     // Warmup: flush the datapath
     {
+        DPRINT << "S: Sending warmup packet to responder..." << ENDL();
         send_seminc_packet();
+
+        DPRINT << "S: Waiting for responder ack..." << ENDL();
         wait_for_semaphore_then_reset(1);
+        DPRINT << "S: Warmup complete" << ENDL();
     }
+    DPRINT << "S: Entering main loop" << ENDL();
 
     // Store elapsed time (cycles) as uint32_t in result buffer
     volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(result_buffer_address);
@@ -163,6 +174,7 @@ void kernel_main() {
             noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), 1);
             *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
         }
+        DPRINT << "S: TEST 4" << ENDL();
 
         auto end_timestamp = get_timestamp();
 

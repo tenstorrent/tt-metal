@@ -195,9 +195,23 @@ inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id,
             if constexpr (std::is_same_v<T, FabricNodeId>) {
                 return id;  // Already resolved
             } else if constexpr (std::is_same_v<T, ChipId>) {
-                return provider.get_fabric_node_id(id);
+                auto result = provider.get_fabric_node_id(id);
+                log_info(
+                    tt::LogTest,
+                    "[RESOLVE] ChipId {} -> FabricNodeId MeshID {} ChipID {}",
+                    id,
+                    result.mesh_id,
+                    result.chip_id);
+                return result;
             } else if constexpr (std::is_same_v<T, std::pair<MeshId, ChipId>>) {
-                return FabricNodeId{id.first, id.second};
+                auto result = FabricNodeId{id.first, id.second};
+                log_info(
+                    tt::LogTest,
+                    "[RESOLVE] [MeshId {}, ChipId {}] -> FabricNodeId {}",
+                    id.first.get(),
+                    id.second,
+                    result.chip_id);
+                return result;
             } else if constexpr (std::is_same_v<T, std::pair<MeshId, MeshCoordinate>>) {
                 return provider.get_fabric_node_id(id.first, id.second);
             } else {

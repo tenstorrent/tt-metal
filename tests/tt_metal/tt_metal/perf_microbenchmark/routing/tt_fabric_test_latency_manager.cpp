@@ -31,6 +31,7 @@ void LatencyTestManager::create_latency_kernels_for_device(
 
         const auto& sender_config = sender_configs[0].first;
         FabricNodeId responder_device_id = sender_config.dst_node_ids[0];
+        std::cout << "Lat manager: responder_device_id chip_id:" << responder_device_id.chip_id << std::endl;
 
         TestDevice* responder_device = nullptr;
         for (auto& [responder_coord, responder_test_device] : test_devices) {
@@ -49,6 +50,7 @@ void LatencyTestManager::create_latency_kernels_for_device(
             responder_device->get_device_info_provider()->get_virtual_core_from_logical_core(
                 sender_config.dst_logical_core);
 
+        std::cout << "Lat manager: responder_device_id chip_id:" << responder_device_id.chip_id << std::endl;
         test_device.create_latency_sender_kernel(
             sender_core,
             responder_device_id,
@@ -64,6 +66,12 @@ void LatencyTestManager::create_latency_kernels_for_device(
         TestDevice* sender_device = sender_location.device;
         CoreCoord sender_core = sender_location.core;
 
+        log_info(
+            tt::LogTest,
+            "[LOOKUP] Found sender at device {} (node_id={})",
+            sender_location.mesh_coord,
+            sender_location.node_id.chip_id);
+
         const auto& sender_senders = sender_device->get_senders();
         const auto& sender_worker = sender_senders.at(sender_core);
         const auto& sender_configs = sender_worker.get_configs();
@@ -73,6 +81,12 @@ void LatencyTestManager::create_latency_kernels_for_device(
         uint32_t num_samples = sender_config.parameters.num_packets;
         NocSendType noc_send_type = sender_config.parameters.noc_send_type;
         FabricNodeId sender_device_id = sender_config.src_node_id;
+
+        log_info(
+            tt::LogTest,
+            "[READ] Read from sender_config: src_node_id={} dst_node_id={}",
+            sender_device_id.chip_id,
+            sender_config.dst_node_ids[0].chip_id);
 
         uint32_t sender_send_buffer_address = sender_device->get_latency_send_buffer_address();
         uint32_t sender_receive_buffer_address = sender_device->get_latency_receive_buffer_address(payload_size);
@@ -164,6 +178,12 @@ void LatencyTestManager::setup_latency_test_workers(
     FabricNodeId sender_device_id = sender.device;
     FabricNodeId receiver_device_id = dest.device.value();
 
+    log_info(
+        tt::LogTest,
+        "[YAML] Parsed sender_device_id={} receiver_device_id={}",
+        sender_device_id.chip_id,
+        receiver_device_id.chip_id);
+
     // Create sender worker on sender device
     if (fixture_.is_local_fabric_node_id(sender_device_id)) {
         const auto& sender_coord = fixture_.get_device_coord(sender_device_id);
@@ -196,6 +216,11 @@ void LatencyTestManager::setup_latency_test_workers(
             .payload_buffer_size = 0,
             .link_id = 0};
 
+        log_info(
+            tt::LogTest,
+            "[CONFIG] Adding sender config: src_node_id={} dst_node_id={}",
+            latency_sender_config.src_node_id.chip_id,
+            latency_sender_config.dst_node_ids[0].chip_id);
         sender_test_device.add_sender_traffic_config(sender_core, std::move(latency_sender_config));
 
         // Set latency sender kernel
