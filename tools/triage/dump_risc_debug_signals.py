@@ -109,7 +109,7 @@ def collect_debug_bus_signals(
         # Return only the core data - location/device info comes from PerBlockCheckResult
         return {
             "failed_riscs": failed_riscs,
-            "debug_bus_signals": debug_bus_data,
+            "debug_bus_signal_groups": debug_bus_data,
         }
 
     except Exception as e:
@@ -151,11 +151,11 @@ def run(args, context: Context):
                 all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
             all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = {
                 "failed_riscs": r.result["failed_riscs"],
-                "debug_bus_signals": r.result["debug_bus_signals"],
+                "debug_bus_signal_groups": r.result["debug_bus_signal_groups"],
             }
 
         if all_debug_bus_data:
-            output_path = os.getenv("TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH", "debug_bus_signals.json")
+            output_path = os.getenv("TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH", "debug_bus_signal_groups.json")
             with open(output_path, "w") as f:
                 json.dump(all_debug_bus_data, f, indent=2)
             log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")
