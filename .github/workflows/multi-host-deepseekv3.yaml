@@ -93,6 +93,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GITHUB_RUN_ID=${{ github.run_id }}
             -e _DEEPSEEK_V3_CACHE_DIR=${{ inputs.cache-dir }}
             -e _DEEPSEEK_V3_OVERRIDE_NUM_LAYERS=${{ inputs.override-num-layers }}
             -v /etc/mpirun:/etc/mpirun:ro
