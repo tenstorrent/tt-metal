@@ -104,6 +104,7 @@ enum class EnvVarID {
     TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
+    TT_METAL_SPLIT_PREFETCHER,              // Split prefetch_hd into reader (BRISC) + writer stub (NCRISC)
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -677,6 +678,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (use SFPLOADMACRO instructions)
         // Usage: export TT_METAL_DISABLE_SFPLOADMACRO=1
         case EnvVarID::TT_METAL_DISABLE_SFPLOADMACRO: this->disable_sfploadmacro = is_env_enabled(value); break;
+
+        // TT_METAL_SPLIT_PREFETCHER
+        // Split the prefetch_hd kernel into a reader (BRISC) and a writer stub (NCRISC) on the same core.
+        // Default: false (single prefetch_hd kernel on BRISC)
+        // Usage: export TT_METAL_SPLIT_PREFETCHER=1
+        case EnvVarID::TT_METAL_SPLIT_PREFETCHER: this->split_prefetcher = true; break;
 
         // ========================================
         // PROFILING & PERFORMANCE

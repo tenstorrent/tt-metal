@@ -23,8 +23,9 @@ enum DispatchWorkerType : uint32_t {
     DISPATCH_H = 6,
     DISPATCH_D = 7,
     DISPATCH_S = 8,
-    FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
-    RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
+    FABRIC_MUX = 17,          // Downstream from MMIO to remote mux. Tunnel index is required.
+    RETURN_FABRIC_MUX = 18,   // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
+    PREFETCH_HD_WRITER = 19,  // Writer stub that runs on NCRISC of the same core as PREFETCH_HD (on BRISC).
     COUNT,
 };
 
