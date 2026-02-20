@@ -48,9 +48,7 @@ def test_perf_device_bare_metal_maskformer_swin_b():
         f"--dump-perf {perf_json} "
         f"--dump-perf-header {perf_header_json}"
     )
-    with patch.object(
-        device_perf_utils, "run_device_profiler", side_effect=_run_device_profiler_with_high_op_support
-    ):
+    with patch.object(device_perf_utils, "run_device_profiler", side_effect=_run_device_profiler_with_high_op_support):
         post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
 
     # No fixed perf target yet (bring-up baseline); report only.

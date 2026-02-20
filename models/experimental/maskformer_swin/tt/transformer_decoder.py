@@ -170,7 +170,10 @@ class MaskFormerTransformerDecoder:
         mem_seq = ttnn.reshape(tt_proj, (B, H * W, int(self.config.hidden_dim)))
         mem_seq = ttnn.to_layout(mem_seq, ttnn.TILE_LAYOUT)
         if debug:
-            print(f"[maskformer][decoder] input_proj out seq_k={int(mem_seq.shape[1])} hidden_dim={int(mem_seq.shape[2])}", flush=True)
+            print(
+                f"[maskformer][decoder] input_proj out seq_k={int(mem_seq.shape[1])} hidden_dim={int(mem_seq.shape[2])}",
+                flush=True,
+            )
 
         # ------------------------------------------------------------------
         # 2) Queries (learned) + initial hidden state (zeros)
@@ -437,16 +440,19 @@ class MaskFormerTransformerDecoder:
                     if use_sdpa:
                         try:
                             attn_ctx = ttnn.transformer.scaled_dot_product_attention(
-                                q, k, v, is_causal=False, program_config=prog_cfg.sdpa, compute_kernel_config=compute_cfg
+                                q,
+                                k,
+                                v,
+                                is_causal=False,
+                                program_config=prog_cfg.sdpa,
+                                compute_kernel_config=compute_cfg,
                             )
                             ctx = _concat_heads(attn_ctx)
                         except Exception:
                             ctx = None
                     if ctx is None:
                         ctx = _concat_heads(
-                            _attention_core(
-                                q, k, v, tag=f"layer{layer_idx}.self_attn", key_is_transposed=not use_sdpa
-                            )
+                            _attention_core(q, k, v, tag=f"layer{layer_idx}.self_attn", key_is_transposed=not use_sdpa)
                         )
             if ctx is None and use_sdpa:
                 # SDPA is beneficial even without fused-QKV; fall back to separate projections.
