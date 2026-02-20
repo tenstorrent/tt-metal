@@ -274,6 +274,9 @@ Demo scripts visualize model inference on robotics datasets.
 **Extract Sample Images (required first):**
 
 ```bash
+# ImageIO python library plugin PyAv is needed to extract images from videos
+python -m ensurepip --upgrade && python -m pip install imageio[pyav]
+
 # Extract ALOHA simulation samples (downloads from HuggingFace)
 python models/experimental/pi0/tests/demo/extract_aloha_samples.py
 
