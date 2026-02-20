@@ -379,6 +379,7 @@ public:
     // Latency buffer address getters (public so TestContext can query them)
     size_t get_latency_send_buffer_address() const;
     size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
+    size_t get_latency_send_benchmark_buffer_address() const;
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);

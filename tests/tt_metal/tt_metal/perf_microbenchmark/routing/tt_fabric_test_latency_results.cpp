@@ -305,6 +305,11 @@ void LatencyResultsManager::report_latency_results(
         sender_coord, {sender_core}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
     const auto& sender_data = sender_result_data.at(sender_core);
 
+    // Read send benchmark data from sender device
+    auto send_benchmark_result_data = fixture_.read_buffer_from_cores(
+        sender_coord, {sender_core}, sender_device->get_latency_send_benchmark_buffer_address(), result_buffer_size);
+    const auto& send_benchmark_data = send_benchmark_result_data.at(sender_core);
+
     // Read responder elapsed times from responder device
     auto responder_result_data = fixture_.read_buffer_from_cores(
         responder_coord, {responder_core}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
@@ -316,20 +321,24 @@ void LatencyResultsManager::report_latency_results(
     std::vector<uint64_t> responder_times_cycles;
     std::vector<uint64_t> net_latencies_cycles;
     std::vector<uint64_t> per_hop_latency_cycles;
+    std::vector<uint64_t> send_benchmark_cycles;
 
     raw_latencies_cycles.reserve(num_samples);
     responder_times_cycles.reserve(num_samples);
     net_latencies_cycles.reserve(num_samples);
     per_hop_latency_cycles.reserve(num_samples);
+    send_benchmark_cycles.reserve(num_samples);
 
     for (uint32_t i = 0; i < num_samples; i++) {
         // Read elapsed times directly (already computed on device)
         uint64_t raw_latency = sender_data[i];
         uint64_t responder_time = responder_data[i];
+        uint64_t send_time = send_benchmark_data[i];
 
         // Validate that responder time is reasonable
         TT_FATAL(raw_latency > 0, "Invalid sender latency (zero) for sample {}", i);
         TT_FATAL(responder_time > 0, "Invalid responder time (zero) for sample {}", i);
+        TT_FATAL(send_time > 0, "Invalid send time (zero) for sample {}", i);
 
         // Check for clock synchronization issues between sender and responder devices
         // If responder time exceeds raw latency, this indicates unsynchronized clocks
@@ -355,6 +364,7 @@ void LatencyResultsManager::report_latency_results(
         responder_times_cycles.push_back(responder_time);
         net_latencies_cycles.push_back(net_latency);
         per_hop_latency_cycles.push_back(per_hop_latency);
+        send_benchmark_cycles.push_back(send_time);
     }
 
     if (raw_latencies_cycles.empty()) {
@@ -367,6 +377,7 @@ void LatencyResultsManager::report_latency_results(
     std::sort(responder_times_cycles.begin(), responder_times_cycles.end());
     std::sort(net_latencies_cycles.begin(), net_latencies_cycles.end());
     std::sort(per_hop_latency_cycles.begin(), per_hop_latency_cycles.end());
+    std::sort(send_benchmark_cycles.begin(), send_benchmark_cycles.end());
 
     // Get device frequency for conversion to ns
     uint32_t freq_mhz = fixture_.get_device_frequency_mhz(sender_node_id);
@@ -393,6 +404,7 @@ void LatencyResultsManager::report_latency_results(
     auto responder_stats = calc_stats(responder_times_cycles);
     auto net_stats = calc_stats(net_latencies_cycles);
     auto per_hop_latency_stats = calc_stats(per_hop_latency_cycles);
+    auto send_stats = calc_stats(send_benchmark_cycles);
 
     // Log results in table format
     log_info(tt::LogTest, "");
@@ -400,40 +412,49 @@ void LatencyResultsManager::report_latency_results(
     log_info(tt::LogTest, "Payload size: {} bytes | Num samples: {}", payload_size, raw_latencies_cycles.size());
     log_info(tt::LogTest, "");
     log_info(
-        tt::LogTest, "Metric    Raw Latency (ns)    Responder Time (ns)    Net Latency (ns)    Per-Hop Latency (ns)");
-    log_info(tt::LogTest, "------------------------------------------------------------------------");
+        tt::LogTest,
+        "Metric    Raw Latency (ns)    Send Time (ns)    Responder Time (ns)    Net Latency (ns)    Per-Hop Latency "
+        "(ns)");
     log_info(
         tt::LogTest,
-        "Min       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
+        "------------------------------------------------------------------------------------------------------------");
+    log_info(
+        tt::LogTest,
+        "Min       {:>15.2f}    {:>13.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.min * ns_per_cycle,
+        send_stats.min * ns_per_cycle,
         responder_stats.min * ns_per_cycle,
         net_stats.min * ns_per_cycle,
         per_hop_latency_stats.min * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "Max       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
+        "Max       {:>15.2f}    {:>13.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.max * ns_per_cycle,
+        send_stats.max * ns_per_cycle,
         responder_stats.max * ns_per_cycle,
         net_stats.max * ns_per_cycle,
         per_hop_latency_stats.max * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "Avg       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
+        "Avg       {:>15.2f}    {:>13.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.avg * ns_per_cycle,
+        send_stats.avg * ns_per_cycle,
         responder_stats.avg * ns_per_cycle,
         net_stats.avg * ns_per_cycle,
         per_hop_latency_stats.avg * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "P50       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
+        "P50       {:>15.2f}    {:>13.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.p50 * ns_per_cycle,
+        send_stats.p50 * ns_per_cycle,
         responder_stats.p50 * ns_per_cycle,
         net_stats.p50 * ns_per_cycle,
         per_hop_latency_stats.p50 * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "P99       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
+        "P99       {:>15.2f}    {:>13.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.p99 * ns_per_cycle,
+        send_stats.p99 * ns_per_cycle,
         responder_stats.p99 * ns_per_cycle,
         net_stats.p99 * ns_per_cycle,
         per_hop_latency_stats.p99 * ns_per_cycle);

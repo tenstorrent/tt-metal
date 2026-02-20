@@ -1252,9 +1252,10 @@ void TestDevice::set_local_runtime_args_for_core(
 }
 
 size_t TestDevice::get_latency_send_buffer_address() const {
-    // Send buffer starts after the latency result buffer
+    // Send buffer starts after the latency result buffer and send benchmark buffer
     // Results are stored as uint32_t elapsed times (1 per sample)
-    return sender_memory_map_->get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+    // Send benchmark buffer also stores uint32_t elapsed times (1 per sample)
+    return sender_memory_map_->get_result_buffer_address() + (2 * TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
 }
 
 size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) const {
@@ -1262,6 +1263,12 @@ size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) con
     // Send buffer size must accommodate the full message payload
     TT_FATAL(payload_size > 0, "Latency payload size must be greater than 0");
     return get_latency_send_buffer_address() + payload_size;
+}
+
+size_t TestDevice::get_latency_send_benchmark_buffer_address() const {
+    // Send benchmark buffer stores timing measurements for send_payload_packet calls
+    // It comes right after the latency result buffer (before send buffer)
+    return sender_memory_map_->get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
 }
 
 void TestDevice::create_latency_sender_kernel(
@@ -1320,6 +1327,7 @@ void TestDevice::create_latency_sender_kernel(
 
     uint32_t send_buffer_address = get_latency_send_buffer_address();
     uint32_t receive_buffer_address = get_latency_receive_buffer_address(payload_size);
+    uint32_t send_benchmark_buffer_address = get_latency_send_benchmark_buffer_address();
 
     // responder_virtual_core is passed as parameter from TestContext
     // Build runtime args - routing parameters differ between 1D and 2D
@@ -1330,6 +1338,7 @@ void TestDevice::create_latency_sender_kernel(
         num_samples,                                      // number of latency samples to collect
         send_buffer_address,                              // sender's send buffer (to write before sending)
         receive_buffer_address,                           // sender's receive buffer (to wait on)
+        send_benchmark_buffer_address,                    // buffer to store send_payload_packet timing measurements
         static_cast<uint32_t>(responder_virtual_core.x),  // responder's virtual NOC X coordinate
         static_cast<uint32_t>(responder_virtual_core.y),  // responder's virtual NOC Y coordinate
     };

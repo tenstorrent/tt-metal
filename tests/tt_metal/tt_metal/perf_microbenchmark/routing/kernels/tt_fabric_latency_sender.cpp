@@ -33,6 +33,8 @@ void kernel_main() {
     const size_t send_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // Sender's send buffer (write before sending)
     const size_t receive_buffer_address =
         get_arg_val<uint32_t>(arg_idx++);  // Sender's receive buffer (wait for response)
+    const size_t send_benchmark_buffer_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Buffer to store send_payload_packet timing measurements
     const uint8_t responder_noc_x =
         static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Responder's virtual NOC X
     const uint8_t responder_noc_y =
@@ -99,11 +101,15 @@ void kernel_main() {
     auto send_payload_packet = [&fabric_connection, payload_packet_header, send_buffer_address, payload_size_bytes]() {
         fabric_connection.wait_for_empty_write_slot();
         if (payload_size_bytes > 0) {
+            __asm__ volatile("# sending payload");
             fabric_connection.send_payload_without_header_non_blocking_from_address(
                 send_buffer_address, payload_size_bytes);
+            __asm__ volatile("# done sending payload");
         }
+        __asm__ volatile("# sending header");
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+        __asm__ volatile("# done sending header");
     };
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
@@ -119,11 +125,13 @@ void kernel_main() {
 
     // Store elapsed time (cycles) as uint32_t in result buffer
     volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(result_buffer_address);
+    volatile uint32_t* send_benchmark_ptr = reinterpret_cast<volatile uint32_t*>(send_benchmark_buffer_address);
 
     // Clear result buffer before writing elapsed times to avoid reading stale data
     uint32_t result_buffer_size = num_samples * sizeof(uint32_t);
     for (uint32_t i = 0; i < num_samples; i++) {
         result_ptr[i] = 0;
+        send_benchmark_ptr[i] = 0;
     }
 
     // Main latency measurement loop
@@ -147,15 +155,20 @@ void kernel_main() {
         }
 
         // Send one message per sample
+        auto send_start = get_timestamp();
         if constexpr (enable_fused_payload_with_sync) {
             send_payload_packet();
         } else {
             if constexpr (sem_inc_only) {
                 send_seminc_packet();
             } else {
+                __asm__ volatile("# about to send paylod");
                 send_payload_packet();
             }
         }
+        auto send_end = get_timestamp();
+        send_benchmark_ptr[sample_idx] = static_cast<uint32_t>(send_end - send_start);
+
         auto start_timestamp = get_timestamp();
 
         // Don't want to include noc command buffer response time in the total latency measurement
