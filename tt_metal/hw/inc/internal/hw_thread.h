@@ -13,9 +13,30 @@
 
 namespace internal_ {
 
+// Internal API - not for direct use in kernels
 // Returns the hardware thread index for the current processor
-// On Quasar, a DM/TRISC kernel may run on multiple hardware threads
-// So the thread index is read at runtime from CSRs
+//
+// This index is used to access per-processor data structures shared between
+// host and device (e.g. mailbox, RTAs, watcher debug)
+// The ordering must match the host side expectation
+//
+// Quasar (tt-2xx) Tensix:
+//   Index 0-7  : DM0-DM7 (data movement processors)
+//   Index 8-11 : NEO0 Cluster (TRISC0-TRISC3)
+//   Index 12-15: NEO1 Cluster (TRISC0-TRISC3)
+//   Index 16-19: NEO2 Cluster (TRISC0-TRISC3)
+//   Index 20-23: NEO3 Cluster (TRISC0-TRISC3)
+//
+// Blackhole/Wormhole (tt-1xx) Tensix:
+//   Index 0: BRISC  (DM0)
+//   Index 1: NCRISC (DM1)
+//   Index 2: TRISC0
+//   Index 3: TRISC1
+//   Index 4: TRISC2
+//
+// Ethernet cores for all archs use PROCESSOR_INDEX
+// ETH Wormhole: Index 0
+// ETH Blackhole/Quasar: Index 0 to 1
 inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
     uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
