@@ -183,9 +183,9 @@ struct DRAMStreamingMatmul {
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
 
-            // Multi-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3 * CTArgs::num_subblocks_k;
-            constexpr uint32_t extra_blocks_in_flight = 2;
+            // Triple-buffering with transaction IDs for pipelining
+            constexpr uint32_t num_buffers = 3;
+            constexpr uint32_t extra_blocks_in_flight = 1;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;

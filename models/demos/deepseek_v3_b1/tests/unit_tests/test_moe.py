@@ -818,7 +818,7 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index):
         w_shard = weights_tensor.memory_config().shard_spec.shape
         Kt = w_shard[0] // w_tile.tile_shape[0]
         subblock_k = Kt // num_subblocks_k
-        num_in1_buffers = 3 * num_subblocks_k
+        num_in1_buffers = 3
         in1_CB_tiles = subblock_k * num_in1_buffers
         tile_h = w_tile.tile_shape[0]
         tile_w = w_tile.tile_shape[1]
