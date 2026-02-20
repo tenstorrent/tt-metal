@@ -16,7 +16,7 @@ from models.experimental.tt_symbiote.core.run_config import (
     DistributedTensorConfig,
     DistributedConfig,
 )
-from torch.utils._pytree import tree_map
+from models.experimental.tt_symbiote.core.utils import tree_map
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
 
