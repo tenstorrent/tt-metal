@@ -72,7 +72,7 @@ ALWI void untilize_uninit();
  *   output_cb         — Output circular buffer index (0–31, row-major output, must differ from input_cb).
  *   init_uninit_mode  — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode         — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode     — Register datatype reconfiguration (default: NoReconfigure).
+ *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
  *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
@@ -117,7 +117,7 @@ template <
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>
+        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

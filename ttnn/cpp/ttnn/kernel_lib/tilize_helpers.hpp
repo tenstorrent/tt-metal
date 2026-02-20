@@ -63,7 +63,7 @@ enum class WaitMode : uint8_t {
  *   output_cb        — Output circular buffer index (0–31, tiled output, must differ from input_cb).
  *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode    — Register datatype reconfiguration (default: NoReconfigure).
+ *   reconfig_mode    — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
  *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
@@ -115,7 +115,7 @@ template <
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>
+        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
 ALWI void tilize(
     uint32_t block_width_tiles, uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
