@@ -11,6 +11,7 @@ After implementing exercise_cpp/, this should work:
 
 import torch
 import ttnn
+from _e03_exercise import e03_eltwise_add
 
 
 def eltwise_add(device, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -18,7 +19,8 @@ def eltwise_add(device, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # TODO: Call your custom operation after implementing exercise_cpp/
-    # tt_result = ttnn.onboarding_eltwise_add(tt_a, tt_b)
-    # return ttnn.to_torch(tt_result)
+    # Call the custom operation (registered via nanobind)
+    tt_result = e03_eltwise_add(tt_a, tt_b)
+    return ttnn.to_torch(tt_result)
 
     raise NotImplementedError("Implement exercise_cpp/ first")

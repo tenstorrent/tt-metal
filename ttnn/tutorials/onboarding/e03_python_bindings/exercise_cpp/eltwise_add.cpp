@@ -10,10 +10,8 @@
 namespace ttnn::operations::onboarding::exercise {
 
 Tensor EltwiseAdd::invoke(const ttnn::Tensor& a, const ttnn::Tensor& b) {
-    (void)a;
-    (void)b;
-    // TODO: Implement
-    TT_THROW("Not implemented");
+    // Call the existing ttnn::add operation
+    return ttnn::add(a, b);
 }
 
 }  // namespace ttnn::operations::onboarding::exercise

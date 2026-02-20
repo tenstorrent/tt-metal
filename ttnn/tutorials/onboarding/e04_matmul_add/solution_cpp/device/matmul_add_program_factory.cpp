@@ -31,8 +31,17 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
 
+    tt::tt_metal::IDevice* device = a.device();  // ← Get device from tensor
+
+    auto core_grid = device->compute_with_storage_grid_size();
+    auto num_cores_y = core_grid.y;
+    auto num_output_tiles_total = (M * N) / TILE_HW;
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
+        split_work_to_cores(core_grid, num_output_tiles_total);
+
     Program program{};
-    CoreCoord core{0, 0};
+    // CoreCoord core{0, 0};
 
     tt::DataFormat cb_format = datatype_to_dataformat_converter(a.dtype());
     // Tile size: element_size * TILE_HEIGHT * TILE_WIDTH
@@ -44,10 +53,10 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
     auto cb_c = CBIndex::c_2;
     auto cb_out = CBIndex::c_16;
 
-    create_cb(cb_a, program, core, tile_size, 2, cb_format);
-    create_cb(cb_b, program, core, tile_size, 2, cb_format);
-    create_cb(cb_c, program, core, tile_size, 2, cb_format);
-    create_cb(cb_out, program, core, tile_size, 2, cb_format);
+    create_cb(cb_a, program, all_cores, tile_size, 2, cb_format);
+    create_cb(cb_b, program, all_cores, tile_size, 2, cb_format);
+    create_cb(cb_c, program, all_cores, tile_size, 2, cb_format);
+    create_cb(cb_out, program, all_cores, tile_size, 2, cb_format);
 
     // Custom kernels - compile args include TensorAccessorArgs + dimensions
     std::vector<uint32_t> reader_ct_args;
@@ -61,7 +70,7 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
     auto reader_id = CreateKernel(
         program,
         "ttnn/tutorials/onboarding/e04_matmul_add/solution_cpp/device/kernels/reader.cpp",
-        core,
+        all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
@@ -73,21 +82,54 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
     auto writer_id = CreateKernel(
         program,
         "ttnn/tutorials/onboarding/e04_matmul_add/solution_cpp/device/kernels/writer.cpp",
-        core,
+        all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_ct_args});
 
     auto compute_id = CreateKernel(
         program,
         "ttnn/tutorials/onboarding/e04_matmul_add/solution_cpp/device/kernels/compute.cpp",
-        core,
+        all_cores,
         ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = {Mt, Kt, Nt}});
 
     // Runtime args: only buffer addresses (dimensions are compile args)
-    SetRuntimeArgs(program, reader_id, core, {a.buffer()->address(), b.buffer()->address(), c.buffer()->address()});
-    SetRuntimeArgs(program, writer_id, core, {output.buffer()->address()});
+    uint32_t work_offset = 0;
+    auto work_groups = {std::make_pair(core_group_1, work_per_core1), std::make_pair(core_group_2, work_per_core2)};
 
-    return {std::move(program), {reader_id, writer_id, compute_id}};
+    // Iterate through each work group and assign work to cores
+    for (const auto& [ranges, work_per_core] : work_groups) {
+        for (const auto& range : ranges.ranges()) {
+            for (const auto& core : range) {
+                // Set arguments for the reader kernel (data input)
+                tt_metal::SetRuntimeArgs(
+                    program,
+                    reader_id,
+                    core,
+                    {a.buffer()->address(),  // Address of matrix A in DRAM
+                     b.buffer()->address(),  // Address of matrix B in DRAM
+                     c.buffer()->address(),  // Address of matrix C in DRAM
+                     work_offset,            // Starting offset for this core's work
+                     work_per_core,
+                     core.x,
+                     core.y});  // Amount of work for this core
+
+                // Set arguments for the writer kernel (data output)
+                tt_metal::SetRuntimeArgs(
+                    program, writer_id, core, {output.buffer()->address(), work_per_core, work_offset, core.x, core.y});
+                // Set arguments for the compute kernel
+                tt_metal::SetRuntimeArgs(
+                    program,
+                    compute_id,
+                    core,
+                    {
+                        work_per_core, core.x, core.y  // Amount of work for this core
+                    });
+                work_offset += work_per_core;  // Update offset for next core
+            }
+        }
+    }
+
+    return {std::move(program), {reader_id, writer_id, compute_id, num_cores, num_cores_y}};
 }
 
 void MatmulAddOperation::ProgramFactory::override_runtime_arguments(
@@ -96,15 +138,34 @@ void MatmulAddOperation::ProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
-    CoreCoord core{0, 0};
+    // CoreCoord core{0, 0};
 
-    auto& reader_args = GetRuntimeArgs(program, cached_program.shared_variables.reader_id, core);
-    reader_args[0] = tensor_args.a.buffer()->address();
-    reader_args[1] = tensor_args.b.buffer()->address();
-    reader_args[2] = tensor_args.c.buffer()->address();
+    auto& num_cores = cached_program.shared_variables.num_cores;
+    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_id, core);
-    writer_args[0] = output.buffer()->address();
+    for (uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        {
+            auto& reader_args = GetRuntimeArgs(program, cached_program.shared_variables.reader_id, core);
+            reader_args[0] = tensor_args.a.buffer()->address();
+            reader_args[1] = tensor_args.b.buffer()->address();
+            reader_args[2] = tensor_args.c.buffer()->address();
+        }
+
+        {
+            auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_id, core);
+            writer_args[0] = output.buffer()->address();
+        }
+    }
+
+    // auto& reader_args = GetRuntimeArgs(program, cached_program.shared_variables.reader_id, all_cores);
+    // reader_args[0] = tensor_args.a.buffer()->address();
+    // reader_args[1] = tensor_args.b.buffer()->address();
+    // reader_args[2] = tensor_args.c.buffer()->address();
+
+    // auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_id, all_cores);
+    // writer_args[0] = output.buffer()->address();
 }
 
 }  // namespace ttnn::operations::onboarding
