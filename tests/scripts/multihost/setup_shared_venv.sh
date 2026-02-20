@@ -111,6 +111,7 @@ tmp_env_dir="${TARGET_VENV}.tmp.$$"
       "$PATCH_SCRIPT" "${TARGET_VENV}" >&2 || true
     fi
   fi
+  sync
 ) 9>"${lockfile}"
 
 # If --activate was specified, output commands to stdout for eval

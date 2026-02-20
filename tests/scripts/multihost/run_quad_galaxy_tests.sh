@@ -56,6 +56,8 @@ setup_dual_galaxy_env() {
     mkdir -p logs
     mkdir -p generated/artifacts
 
+    sync
+
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
         exit 1
@@ -78,6 +80,8 @@ setup_quad_galaxy_env() {
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
+
+    sync
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
