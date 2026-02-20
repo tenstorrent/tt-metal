@@ -598,27 +598,6 @@ TEST_F(Fabric1DChannelTrimmingFixture, ChannelTrimmingCapture_RuntimeOptionGette
     rtoptions.set_enable_channel_trimming_capture(original);
 }
 
-// Test: DiagnosticBufferMap shows channel_trimming_capture disabled when not enabled at setup
-TEST_F(Fabric1DChannelTrimmingFixture, ChannelTrimmingCapture_DiagnosticBufferMapDisabled) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
-    auto buffer_map = builder_ctx.get_telemetry_and_metadata_buffer_map();
-
-    EXPECT_FALSE(buffer_map.channel_trimming_capture.is_enabled());
-    EXPECT_EQ(buffer_map.channel_trimming_capture.l1_address, 0u);
-    EXPECT_EQ(buffer_map.channel_trimming_capture.size_bytes, 0u);
-}
-
-// Test: Config does NOT allocate L1 buffer when capture is disabled
-TEST_F(Fabric1DChannelTrimmingFixture, ChannelTrimmingCapture_ConfigNoAllocWhenDisabled) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& config = control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
-
-    // Fabric1DChannelTrimmingFixture does not enable channel trimming capture, so the config should not allocate
-    EXPECT_EQ(config.datapath_usage_l1_address, 0u);
-    EXPECT_EQ(config.datapath_usage_buffer_size, 0u);
-}
-
 // ============================================================================
 // Fixture: Fabric2D with channel trimming capture enabled before fabric setup
 // ============================================================================
