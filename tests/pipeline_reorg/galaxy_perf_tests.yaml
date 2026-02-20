@@ -91,6 +91,18 @@
   save-perf-data: true
   model-type: QwenImage
 
+- name: Galaxy DeepSeek V3 decode perf tests
+  cmd: export MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3/demo/test_decode_demo_perf.py --timeout=1200
+  model: deepseek_v3
+  skus:
+    wh_galaxy:
+      timeout: 20
+  owner_id: U03HY7MK4BT
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: deepseek_v3
+
 - name: Galaxy Sentence Bert tests
   cmd: |
     pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py
@@ -108,10 +120,11 @@
 - name: Galaxy GPT-OSS model perf tests
   cmd: uv pip install -r models/demos/gpt_oss/requirements.txt && export HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ && pytest --timeout 600 models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_all_fused_ops_device_perf.py::test_all_fused_ops_device_perf -k "decode and 1"
   model: gpt-oss
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 15
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
-  timeout: 15
   arch: wormhole_b0
   save-perf-data: true
   model-type: GPT-OSS

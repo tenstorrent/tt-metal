@@ -17,6 +17,8 @@ namespace deepseek_b1_ops {
 
 #if defined(COMPILE_FOR_BRISC)
 
+constexpr bool mcast_is_shared_write_cmd_buf = write_cmd_buf == write_reg_cmd_buf;
+
 template <uint8_t noc>
 FORCE_INLINE uint64_t get_noc_multicast_addr(
     uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint32_t addr) {
@@ -137,25 +139,27 @@ FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uin
         false,
         false,
         write_cmd_buf>(0, mcast_flag_noc_addr, 0);
-    mcast_send_set_state<
-        mcast_num_cores,
-        loopback,
-        is_part_of_receiver_grid,
-        linked,
-        posted,
-        true,
-        true,
-        true,
-        write_reg_cmd_buf>(data_sender_semaphore_addr, mcast_flag_noc_addr, 4);
+    if constexpr (!mcast_is_shared_write_cmd_buf) {
+        mcast_send_set_state<
+            mcast_num_cores,
+            loopback,
+            is_part_of_receiver_grid,
+            linked,
+            posted,
+            true,
+            true,
+            true,
+            write_reg_cmd_buf>(data_sender_semaphore_addr, mcast_flag_noc_addr, 4);
+    }
     mcast_send_with_state<
         mcast_num_cores,
         loopback,
         is_part_of_receiver_grid,
         linked,
         posted,
-        false,
-        false,
-        write_reg_cmd_buf>(0, 0, 0);
+        mcast_is_shared_write_cmd_buf,
+        mcast_is_shared_write_cmd_buf,
+        write_reg_cmd_buf>(data_sender_semaphore_addr, mcast_flag_noc_addr, 4);
     noc_async_posted_writes_flushed();
 }
 
@@ -365,8 +369,8 @@ struct Mcast {
                     linked,
                     posted,
                     true,
-                    false,
-                    write_reg_cmd_buf>(data_sender_semaphore_addr, data_receiver_semaphore_addr, 0);
+                    mcast_is_shared_write_cmd_buf,
+                    write_reg_cmd_buf>(data_sender_semaphore_addr, data_receiver_semaphore_addr, 4);
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {

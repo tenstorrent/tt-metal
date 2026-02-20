@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <gtest/gtest.h>
@@ -10,7 +11,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/fabric/topology_solver_internal.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/mock_device.hpp>
@@ -28,7 +28,7 @@ protected:
 };
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
-    // Use 2x2 T3K multiprocess MGD (has 2 meshes: mesh_id 0 and 1)
+    // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path mesh_graph_desc_path =
@@ -38,13 +38,13 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
     // Create mesh graph from descriptor
     auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
 
-    // Build adjacency map logical
-    auto adjacency_map = build_adjacency_map_logical(mesh_graph);
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_GT(adjacency_map.size(), 0u);
 
-    // Verify each mesh has a valid adjacency graph
+    // Verify each mesh has a valid adjacency graph (including switches)
     for (const auto& [mesh_id, adj_graph] : adjacency_map) {
         const auto& nodes = adj_graph.get_nodes();
         EXPECT_GT(nodes.size(), 0u) << "Mesh " << mesh_id.get() << " should have nodes";
@@ -61,8 +61,60 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
         }
     }
 
-    // For T3K 2x2 multiprocess, we expect 2 meshes
-    EXPECT_EQ(adjacency_map.size(), 2u);
+    // For T3K 2x2 multiprocess, we expect 2 meshes (mesh_id 0 and 1)
+    // Note: This includes all meshes returned by get_all_mesh_ids() (compute meshes and switches if present)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
+    // Use T3K 2x2 MGD with TT-Switch (has 1 compute mesh: mesh_id 0, and 1 switch: mesh_id 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph);
+
+    // Verify that we have adjacency graphs for each mesh
+    EXPECT_GT(adjacency_map.size(), 0u);
+
+    // Count compute meshes and switches separately
+    size_t compute_mesh_count = 0;
+    size_t switch_mesh_count = 0;
+
+    // Verify each mesh has a valid adjacency graph (including switches)
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        const auto& nodes = adj_graph.get_nodes();
+        EXPECT_GT(nodes.size(), 0u) << "Mesh " << mesh_id.get() << " should have nodes";
+
+        // Verify that nodes belong to the correct mesh
+        for (const auto& node : nodes) {
+            EXPECT_EQ(node.mesh_id, mesh_id) << "Node should belong to mesh " << mesh_id.get();
+
+            // Verify we can query neighbors
+            const auto& neighbors = adj_graph.get_neighbors(node);
+            for (const auto& neighbor : neighbors) {
+                EXPECT_EQ(neighbor.mesh_id, mesh_id) << "Neighbor should belong to the same mesh " << mesh_id.get();
+            }
+        }
+
+        // Count compute meshes and switches
+        if (mesh_graph.is_switch_mesh(mesh_id)) {
+            switch_mesh_count++;
+        } else {
+            compute_mesh_count++;
+        }
+    }
+
+    // For T3K 2x2 with TT-Switch, we expect 1 compute mesh and 1 switch mesh (total 2 meshes)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes total (1 compute + 1 switch)";
+    EXPECT_EQ(compute_mesh_count, 1u) << "Should have 1 compute mesh (mesh_id 0)";
+    EXPECT_EQ(switch_mesh_count, 1u) << "Should have 1 switch mesh (mesh_id 1)";
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
@@ -88,7 +140,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{103}] = MeshHostRankId{0};
 
     // Build adjacency map physical
-    auto adjacency_map = build_adjacency_map_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
+    auto adjacency_map = build_adjacency_graph_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes";
@@ -1404,6 +1456,231 @@ AdjacencyGraph<NodeId> create_1d_ring_graph(size_t length) {
     return AdjacencyGraph<NodeId>(adj_map);
 }
 
+// Helper function to create a 2D torus graph (wraps around both dimensions)
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_2d_torus_graph(size_t rows, size_t cols) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return (row * cols) + col; };
+
+    for (size_t row = 0; row < rows; ++row) {
+        for (size_t col = 0; col < cols; ++col) {
+            size_t node_id = get_node_id(row, col);
+            std::vector<NodeId> neighbors;
+
+            // Add left neighbor (wraps around)
+            size_t left_col = (col == 0) ? cols - 1 : col - 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(row, left_col)));
+
+            // Add right neighbor (wraps around)
+            size_t right_col = (col == cols - 1) ? 0 : col + 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(row, right_col)));
+
+            // Add top neighbor (wraps around)
+            size_t top_row = (row == 0) ? rows - 1 : row - 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(top_row, col)));
+
+            // Add bottom neighbor (wraps around)
+            size_t bottom_row = (row == rows - 1) ? 0 : row + 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(bottom_row, col)));
+
+            adj_map[static_cast<NodeId>(node_id)] = neighbors;
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
+TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners) {
+    // Create global graph: 8x8 mesh (64 nodes, no wrap-around, has 4 corners)
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
+
+    // Create target graph: 4x8 mesh without torus connections (32 nodes, has 4 corners)
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(4, 8);
+
+    // Verify graph sizes
+    EXPECT_EQ(global_graph.get_nodes().size(), 64u);
+    EXPECT_EQ(target_graph.get_nodes().size(), 32u);
+
+    // Verify global graph structure (8x8 mesh - corners have 2, edges have 3, interior have 4)
+    size_t global_corner_count = 0, global_edge_count = 0, global_interior_count = 0;
+    for (const auto& node : global_graph.get_nodes()) {
+        size_t degree = global_graph.get_neighbors(node).size();
+        if (degree == 2) {
+            global_corner_count++;
+        } else if (degree == 3) {
+            global_edge_count++;
+        } else if (degree == 4) {
+            global_interior_count++;
+        }
+    }
+    // 8x8 mesh: 4 corners, (8-2)*2 + (8-2)*2 = 12 + 12 = 24 edge nodes, (8-2)*(8-2) = 36 interior
+    EXPECT_EQ(global_corner_count, 4u);
+    EXPECT_EQ(global_edge_count, 24u);
+    EXPECT_EQ(global_interior_count, 36u);
+
+    // Verify target graph structure (4x8 mesh - corners have 2, edges have 3, interior have 4)
+    size_t target_corner_count = 0, target_edge_count = 0, target_interior_count = 0;
+    for (const auto& node : target_graph.get_nodes()) {
+        size_t degree = target_graph.get_neighbors(node).size();
+        if (degree == 2) {
+            target_corner_count++;
+        } else if (degree == 3) {
+            target_edge_count++;
+        } else if (degree == 4) {
+            target_interior_count++;
+        }
+    }
+    // 4x8 mesh: 4 corners, (4-2)*2 + (8-2)*2 = 4 + 12 = 16 edge nodes, (4-2)*(8-2) = 12 interior
+    EXPECT_EQ(target_corner_count, 4u);
+    EXPECT_EQ(target_edge_count, 16u);
+    EXPECT_EQ(target_interior_count, 12u);
+
+    // Identify corner nodes in target graph (nodes with degree 2)
+    std::map<TestTargetNode, std::string> target_traits;
+
+    // Mark corner nodes in target graph (4x8 mesh corners)
+    for (const auto& node : target_graph.get_nodes()) {
+        if (target_graph.get_neighbors(node).size() == 2) {
+            target_traits[node] = "corner";
+        }
+    }
+
+    // Verify we found the correct number of corners in target graph
+    EXPECT_EQ(target_traits.size(), 4u) << "Target graph should have 4 corners";
+
+    // Define specific allowed positions for corners in global graph
+    // Positions: 00, 03, 04, 07, 70, 73, 74, 77
+    // Node ID = row * 8 + col
+    std::map<TestGlobalNode, std::string> global_traits;
+    global_traits[0] = "corner";   // 00 = row 0, col 0
+    global_traits[3] = "corner";   // 03 = row 0, col 3
+    global_traits[4] = "corner";   // 04 = row 0, col 4
+    global_traits[7] = "corner";   // 07 = row 0, col 7
+    global_traits[56] = "corner";  // 70 = row 7, col 0
+    global_traits[59] = "corner";  // 73 = row 7, col 3
+    global_traits[60] = "corner";  // 74 = row 7, col 4
+    global_traits[63] = "corner";  // 77 = row 7, col 7
+
+    // Verify we have 8 allowed positions
+    EXPECT_EQ(global_traits.size(), 8u) << "Should have 8 allowed corner positions";
+
+    // Create constraints with trait-based required mappings (one-to-many)
+    // This constrains mesh corners to map to ANY of the 8 specified positions
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+
+    // Solve the mapping
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Verify mapping succeeded
+    EXPECT_TRUE(result.success)
+        << "4x8 mesh should fit in 8x8 mesh with corner-to-allowed-positions constraints. Error: "
+        << result.error_message;
+
+    if (result.success) {
+        // Verify all target nodes are mapped
+        EXPECT_EQ(result.target_to_global.size(), 32u) << "All 32 target nodes should be mapped";
+
+        // Verify all corner nodes are mapped to allowed positions
+        for (const auto& [target_node, trait] : target_traits) {
+            if (trait == "corner") {
+                auto it = result.target_to_global.find(target_node);
+                ASSERT_NE(it, result.target_to_global.end()) << "Corner node " << target_node << " should be mapped";
+
+                // Verify the mapped global node is one of the allowed positions
+                TestGlobalNode mapped_global = it->second;
+                auto global_it = global_traits.find(mapped_global);
+                EXPECT_NE(global_it, global_traits.end())
+                    << "Target corner " << target_node
+                    << " should map to one of the allowed positions (00, 03, 04, 07, 70, 73, 74, 77), "
+                    << "but mapped to " << mapped_global;
+                if (global_it != global_traits.end()) {
+                    EXPECT_EQ(global_it->second, "corner") << "Mapped global node should be in allowed positions";
+                }
+            }
+        }
+
+        // Verify all 4 target corners mapped to allowed positions
+        size_t corners_mapped_to_allowed = 0;
+        for (const auto& [target_node, trait] : target_traits) {
+            if (trait == "corner" && result.target_to_global.contains(target_node)) {
+                TestGlobalNode mapped_global = result.target_to_global.at(target_node);
+                if (global_traits.contains(mapped_global)) {
+                    corners_mapped_to_allowed++;
+                }
+            }
+        }
+        EXPECT_EQ(corners_mapped_to_allowed, 4u) << "All 4 target corners should map to allowed positions";
+
+        // Verify mapping preserves adjacency
+        for (const auto& [target_node, global_node] : result.target_to_global) {
+            const auto& target_neighbors = target_graph.get_neighbors(target_node);
+            const auto& global_neighbors = global_graph.get_neighbors(global_node);
+
+            for (const auto& target_neighbor : target_neighbors) {
+                auto it = result.target_to_global.find(target_neighbor);
+                if (it != result.target_to_global.end()) {
+                    // Check if the mapped neighbor is adjacent to the mapped global node
+                    bool neighbor_adjacent = std::find(global_neighbors.begin(), global_neighbors.end(), it->second) !=
+                                             global_neighbors.end();
+                    EXPECT_TRUE(neighbor_adjacent)
+                        << "Target node " << target_node << " -> global " << global_node << " should have neighbor "
+                        << target_neighbor << " -> global " << it->second << " as adjacent";
+                }
+            }
+        }
+
+        // Log statistics
+        log_info(
+            tt::LogFabric,
+            "Corner-to-allowed-positions constraints test completed: corners_mapped={}, dfs_calls={}, backtracks={}",
+            corners_mapped_to_allowed,
+            result.stats.dfs_calls,
+            result.stats.backtrack_count);
+    } else {
+        log_error(tt::LogFabric, "Mapping failed: {}", result.error_message);
+    }
+}
+
+// Helper function to create a 2D mesh graph without torus connections (no wrap-around)
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_2d_mesh_no_torus_graph(size_t rows, size_t cols) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return (row * cols) + col; };
+
+    for (size_t row = 0; row < rows; ++row) {
+        for (size_t col = 0; col < cols; ++col) {
+            size_t node_id = get_node_id(row, col);
+            std::vector<NodeId> neighbors;
+
+            // Add left neighbor (no wrap-around)
+            if (col > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col - 1)));
+            }
+            // Add right neighbor (no wrap-around)
+            if (col < cols - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col + 1)));
+            }
+            // Add top neighbor (no wrap-around)
+            if (row > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row - 1, col)));
+            }
+            // Add bottom neighbor (no wrap-around)
+            if (row < rows - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row + 1, col)));
+            }
+
+            adj_map[static_cast<NodeId>(node_id)] = neighbors;
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
 // Helper function to create a disconnected graph with multiple components
 template <typename NodeId>
 AdjacencyGraph<NodeId> create_disconnected_graph(
@@ -2109,79 +2386,141 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
     EXPECT_GE(result.constraint_stats.preferred_satisfied, 0u) << "Should track preferred constraints";
 }
 
-TEST_F(TopologySolverTest, BuildAdjacencyMapLogical_WithSwitchMeshes) {
-    // Test that topology solver works correctly with switch meshes
-    // Use T3K 2x2 TT-Switch MGD (has 1 compute mesh and 1 switch mesh)
-    // Use same infrastructure as BuildAdjacencyMapLogical test
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
-    const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto";
+TEST_F(TopologySolverTest, MappingConstraintsOneToManyRequired) {
+    // Test one target to many globals (required constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(1, global_nodes);
 
-    // Create mesh graph from descriptor
-    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 20));
 
-    // Build adjacency map logical - this should include both regular meshes and switch meshes
-    auto adjacency_map = build_adjacency_map_logical(mesh_graph);
+    // Test intersection with existing constraint
+    std::set<TestGlobalNode> global_nodes2 = {11, 12, 13};
+    constraints.add_required_constraint(1, global_nodes2);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);  // Intersection: {11, 12}
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 0u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(13), 0u);
 
-    // Verify that we have adjacency graphs for all meshes (including switches)
-    EXPECT_GT(adjacency_map.size(), 0u);
+    // Test many targets to one global (required constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    constraints2.add_required_constraint(target_nodes, 10);
 
-    // Get all mesh IDs (includes switches)
-    auto all_mesh_ids = mesh_graph.get_all_mesh_ids();
-    auto compute_mesh_ids = mesh_graph.get_mesh_ids();  // Excludes switches
-    auto switch_ids = mesh_graph.get_switch_ids();
+    EXPECT_EQ(constraints2.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(2).size(), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(3).size(), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(3).count(10), 1u);
 
-    // Verify we have both compute meshes and switches
-    EXPECT_GT(compute_mesh_ids.size(), 0u);
-    EXPECT_GT(switch_ids.size(), 0u);
+    // Test intersection with existing constraint for multiple targets
+    std::set<TestGlobalNode> global_nodes3 = {10, 11};
+    std::set<TestGlobalNode> global_nodes4 = {10, 12};
+    constraints2.add_required_constraint(1, global_nodes3);
+    constraints2.add_required_constraint(2, global_nodes4);
+    EXPECT_EQ(constraints2.get_valid_mappings(1).size(), 1u);  // Still {10}
+    EXPECT_EQ(constraints2.get_valid_mappings(2).size(), 1u);  // Still {10}
+    EXPECT_EQ(constraints2.get_valid_mappings(3).size(), 1u);  // Still {10}
 
-    // Verify adjacency map includes all meshes (compute + switches)
-    EXPECT_EQ(adjacency_map.size(), all_mesh_ids.size());
-
-    // Verify each mesh (including switches) has a valid adjacency graph
-    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
-        const auto& nodes = adj_graph.get_nodes();
-        EXPECT_GT(nodes.size(), 0u) << "Mesh " << mesh_id.get() << " should have nodes";
-
-        // Verify that nodes belong to the correct mesh
-        for (const auto& node : nodes) {
-            EXPECT_EQ(node.mesh_id, mesh_id) << "Node should belong to mesh " << mesh_id.get();
-
-            // Verify we can query neighbors
-            const auto& neighbors = adj_graph.get_neighbors(node);
-            for (const auto& neighbor : neighbors) {
-                EXPECT_EQ(neighbor.mesh_id, mesh_id) << "Neighbor should belong to the same mesh " << mesh_id.get();
-            }
-        }
-
-        // Verify switch meshes have correct connectivity
-        if (mesh_graph.is_switch_mesh(mesh_id)) {
-            // Switches should have intra-switch connectivity (devices within the switch)
-            // For a 2x2 switch, we expect 4 devices with mesh connectivity
-            EXPECT_EQ(nodes.size(), 4u) << "2x2 switch should have 4 devices";
-
-            // Verify each device in the switch has neighbors (intra-switch connections)
-            for (const auto& node : nodes) {
-                const auto& neighbors = adj_graph.get_neighbors(node);
-                // In a 2x2 mesh, each device should have 2-4 neighbors depending on position
-                EXPECT_GT(neighbors.size(), 0u) << "Switch device should have neighbors";
-                EXPECT_LE(neighbors.size(), 4u) << "Switch device should have at most 4 neighbors";
-            }
-        }
-    }
-
-    // Verify we can distinguish between compute meshes and switches
-    for (const auto& mesh_id : compute_mesh_ids) {
-        EXPECT_FALSE(mesh_graph.is_switch_mesh(mesh_id)) << "Mesh " << mesh_id.get() << " should be a compute mesh";
-    }
-
-    for (const auto& switch_id : switch_ids) {
-        MeshId switch_mesh_id(*switch_id);
-        EXPECT_TRUE(mesh_graph.is_switch_mesh(switch_mesh_id))
-            << "Mesh " << switch_mesh_id.get() << " should be a switch mesh";
-    }
+    // Test conflict: many targets to one global, then conflicting constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
+    std::set<TestTargetNode> target_nodes2 = {1, 2};
+    constraints3.add_required_constraint(target_nodes2, 10);
+    EXPECT_THROW(constraints3.add_required_constraint(1, 20), std::runtime_error);
 }
 
+TEST_F(TopologySolverTest, MappingConstraintsOneToManyPreferred) {
+    // Test one target to many globals (preferred constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_preferred_constraint(1, global_nodes);
+
+    EXPECT_EQ(constraints.get_preferred_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 0u);  // Preferred doesn't restrict valid
+
+    // Test intersection with existing preferred constraint
+    std::set<TestGlobalNode> global_nodes2 = {11, 12, 13};
+    constraints.add_preferred_constraint(1, global_nodes2);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).size(), 2u);  // Intersection: {11, 12}
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(10), 0u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(13), 0u);
+
+    // Test many targets to one global (preferred constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    constraints2.add_preferred_constraint(target_nodes, 10);
+
+    EXPECT_EQ(constraints2.get_preferred_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(2).size(), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(3).size(), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(3).count(10), 1u);
+
+    // Test intersection with existing preferred constraint for multiple targets
+    std::set<TestGlobalNode> global_nodes3 = {10, 11};
+    std::set<TestGlobalNode> global_nodes4 = {10, 12};
+    constraints2.add_preferred_constraint(1, global_nodes3);
+    constraints2.add_preferred_constraint(2, global_nodes4);
+    EXPECT_EQ(constraints2.get_preferred_mappings(1).size(), 1u);  // Intersection: {10}
+    EXPECT_EQ(constraints2.get_preferred_mappings(2).size(), 1u);  // Intersection: {10}
+    EXPECT_EQ(constraints2.get_preferred_mappings(3).size(), 1u);  // Still {10}
+
+    // Test that preferred constraints don't restrict valid mappings
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
+    std::set<TestGlobalNode> preferred_globals = {10, 11};
+    std::set<TestGlobalNode> required_globals = {20, 21};
+    constraints3.add_preferred_constraint(1, preferred_globals);
+    constraints3.add_required_constraint(1, required_globals);
+    EXPECT_EQ(constraints3.get_preferred_mappings(1).size(), 2u);  // {10, 11}
+    EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 2u);      // {20, 21}
+    EXPECT_TRUE(constraints3.is_valid_mapping(1, 20));
+    EXPECT_TRUE(constraints3.is_valid_mapping(1, 21));
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsOneToManyIntersection) {
+    // Test intersection between one-to-many and one-to-one constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Start with one-to-many constraint
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+
+    // Intersect with one-to-one constraint
+    constraints.add_required_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+
+    // Test intersection between many-to-one and one-to-many
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    constraints2.add_required_constraint(target_nodes, 10);
+    std::set<TestGlobalNode> global_nodes2 = {10, 11};
+    constraints2.add_required_constraint(1, global_nodes2);
+    EXPECT_EQ(constraints2.get_valid_mappings(1).size(), 1u);  // Intersection: {10}
+    EXPECT_EQ(constraints2.get_valid_mappings(2).size(), 1u);  // Still {10}
+
+    // Test intersection between trait constraints and one-to-many
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
+    std::map<TestTargetNode, uint8_t> target_traits = {{1, 0}};
+    std::map<TestGlobalNode, uint8_t> global_traits = {{10, 0}, {11, 0}, {20, 1}};
+    constraints3.add_required_trait_constraint<uint8_t>(target_traits, global_traits);
+    EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 2u);  // {10, 11}
+
+    std::set<TestGlobalNode> global_nodes3 = {10, 12};
+    constraints3.add_required_constraint(1, global_nodes3);
+    EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 1u);  // Intersection: {10}
+}
 }  // namespace tt::tt_fabric

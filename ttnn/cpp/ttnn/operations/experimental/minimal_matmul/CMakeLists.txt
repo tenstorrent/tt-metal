@@ -29,14 +29,11 @@ target_sources(
         minimal_matmul_split.cpp
         device/minimal_matmul_device_operation.cpp
         device/minimal_matmul_program_factory.cpp
-        device/minimal_matmul_split_device_operation.cpp
-        device/minimal_matmul_split_program_factory.cpp
 )
 
 # Disable unity build for program factory files to avoid symbol collisions
 set_source_files_properties(
     device/minimal_matmul_program_factory.cpp
-    device/minimal_matmul_split_program_factory.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             ON

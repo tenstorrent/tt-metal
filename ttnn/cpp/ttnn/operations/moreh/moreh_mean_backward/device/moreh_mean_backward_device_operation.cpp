@@ -23,11 +23,6 @@ void MorehMeanBackwardOperation::validate_tensors(
     check_tensor(input_grad, "moreh_mean_backward", "input_grad", {DataType::BFLOAT16});
 }
 
-MorehMeanBackwardOperation::program_factory_t MorehMeanBackwardOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MorehMeanBackwardFactory{};
-}
-
 void MorehMeanBackwardOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
