@@ -194,6 +194,7 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     std::filesystem::create_directories(output_file_path.parent_path());
 
     const auto& mesh_graph = topology_mapper.get_mesh_graph();
+    const auto& physical_system_descriptor = topology_mapper.get_physical_system_descriptor();
 
     // Structure: hostname -> mesh_id -> umd_chip_id -> {asic_position, fabric_node_id, asic_id}
     struct AsicMapping {
@@ -217,10 +218,9 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 // Get physical chip ID (UMD chip ID) for this fabric node
                 ChipId umd_chip_id = topology_mapper.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
 
-                // Get ASIC position (tray_id and asic_location) from TopologyMapper's MappedChipInfo
-                tt::tt_metal::TrayID tray_id = topology_mapper.get_tray_id_for_fabric_node_id(fabric_node_id);
-                tt::tt_metal::ASICLocation asic_location =
-                    topology_mapper.get_asic_location_for_fabric_node_id(fabric_node_id);
+                // Get ASIC position (tray_id and asic_location) from physical system descriptor
+                tt::tt_metal::TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
+                tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
 
                 // Get hostname for this fabric node
                 HostName hostname = topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id);

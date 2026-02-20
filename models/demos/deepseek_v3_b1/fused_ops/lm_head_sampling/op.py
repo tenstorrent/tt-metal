@@ -524,8 +524,12 @@ class LMHeadSampling:
                 # Append fabric connection args to BRISC kernel if needed (CCL mode only)
                 if not skip_ccl and num_connections > 0:
                     for idx, kernel in enumerate(program.kernels):
-                        if kernel.core_ranges.contains(worker_core) and isinstance(
-                            kernel.config, ttnn.WriterConfigDescriptor
+                        if kernel.core_ranges.contains(worker_core) and (
+                            isinstance(kernel.config, ttnn.WriterConfigDescriptor)
+                            or (
+                                isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
+                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_0
+                            )
                         ):
                             writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
                             fabric_args = ttnn.setup_routing_plane_connection(
