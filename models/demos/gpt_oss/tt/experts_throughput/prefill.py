@@ -8,6 +8,7 @@ to dynamically batch tokens across devices based on expert routing.
 """
 
 import ttnn
+from models.demos.gpt_oss.config import MeshConfig
 
 from .config import AllToAllCombineConfig, AllToAllDispatchConfig, ThroughputExpertConfig, ThroughputProgramConfig
 from .decode import decode_forward as forward
@@ -26,7 +27,9 @@ def prefill_forward_chunked(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
-    chunk_size: int = 512,  # TODO: increasing this causes diverging outputs for last mesh row (https://github.com/tenstorrent/tt-metal/issues/36335)
+    mesh_config: MeshConfig,
+    ccl_manager,
+    chunk_size: int,
 ) -> ttnn.Tensor:
     """Chunked prefill forward pass for very long sequences.
 
@@ -66,6 +69,8 @@ def prefill_forward_chunked(
             combine_config,
             program_config,
             mesh_device,
+            mesh_config,
+            ccl_manager,
         )
 
     # Split into chunks
@@ -92,6 +97,8 @@ def prefill_forward_chunked(
             combine_config,
             program_config,
             mesh_device,
+            mesh_config,
+            ccl_manager,
         )
         output_chunks.append(chunk_output)
 

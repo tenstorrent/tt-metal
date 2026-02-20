@@ -232,3 +232,41 @@ def test_minimal_matmul_split(device):
     logger.info(f"Q shape: {Q.shape}")  # Q shape: Shape([32, 64, 64])
     logger.info(f"K shape: {K.shape}")  # K shape: Shape([32, 64, 64])
     logger.info(f"V shape: {V.shape}")  # V shape: Shape([32, 64, 64])
+
+
+def test_dit_minimal_matmul_addcmul_fused(device):
+    # Fused operation: output = base_value + (scalar * matmul(input, weight) * gate)
+    input_tensor = ttnn.rand((64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [M, K]
+    weight_tensor = ttnn.rand((32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [K, N]
+
+    base_value = ttnn.rand((64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [M, N] - full shape
+    gate = ttnn.rand((1, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [1, N] - broadcast
+
+    output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+        matmul_input_tensor=input_tensor,
+        matmul_weight_tensor=weight_tensor,
+        scalar=1.0,
+        addcmul_input_tensor1=base_value,  # base value (full shape)
+        addcmul_input_tensor2=gate,  # gate/multiplier (broadcast row)
+    )
+    logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([64, 64])
+
+    # Example with bias and config
+    bias = ttnn.rand((1, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [1, N]
+    output_with_bias = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+        matmul_input_tensor=input_tensor,
+        matmul_weight_tensor=weight_tensor,
+        scalar=2.0,
+        addcmul_input_tensor1=base_value,
+        addcmul_input_tensor2=gate,
+        bias_tensor=bias,
+        config=ttnn.MinimalMatmulConfig(
+            M_block_size=8,
+            K_block_size=8,
+            N_block_size=8,
+            subblock_h=2,
+            subblock_w=2,
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        ),
+    )
+    logger.info(f"Output with bias shape: {output_with_bias.shape}")  # Output with bias shape: Shape([64, 64])
