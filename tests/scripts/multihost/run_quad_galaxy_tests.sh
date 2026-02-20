@@ -97,7 +97,7 @@ setup_quad_galaxy_env() {
 _run_deepseekv3_tt() {
     tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
-        "$1"
+        "$@"
 }
 
 ###############################################################################
@@ -108,7 +108,7 @@ run_dual_deepseekv3_unit_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests/unit" ; fail+=$?
+    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -119,7 +119,7 @@ run_quad_deepseekv3_unit_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests/unit" ; fail+=$?
+    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -134,7 +134,7 @@ run_dual_deepseekv3_module_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests" ; fail+=$?
+    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -145,7 +145,7 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests" ; fail+=$?
+    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -160,7 +160,7 @@ run_dual_teacher_forced_test() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/dual_teacher_forced_output.log ]]; then
@@ -178,7 +178,7 @@ run_quad_teacher_forced_test() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/quad_teacher_forced_output.log ]]; then
@@ -200,7 +200,7 @@ run_dual_demo_test() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -211,7 +211,7 @@ run_quad_demo_test() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -226,7 +226,7 @@ run_dual_demo_stress_test() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -237,7 +237,7 @@ run_quad_demo_stress_test() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
