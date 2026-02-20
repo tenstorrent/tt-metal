@@ -383,6 +383,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
+    TT_FATAL(
+        packet_size_bytes >= l1_scratch_cb_page_size_bytes,
+        "Fabric packet size ({} bytes) must be >= tensor page size ({} bytes). "
+        "Increase max_packet_payload_size_bytes in FabricRouterConfig.",
+        packet_size_bytes,
+        l1_scratch_cb_page_size_bytes);
 
     // scatter-write currently supports 4 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 4;

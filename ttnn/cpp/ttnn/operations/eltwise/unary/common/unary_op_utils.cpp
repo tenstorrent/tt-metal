@@ -45,7 +45,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ISNEGINF:
         case UnaryOpType::ISPOSINF:
         case UnaryOpType::ISFINITE: return "SFPU_OP_ISINF_ISNAN_INCLUDE";
-        case UnaryOpType::LOGICAL_NOT_UNARY: return "SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE";
+        case UnaryOpType::LOGICAL_NOT_UNARY: return "SFPU_OP_LOGICAL_NOT_INCLUDE";
         case UnaryOpType::I0: return "SFPU_OP_I0_INCLUDE";
         case UnaryOpType::I1: return "SFPU_OP_I1_INCLUDE";
         case UnaryOpType::ACOSH:
@@ -168,9 +168,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::POWER_ITERATIVE:
             // For exponents 0, 1, 2, 3: use iterative approach
-            return {
-                "power_iterative_tile_init();",
-                fmt::format("power_iterative_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                param0 >= 0.0f && param0 == std::floor(param0),
+                "POWER_ITERATIVE requires non-negative integer exponent, got {}",
+                param0);
+            return {"power_iterative_tile_init();", fmt::format("power_iterative_tile({}, {});", idst, param0_raw)};
         case UnaryOpType::LEAKY_RELU:
             return {
                 "leaky_relu_tile_init();",
@@ -595,19 +597,22 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::ISPOSINF: return {"isposinf_tile_init();", fmt::format("isposinf_tile({});", idst)};
         case UnaryOpType::ISNEGINF: return {"isneginf_tile_init();", fmt::format("isneginf_tile({});", idst)};
         case UnaryOpType::ISNAN: return {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)};
-        case UnaryOpType::LOGICAL_NOT_UNARY:
+        case UnaryOpType::LOGICAL_NOT_UNARY: {
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32) {
-                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_int32({});", idst)};
+            const char* data_format;
+            switch (input_dtype.value()) {
+                case DataType::INT32: data_format = "Int32"; break;
+                case DataType::UINT32: data_format = "UInt32"; break;
+                case DataType::UINT16: data_format = "UInt16"; break;
+                case DataType::FLOAT32: data_format = "Float32"; break;
+                case DataType::BFLOAT16: data_format = "Float16_b"; break;
+                case DataType::BFLOAT8_B: data_format = "Bfp8_b"; break;
+                default: TT_THROW("Unsupported data format for logical not unary: {}", input_dtype);
             }
-            if (input_dtype == DataType::UINT32) {
-                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint32({});", idst)};
-            }
-            if (input_dtype == DataType::UINT16) {
-                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint16({});", idst)};
-            }
-            return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
+            return {
+                "logical_not_tile_init();", fmt::format("logical_not_tile<DataFormat::{0}>({1});", data_format, idst)};
+        }
         case UnaryOpType::I0: return {"i0_tile_init();", fmt::format("i0_tile({});", idst)};
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};

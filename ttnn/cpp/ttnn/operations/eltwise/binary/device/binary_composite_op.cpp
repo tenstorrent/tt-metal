@@ -633,45 +633,22 @@ Tensor ExecuteBinaryRemainder::invoke(
     return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt, sub_core_grids);
 }
 
-Tensor run_fmod(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const Tensor& division_result,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::subtract(
-        input_a,
-        ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
 // FMOD result = input − (other * trunc(input/other))
-// When inputs are of data type BF16 and when input_b==0, expected is nan, but FMOD gives inf
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    DataType input_dtype = input_a.dtype();
-
-    // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
-    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    if (is_int32) {
-        return ttnn::prim::binary_ng(
-            input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
-    }
-    Tensor div_res = ttnn::div(input_a, input_b, false, "trunc", std::nullopt, output_mem_config);
-
-    // No typecast for FP32 input
-    if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
-        return run_fmod(input_a, input_b, div_res, output_mem_config);
-    }
-    // For bfloat16 with decimal values, need to typecast to FP32 to improve precision
-    Tensor a = typecast(input_a, DataType::FLOAT32);
-    Tensor b = typecast(input_b, DataType::FLOAT32);
-    div_res = typecast(div_res, DataType::FLOAT32);
-    return typecast(run_fmod(a, b, div_res, output_mem_config), input_dtype);
+    return BinaryOperationSfpu<BinaryOpType::FMOD>::invoke(
+        input_a,
+        input_b,
+        std::nullopt,  // output_dtype
+        output_mem_config,
+        std::nullopt,   // optional_output_tensor
+        {},             // post_activations
+        {},             // lhs_activations
+        {},             // rhs_activations
+        std::nullopt);  // use_legacy
 }
 
 Tensor ExecuteBinaryFmod::invoke(
@@ -828,7 +805,8 @@ Tensor ExecutePower::invoke(
     const std::optional<Tensor>& output_tensor) {
     float exponent_floor = std::floor(exponent);
     if (static_cast<int32_t>(exponent_floor) == exponent) {
-        return ExecutePower::invoke(input_a, static_cast<int32_t>(exponent), output_mem_config, output_tensor);
+        int32_t exp = exponent;
+        return ExecutePower::invoke(input_a, exp, output_mem_config, output_tensor);
     }
     return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
         input_a, exponent, output_mem_config, output_tensor);
@@ -842,8 +820,9 @@ Tensor ExecutePower::invoke(
     const std::optional<Tensor>& output_tensor) {
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
+        uint32_t exp = exponent;
         return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER_ITERATIVE>::
-            invoke(input, exponent, output_mem_config, output_tensor);
+            invoke(input, exp, output_mem_config, output_tensor);
     }
     return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
         input, exponent, output_mem_config, output_tensor);

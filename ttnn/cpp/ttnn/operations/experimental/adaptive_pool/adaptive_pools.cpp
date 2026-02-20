@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <variant>
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"
 #include "ttnn/operations/pool/generic/generic_pools.hpp"
@@ -10,7 +9,7 @@
 namespace ttnn::operations::experimental::adaptive_pool {
 
 // Reusing the generic pool2d functionality from the regular pool operations
-Tensor AdaptiveAvgPool2DOp::invoke(
+Tensor adaptive_avg_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -31,7 +30,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
 
     auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
-    return ttnn::operations::pool::AvgPool2DOp::invoke(
+    return ttnn::operations::pool::avg_pool2d(
         input_tensor,
         batch_size,
         input_h,
@@ -48,10 +47,13 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         applied_shard_scheme,
         compute_kernel_config,
         deallocate_input,
-        reallocate_output);
+        reallocate_output,
+        DataType::BFLOAT16,  // dtype - using default
+        Layout::ROW_MAJOR,   // output_layout - using default
+        false);              // config_tensor_in_dram - using default
 }
 
-Tensor AdaptiveMaxPool2DOp::invoke(
+Tensor adaptive_max_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -71,7 +73,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
 
     auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
-    auto result = ttnn::operations::pool::MaxPool2DOp::invoke(
+    auto result = ttnn::operations::pool::max_pool2d(
         input_tensor,
         batch_size,
         input_h,
@@ -87,7 +89,10 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         applied_shard_scheme,
         deallocate_input,
         reallocate_output,
-        false /*return_indices*/);
+        false,  // return_indices
+        DataType::BFLOAT16,  // dtype - using default
+        Layout::ROW_MAJOR,   // output_layout - using default
+        false);              // config_tensor_in_dram - using default
 
     // Since return_indices=false, the result variant should always contain a Tensor
     TT_FATAL(result.size() == 1, "Expected Tensor result when return_indices is false");

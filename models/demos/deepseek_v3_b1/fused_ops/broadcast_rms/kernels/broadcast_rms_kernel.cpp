@@ -33,8 +33,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_sender"),
         get_named_compile_time_arg_val("core_noc_x"),
         get_named_compile_time_arg_val("core_noc_y"),
-        get_named_compile_time_arg_val("is_secondary_sender"),
-        get_named_compile_time_arg_val("is_active_broadcaster")>;
+        get_named_compile_time_arg_val("is_secondary_sender")>;
 
     // Only read broadcast runtime args if CCL is enabled
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
@@ -67,12 +66,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("core_noc_y"),
         get_named_compile_time_arg_val("is_secondary_sender"),
         get_named_compile_time_arg_val("has_secondary_target"),
-        get_named_compile_time_arg_val("has_reverse_secondary_connection"),
         get_named_compile_time_arg_val("start_distance_in_hops_forward"),
         get_named_compile_time_arg_val("range_hops_forward"),
         get_named_compile_time_arg_val("start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("range_hops_backward"),
-        get_named_compile_time_arg_val("using_persistent_buffers")>;
+        get_named_compile_time_arg_val("range_hops_backward")>;
 
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
@@ -106,12 +103,12 @@ void kernel_main() {
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
-
-    deepseek_b1_ops::RMSNorm::ComputeArgs rms_args{
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
+
+    deepseek_b1_ops::RMSNorm::ComputeArgs rms_args{
         get_common_arg_val<uint32_t>(0),  // epsilon (common runtime arg 0)
         get_common_arg_val<float>(1),     // scalar (1/N)
     };
@@ -120,6 +117,9 @@ void kernel_main() {
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
 #endif
+
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 
 #endif
 

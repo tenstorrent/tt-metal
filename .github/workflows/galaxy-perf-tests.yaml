@@ -21,6 +21,8 @@ on:
           - wan2-2
           - mochi
           - qwenimage
+          - gpt-oss
+          - deepseek_v3
       build-type:
         required: false
         type: choice
