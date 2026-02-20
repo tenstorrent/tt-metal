@@ -55,6 +55,11 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(const NodeId& n
 }
 
 template <typename NodeId>
+const typename AdjacencyGraph<NodeId>::AdjacencyMap& AdjacencyGraph<NodeId>::get_adjacency_map() const {
+    return adj_map_;
+}
+
+template <typename NodeId>
 void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name) const {
     std::stringstream ss;
     ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
