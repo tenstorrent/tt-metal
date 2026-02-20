@@ -17,8 +17,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            creation.hpp
+        FILES creation.hpp
     PRIVATE
 )
 
