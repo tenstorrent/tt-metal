@@ -23,6 +23,7 @@ class DeviceLockTimeout(Exception):
     """Raised when acquiring the device lock times out."""
 
 
+# todo)) the UMD already provides a lock mechanism -- use it instead of this?
 @contextlib.contextmanager
 def tt_device_lock(lock_path: str = _TT_DEVICE_LOCK_PATH, timeout: float = _TT_DEVICE_LOCK_TIMEOUT):
     """

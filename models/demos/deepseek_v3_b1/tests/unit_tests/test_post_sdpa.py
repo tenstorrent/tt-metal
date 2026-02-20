@@ -41,12 +41,11 @@ def create_fabric_router_config(max_payload_size):
 
 
 @pytest.mark.parametrize(
-    "num_devices, mesh_device, device_params",
+    "num_devices, device_params",
     [
-        (1, (1, 1), {}),
+        (1, {}),
         (
             2,
-            (2, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(15232),
@@ -54,7 +53,7 @@ def create_fabric_router_config(max_payload_size):
         ),
     ],
     ids=["single_device", "multi_device"],
-    indirect=["mesh_device", "device_params"],
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize(
     "M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
@@ -66,7 +65,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("fuse_residual_add", [False, True])
 @pytest.mark.parametrize("ccl_enabled", [True, False], ids=["ccl_on", "ccl_off"])
 def test_post_sdpa(
-    mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     M,
     K1,
@@ -82,7 +81,7 @@ def test_post_sdpa(
     """Test post_sdpa fused operation with optional CCL all-reduce"""
 
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # CCL requires multiple devices
@@ -94,19 +93,10 @@ def test_post_sdpa(
         pytest.skip("Residual add requires CCL to be enabled")
 
     # Create submesh - fabric requires opening full system mesh first
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
@@ -417,6 +407,48 @@ def test_post_sdpa(
         logger.info("Created global semaphores for CCL synchronization")
 
     # ========================================================================
+    # SDPA KV Cache tensor for CB overlap
+    # Matches flash_mla's double-buffered KV CB sizing: shard = (256, 576) per core,
+    # giving 156672 bytes/core in bfloat8_b — same as flash_mla's cb_k_in.
+    # ========================================================================
+    KNOPE_DIM = 512
+    KROPE_DIM = 64
+    kvpe_dim = KNOPE_DIM + KROPE_DIM  # 576
+    sdpa_kv_cache_num_cores_x = compute_grid_size.x
+    sdpa_kv_cache_num_cores_y = compute_grid_size.y
+    sdpa_kv_cache_num_cores = sdpa_kv_cache_num_cores_x * sdpa_kv_cache_num_cores_y
+    sdpa_kv_cache_shard_height = 256  # 2 * k_chunk_size (128), matching flash_mla double-buffer
+    sdpa_kv_cache_total_height = sdpa_kv_cache_shard_height * sdpa_kv_cache_num_cores
+
+    sdpa_kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(sdpa_kv_cache_num_cores_x - 1, sdpa_kv_cache_num_cores_y - 1),
+                )
+            }
+        ),
+        (sdpa_kv_cache_shard_height, kvpe_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.randn((1, 1, sdpa_kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_kv_cache_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    logger.info(
+        f"Created sdpa_kv_cache buffer for CB overlap: shard ({sdpa_kv_cache_shard_height}, {kvpe_dim}) on {sdpa_kv_cache_num_cores} cores"
+    )
+
+    # ========================================================================
     # Run fused operation
     # ========================================================================
     logger.info(f"Running post_sdpa fused operation (ccl_enabled={ccl_enabled})...")
@@ -433,6 +465,7 @@ def test_post_sdpa(
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
         ccl_enabled=ccl_enabled,
+        sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
     )
     ttnn.synchronize_device(submesh)
 
@@ -470,10 +503,6 @@ def test_post_sdpa(
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED - {pcc_message}")
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices have the correct output"
     logger.info(f"✓ Post SDPA fused op test passed (ccl_enabled={ccl_enabled})!")

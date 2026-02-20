@@ -375,6 +375,22 @@ void wait_until_cores_done(
     }
 }
 
+void wait_for_idle(ChipId device_id, const std::vector<std::vector<CoreCoord>>& logical_cores) {
+    std::unordered_set<CoreCoord> not_done_cores;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        CoreType core_type = hal.get_core_type(index);
+        const auto& logical_cores_of_type = logical_cores[index];
+        for (const auto& logical_core : logical_cores_of_type) {
+            auto physical_core =
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, core_type);
+            not_done_cores.insert(physical_core);
+        }
+    }
+    wait_until_cores_done(device_id, tt_metal::dev_msgs::RUN_MSG_GO, not_done_cores);
+}
+
 void send_msg_to_eth_mailbox(
     tt::ChipId device_id,
     const CoreCoord& virtual_core,

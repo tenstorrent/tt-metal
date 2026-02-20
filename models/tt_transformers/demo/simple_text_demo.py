@@ -621,7 +621,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
@@ -742,6 +742,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
+# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -1125,7 +1126,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits, log_probs = generator.decode_forward_text(
+            logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,

@@ -16,12 +16,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-JointSDPADeviceOperation::program_factory_t JointSDPADeviceOperation::select_program_factory(
-    const JointSDPAParams& /*args*/, const JointSDPAInputs& /*tensor_args*/) {
-    return JointSDPAProgramFactory{};
-}
-
 void JointSDPADeviceOperation::validate_on_program_cache_miss(
     const JointSDPAParams& args, const JointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
