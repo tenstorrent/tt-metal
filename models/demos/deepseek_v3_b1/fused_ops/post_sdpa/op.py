@@ -38,7 +38,6 @@ CB Layout:
 """
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -328,15 +327,9 @@ class PostSDPA:
             # Alias for backward compatibility with CB descriptor code
             sdpa_l_tiles_per_worker = sdpa_out_tiles
 
-            logger.info(
-                f"sdpa_num_l_chunks={sdpa_num_l_chunks}, sdpa_tiles_per_l_chunk={sdpa_tiles_per_l_chunk}, "
-                f"sdpa_out_tiles={sdpa_out_tiles}, sdpa_input_page_size_bytes={sdpa_input_page_size_bytes}"
-            )
-
             # SDPA tile sizes (get from actual tensor, not hardcoded)
             sdpa_l_tile_size = sdpa_input_page_size_bytes  # Actual tile size from input
             sdpa_ms_tile_size = _round_up(sdpa_input_page_size_bytes, sdpa_l1_alignment)  # Aligned for MS
-            logger.info(f"sdpa_l_chunk_size_bytes={sdpa_l_chunk_size_bytes}, sdpa_l_tile_size={sdpa_l_tile_size}")
 
             # SDPA scatter parameters (scatter output to matmul1 cores)
             # Each SDPA worker scatters rows to matmul1 cores (one row per tile when using 8x32 tiles)
@@ -344,9 +337,11 @@ class PostSDPA:
             sdpa_scatter_num_tiles = sdpa_l_tiles_per_worker  # Tiles per worker
             sdpa_scatter_src_tile_size = sdpa_l_tile_size  # Source tile size
             sdpa_scatter_dst_tile_size = tile_1x32_size  # 1x32 destination (row-extracted)
-            # Face size = half tile bytes (tile_height/2 rows * tile_width cols * element_size)
-            sdpa_scatter_face_size = (sdpa_tile_height // 2) * sdpa_tile_width * sdpa_element_size_bytes
-            sdpa_scatter_row_face_size = sdpa_tile_width * sdpa_element_size_bytes  # One row in face
+            # Face layout: each 8x32 tile has 2 faces of tile_height × (tile_width/2) = 8 × 16.
+            # face_size = stride from Face 0 to Face 1 in source tile
+            # row_face_size = one row within a face (also = dest face size for 1×32 dest tiles)
+            sdpa_scatter_face_size = sdpa_tile_height * (sdpa_tile_width // 2) * sdpa_element_size_bytes
+            sdpa_scatter_row_face_size = 1 * (sdpa_tile_width // 2) * sdpa_element_size_bytes  # dest_h=1 for 1x32
 
             # SDPA CB indices (14-24, after existing CBs 0-13)
             sdpa_cb_local_l = 14
@@ -386,9 +381,6 @@ class PostSDPA:
                 sdpa_semaphore2 = sdpa_semaphores[1]
                 sdpa_semaphore1_addr = ttnn.get_global_semaphore_address(sdpa_semaphore1)
                 sdpa_semaphore2_addr = ttnn.get_global_semaphore_address(sdpa_semaphore2)
-                print(
-                    f"DEBUG: SDPA global semaphore1_addr={sdpa_semaphore1_addr}, semaphore2_addr={sdpa_semaphore2_addr}"
-                )
 
             # Convert scale to FP32 bits
             import struct
@@ -955,9 +947,12 @@ class PostSDPA:
                     cb_list.append(sdpa_local_ms_cb_descriptor)
 
                     # CB 16: SDPA R1 neighbor L (aliased to R1 recv buffer)
+                    # The recv buffer holds both L and MS data, but this CB should only
+                    # cover the L portion. Override total_size like the original op does.
                     sdpa_r1_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         sdpa_cb_r1_neighbor_l, sdpa_r1_recv_device
                     )
+                    sdpa_r1_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
                     cb_list.append(sdpa_r1_neighbor_l_cb_descriptor)
 
                     # CB 17: SDPA R1 neighbor MS (scratch, not backed by tensor)
@@ -1006,9 +1001,11 @@ class PostSDPA:
                     cb_list.append(sdpa_r1_result_ms_cb_descriptor)
 
                     # CB 20: SDPA R2 neighbor L (aliased to R2 recv buffer)
+                    # Same total_size override as R1 neighbor L - only cover L portion.
                     sdpa_r2_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         sdpa_cb_r2_neighbor_l, sdpa_r2_recv_device
                     )
+                    sdpa_r2_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
                     cb_list.append(sdpa_r2_neighbor_l_cb_descriptor)
 
                     # CB 21: SDPA R2 neighbor MS (scratch)
@@ -1308,13 +1305,6 @@ class PostSDPA:
                     fabric_node_id = mesh_device.get_fabric_node_id(coord)
                     neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
                     neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
-                    print("cluster axis:", cluster_axis)
-                    print("ccl row:", row)
-                    print("ccl col:", col)
-                    print("ccl neighbor row:", neighbor_row)
-                    print("ccl neighbor col:", neighbor_col)
-                    print(f"fabric node id (local): {fabric_node_id} umd device id: {device.id()}")
-                    print("fabric node id (neighbor):", neighbor_fabric_node_id)
                     # Setup sender fabric connection
                     sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
                     sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
@@ -1375,22 +1365,10 @@ class PostSDPA:
 
                     fwd_row, fwd_col = get_sdpa_neighbor_coord(mesh_shape, row, col, +1, sdpa_cluster_axis)
                     bwd_row, bwd_col = get_sdpa_neighbor_coord(mesh_shape, row, col, -1, sdpa_cluster_axis)
-                    print("sdpa_cluster_axis:", sdpa_cluster_axis)
-                    print("sdpa mesh shape[0]:", mesh_shape[0])
-                    print("sdpa mesh shape[1]:", mesh_shape[1])
-                    print("sdpa row:", row)
-                    print("sdpa col:", col)
-                    print("sdpa fwd_row:", fwd_row)
-                    print("sdpa fwd_col:", fwd_col)
-                    print("sdpa bwd_row:", bwd_row)
-                    print("sdpa bwd_col:", bwd_col)
                     fwd_coord = ttnn.MeshCoordinate(fwd_row, fwd_col)
                     bwd_coord = ttnn.MeshCoordinate(bwd_row, bwd_col)
                     fwd_fabric_node_id = mesh_device.get_fabric_node_id(fwd_coord)
                     bwd_fabric_node_id = mesh_device.get_fabric_node_id(bwd_coord)
-                    print("sdpa fabric_node_id:", sdpa_fabric_node_id)
-                    print("sdpa fwd_fabric_node_id:", fwd_fabric_node_id)
-                    print("sdpa bwd_fabric_node_id:", bwd_fabric_node_id)
                     # SDPA worker runtime args (per-core)
                     sdpa_worker_ncrisc_rt_args = ttnn.RuntimeArgs()
                     sdpa_worker_brisc_rt_args = ttnn.RuntimeArgs()

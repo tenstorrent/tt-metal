@@ -40,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
 
 
 def create_fabric_router_config(max_payload_size):
@@ -709,13 +710,31 @@ def test_post_sdpa_with_sdpa_phase(
     torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
 
     # SDPA input tensors per device: L [8, 4096], MS [8, 256]
+    # MS tensor layout: for each worker core c (0..7), within columns [c*32, (c+1)*32]:
+    #   column 0 = M (max), column 1 = S (sum), rest unused
+    # This matches the original sdpa_reduce_to_all test/op format.
+    MS_WIDTH_PER_CORE = 32  # ms_width per SDPA worker core
     device_sdpa_l_inputs = []
     device_sdpa_ms_inputs = []
+    device_sdpa_m_inputs = []  # M (max) per device: [8, num_workers]
+    device_sdpa_s_inputs = []  # S (sum) per device: [8, num_workers]
     for device_idx in range(num_devices):
         torch_sdpa_l = torch.randn((SDPA_L_HEIGHT, SDPA_L_WIDTH), dtype=torch.bfloat16)
         torch_sdpa_ms = torch.randn((SDPA_L_HEIGHT, SDPA_MS_WIDTH), dtype=torch.bfloat16)
+
+        # Create structured M and S values at correct positions
+        m_device = torch.zeros((SDPA_L_HEIGHT, NUM_SDPA_WORKERS), dtype=torch.bfloat16)
+        s_device = torch.zeros((SDPA_L_HEIGHT, NUM_SDPA_WORKERS), dtype=torch.bfloat16)
+        for core_idx in range(NUM_SDPA_WORKERS):
+            m_device[:, core_idx] = torch.randn(SDPA_L_HEIGHT, dtype=torch.bfloat16) * 0.5 - 1.0
+            s_device[:, core_idx] = torch.abs(torch.randn(SDPA_L_HEIGHT, dtype=torch.bfloat16)) + 0.1
+            torch_sdpa_ms[:, core_idx * MS_WIDTH_PER_CORE + 0] = m_device[:, core_idx]
+            torch_sdpa_ms[:, core_idx * MS_WIDTH_PER_CORE + 1] = s_device[:, core_idx]
+
         device_sdpa_l_inputs.append(torch_sdpa_l)
         device_sdpa_ms_inputs.append(torch_sdpa_ms)
+        device_sdpa_m_inputs.append(m_device)
+        device_sdpa_s_inputs.append(s_device)
 
     # Residual tensor (optional)
     if fuse_residual_add:
@@ -724,31 +743,70 @@ def test_post_sdpa_with_sdpa_phase(
         torch_residual = None
 
     # ========================================================================
-    # Compute golden reference (SDPA reduce-to-all -> matmul1 -> matmul2 -> CCL)
+    # Compute golden reference (SDPA reduce-to-all -> scatter -> matmul1 -> gather -> matmul2 -> CCL)
     # ========================================================================
-    # For now, we compute a simplified golden that assumes SDPA produces the expected
-    # matmul1 input. In a full implementation, this would include the actual SDPA
-    # reduction logic.
+    # Step 1: Compute SDPA reduce-to-all for each column ring (sdpa_cluster_axis=0).
+    # Devices in the same column form a ring. With a 4x2 mesh:
+    #   Column 0 ring: device indices 0, 2, 4, 6 (row-major: (0,0), (1,0), (2,0), (3,0))
+    #   Column 1 ring: device indices 1, 3, 5, 7 (row-major: (0,1), (1,1), (2,1), (3,1))
+    sdpa_l_reduced_per_col = {}
+    for col in range(mesh_cols):
+        # Collect devices in this column's ring (along axis 0)
+        ring_device_indices = [row * mesh_cols + col for row in range(mesh_rows)]
+        ring_l_data = [device_sdpa_l_inputs[d].float() for d in ring_device_indices]
+        ring_s_data = [device_sdpa_s_inputs[d].float() for d in ring_device_indices]
+        ring_m_data = [device_sdpa_m_inputs[d].float() for d in ring_device_indices]
+
+        l_reduced, _, _ = SdpaReduceToAll.golden(
+            ring_l_data,
+            ring_s_data,
+            ring_m_data,
+            num_cores=NUM_SDPA_WORKERS,
+            scale_value=1.0,
+        )
+        sdpa_l_reduced_per_col[col] = l_reduced  # [8, 4096]
+        logger.info(f"SDPA golden for column {col}: L_reduced shape {l_reduced.shape}")
+
+    # Step 2: Model scatter + matmul1 + gather + matmul2 for each device.
+    # The scatter maps SDPA output rows to matmul1 cores:
+    #   core_idx = worker_i * scatter_rows + row_j
+    #   core_idx gets L_reduced[row_j, worker_i*l_width:(worker_i+1)*l_width]
+    # Matmul1: each core computes [1,512] x [512,128] -> [1,128] (weight cols = core_idx*128..+128)
+    # Gather: concat 64 x [1,128] -> [1,8192]
+    l_width = K1  # 512 per worker
+    n_per_core = intermediate // num_matmul1_cores  # 8192/64 = 128
+
+    def scatter_matmul_gather(l_reduced, weights1, weights2):
+        """Model scatter -> matmul1 -> gather -> matmul2 pipeline."""
+        gathered = torch.zeros(1, intermediate)  # [1, 8192]
+        for worker_i in range(NUM_SDPA_WORKERS):
+            for row_j in range(SDPA_L_HEIGHT):
+                core_idx = worker_i * SDPA_L_HEIGHT + row_j
+                input_slice = l_reduced[row_j, worker_i * l_width : (worker_i + 1) * l_width]  # [512]
+                weight_slice = weights1[:, core_idx * n_per_core : (core_idx + 1) * n_per_core]  # [512, 128]
+                gathered[0, core_idx * n_per_core : (core_idx + 1) * n_per_core] = input_slice @ weight_slice
+        result = gathered @ weights2  # [1, 8192] x [8192, 7168] = [1, 7168]
+        return result
+
+    # Step 3: CCL all-reduce across row pairs (cluster_axis=1).
+    # Each row has mesh_cols devices. Both devices in a row pair compute their own
+    # scatter+matmul1+gather+matmul2 (using their column's SDPA output), then sum.
     num_pairs = mesh_rows
-    devices_per_pair = mesh_cols
     torch_expected_per_pair = []
-
     for pair_idx in range(num_pairs):
-        pair_inputs = []
-        for col in range(devices_per_pair):
-            device_idx = pair_idx * devices_per_pair + col
-            # For testing, use a simple input derived from SDPA L tensor
-            # In reality, SDPA would reduce L/MS and scatter to matmul1 cores
-            torch_input = device_sdpa_l_inputs[device_idx][:1, :K1]  # Take first row, first K1 cols
-            pair_inputs.append(torch_input.float())
-
-        golden = PostSDPA.golden(
-            pair_inputs,
-            torch_weights1.float(),
-            torch_weights2.float(),
-            torch_residual.float() if torch_residual is not None else None,
-        ).bfloat16()
-        torch_expected_per_pair.append(golden)
+        pair_result = torch.zeros(M, output_size)
+        for col in range(mesh_cols):
+            l_reduced = sdpa_l_reduced_per_col[col]
+            device_result = scatter_matmul_gather(
+                l_reduced,
+                torch_weights1.float(),
+                torch_weights2.float(),
+            )
+            pair_result += device_result
+        # Add residual if provided
+        if torch_residual is not None:
+            pair_result += torch_residual.float()
+        torch_expected_per_pair.append(pair_result.bfloat16())
 
     logger.info(f"Golden output shape (per-pair all-reduced): {torch_expected_per_pair[0].shape}")
 
@@ -963,22 +1021,36 @@ def test_post_sdpa_with_sdpa_phase(
         mesh_mapper=mesh_mapper,
     )
 
-    # SDPA R1/R2 receive buffers (same shape as L input for receiving neighbor data)
+    # SDPA R1/R2 receive buffers: must hold BOTH L and MS data per core.
+    # Buffer layout per core: [L_chunk0][L_chunk1]...[L_chunkN-1][MS]
+    # The original sdpa_reduce_to_all op uses shard shape [batch, l_width + ms_width] per core.
+    # Using only L-sized buffers causes MS writes to go past the allocated memory!
+    sdpa_recv_per_worker = sdpa_l_per_worker + sdpa_ms_per_worker  # 512 + 32 = 544
+    sdpa_recv_shard_shape = (SDPA_L_HEIGHT, sdpa_recv_per_worker)  # [8, 544]
+    sdpa_recv_shard_spec = ttnn.ShardSpec(sdpa_worker_grid, sdpa_recv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_recv_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, sdpa_recv_shard_spec
+    )
+    # Full receive tensor: [8, (l_width + ms_width) * num_workers] = [8, 544*8] = [8, 4352]
+    sdpa_recv_full_width = sdpa_recv_per_worker * NUM_SDPA_WORKERS
+    mesh_sdpa_recv_torch = torch.cat(
+        [torch.zeros((SDPA_L_HEIGHT, sdpa_recv_full_width), dtype=torch.bfloat16)] * num_devices, dim=0
+    )
     ttnn_sdpa_r1_recv = ttnn.from_torch(
-        mesh_sdpa_l_out_torch,
+        mesh_sdpa_recv_torch,
         device=submesh,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_l_mem_config,
+        memory_config=sdpa_recv_mem_config,
         tile=sdpa_tile,
         mesh_mapper=mesh_mapper,
     )
     ttnn_sdpa_r2_recv = ttnn.from_torch(
-        mesh_sdpa_l_out_torch,
+        mesh_sdpa_recv_torch,
         device=submesh,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_l_mem_config,
+        memory_config=sdpa_recv_mem_config,
         tile=sdpa_tile,
         mesh_mapper=mesh_mapper,
     )
