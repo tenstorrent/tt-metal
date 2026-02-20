@@ -14,6 +14,7 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK PACK
@@ -50,17 +51,17 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t l1_tile_index;
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_handle];
     if constexpr (out_of_order_output) {
-        // Use the write tile index to track position within CB
-        l1_tile_index = get_local_cb_interface(output_id).fifo_wr_tile_idx + output_tile_index;
+        // Use the write tile index to track position within DFB
+        l1_tile_index = local_dfb_interface.wr_entry_idx + output_tile_index;
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
             // In-order packing: use fifo_wr_tile_ptr as the incrementing tile offset
-            l1_tile_index =
-                get_local_cb_interface(output_id).fifo_wr_tile_idx + get_local_cb_interface(output_id).fifo_wr_tile_ptr;
-            get_local_cb_interface(output_id).fifo_wr_tile_ptr++;
+            l1_tile_index = local_dfb_interface.wr_entry_idx + local_dfb_interface.wr_entry_ptr;
+            local_dfb_interface.wr_entry_ptr++;
         }
     }
     return l1_tile_index;
