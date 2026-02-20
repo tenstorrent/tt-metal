@@ -76,7 +76,6 @@ def collect_debug_bus_signals(
             continue
 
         try:
-            raise RiscHaltError(risc_name, location)
             with risc_debug.ensure_halted():
                 pass
         except RiscHaltError:
