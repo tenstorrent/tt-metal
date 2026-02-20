@@ -37,6 +37,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -486,6 +487,25 @@ void device_module(nb::module_& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
+
+    m_device.def(
+        "enable_asynchronous_slow_dispatch",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            tt::tt_metal::experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(device);
+        },
+        nb::arg("device"),
+        R"doc(
+        Experimental: If Slow Dispatch is enabled, this function enables running multiple non-overlapping programs concurrently on the same device.
+        )doc");
+    m_device.def(
+        "disable_asynchronous_slow_dispatch",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            tt::tt_metal::experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(device);
+        },
+        nb::arg("device"),
+        R"doc(
+        Experimental: If Slow Dispatch is enabled, this function disables the ability to run multiple non-overlapping programs concurrently on the same device.
+        )doc");
 }
 
 void py_device_module(nb::module_& mod) {

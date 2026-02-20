@@ -130,11 +130,19 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     auto lock = lock_api_function_();
+
+    if (!asynchronous_slow_dispatch_enabled_) {
+        wait_for_cores_idle();
+    }
+
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         const auto& program_cores = program.impl().logical_cores();
         for (const auto& coord : coord_range) {
-            if (mesh_device_->impl().is_local(coord)) {
-                auto* device = mesh_device_->impl().get_device(coord);
+            if (!mesh_device_->impl().is_local(coord)) {
+                continue;
+            }
+            auto* device = mesh_device_->impl().get_device(coord);
+            if (asynchronous_slow_dispatch_enabled_) {
                 auto it = logical_cores_for_previous_workload_.find(device->id());
                 if (it != logical_cores_for_previous_workload_.end()) {
                     const auto& previous_cores = it->second;
@@ -146,8 +154,9 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                         logical_cores_for_previous_workload_.erase(device->id());
                     }
                 }
-                tt_metal::detail::LaunchProgram(device, program, false);
             }
+
+            tt_metal::detail::LaunchProgram(device, program, false);
         }
     }
 
@@ -158,14 +167,15 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 if (blocking) {
                     tt_metal::detail::WaitProgramDone(device, program);
                 } else {
-                    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-                    if (l !ogical_cores_for_previous_workload_.contains(device->id())) {
+                    if (!(asynchronous_slow_dispatch_enabled_ and
+                          logical_cores_for_previous_workload_.contains(device->id()))) {
                         // Device had no active cores until this program was launched
                         logical_cores_for_previous_workload_[device->id()] = program.impl().logical_cores();
                     } else {
                         // Device had active cores before this program was launched
                         // Merge the active cores from the previous program with the active cores from the current
                         // program
+                        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
                         auto program_cores = program.impl().logical_cores();
                         for (uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
                              core_type_index++) {
@@ -228,5 +238,12 @@ void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<
 void SDMeshCommandQueue::record_end() { TT_THROW("Not supported for slow dispatch"); }
 
 void SDMeshCommandQueue::enqueue_trace(const MeshTraceId&, bool) { TT_THROW("Not supported for slow dispatch"); }
+
+void SDMeshCommandQueue::enable_asynchronous_slow_dispatch() { asynchronous_slow_dispatch_enabled_ = true; }
+
+void SDMeshCommandQueue::disable_asynchronous_slow_dispatch() {
+    wait_for_cores_idle();
+    asynchronous_slow_dispatch_enabled_ = false;
+}
 
 }  // namespace tt::tt_metal::distributed
