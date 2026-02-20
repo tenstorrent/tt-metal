@@ -58,7 +58,7 @@ Design doc for the **prepare_weights** feature: building device-resident, fused 
 | File | Role |
 |------|------|
 | **prepare_weights.py** | Entry point and types. Defines `prepare_weights()`, `DeepSeekV3Weights`, `DeepSeekV3DenseLayerWeights`, `DeepSeekV3MoELayerWeights`, and helpers (`_key`, `_split_kv_b_proj`). Imports `BlitzDecodeWeights` and `OverlappedTensor` from `blitz_decode_weights`. |
-| **blitz_decode_weights.py** | Weight overlapping (fusion) implementation. Exposes `BlitzDecodeWeights` and configs; `get_tt_o_proj_and_gate_mm_weights(..., gate_mm_weights=None)` supports dense layers when `gate_mm_weights` is omitted. |
+| **blitz_decode_weights.py** | Weight overlapping (fusion) implementation (bliu/deepseek). Exposes `BlitzDecodeWeights` and configs; `get_tt_o_proj_and_gate_mm_weights(..., gate_mm_weights)` requires a tensor (dense layers pass a dummy zeros (7168, 256)); always returns six OverlappedTensors. |
 | **model.py** | Host I/O and prefill/decode orchestration. Intended to accept an optional `DeepSeekV3Weights` once the real decoder pipeline is wired; no weight loading in this doc’s scope. |
 | **tests/unit_tests/test_prepare_weights.py** | Unit tests: random-weight state dicts for one dense and one MoE layer, plus a skip-marked placeholder for real checkpoint tests. |
 
@@ -92,7 +92,7 @@ All weight fields are **OverlappedTensor** views (see `blitz_decode_weights.py`)
 | Fusion method | Outputs | Notes |
 |---------------|--------|--------|
 | `get_tt_q_ab_proj_and_kv_a_proj_weights` | q_a_proj, q_b_proj, kv_a_proj | WIDTH_SHARDED; q_a packed, q_b shuffled for Qnope/Qrope, kv_a shard-reordered. |
-| `get_tt_o_proj_and_gate_mm_weights` | o_proj, [gate_mm], attn_norm, q_norm, kv_norm, ffn_norm | gate_mm optional for dense; UINT32 raw container. |
+| `get_tt_o_proj_and_gate_mm_weights` | o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm | gate_mm always required (dense layers pass dummy zeros); always six outputs; UINT32 raw container. |
 | `get_tt_kv_b12_proj_weights` | kv_b1_proj, kv_b2_proj | HEIGHT_SHARDED. |
 | `get_tt_gate_up_proj_weights` | shared_gate_proj, shared_up_proj | HEIGHT_SHARDED, block-sharded; MoE only. |
 
@@ -138,11 +138,11 @@ This aligns with `models/demos/deepseek_v3/tt/mla/mla1d.py` (wkv_b1 / wkv_b2) an
 
 ---
 
-## 7. Dense vs MoE and Optional gate_mm
+## 7. Dense vs MoE and gate_mm (bliu/deepseek)
 
-- **Dense layers** (`i < first_k_dense_replace`): No `mlp.gate` or `mlp.shared_experts.*`. We call `get_tt_o_proj_and_gate_mm_weights(o_proj, None, attn_norm, q_norm, kv_norm, ffn_norm)` so that the 8 gate_mm cores are omitted from the fused buffer; the returned list has 5 elements (no gate_mm OverlappedTensor). We do not call `get_tt_gate_up_proj_weights`.
+- **Dense layers** (`i < first_k_dense_replace`): No `mlp.gate` or `mlp.shared_experts.*` in the state dict. We create a **dummy** gate_mm tensor `torch.zeros(7168, 256, dtype=torch.bfloat16, device=...)` and call `get_tt_o_proj_and_gate_mm_weights(o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm)`. The method always returns six OverlappedTensors; we unpack all six and build `DeepSeekV3DenseLayerWeights` using only `o_proj_ot`, `attn_norm_ot`, `q_norm_ot`, `kv_norm_ot`, `ffn_norm_ot` (we ignore `gate_mm_ot`). We do not call `get_tt_gate_up_proj_weights`.
 
-- **MoE layers** (`i >= first_k_dense_replace`): We pass `gate_mm` and call `get_tt_gate_up_proj_weights(shared_gate, shared_up)`; the layer is stored as `DeepSeekV3MoELayerWeights` with all fields populated.
+- **MoE layers** (`i >= first_k_dense_replace`): We pass the real `gate_mm` from the state dict and call `get_tt_gate_up_proj_weights(shared_gate, shared_up)`; the layer is stored as `DeepSeekV3MoELayerWeights` with all fields populated.
 
 ---
 
@@ -217,37 +217,33 @@ What is **not** supported today:
 
 ---
 
-## 10. Adapting prepare_weights to branch `bliu/deepseek`
+## 10. Integration with bliu/deepseek (current)
 
-On branch **bliu/deepseek**, `BlitzDecodeWeights` adds **tensor parallelism (TP)** and renames configs. Below is what must change in **prepare_weights.py** when that branch is used.
+**prepare_weights** is integrated with the **bliu/deepseek** blitz decode path. `BlitzDecodeWeights` uses tensor parallelism (TP) and single-device overlap specs; prepare_weights passes full-model shapes and uses a dummy gate_mm for dense layers.
 
-### 10.1 HF state dict is unchanged; TP/DP are TTNN placement only
+### 10.1 HF state dict; TP/DP are TTNN placement only
 
-The HuggingFace state dict and checkpoint stay the same regardless of TP/DP. We always load **full-model** weights (e.g. q_b (1536, 12288), o_proj (8192, 7168), etc.). The **TP/DP factors** (e.g. mla_tp=2, moe_tp=8 on a 4×2 mesh) refer to how the **TTNN tensors** (the fused device buffers) are **sharded across the decoder mesh** — i.e. a runtime/placement concern, not a different checkpoint layout. So **prepare_weights** always passes the same shapes to blitz (the full-model shapes derived from the HF state dict). BlitzDecodeWeights is responsible for slicing/sharding those full-model tensors and placing them on the mesh when the device is multi-device.
+The HuggingFace state dict and checkpoint are unchanged. We always load **full-model** weights (e.g. q_b (1536, 12288), o_proj (8192, 7168), etc.). The **TP/DP factors** (e.g. mla_tp=2, moe_tp=8 on a 4×2 mesh) refer to how the **TTNN tensors** (the fused device buffers) are **sharded across the decoder mesh** — a runtime/placement concern. **prepare_weights** always passes the same full-model shapes to blitz; BlitzDecodeWeights is responsible for slicing/sharding and placement when the device is multi-device.
 
-### 10.2 Branch changes in blitz_decode_weights.py
+### 10.2 blitz_decode_weights.py (bliu/deepseek)
 
-- **Config renames:** `QAB_KVA_PROJ_OverlapConfig` → `QAB_KVA_PROJ_SingleDeviceOverlapSpec`, and similarly for the other three (constants use `*_SINGLE_DEVICE_OVERLAP_SPEC`). Logic is equivalent; only names differ.
-- **BlitzDecodeWeights.__init__:** Sets `self.mla_tp` and `self.moe_tp` from the device (single device → 1/1; 4×2 mesh → 2/8). These drive how the **output** TTNN tensors are sharded (e.g. `ShardTensor2dMesh`), not the **input** shapes from the caller.
-- **Intended input shapes (full-model from HF):** Callers (e.g. prepare_weights) always pass **full-model** weights: q_b (1536, 12288), o_proj (8192, 7168), kv_b1 (8192, 512), kv_b2 (512, 8192), gate/up (7168, 256). When the device is a mesh, blitz should **accept these same shapes**, slice them per TP index internally, and produce the sharded mesh tensor. (Note: the current branch code may still expect TP-concatenated shapes like (1536, 12288×mla_tp); aligning with “HF stays the same” would mean changing blitz to accept (1536, 12288) and do the slicing inside.)
-- **Dense layers:** On the branch, `get_tt_o_proj_and_gate_mm_weights` **requires** `gate_mm_weights` (no `None`). So either the branch adds optional `gate_mm` for dense, or prepare_weights passes a dummy (e.g. zeros) of shape (7168, 256) for dense layers.
-- **GATE_UP:** `GATE_UP_PROJ_SingleDeviceOverlapSpec` uses different core range groupings and `reshuffle_block_to_height_sharded(weights, core_range_set)`; no change to prepare_weights call signature for gate/up.
+- **Config names:** Overlap configs use `*_SINGLE_DEVICE_OVERLAP_SPEC` (e.g. `QAB_KVA_PROJ_SingleDeviceOverlapSpec`, `O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC`).
+- **BlitzDecodeWeights:** Sets `self.mla_tp` and `self.moe_tp` from the device; these drive how **output** TTNN tensors are sharded, not the **input** shapes from the caller.
+- **Input shapes:** prepare_weights passes **full-model** weights (e.g. o_proj (8192, 7168) for single-device; for TP, blitz expects (8192×mla_tp, 7168) per its config). Gate_mm is (7168, 256).
+- **gate_mm required:** `get_tt_o_proj_and_gate_mm_weights(..., gate_mm_weights)` takes a **required** `torch.Tensor` (no `None`). It always returns six OverlappedTensors: o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm.
+- **GATE_UP:** `get_tt_gate_up_proj_weights(shared_gate, shared_up)` unchanged from prepare_weights' perspective.
 
-### 10.3 Required changes in prepare_weights.py
+### 10.3 prepare_weights.py behavior
 
-Because **HF stays the same** and TP/DP only affect how TTNN tensors are sharded on the mesh, prepare_weights continues to load the same state dict and pass **the same full-model shapes** to BlitzDecodeWeights for both single-device and 4×2 mesh:
-
-- **No TP-concatenation in prepare_weights.** We do not build (1536, 12288×mla_tp) or (7168, 256×moe_tp); we always pass (1536, 12288), (7168, 256), etc. from the HF state dict (after transpose/split as today). Blitz is responsible for sharding those full-model tensors across the mesh when the device is multi-device.
-
-- **Dense layers and gate_mm:** If the branch does not support `gate_mm_weights=None`, then for dense layers either add optional `gate_mm` on the branch, or in prepare_weights pass a zero tensor of shape (7168, 256) when `i < first_k_dense_replace`.
-
-- **Branch blitz alignment:** If the current branch API still expects TP-concatenated input shapes (e.g. q_b (1536, 12288×mla_tp)), then the branch should be updated to accept full-model shapes and perform the TP slicing internally, so that prepare_weights can remain agnostic of mla_tp/moe_tp and always pass HF-derived shapes.
+- **Full-model shapes:** No TP-concatenation in prepare_weights; we pass HF-derived shapes (after transpose/split). Blitz handles per-TP slicing when the device is a mesh.
+- **Dense layers:** For `i < first_k_dense_replace` we pass a **dummy** gate_mm: `torch.zeros(7168, 256, dtype=torch.bfloat16, device=...)`. We unpack all six elements from `get_tt_o_proj_and_gate_mm_weights` and ignore `gate_mm_ot` when building `DeepSeekV3DenseLayerWeights`.
+- **MoE layers:** We pass the real `gate_mm` from the state dict and unpack the same six elements; all six are used in `DeepSeekV3MoELayerWeights`.
 
 ### 10.4 Summary
 
 - **HF state dict:** Unchanged; single full-model checkpoint.
-- **prepare_weights:** Always passes full-model shapes (same as today); no mesh- or TP-specific logic.
-- **BlitzDecodeWeights:** Uses mla_tp/moe_tp to shard the **output** TTNN tensors across the 4×2 decoder mesh; should accept the **same** full-model input shapes and do any per-TP slicing internally.
+- **prepare_weights:** Passes full-model shapes; dense layers use a dummy (7168, 256) gate_mm and ignore the gate_mm OverlappedTensor in the dense layer container.
+- **BlitzDecodeWeights (bliu/deepseek):** Requires gate_mm; always returns six sub-tensors from `get_tt_o_proj_and_gate_mm_weights`; uses mla_tp/moe_tp for output sharding on the mesh.
 
 ---
 
@@ -265,3 +261,4 @@ Because **HF stays the same** and TP/DP only affect how TTNN tensors are sharded
 - **Initial:** Added prepare_weights API, DeepSeekV3Weights / Dense / MoE types, state dict mapping, kv_b split, optional gate_mm in blitz_decode_weights, and unit tests with random weights plus placeholder for real weights.
 - **Multi-device / full pipeline:** Added §9 (Multi-device and full-pipeline extension): current single-device assumption, MeshDevice + replication behavior, and required extensions for pipeline parallelism, tensor parallelism, and full decoder weight coverage.
 - **bliu/deepseek branch:** Added §10 (Adapting prepare_weights to branch bliu/deepseek): TP-aware shapes, mla_tp/moe_tp, and required prepare_weights.py changes for single-device vs 4×2 mesh.
+- **bliu/deepseek integrated:** prepare_weights now targets bliu/deepseek blitz path. gate_mm is required in `get_tt_o_proj_and_gate_mm_weights`; dense layers pass a dummy zeros (7168, 256) and unpack six elements (gate_mm_ot ignored for DenseLayerWeights). §3, §4.2, §7, and §10 updated to describe current behavior.

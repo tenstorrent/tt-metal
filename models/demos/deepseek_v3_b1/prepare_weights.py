@@ -113,6 +113,108 @@ def _split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
     return kv_b1, kv_b2
 
 
+def _get_layer_raw_tensors(
+    state_dict: dict[str, torch.Tensor], layer_idx: int
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor,
+    torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+]:
+    """Extract and transform raw tensors for one layer from the state dict.
+
+    Returns:
+        (q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm).
+    """
+    q_a = state_dict[_key(layer_idx, "self_attn.q_a_proj.weight")].T.contiguous()
+    q_b = state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")].T.contiguous()
+    kv_a = state_dict[_key(layer_idx, "self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
+    kv_b1, kv_b2 = _split_kv_b_proj(state_dict[_key(layer_idx, "self_attn.kv_b_proj.weight")])
+    o_proj = state_dict[_key(layer_idx, "self_attn.o_proj.weight")].T.contiguous()
+
+    attn_norm = state_dict[_key(layer_idx, "input_layernorm.weight")].unsqueeze(0)
+    q_norm = state_dict[_key(layer_idx, "self_attn.q_a_layernorm.weight")].unsqueeze(0)
+    kv_norm = state_dict[_key(layer_idx, "self_attn.kv_a_layernorm.weight")].unsqueeze(0)
+    ffn_norm = state_dict[_key(layer_idx, "post_attention_layernorm.weight")].unsqueeze(0)
+
+    return q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm
+
+
+def prepare_dense_decoder_layer_weights(
+    bdw: BlitzDecodeWeights,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+) -> DeepSeekV3DenseLayerWeights:
+    """Prepare fused weights for a single dense decoder layer."""
+    q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = _get_layer_raw_tensors(
+        state_dict, layer_idx
+    )
+
+    q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a)
+    kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2)
+
+    gate_mm_dummy = torch.zeros(
+        7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device
+    )
+    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
+        o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm
+    )
+    o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
+
+    return DeepSeekV3DenseLayerWeights(
+        q_a_proj=q_a_proj,
+        q_b_proj=q_b_proj,
+        kv_a_proj=kv_a_proj,
+        o_proj=o_proj_ot,
+        attn_norm=attn_norm_ot,
+        q_norm=q_norm_ot,
+        kv_norm=kv_norm_ot,
+        ffn_norm=ffn_norm_ot,
+        kv_b1_proj=kv_b1_proj,
+        kv_b2_proj=kv_b2_proj,
+    )
+
+
+def prepare_moe_decoder_layer_weights(
+    bdw: BlitzDecodeWeights,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+) -> DeepSeekV3MoELayerWeights:
+    """Prepare fused weights for a single MoE decoder layer."""
+    q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = _get_layer_raw_tensors(
+        state_dict, layer_idx
+    )
+
+    q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a)
+    kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2)
+
+    gate_mm = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
+    shared_gate = state_dict[_key(layer_idx, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
+    shared_up = state_dict[_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
+
+    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
+        o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm
+    )
+    o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
+    shared_gate_proj, shared_up_proj = bdw.get_tt_gate_up_proj_weights(shared_gate, shared_up)
+
+    return DeepSeekV3MoELayerWeights(
+        q_a_proj=q_a_proj,
+        q_b_proj=q_b_proj,
+        kv_a_proj=kv_a_proj,
+        o_proj=o_proj_ot,
+        gate_mm=gate_mm_ot,
+        attn_norm=attn_norm_ot,
+        q_norm=q_norm_ot,
+        kv_norm=kv_norm_ot,
+        ffn_norm=ffn_norm_ot,
+        kv_b1_proj=kv_b1_proj,
+        kv_b2_proj=kv_b2_proj,
+        shared_gate_proj=shared_gate_proj,
+        shared_up_proj=shared_up_proj,
+    )
+
+
 def prepare_weights(
     state_dict: dict[str, torch.Tensor],
     device,
@@ -134,77 +236,10 @@ def prepare_weights(
     layers: list[DeepSeekV3LayerWeights] = []
 
     for i in range(num_layers):
-        prefix = f"model.layers.{i}."
-
-        # Linear weights: HF (out_features, in_features) -> (K, N) for blitz. All transposed except kv_b1.
-        q_a = state_dict[_key(i, "self_attn.q_a_proj.weight")].T.contiguous()
-        q_b = state_dict[_key(i, "self_attn.q_b_proj.weight")].T.contiguous()
-        kv_a = state_dict[_key(i, "self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-        kv_b1, kv_b2 = _split_kv_b_proj(state_dict[_key(i, "self_attn.kv_b_proj.weight")])  # b1 no transpose, b2 transposed inside
-        o_proj = state_dict[_key(i, "self_attn.o_proj.weight")].T.contiguous()
-
-        # Norms: (C,) -> (1, C)
-        attn_norm = state_dict[_key(i, "input_layernorm.weight")].unsqueeze(0)
-        q_norm = state_dict[_key(i, "self_attn.q_a_layernorm.weight")].unsqueeze(0)
-        kv_norm = state_dict[_key(i, "self_attn.kv_a_layernorm.weight")].unsqueeze(0)
-        ffn_norm = state_dict[_key(i, "post_attention_layernorm.weight")].unsqueeze(0)
-
-        q_ab_kv_a = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a)
-        q_a_proj, q_b_proj, kv_a_proj = q_ab_kv_a
-
-        kv_b12 = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2)
-        kv_b1_proj, kv_b2_proj = kv_b12
-
-        if i < first_k_dense_replace:
-            gate_mm_dummy = torch.zeros(
-                7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device
-            )
-            o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-                o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm
-            )
-            o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
-            layers.append(
-                DeepSeekV3DenseLayerWeights(
-                    q_a_proj=q_a_proj,
-                    q_b_proj=q_b_proj,
-                    kv_a_proj=kv_a_proj,
-                    o_proj=o_proj_ot,
-                    attn_norm=attn_norm_ot,
-                    q_norm=q_norm_ot,
-                    kv_norm=kv_norm_ot,
-                    ffn_norm=ffn_norm_ot,
-                    kv_b1_proj=kv_b1_proj,
-                    kv_b2_proj=kv_b2_proj,
-                )
-            )
+        is_moe = i >= first_k_dense_replace
+        if is_moe:
+            layers.append(prepare_moe_decoder_layer_weights(bdw, state_dict, i))
         else:
-            gate_mm = state_dict[_key(i, "mlp.gate.weight")].T.contiguous()
-            shared_gate = state_dict[_key(i, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
-            shared_up = state_dict[_key(i, "mlp.shared_experts.up_proj.weight")].T.contiguous()
-
-            o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-                o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm
-            )
-            o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
-            gate_up = bdw.get_tt_gate_up_proj_weights(shared_gate, shared_up)
-            shared_gate_proj, shared_up_proj = gate_up
-
-            layers.append(
-                DeepSeekV3MoELayerWeights(
-                    q_a_proj=q_a_proj,
-                    q_b_proj=q_b_proj,
-                    kv_a_proj=kv_a_proj,
-                    o_proj=o_proj_ot,
-                    gate_mm=gate_mm_ot,
-                    attn_norm=attn_norm_ot,
-                    q_norm=q_norm_ot,
-                    kv_norm=kv_norm_ot,
-                    ffn_norm=ffn_norm_ot,
-                    kv_b1_proj=kv_b1_proj,
-                    kv_b2_proj=kv_b2_proj,
-                    shared_gate_proj=shared_gate_proj,
-                    shared_up_proj=shared_up_proj,
-                )
-            )
+            layers.append(prepare_dense_decoder_layer_weights(bdw, state_dict, i))
 
     return DeepSeekV3Weights(layers=layers)
