@@ -152,12 +152,14 @@ static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
         case CommonDataFormat::Float16:
         case CommonDataFormat::Float16_b:
         case CommonDataFormat::UInt16: return 2;
+#ifndef ARCH_QUASAR
         case CommonDataFormat::Bfp2:
         case CommonDataFormat::Bfp2_b:
         case CommonDataFormat::Bfp4:
         case CommonDataFormat::Bfp4_b:
         case CommonDataFormat::Bfp8:
         case CommonDataFormat::Bfp8_b:
+#endif
         case CommonDataFormat::Int8:
         case CommonDataFormat::Lf8:
         case CommonDataFormat::UInt8: return 1;  // Round up to 1 byte
@@ -168,12 +170,14 @@ static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
 
 static constexpr bool is_bfp(const CommonDataFormat& format) {
     switch (format) {
+#ifndef ARCH_QUASAR
         case CommonDataFormat::Bfp2:
         case CommonDataFormat::Bfp2_b:
         case CommonDataFormat::Bfp4:
         case CommonDataFormat::Bfp4_b:
         case CommonDataFormat::Bfp8:
         case CommonDataFormat::Bfp8_b: return true;
+#endif
         case CommonDataFormat::Float16:
         case CommonDataFormat::Float16_b:
         case CommonDataFormat::Float32:
@@ -190,8 +194,10 @@ static constexpr bool is_bfp(const CommonDataFormat& format) {
 
 static constexpr bool is_supported_format(const CommonDataFormat& format) {
     switch (format) {
+#ifndef ARCH_QUASAR
         case CommonDataFormat::Bfp4_b:
         case CommonDataFormat::Bfp8_b:
+#endif
         case CommonDataFormat::Float16_b:
         case CommonDataFormat::Float32:
         case CommonDataFormat::Int8:
@@ -199,10 +205,12 @@ static constexpr bool is_supported_format(const CommonDataFormat& format) {
         case CommonDataFormat::UInt16:
         case CommonDataFormat::UInt32:
         case CommonDataFormat::Int32: return true;
+#ifndef ARCH_QUASAR
         case CommonDataFormat::Bfp2:
         case CommonDataFormat::Bfp2_b:
         case CommonDataFormat::Bfp4:
         case CommonDataFormat::Bfp8:
+#endif
         case CommonDataFormat::Float16:
         case CommonDataFormat::Lf8:
         case CommonDataFormat::Invalid:
