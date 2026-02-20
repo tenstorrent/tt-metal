@@ -69,8 +69,6 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
     // CCL Broadcast CTArgs type alias
-
-    // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
@@ -89,6 +87,7 @@ void kernel_main() {
 
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
@@ -245,6 +244,7 @@ void kernel_main() {
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
 
+    // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
@@ -252,10 +252,10 @@ void kernel_main() {
 
     // CCL Broadcast reader runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
     }
-
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
@@ -377,8 +377,8 @@ void kernel_main() {
     deepseek_b1_ops::Rope::WriterArgs krope_args{};
 
     deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
-        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(15),
-        .position_id = get_common_arg_val<uint32_t>(16),
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
+        .position_id = get_common_arg_val<uint32_t>(1),
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
@@ -670,7 +670,6 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (Core::is_input_core) {
-        // Multi-device mode only: BRISC sets up intermediate (broadcast output) buffer
         // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");

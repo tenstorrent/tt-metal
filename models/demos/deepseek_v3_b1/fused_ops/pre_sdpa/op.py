@@ -1158,9 +1158,6 @@ class PreSDPA:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB: CCL broadcast buffer
-                bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
-
                 # CB: Gamma (created from sharded tensor)
                 gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor_device)
                 # Update the tile descriptor in the format descriptor
@@ -1179,20 +1176,7 @@ class PreSDPA:
                 sdpa_kv_cache_running_offset = 0
 
                 # CB: CCL broadcast packet buffer
-                bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    bcast_pkt_cb,
-                    sdpa_kv_cache_buffer_device,
-                    address_offset=sdpa_kv_cache_running_offset,
-                    total_size=num_tiles * cb_page_size,
-                )
-                bcast_pkt_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=bcast_pkt_cb,
-                        data_format=data_format,
-                        page_size=cb_page_size,
-                        tile=tile_descriptor,
-                    )
-                ]
+                bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
                 sdpa_kv_cache_running_offset += bcast_pkt_cb_descriptor.total_size
 
                 # CB: RMSNorm output buffer
@@ -1697,7 +1681,7 @@ class PreSDPA:
                 # ================================================================
                 if skip_ccl:
                     # Single-device mode: empty broadcast args
-                    brisc_bcast_common_args = [0] * 13
+                    ncrisc_bcast_common_args = [0] * 13
                     dst_nodes = []
                     fabric_node_id = None
                 else:
@@ -1774,6 +1758,8 @@ class PreSDPA:
                     + kv_rmsnorm_ncrisc_named_compile_time_args
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args,
+                    # NCRISC common runtime args:
+                    ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + create_q_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
                     brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
                     + mcast_sender_named_compile_time_args
@@ -1789,7 +1775,6 @@ class PreSDPA:
                     + kv_cache_brisc_named_compile_time_args,
                     # BRISC common runtime args: bcast args
                     brisc_common_runtime_args=[int(kv_cache_tensor_device.buffer_address()), position_id],
-                    ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + qrope + create_q_heads + dkv_matmul + kv_rmsnorm + krope
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
@@ -1947,11 +1932,12 @@ class PreSDPA:
                 if not skip_ccl and num_connections > 0:
                     # Find the BRISC (writer) kernel whose core_ranges includes worker_core
                     for idx, kernel in enumerate(program.kernels):
-                        if kernel.core_ranges.contains(worker_core) and isinstance(
-                            kernel.config, ttnn.ReaderConfigDescriptor)
+                        if kernel.core_ranges.contains(worker_core) and (
+                            isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
                             or (
                                 isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
                                 and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
+                            )
                         ):
                             writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
                             fabric_args = ttnn.setup_routing_plane_connection(
