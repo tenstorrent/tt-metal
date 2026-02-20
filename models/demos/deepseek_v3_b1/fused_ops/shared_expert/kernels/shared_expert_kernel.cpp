@@ -322,6 +322,8 @@ void kernel_main() {
 
     // Output gather compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs og_args{};
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ========================================================================

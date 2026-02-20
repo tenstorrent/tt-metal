@@ -100,6 +100,8 @@ struct GatherReduce {
 #if defined(COMPILE_FOR_TRISC)
     // in0_cb += in1_cb over num_tiles tiles, in place
     static inline void add_tiles_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+        reconfig_data_format<false, true>(in0_cb, in1_cb);
+        pack_reconfig_data_format<true>(in0_cb);
         add_tiles_init(in0_cb, in1_cb);
         cb_wait_front(in0_cb, num_tiles);
         cb_wait_front(in1_cb, num_tiles);

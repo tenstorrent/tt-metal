@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#ifdef ARCH_QUASAR
+#include "api/debug/assert.h"
+#endif
 #ifdef TRISC_PACK
 #include "llk_io_pack.h"
 #endif
@@ -167,6 +170,9 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return address;
+#else
+    ASSERT(false && "get_tile_address is not implemented for ARCH_QUASAR");
+    return 0;
 #endif  // TODO: AM; add Quasar implementation
 }
 
@@ -204,6 +210,9 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return value;
+#else
+    ASSERT(false && "read_tile_value is not implemented for ARCH_QUASAR");
+    return 0;
 #endif  // TODO: AM; add Quasar implementation
 }
 

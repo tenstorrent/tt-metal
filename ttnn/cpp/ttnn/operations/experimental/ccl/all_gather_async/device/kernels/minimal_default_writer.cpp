@@ -275,8 +275,9 @@ void kernel_main() {
     uint32_t slice_writes = 0;
     bool split_forwarding_enabled = false;
     if constexpr (topology == Topology::Ring) {
-        if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the first half of the
-                                                    // tiles, otherwise we write the entire packet
+        if (ring_size % 2 == 0 && ring_size > 2 &&
+            input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
+                                                             // the tiles, otherwise we write the entire packet
             split_forwarding_enabled = true;
         }
     }
@@ -626,10 +627,32 @@ void kernel_main() {
                 num_channels_processed_in_current_batch = 0;
             }
 
+            // Reset for next batch, but respect split slice boundaries
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
             row_offset = start_row_offset;
             pages_read_in_row = start_pages_read_in_row;
+            if (split_forwarding_enabled && is_last_slice) {
+                uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+                uint32_t first_half_tiles = total_tiles / 2;
+                if (direction == 0) {
+                    tiles_to_read = input_tile_id_start + first_half_tiles;
+                } else {
+                    tiles_read = input_tile_id_start + first_half_tiles;
+                    // Re-adjust position for second half
+                    uint32_t tiles_to_skip = first_half_tiles;
+                    while (tiles_to_skip > 0) {
+                        if (tiles_to_skip < slice_Wt - pages_read_in_row) {
+                            pages_read_in_row += tiles_to_skip;
+                            tiles_to_skip = 0;
+                        } else {
+                            tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
+                    }
+                }
+            }
         }
         slice_writes++;
     }
