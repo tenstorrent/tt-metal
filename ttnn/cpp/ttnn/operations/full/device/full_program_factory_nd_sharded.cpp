@@ -30,8 +30,7 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
 
     auto data_format = datatype_to_dataformat_converter(dtype);
     const auto& distribution_spec = output.buffer()->buffer_distribution_spec().value();
-    int32_t num_shards = distribution_spec.num_shards();
-    const auto page_mapping = distribution_spec.compute_page_mapping();
+    uint32_t num_shards = distribution_spec.num_shards();
     const auto& ordered_cores_with_data = distribution_spec.cores_with_data();
     uint32_t num_compute_cores = ordered_cores_with_data.size();
 
