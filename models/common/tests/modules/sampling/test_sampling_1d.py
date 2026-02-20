@@ -562,6 +562,98 @@ def test_sampling1d_topk32_in_range(ttnn_mesh_device):
         assert sampled_token in top32_set, f"Batch {b}: sampled token {sampled_token} not in top-32 set"
 
 
+def _hf_valid_token_set(logits_row: "torch.Tensor", k: int, p: float, temp: float) -> set:
+    """Compute the set of tokens eligible under top-k / top-p / temperature filtering.
+
+    Mirrors the pipeline inside ttnn.sampling:
+      1. Temperature: divide logits by temp  (skipped if temp == 1.0)
+      2. Top-k:       zero out all but top-k tokens
+      3. Top-p:       zero out tokens outside the cumulative-probability nucleus
+
+    Uses HuggingFace's LogitsWarper classes so this reference is auditable against
+    the transformers library rather than a hand-rolled implementation.
+
+    Returns the set of token ids that have finite logit after filtering — any
+    sampled token MUST come from this set.
+    """
+    from transformers.generation.logits_process import TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper
+
+    # Warpers expect input_ids (unused here, pass None) and a [1, V] float32 scores tensor.
+    scores = logits_row.float().unsqueeze(0)  # [1, V]
+    if temp != 1.0:
+        scores = TemperatureLogitsWarper(temperature=temp)(None, scores)
+    if k > 0:
+        scores = TopKLogitsWarper(top_k=k)(None, scores)
+    if 0.0 < p < 1.0:
+        scores = TopPLogitsWarper(top_p=p)(None, scores)
+    # Tokens with -inf logit are filtered out; all others are valid candidates.
+    return set(scores[0].isfinite().nonzero(as_tuple=False).squeeze(-1).tolist())
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+@pytest.mark.parametrize(
+    "k, p, temp, max_boundary_violations",
+    [
+        # p=0.0 or p=1.0 → no nucleus boundary; token MUST be in top-k, zero tolerance.
+        pytest.param(1, 0.0, 1.0, 0, id="k1-p0-t1"),  # degenerates to argmax
+        pytest.param(8, 1.0, 1.0, 0, id="k8-p1-t1"),  # pure top-k, no nucleus cut
+        # p ∈ (0, 1) → nucleus boundary may differ between bf16 (device) and f32 (HF ref).
+        # ttnn.sampling computes softmax+cumsum in bf16; at the p-threshold, a token can
+        # fall inside or outside depending on precision. max_boundary_violations is the
+        # empirically-calibrated headroom for these boundary disagreements. A regression
+        # (violations >> max) indicates a correctness issue beyond precision noise.
+        pytest.param(32, 0.5, 1.0, 3, id="k32-p0.5-t1"),  # tight nucleus, neutral temp
+        pytest.param(32, 0.9, 2.0, 2, id="k32-p0.9-t2"),  # loose nucleus, flat dist
+        pytest.param(32, 0.9, 0.5, 6, id="k32-p0.9-t0.5"),  # loose nucleus, peaked dist
+    ],
+)
+def test_sampling1d_token_in_valid_set(ttnn_mesh_device, k, p, temp, max_boundary_violations):
+    """Sampled token must lie within the HF-derived valid candidate set (up to bf16 boundary).
+
+    For each (k, p, temp), the HuggingFace pipeline
+        TemperatureLogitsWarper → TopKLogitsWarper → TopPLogitsWarper
+    defines which tokens are eligible. Any sampled token MUST come from this set.
+
+    Precision note: ttnn.sampling runs its softmax/cumsum in bfloat16, while the HF
+    reference uses float32. Tokens near the nucleus cutoff may fall on different sides
+    of the cumulative-probability threshold. max_boundary_violations allows for this;
+    it is zero when p ∈ {0.0, 1.0} (no nucleus threshold exists) and small-but-nonzero
+    otherwise. Violations significantly above max indicate a real correctness regression.
+    """
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 1024
+
+    tt_ccl = _get_tt_ccl_if_multi_device(ttnn_mesh_device)
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k_tt, p_tt, temp_tt = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=k, p_val=p, temp_val=temp, cluster_shape=cluster_shape
+    )
+
+    tokens_tt, _ = sampler.decode_forward(logits_tt, k=k_tt, p=p_tt, temp=temp_tt)
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B]
+
+    # Build per-batch-element valid sets from bf16 logits (same precision as device input)
+    logits_2d = logits_host.squeeze().bfloat16()  # [B, V]
+    violations = []
+    for b in range(B):
+        valid = _hf_valid_token_set(logits_2d[b], k=k, p=p, temp=temp)
+        token = tokens_host[b].item()
+        if token not in valid:
+            violations.append((b, token, len(valid)))
+
+    assert len(violations) <= max_boundary_violations, (
+        f"k={k} p={p} temp={temp}: {len(violations)}/{B} tokens outside valid set "
+        f"(max allowed={max_boundary_violations} for bf16 boundary):\n"
+        + "\n".join(f"  batch {b}: token {tok} not in {n}-token valid set" for b, tok, n in violations[:5])
+    )
+
+
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
 def test_sampling1d_deterministic_with_same_seed(ttnn_mesh_device):
     """
