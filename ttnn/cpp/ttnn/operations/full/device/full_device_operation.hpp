@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::full {
 
-struct FullOperation {
+struct FullDeviceOperation {
     using operation_attributes_t = ttnn::operations::full::operation_attributes_t;
     using tensor_args_t = ttnn::operations::full::tensor_args_t;
     using spec_return_value_t = ttnn::operations::full::spec_return_value_t;
@@ -32,7 +32,7 @@ struct FullOperation {
 }  // namespace ttnn::operations::full
 
 namespace ttnn::prim {
-ttnn::operations::full::FullOperation::tensor_return_value_t full(
+ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
     ttnn::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,

@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::full {
 
-FullOperation::program_factory_t FullOperation::select_program_factory(
+FullDeviceOperation::program_factory_t FullDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.memory_config.is_sharded()) {
         if (operation_attributes.memory_config.shard_spec().has_value()) {
@@ -21,7 +21,7 @@ FullOperation::program_factory_t FullOperation::select_program_factory(
     return FullInterleavedProgramFactory{};
 }
 
-void FullOperation::validate_inputs(
+void FullDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(
         operation_attributes.dtype == DataType::BFLOAT16 || operation_attributes.dtype == DataType::INT32 ||
@@ -47,12 +47,12 @@ void FullOperation::validate_inputs(
     }
 }
 
-void FullOperation::validate_on_program_cache_miss(
+void FullDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
-FullOperation::spec_return_value_t FullOperation::compute_output_specs(
+FullDeviceOperation::spec_return_value_t FullDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t&) {
     return TensorSpec(
         Shape(operation_attributes.shape),
@@ -62,7 +62,7 @@ FullOperation::spec_return_value_t FullOperation::compute_output_specs(
             operation_attributes.memory_config));
 };
 
-FullOperation::tensor_return_value_t FullOperation::create_output_tensors(
+FullDeviceOperation::tensor_return_value_t FullDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, operation_attributes.mesh_device);
@@ -71,14 +71,14 @@ FullOperation::tensor_return_value_t FullOperation::create_output_tensors(
 }  // namespace ttnn::operations::full
 
 namespace ttnn::prim {
-ttnn::operations::full::FullOperation::tensor_return_value_t full(
+ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
     ttnn::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,
     const Layout& layout,
     const MemoryConfig& memory_config) {
-    using OperationType = ttnn::operations::full::FullOperation;
+    using OperationType = ttnn::operations::full::FullDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         std::move(shape),
         fill_value,
