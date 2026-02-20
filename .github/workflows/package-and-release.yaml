@@ -22,6 +22,11 @@ on:
         required: false
         default: ""
         type: string
+      tests-yaml-gist-url:
+        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
+        required: false
+        default: ""
+        type: string
 
   schedule:
     # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
@@ -147,6 +152,7 @@ jobs:
       dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
+      tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
 
   publish-to-pypi:
     needs: [build-test-publish, create-tag]

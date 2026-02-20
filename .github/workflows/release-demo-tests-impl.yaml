@@ -24,6 +24,11 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
+      tests-yaml-gist-url:
+        required: false
+        type: string
+        default: ""
+        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
 
 jobs:
   load-test-matrix:
@@ -40,6 +45,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip3 install PyYAML
+      - name: Download tests YAML from gist (if provided)
+        if: ${{ inputs.tests-yaml-gist-url != '' }}
+        run: |
+          echo "Downloading tests YAML from gist: ${{ inputs.tests-yaml-gist-url }}"
+          curl -fsSL "${{ inputs.tests-yaml-gist-url }}" -o "${{ env.TESTS_YAML_PATH }}"
+          echo "Downloaded tests YAML:"
+          head -n 20 "${{ env.TESTS_YAML_PATH }}"
       - name: Verify test timeouts against budget
         run: |
           set -e

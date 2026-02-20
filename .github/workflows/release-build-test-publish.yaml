@@ -27,6 +27,11 @@ on:
         required: false
         default: "Ubuntu 22.04"
         type: string
+      tests-yaml-gist-url:
+        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -94,6 +99,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+      tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
 
   # We need to tag the image used to reproduce the release later
   push-image-to-ghcr:
