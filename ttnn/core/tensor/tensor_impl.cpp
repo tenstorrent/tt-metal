@@ -1598,4 +1598,74 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
 
+// ======================================================================================
+//                                  Runtime Tensor Creation Functions
+// ======================================================================================
+
+DeviceTensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto mesh_buffer = allocate_device_buffer(device, tensor_spec);
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
+        coords.push_back(coord);
+    }
+    DeviceStorage device_storage(std::move(mesh_buffer), coords);
+    // TODO (#25340): Implement correct logic and add test for this
+    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
+    for (size_t i = 0; i < device->shape().dims(); i++) {
+        placements[i] = distributed::MeshMapperConfig::Replicate{};
+    }
+
+    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    return DeviceTensor(std::move(device_storage), tensor_spec, tensor_topology);
+}
+
+HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value) {
+    uint32_t height = input_tensor.padded_shape()[-2];
+    uint32_t width = input_tensor.padded_shape()[-1];
+    uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
+    uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
+
+    ttsl::SmallVector<uint32_t> padded_shape;
+    ttsl::SmallVector<uint32_t> input_tensor_start;
+
+    for (auto index = 0; index < static_cast<int>(input_tensor.padded_shape().rank()) - 2; index++) {
+        padded_shape.push_back(input_tensor.padded_shape()[index]);
+        input_tensor_start.push_back(0);
+    }
+
+    padded_shape.push_back(padded_height);
+    padded_shape.push_back(padded_width);
+    input_tensor_start.push_back(0);
+    input_tensor_start.push_back(0);
+
+    return pad(
+        input_tensor,
+        tt::tt_metal::Shape(std::move(padded_shape)),
+        tt::tt_metal::Shape{std::move(input_tensor_start)},
+        pad_value);
+}
+
+HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
+    for (auto index = -3; index >= -static_cast<int>(input_tensor.padded_shape().rank()); index--) {
+        TT_ASSERT(
+            input_tensor.logical_shape()[index] == output_tensor_shape[index],
+            "Input shape must match output shape apart from last 2 dims");
+    }
+    TT_ASSERT(
+        input_tensor.padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
+            input_tensor.padded_shape()[-1] % constants::TILE_WIDTH == 0,
+        "Last 2 dims of input shape must be multiples of 32");
+    TT_ASSERT(
+        input_tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
+            input_tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
+        "Last 2 dims of output must be within range to have been padded to input");
+    Shape output_tensor_start(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
+    Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
+    for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
+        output_tensor_end[index] = output_tensor_shape[index];
+    }
+    return unpad(input_tensor, output_tensor_start, output_tensor_end);
+}
+
 }  // namespace tt::tt_metal::tensor_impl

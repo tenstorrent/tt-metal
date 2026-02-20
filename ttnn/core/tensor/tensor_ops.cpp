@@ -22,26 +22,6 @@
 
 namespace tt::tt_metal {
 
-tt::tt_metal::DeviceTensor allocate_tensor_on_device(
-    const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
-    using namespace tt::tt_metal;
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        coords.push_back(coord);
-    }
-    DeviceStorage device_storage(std::move(mesh_buffer), coords);
-    // TODO (#25340): Implement correct logic and add test for this
-    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
-    for (size_t i = 0; i < device->shape().dims(); i++) {
-        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    }
-
-    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    return DeviceTensor(std::move(device_storage), tensor_spec, tensor_topology);
-}
-
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
@@ -71,14 +51,14 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-    output = Tensor(allocate_tensor_on_device(tensor_spec, mesh_device));
+    output = Tensor(tensor_impl::allocate_tensor_on_device(tensor_spec, mesh_device));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
 
 DeviceTensor create_device_metal_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
-    DeviceTensor output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    DeviceTensor output = tensor_impl::allocate_tensor_on_device(tensor_spec, mesh_device);
     return output;
 }
 }  // namespace tt::tt_metal
@@ -210,14 +190,6 @@ Tensor pad(
     return output;
 }
 
-HostTensor pad(
-    const HostTensor& input_tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value) {
-    return tensor_impl::pad(input_tensor, output_padded_shape, input_tensor_start, pad_value);
-}
-
 Tensor unpad(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& output_tensor_start,
@@ -233,66 +205,18 @@ Tensor unpad(
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    Tensor output = Tensor(pad_to_tile(input_tensor.host_tensor(), pad_value));
+    Tensor output = Tensor(tensor_impl::pad_to_tile(input_tensor.host_tensor(), pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
-}
-
-HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value) {
-    uint32_t height = input_tensor.padded_shape()[-2];
-    uint32_t width = input_tensor.padded_shape()[-1];
-    uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
-    uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
-
-    ttsl::SmallVector<uint32_t> padded_shape;
-    ttsl::SmallVector<uint32_t> input_tensor_start;
-
-    for (auto index = 0; index < static_cast<int>(input_tensor.padded_shape().rank()) - 2; index++) {
-        padded_shape.push_back(input_tensor.padded_shape()[index]);
-        input_tensor_start.push_back(0);
-    }
-
-    padded_shape.push_back(padded_height);
-    padded_shape.push_back(padded_width);
-    input_tensor_start.push_back(0);
-    input_tensor_start.push_back(0);
-
-    return tensor_impl::pad(
-        input_tensor,
-        tt::tt_metal::Shape(std::move(padded_shape)),
-        tt::tt_metal::Shape{std::move(input_tensor_start)},
-        pad_value);
 }
 
 Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
-    Tensor output = Tensor(unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
+    Tensor output = Tensor(tensor_impl::unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
-}
-
-HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
-    for (auto index = -3; index >= -static_cast<int>(input_tensor.padded_shape().rank()); index--) {
-        TT_ASSERT(
-            input_tensor.logical_shape()[index] == output_tensor_shape[index],
-            "Input shape must match output shape apart from last 2 dims");
-    }
-    TT_ASSERT(
-        input_tensor.padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
-            input_tensor.padded_shape()[-1] % constants::TILE_WIDTH == 0,
-        "Last 2 dims of input shape must be multiples of 32");
-    TT_ASSERT(
-        input_tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
-            input_tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
-        "Last 2 dims of output must be within range to have been padded to input");
-    Shape output_tensor_start(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
-    Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
-    for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
-        output_tensor_end[index] = output_tensor_shape[index];
-    }
-    return tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
 }
 
 // ======================================================================================
