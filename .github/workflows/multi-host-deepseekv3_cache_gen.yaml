@@ -38,6 +38,8 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+  push:
+    branches: ["mtsishkouski/38198-deepseek-cache-re-gen-pipeline-4x"]
 
 run-name: "DeepSeek V3 Cache Generation - quad"
 
