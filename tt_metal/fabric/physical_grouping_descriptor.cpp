@@ -1559,8 +1559,7 @@ void process_higher_layer_and_recurse(
 }  // namespace
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
-    const MeshGraphDescriptor& mesh_graph_descriptor,
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
+    const MeshGraphDescriptor& mesh_graph_descriptor) const {
     ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
@@ -1632,18 +1631,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 auto lookup_it = mesh_grouping_lookup.find(match_name);
                 if (lookup_it != mesh_grouping_lookup.end()) {
                     const GroupingInfo& candidate_grouping = lookup_it->second;
-
-                    // Phase 2: If PSD is provided, validate that this mesh grouping is valid on the PSD
-                    if (physical_system_descriptor != nullptr) {
-                        if (validate_grouping_with_psd(
-                                *this, candidate_grouping, *physical_system_descriptor, nullptr)) {
-                            result[instance_type][instance_name].push_back(candidate_grouping);
-                        }
-                        // Skip invalid groupings - they don't match the PSD
-                    } else {
-                        // No PSD provided - include all topology matches
-                        result[instance_type][instance_name].push_back(candidate_grouping);
-                    }
+                    result[instance_type][instance_name].push_back(candidate_grouping);
                 }
             }
         }
