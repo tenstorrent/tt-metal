@@ -254,7 +254,7 @@ run_quad_cache_gen() {
 
     local model_path="${DEEPSEEK_V3_HF_MODEL}"
     local cache_dir="${_DEEPSEEK_V3_CACHE_DIR}"
-    local temp_cache_dir="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/temp"
+    local temp_cache_dir="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/temp/${GITHUB_RUN_ID:-local}"
     local archive_dir="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-Archive"
     local num_layers="${_DEEPSEEK_V3_OVERRIDE_NUM_LAYERS:-}"
 
