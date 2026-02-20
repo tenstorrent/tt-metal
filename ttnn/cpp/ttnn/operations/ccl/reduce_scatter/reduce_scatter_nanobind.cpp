@@ -66,7 +66,8 @@ void bind_reduce_scatter(nb::module_& mod) {
             nb::arg("topology").noconvert() = nb::none(),
             nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()));
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::ccl
