@@ -31,7 +31,7 @@
   cmd: run_t3000_llama3_tests
   skus:
     wh_llmbox_perf:
-      timeout: 60
+      timeout: 70
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   model-name: llama3

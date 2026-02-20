@@ -16,9 +16,11 @@
 #include "metal_context.hpp"
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "firmware_capability.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -31,11 +33,13 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
+#include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device.hpp>
+#include "context/context_descriptor.hpp"
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
@@ -137,13 +141,9 @@ void MetalContext::initialize_device_manager(
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     device_manager_->initialize(
         device_ids,
-        num_hw_cqs,
-        l1_small_size,
-        trace_region_size,
-        l1_bank_remap,
-        worker_l1_size,
         init_profiler,
-        initialize_fabric_and_dispatch_fw);
+        initialize_fabric_and_dispatch_fw,
+        create_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size));
 }
 
 void MetalContext::initialize(
@@ -272,19 +272,13 @@ void MetalContext::initialize(
                     BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                     // fw_build_key is a combination of build_key and fw_compile_hash
                     // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-                    // if it's not already in firmware_built_keys_
                     // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
                     // Uses full 64-bit fw_compile_hash for proper change detection
                     uint64_t fw_build_key =
                         BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
 
-                    {
-                        std::lock_guard<std::mutex> lock(firmware_built_keys_mutex_);
-                        if (!firmware_built_keys_.contains(fw_build_key)) {
-                            BuildEnvManager::get_instance().build_firmware(device_id);
-                            firmware_built_keys_.insert(fw_build_key);
-                        }
-                    }
+                    jit_build_once(
+                        fw_build_key, [device_id] { BuildEnvManager::get_instance().build_firmware(device_id); });
 
                     // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                     // activated. This is required since ethernet cores context switch between application and routing
@@ -300,13 +294,6 @@ void MetalContext::initialize(
         for (auto& fut : futures) {
             fut.get();
         }
-    }
-
-    // Populate FD topology across all devices
-    if (rtoptions_.get_fast_dispatch()) {
-        std::set<ChipId> all_devices_set(all_devices.begin(), all_devices.end());
-        // TODO: enable this when dispatch init/teardown moves to MetalContext
-        // populate_fd_kernels(all_devices_set, num_hw_cqs);
     }
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
@@ -341,16 +328,22 @@ void MetalContext::initialize(
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
     watcher_server_->attach_devices();
-
-    // Register teardown function, but only once.
-    if (not teardown_registered_) {
-        std::atexit([]() { MetalContext::instance().teardown(); });
-        teardown_registered_ = true;
-    }
 }
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
 // undefined behavior. Do not create threads in this function or any functions it calls.
+void MetalContext::reinitialize_dispatch_managers() {
+    // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
+    // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config_, num_hw_cqs_);
+    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs_);
+}
+
+void MetalContext::set_fast_dispatch_mode(bool enable) {
+    rtoptions().set_fast_dispatch(enable);
+    reinitialize_dispatch_managers();
+}
+
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -409,15 +402,7 @@ void MetalContext::teardown() {
         profiler_state_manager_.reset();
     }
 
-    for (auto& mem_map : dispatch_mem_map_) {
-        if (mem_map) {
-            mem_map.reset();
-        }
-    }
-
-    dispatch_query_manager_.reset();
-    dispatch_core_manager_.reset();
-    tt::tt_metal::reset_topology_state();
+    teardown_dispatch_state();
 
     // Clear dispatch, dispatch_s and prefetcher core info in inspector data
     Inspector::clear_all_core_info();
@@ -428,15 +413,68 @@ void MetalContext::teardown() {
 
     noc_debug_state_.reset();
 
+    // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
+    // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
+    // when context is re-initialized).
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
+
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
         experimental::disable_mock_mode();
     }
 }
 
+// MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
+std::atomic<MetalContext*> g_instance{nullptr};
+std::mutex g_instance_mutex;
+bool registered_atexit = false;
+
 MetalContext& MetalContext::instance() {
-    static tt::stl::Indestructible<MetalContext> inst;
-    return inst.get();
+    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+    if (instance) {
+        // There is a potential race condition here if the instance is being torn down while this call is running or
+        // while the caller is using the instance. We assume that if teardown is in progress, this call must be coming
+        // from the teardown process (maybe on one of several threads) and is synchronized with the teardown.
+        return *instance;
+    }
+    std::lock_guard lock(g_instance_mutex);
+    // Check again in case another thread created the instance while we were waiting for the lock.
+    instance = g_instance.load(std::memory_order_acquire);
+    if (!instance) {
+        instance = new MetalContext();
+        g_instance.store(instance, std::memory_order_release);
+        if (!registered_atexit) {
+            std::atexit([]() {
+                // Don't check device count because the destruction order is complicated and we can't guarantee that the
+                // client isn't holding onto devices on process exit.
+                MetalContext::destroy_instance(false);
+            });
+            registered_atexit = true;
+        }
+    }
+    return *instance;
+}
+
+void MetalContext::destroy_instance(bool check_device_count) {
+    // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
+    // one thread while no work is being done on the MetalContext.
+    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+    if (!instance) {
+        return;
+    }
+    if (check_device_count && instance->device_manager() && instance->device_manager()->is_initialized() &&
+        !instance->device_manager()->get_all_active_devices().empty()) {
+        TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
+    }
+    delete instance;
+    // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
+    // return the old instance.
+    g_instance.store(nullptr, std::memory_order_release);
 }
 
 // Switch from mock mode to real hardware (requires all devices to be closed).
@@ -458,7 +496,6 @@ void MetalContext::reinitialize_for_real_hardware() {
     TT_FATAL(device_manager_ != nullptr, "Cannot reinitialize MetalContext before it is fully initialized");
 
     // Check if any devices are actually active (not just if MetalContext was initialized)
-    // Note: initialized_ flag doesn't get reset until process exit, so we check active devices instead
     auto active_devices = device_manager_->get_all_active_devices();
     TT_FATAL(
         active_devices.empty(),
@@ -496,6 +533,9 @@ void MetalContext::reinitialize_for_real_hardware() {
         worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
+    teardown_dispatch_state();
+    initialized_ = false;
+
     log_info(tt::LogMetal, "MetalContext reinitialized with real hardware");
 }
 
@@ -509,32 +549,42 @@ void MetalContext::teardown_base_objects() {
     hal_.reset();
 }
 
+void MetalContext::teardown_dispatch_state() {
+    for (auto& mem_map : dispatch_mem_map_) {
+        if (mem_map) {
+            mem_map.reset();
+        }
+    }
+    device_manager_->reset_dispatch_topology();
+    dispatch_query_manager_.reset();
+    dispatch_core_manager_.reset();
+}
+
 void MetalContext::initialize_base_objects() {
     const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     const auto platform_arch = get_platform_architecture(rtoptions_);
 
-    const auto initialize_objects = [&]() {
-        hal_ = std::make_unique<Hal>(
-            platform_arch,
-            is_base_routing_fw_enabled,
-            rtoptions_.get_enable_2_erisc_mode(),
-            get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
-        rtoptions_.ParseAllFeatureEnv(*hal_);
-        cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-        distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
-    };
+    cluster_ = std::make_unique<Cluster>(rtoptions_);
 
-    initialize_objects();
+    FirmwareCapabilityRequest req;
+    req.enable_2_erisc_mode = rtoptions_.get_enable_2_erisc_mode();
 
-    // Requires reinit with features disabled
-    // This will maintain backward compatibility with clusters that have legacy firmware but it will cause a slowdown
-    // during the first init
-    if (!cluster_->verify_eth_fw_capability()) {
-        rtoptions_.set_enable_2_erisc_mode(false);
-        teardown_base_objects();
-        initialize_objects();
+    FirmwareCapabilityResult res;
+
+    if (!check_firmware_capabilities(platform_arch, {.eth_fw = cluster_->get_ethernet_firmware_version()}, req, res)) {
+        rtoptions_.set_enable_2_erisc_mode(res.enable_2_erisc_mode);
     }
+
+    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    hal_ = std::make_unique<Hal>(
+        platform_arch,
+        is_base_routing_fw_enabled,
+        rtoptions_.get_enable_2_erisc_mode(),
+        get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
+
+    rtoptions_.ParseAllFeatureEnv(*hal_);
+    cluster_->set_hal(hal_.get());
 }
 
 MetalContext::MetalContext() {
@@ -569,10 +619,6 @@ MetalContext::MetalContext() {
     }
 
     device_manager_ = std::make_unique<DeviceManager>();
-
-    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
-    // how MetalContext lifetime will work through the API.
-    std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {
@@ -598,6 +644,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 }
 
 MetalContext::~MetalContext() {
+    teardown();
     device_manager_.reset();
     teardown_base_objects();
 }
@@ -896,6 +943,27 @@ tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabr
 
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
+std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
+    int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
+    return std::make_shared<ContextDescriptor>(
+        *hal_,
+        *cluster_,
+        rtoptions_,
+        fabric_config_,
+        fabric_reliability_mode_,
+        fabric_tensix_config_,
+        fabric_udm_mode_,
+        fabric_manager_,
+        fabric_router_config_,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        worker_l1_size,
+        dispatch_core_config_,
+        l1_bank_remap_,
+        rtoptions_.get_mock_cluster_desc_path());
+}
+
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
@@ -1074,8 +1142,12 @@ void MetalContext::reset_cores(ChipId device_id) {
 }
 
 void MetalContext::assert_cores(ChipId device_id) {
-    auto dispatch_cores = get_virtual_dispatch_cores(device_id);
-    auto routing_cores = get_virtual_dispatch_routing_cores(device_id);
+    std::unordered_set<CoreCoord> dispatch_cores;
+    std::unordered_set<CoreCoord> routing_cores;
+    if (device_manager_) {
+        dispatch_cores = device_manager_->get_virtual_dispatch_cores(device_id);
+        routing_cores = device_manager_->get_virtual_dispatch_routing_cores(device_id);
+    }
 
     // Assert riscs on Tensix
     CoreCoord grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
@@ -1134,7 +1206,7 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
-    // Create a dummp allocator to generatoe the bank/noc tables. Specifically, these depend on l1_bank_remap.
+    // Create a dummy allocator to generate the bank/noc tables. Specifically, these depend on l1_bank_remap.
     auto config = L1BankingAllocator::generate_config(
         device_id,
         num_hw_cqs_,
@@ -1144,24 +1216,25 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
         l1_bank_remap_);
     const auto allocator = L1BankingAllocator(config);
     const auto& soc_d = cluster_->get_soc_desc(device_id);
+
+    // Compute all tables in local variables first (no shared state accessed)
     const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);
-    dram_bank_offset_map_[device_id].clear();
-    dram_bank_offset_map_[device_id].resize(num_dram_banks);
+    std::vector<int32_t> local_dram_offsets(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
+        local_dram_offsets[bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
     }
+
     const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
+    std::vector<int32_t> local_l1_offsets(num_l1_banks);
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-    l1_bank_offset_map_[device_id].clear();
-    l1_bank_offset_map_[device_id].resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         l1_noc_coord_per_bank[bank_id] = cluster_->get_virtual_coordinate_from_logical_coordinates(
             device_id, allocator.get_logical_core_from_bank_id(bank_id), CoreType::WORKER);
-        l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
+        local_l1_offsets[bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
     }
 
-    dram_bank_to_noc_xy_[device_id].clear();
-    dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
+    std::vector<uint16_t> local_dram_bank_to_noc_xy;
+    local_dram_bank_to_noc_xy.reserve(hal_->get_num_nocs() * num_dram_banks);
     bool noc_translation_enabled = cluster_->get_target_device_type() != tt::TargetDevice::Mock &&
                                    cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
@@ -1179,20 +1252,29 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
                 noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y);
             }
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
-            dram_bank_to_noc_xy_[device_id].push_back(xy);
+            local_dram_bank_to_noc_xy.push_back(xy);
         }
     }
 
-    l1_bank_to_noc_xy_[device_id].clear();
-    l1_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
+    std::vector<uint16_t> local_l1_bank_to_noc_xy;
+    local_l1_bank_to_noc_xy.reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (const auto& noc_coord : l1_noc_coord_per_bank) {
             auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
-            l1_bank_to_noc_xy_[device_id].push_back(xy);
+            local_l1_bank_to_noc_xy.push_back(xy);
         }
+    }
+
+    // Now lock and commit all computed values to shared state atomically
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        dram_bank_offset_map_[device_id] = std::move(local_dram_offsets);
+        l1_bank_offset_map_[device_id] = std::move(local_l1_offsets);
+        dram_bank_to_noc_xy_[device_id] = std::move(local_dram_bank_to_noc_xy);
+        l1_bank_to_noc_xy_[device_id] = std::move(local_l1_bank_to_noc_xy);
     }
 }
 
@@ -1201,22 +1283,30 @@ void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
 
-    worker_logical_col_to_virtual_col_[device_id].clear();
-    worker_logical_row_to_virtual_row_[device_id].clear();
-    worker_logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
-    worker_logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
+    // Compute in local vectors first (no lock needed)
+    std::vector<uint8_t> local_col_map;
+    std::vector<uint8_t> local_row_map;
+    local_col_map.reserve(tensix_grid_size.x);
+    local_row_map.reserve(tensix_grid_size.y);
 
     for (size_t x = 0; x < tensix_grid_size.x; x++) {
-        worker_logical_col_to_virtual_col_[device_id].push_back(
+        local_col_map.push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .x);
     }
     for (size_t y = 0; y < tensix_grid_size.y; y++) {
-        worker_logical_row_to_virtual_row_[device_id].push_back(
+        local_row_map.push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
+    }
+
+    // Lock only for final commit to shared maps
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        worker_logical_col_to_virtual_col_[device_id] = std::move(local_col_map);
+        worker_logical_row_to_virtual_row_[device_id] = std::move(local_row_map);
     }
 }
 
@@ -1241,6 +1331,7 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     if (end_core.has_value()) {
         // Multicast to all tensix cores in the range [virtual_core, end_core]
         auto start_core = virtual_core;
+
         cluster_->noc_multicast_write(
             dram_bank_to_noc_xy_[device_id].data(),
             dram_to_noc_sz_in_bytes,

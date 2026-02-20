@@ -12,13 +12,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
-
-RepeatAndInterleaveEltwiseMulDeviceOperation::program_factory_t
-RepeatAndInterleaveEltwiseMulDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return RepeatAndInterleaveEltwiseMulProgramFactory{};
-}
-
 void RepeatAndInterleaveEltwiseMulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.a;
@@ -123,16 +116,12 @@ tt::stl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_prog
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_shape_a = input_tensor_a.padded_shape();
     const auto& input_shape_b = input_tensor_b.padded_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     // Determine compile-time defines based on shapes
     bool repeat_in0 = (input_shape_a[-1] == TILE_WIDTH);
     bool repeat_interleave_in1 = (input_shape_b[-1] == HIDDEN_SIZE);
 
     operation::Hash hash = operation::hash_operation<RepeatAndInterleaveEltwiseMulDeviceOperation>(
         args,
-        program_factory.index(),
         input_tensor_a.dtype(),
         input_tensor_b.dtype(),
         input_tensor_a.memory_config(),

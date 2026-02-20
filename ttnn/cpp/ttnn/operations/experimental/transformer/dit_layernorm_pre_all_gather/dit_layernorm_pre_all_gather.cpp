@@ -10,6 +10,7 @@ namespace ttnn::operations::experimental::transformer {
 
 ttnn::Tensor ExecuteDitLayerNormPreAllGather::invoke(
     const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& recip_tensor,
     const DataType dtype,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config) {
@@ -18,7 +19,7 @@ ttnn::Tensor ExecuteDitLayerNormPreAllGather::invoke(
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
     return ttnn::prim::dit_layernorm_pre_all_gather(
-        input_tensor, dtype, kernel_config_val, memory_config.value_or(input_tensor.memory_config()));
+        input_tensor, recip_tensor, dtype, kernel_config_val, memory_config.value_or(input_tensor.memory_config()));
 }
 
 }  // namespace ttnn::operations::experimental::transformer
