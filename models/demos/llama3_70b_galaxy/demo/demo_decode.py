@@ -35,8 +35,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
-    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    # Issue https://github.com/tenstorrent/tt-metal/issues/38054
+    # FIXME #38054: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
     "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 68, "max": 73}},
 }
 

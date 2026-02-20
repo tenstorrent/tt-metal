@@ -1121,8 +1121,7 @@ def test_qwen_demo_text(
         assert (
             avg_time_to_first_token * 1000 < target_time_to_first_token
         ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target_time_to_first_token}."
-        # FIXME: Update target when regression is fixed
-        # Issue https://github.com/tenstorrent/tt-metal/issues/38054
+        # FIXME #38054: Update target when regression is fixed
         target_decode_tok_s_u = 35
         target_decode_tok_s = target_decode_tok_s_u * batch_size
         assert (
