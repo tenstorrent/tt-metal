@@ -80,6 +80,69 @@
   team: models
   model-name: qwen25_vl
 
+- name: bert_tiny N150 functional
+  cmd: run_bert_tiny_func
+  skus:
+    wh_n150:
+      timeout: 15
+  owner_id: U024A4EFV6U # Brian Liu
+  team: models
+  model-name: bert_tiny
+
+- name: distilbert N150 functional
+  cmd: run_distilbert_func
+  skus:
+    wh_n150:
+      timeout: 15
+  owner_id: U013121KDH9 # Austin Ho
+  team: models
+  model-name: distilbert
+
+- name: mnist N150 functional
+  cmd: run_mnist_func
+  skus:
+    wh_n150:
+      timeout: 15
+  owner_id: U06ECNVR0EN # Evan Smal
+  team: models
+  model-name: mnist
+
+- name: squeezebert N150 functional
+  cmd: run_squeezebert_func
+  skus:
+    wh_n150:
+      timeout: 15
+  owner_id: UBHPP2NDP # Joseph Chu
+  team: models
+  model-name: squeezebert
+
+- name: sdxl N150 functional
+  cmd: run_sdxl_func
+  skus:
+    wh_n150:
+      timeout: 20
+  owner_id: U0837MYG788 # Marko Radosavljevic
+  team: models
+  model-name: sdxl
+
+- name: mistral7b N150 functional
+  cmd: run_mistral7b_perf
+  skus:
+    wh_n150:
+      timeout: 20
+  owner_id: U0896VBAKFC # Pratikkumar Prajapati
+  team: models
+  model-name: mistral7b
+
+- name: resnet N150 performance
+  cmd: run_resnet_stability
+  skus:
+    wh_n150:
+      timeout: 20
+  owner_id: U0837MYG788 # Marko Radosavljevic
+  team: models
+  model-name: resnet
+
 # N150 CIv2 tests
 - name: segformer N150 functional
   cmd: run_segformer_func
@@ -98,6 +161,87 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
   model-name: vit
+
+- name: sentence_bert N150 functional
+  cmd: run_sentencebert_func
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: sentence_bert
+
+- name: mobilenetv2 N150 functional
+  cmd: run_mobilenetv2_perf
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: mobilenetv2
+
+- name: ufld_v2 N150 functional
+  cmd: run_ufld_v2_func
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: ufld_v2
+
+- name: swin_s N150 functional
+  cmd: run_swin_s_demo
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
+  model-name: swin_s
+
+- name: vanilla_unet N150 functional
+  cmd: run_vanilla_unet_demo
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: vanilla_unet
+
+- name: vgg_unet N150 functional
+  cmd: run_vgg_unet_demo
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: vgg_unet
+
+- name: efficientnet_b0 N150 functional
+  cmd: run_efficientnet_b0_func
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: efficientnet_b0
+
+- name: vovnet N150 functional
+  cmd: run_vovnet_demo
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: vovnet
+
+- name: swin_v2 N150 functional
+  cmd: run_swin_v2_demo
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: swin_v2
 
 # N300 Core models
 - name: llama3 N300 functional
@@ -136,6 +280,52 @@
   team: models
   model-name: bert
 
+- name: bert_tiny N300 functional
+  cmd: run_bert_tiny_func
+  skus:
+    wh_n300:
+      timeout: 15
+  owner_id: U024A4EFV6U # Brian Liu
+  team: models
+  model-name: bert_tiny
+
+- name: vgg N300 functional
+  cmd: run_vgg_func
+  skus:
+    wh_n300:
+      timeout: 15
+  owner_id: U06Q7ESTFEV # Borys Bradel
+  team: models
+  model-name: vgg
+
+- name: distilbert N300 functional
+  cmd: run_distilbert_func
+  skus:
+    wh_n300:
+      timeout: 15
+  owner_id: U013121KDH9 # Austin Ho
+  team: models
+  model-name: distilbert
+
+- name: mnist N300 functional
+  cmd: run_mnist_func
+  skus:
+    wh_n300:
+      timeout: 15
+  owner_id: U06ECNVR0EN # Evan Smal
+  team: models
+  model-name: mnist
+
+- name: squeezebert N300 functional
+  cmd: run_squeezebert_func
+  skus:
+    wh_n300:
+      timeout: 15
+  owner_id: UBHPP2NDP # Joseph Chu
+  team: models
+  model-name: squeezebert
+
+# N300 CIv2 tests
 - name: ds_r1_qwen N300 functional
   cmd: run_ds_r1_qwen_func
   skus:
@@ -144,6 +334,105 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   model-name: ds_r1_qwen
+
+- name: mobilenetv2 N300 functional
+  cmd: run_mobilenetv2_perf
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: mobilenetv2
+
+- name: ufld_v2 N300 functional
+  cmd: run_ufld_v2_func
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: ufld_v2
+
+- name: segformer N300 functional
+  cmd: run_segformer_func
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: segformer
+
+- name: sentence_bert N300 functional
+  cmd: run_sentencebert_func
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: sentence_bert
+
+- name: vanilla_unet N300 functional
+  cmd: run_vanilla_unet_demo
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: vanilla_unet
+
+- name: vgg_unet N300 functional
+  cmd: run_vgg_unet_demo
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: vgg_unet
+
+- name: vovnet N300 functional
+  cmd: run_vovnet_demo
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: vovnet
+
+- name: swin_v2 N300 functional
+  cmd: run_swin_v2_demo
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: swin_v2
+
+- name: swin_s N300 functional
+  cmd: run_swin_s_demo
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
+  model-name: swin_s
+
+- name: vit N300 functional
+  cmd: run_vit_demo
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
+  model-name: vit
+
+- name: efficientnet_b0 N300 functional
+  cmd: run_efficientnet_b0_func
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U056BK5U81E # Dalar Vartanians
+  team: models
+  model-name: efficientnet_b0
 
 # N300 Performance tests
 - name: mistral7b N300 performance
