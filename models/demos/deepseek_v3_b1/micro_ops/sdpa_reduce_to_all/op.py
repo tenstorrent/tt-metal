@@ -595,12 +595,7 @@ class SdpaReduceToAll:
                 # Neighbor coords (torus/ring only)
                 fwd_row, fwd_col = _get_neighbor_coord(mesh_shape, row, col, +1, cluster_axis)
                 bwd_row, bwd_col = _get_neighbor_coord(mesh_shape, row, col, -1, cluster_axis)
-                print("row:", row)
-                print("col:", col)
-                print("fwd_row:", fwd_row)
-                print("fwd_col:", fwd_col)
-                print("bwd_row:", bwd_row)
-                print("bwd_col:", bwd_col)
+
                 fwd_coord = ttnn.MeshCoordinate(fwd_row, fwd_col)
                 bwd_coord = ttnn.MeshCoordinate(bwd_row, bwd_col)
 
@@ -611,9 +606,6 @@ class SdpaReduceToAll:
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 fwd_fabric_node_id = mesh_device.get_fabric_node_id(fwd_coord)
                 bwd_fabric_node_id = mesh_device.get_fabric_node_id(bwd_coord)
-                print("fabric_node_id:", fabric_node_id)
-                print("fwd_fabric_node_id:", fwd_fabric_node_id)
-                print("bwd_fabric_node_id:", bwd_fabric_node_id)
 
                 # Split shard cores per link
                 cores_per_link = num_shard_cores // num_links

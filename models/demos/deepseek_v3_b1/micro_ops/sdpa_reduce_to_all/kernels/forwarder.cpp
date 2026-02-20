@@ -73,7 +73,6 @@ FORCE_INLINE uint32_t process_ready_slots(
         uint32_t slot = __builtin_ctz(pending);
         uint32_t slot_addr = buffer_base + (slot * slot_size);
 
-        DPRINT << "SDPA Forwarder: pending " << pending << " slot " << slot << " slot_addr " << slot_addr << ENDL();
         // Read actual payload size from packet header (supports variable chunk sizes)
         auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
         uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
@@ -117,7 +116,6 @@ void kernel_main() {
 
     uint32_t r1_sent_mask = 0;
     uint32_t r2_sent_mask = 0;
-    DPRINT << "SDPA Forwarder: Loop Start " << all_sent_mask << ENDL();
 
     do {
         invalidate_l1_cache();
