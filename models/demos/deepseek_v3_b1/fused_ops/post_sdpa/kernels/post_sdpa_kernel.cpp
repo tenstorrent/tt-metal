@@ -58,6 +58,14 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+// tt_memmove for local memory copy (MS data from recv buffer to CB)
+// Include common.hpp when:
+// - CCL is skipped (common.hpp won't be included via all_reduce_sender.hpp), OR
+// - Compiling for NCRISC (all_reduce_sender.hpp only includes common.hpp for BRISC)
+#if defined(SKIP_CCL) || defined(COMPILE_FOR_NCRISC)
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#endif
+using tt::data_movement::common::tt_memmove;
 #endif
 #endif
 
@@ -391,10 +399,9 @@ void kernel_main() {
                 cb_reserve_back(cb_ms, 1);
                 noc_semaphore_wait_min(sem_ptr, SDPA_MS_SEM_THRESHOLD);
                 // MS is at end of buffer (offset = total_l_bytes)
+                // Use tt_memmove for local memory copy (same core L1 to L1)
                 uint32_t ms_src_addr = recv_buffer_addr + sdpa_total_l_bytes;
-                noc_async_read(
-                    get_noc_addr(my_x[0], my_y[0], ms_src_addr), get_write_ptr(cb_ms), sdpa_ms_tile_size_bytes);
-                noc_async_read_barrier();
+                tt_memmove<true, false, false, 0>(get_write_ptr(cb_ms), ms_src_addr, sdpa_ms_tile_size_bytes);
                 cb_push_back(cb_ms, 1);
 
                 // L chunks (sem >= 2, 3, 4, ...)
@@ -449,16 +456,9 @@ void kernel_main() {
 
             uint32_t r1_sent_mask = 0;
             uint32_t r2_sent_mask = 0;
-            DPRINT << "SDPA Forwarder NCRISC: Loop Start " << sdpa_fwd_all_sent_mask << ENDL();
-            DPRINT << "SDPA Forwarder NCRISC: r1_sem_addr " << sdpa_fwd_r1_sem_addr << ENDL();
-            DPRINT << "SDPA Forwarder NCRISC: r2_sem_addr " << sdpa_fwd_r2_sem_addr << ENDL();
-            DPRINT << "SDPA Forwarder NCRISC: r1_buffer_base " << r1_buffer_base << ENDL();
-            DPRINT << "SDPA Forwarder NCRISC: r2_buffer_base " << r2_buffer_base << ENDL();
-            uint32_t num_iterations = 0;
             // Forward packets as they arrive
             do {
                 invalidate_l1_cache();
-                num_iterations++;
                 // Process R1 slots
                 uint32_t r1_sem_value = *r1_sem_ptr;
                 uint32_t r1_pending = r1_sem_value & ~r1_sent_mask;
@@ -467,12 +467,10 @@ void kernel_main() {
                     uint32_t slot_addr = r1_buffer_base + (slot * sdpa_fwd_slot_size);
                     auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
                     uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
-                    // DPRINT<<"SDPA Forwarder NCRISC: Waiting for empty write slot"<<ENDL();
                     sdpa_fabric_connection.wait_for_empty_write_slot();
                     sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
                     r1_sent_mask |= (1u << slot);
                     r1_pending &= ~(1u << slot);
-                    DPRINT << "SDPA Forwarder NCRISC: Forwarded R1 slot " << slot << ENDL();
                 }
 
                 // Process R2 slots
@@ -487,12 +485,6 @@ void kernel_main() {
                     sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
                     r2_sent_mask |= (1u << slot);
                     r2_pending &= ~(1u << slot);
-                    DPRINT << "SDPA Forwarder NCRISC: Forwarded R2 slot " << slot << ENDL();
-                }
-                if (num_iterations == 100000000) {
-                    DPRINT << "SDPA Forwarder NCRISC: r1_sem_value " << r1_sem_value << ENDL();
-                    DPRINT << "SDPA Forwarder NCRISC: r2_sem_value " << r2_sem_value << ENDL();
-                    num_iterations = 0;
                 }
             } while (r1_sent_mask != sdpa_fwd_all_sent_mask || r2_sent_mask != sdpa_fwd_all_sent_mask);
 
@@ -532,9 +524,6 @@ void kernel_main() {
             constexpr uint32_t sdpa_tiles_per_l_chunk = get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk");
             constexpr uint32_t sdpa_total_l_bytes = sdpa_num_l_chunks * sdpa_l_chunk_size_bytes;
 
-            DPRINT << "SDPA Writer: sdpa_num_l_chunks=" << sdpa_num_l_chunks
-                   << " sdpa_tiles_per_l_chunk=" << sdpa_tiles_per_l_chunk << ENDL();
-
             static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
             // Runtime args
@@ -544,7 +533,6 @@ void kernel_main() {
             const uint32_t r1_neighbor_dst_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
             const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
 
-            DPRINT << "SDPA Writer: r1_dst=" << r1_dst_chip_id << " r1_sem=" << r1_neighbor_sem_addr << ENDL();
             const uint32_t r2_dst_mesh_id = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
             const uint32_t r2_dst_chip_id = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
             const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
@@ -597,8 +585,6 @@ void kernel_main() {
                 noc_async_writes_flushed();
 
                 uint64_t fwd_sem_noc = get_noc_addr(fwd_core_x, fwd_core_y, fwd_sem_addr);
-                DPRINT << "SDPA Writer BRISC: sem_inc " << fwd_core_x << "," << fwd_core_y << "," << fwd_sem_addr
-                       << ENDL();
                 noc_semaphore_inc(fwd_sem_noc, 1u << slot_idx);
 
                 cb_push_back(sdpa_cb_packet_slot, 1);
@@ -663,6 +649,10 @@ void kernel_main() {
                     r2_base_slot_idx + 1 + i);
             }
 
+            // Pop R1 result MS now that we've sent it.
+            // TRISC R2 finalize deliberately does NOT pop this CB to avoid a race
+            // where TRISC pops it before BRISC reads it.
+            cb_pop_front(sdpa_cb_r1_result_ms, 1);
             noc_async_full_barrier();
 
             // SCATTER PHASE: Distribute output rows to matmul1 cores
@@ -748,17 +738,8 @@ void kernel_main() {
             uint32_t r1_sent_mask = 0;
             uint32_t r2_sent_mask = 0;
 
-            DPRINT << "SDPA Forwarder BRISC: sdpa_fwd_slots_per_round=" << sdpa_fwd_slots_per_round
-                   << " mask=" << sdpa_fwd_all_sent_mask << ENDL();
-            DPRINT << "SDPA Forwarder BRISC: r1_sem_addr " << sdpa_fwd_r1_sem_addr << ENDL();
-            DPRINT << "SDPA Forwarder BRISC: r2_sem_addr " << sdpa_fwd_r2_sem_addr << ENDL();
-            DPRINT << "SDPA Forwarder BRISC: r1_buffer_base " << r1_buffer_base << ENDL();
-            DPRINT << "SDPA Forwarder BRISC: r2_buffer_base " << r2_buffer_base << ENDL();
-            uint32_t num_iterations = 0;
-
             do {
                 invalidate_l1_cache();
-                num_iterations++;
                 // Process R1 slots
                 uint32_t r1_sem_value = *r1_sem_ptr;
                 uint32_t r1_pending = r1_sem_value & ~r1_sent_mask;
@@ -767,12 +748,10 @@ void kernel_main() {
                     uint32_t slot_addr = r1_buffer_base + (slot * sdpa_fwd_slot_size);
                     auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
                     uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
-                    // DPRINT<<"SDPA Forwarder BRISC: Waiting for empty write slot"<<ENDL();
                     sdpa_fabric_connection.wait_for_empty_write_slot();
                     sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
                     r1_sent_mask |= (1u << slot);
                     r1_pending &= ~(1u << slot);
-                    DPRINT << "SDPA Forwarder BRISC: Forwarded R1 slot " << slot << ENDL();
                 }
 
                 // Process R2 slots
@@ -787,12 +766,6 @@ void kernel_main() {
                     sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
                     r2_sent_mask |= (1u << slot);
                     r2_pending &= ~(1u << slot);
-                    DPRINT << "SDPA Forwarder BRISC: Forwarded R2 slot " << slot << ENDL();
-                }
-                if (num_iterations == 100000000) {
-                    DPRINT << "SDPA Forwarder BRISC: r1_sem_value " << r1_sem_value << ENDL();
-                    DPRINT << "SDPA Forwarder BRISC: r2_sem_value " << r2_sem_value << ENDL();
-                    num_iterations = 0;
                 }
             } while (r1_sent_mask != sdpa_fwd_all_sent_mask || r2_sent_mask != sdpa_fwd_all_sent_mask);
 
@@ -805,6 +778,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_TRISC)
         // SDPA Compute: R1 and R2 reductions
         if constexpr (Core::is_sdpa_worker_core) {
+            DPRINT << "SDPA Compute TRISC: Start" << ENDL();
             // Compile-time args for SDPA compute
             constexpr uint32_t sdpa_scale_fp32 = get_named_compile_time_arg_val("sdpa_scale_fp32");
             constexpr uint32_t sdpa_cb_local_l = get_named_compile_time_arg_val("sdpa_cb_local_l");
@@ -838,7 +812,8 @@ void kernel_main() {
                 cb_reserve_back(sdpa_cb_r1_result_l, sdpa_tiles_per_l_chunk);
 
                 uint32_t tile_index = chunk * sdpa_tiles_per_l_chunk;
-                bool acquire_regs = (chunk != 0);
+                // R1 is non-normalizing: MS reduce releases regs, so always acquire
+                bool acquire_regs = true;
                 ckernel::sdpa_tail_l_block<sdpa_tiles_per_l_chunk>(
                     sdpa_cb_r1_neighbor_l, sdpa_cb_local_l, sdpa_cb_r1_result_l, tile_index, acquire_regs);
 
@@ -863,7 +838,13 @@ void kernel_main() {
 
                 cb_push_back(sdpa_cb_l_out, sdpa_tiles_per_l_chunk);
             }
-            ckernel::sdpa_tail_finalize(sdpa_cb_r2_neighbor_ms, sdpa_cb_r1_result_ms);
+            // Inline R2 finalize: DON'T pop sdpa_cb_r1_result_ms here!
+            // BRISC needs to read sdpa_cb_r1_result_ms (to send R2 data to neighbor).
+            // If we pop it before BRISC reads it, BRISC hangs on cb_wait_front.
+            // BRISC will pop sdpa_cb_r1_result_ms after sending R2 data.
+            ckernel::sdpa_bcast_col_reuse_postamble();
+            cb_pop_front(sdpa_cb_r2_neighbor_ms, 1);
+            DPRINT << "SDPA Compute TRISC: Done" << ENDL();
         }
 #endif  // COMPILE_FOR_TRISC
     }

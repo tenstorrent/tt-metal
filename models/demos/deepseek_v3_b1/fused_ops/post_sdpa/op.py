@@ -38,12 +38,25 @@ CB Layout:
 """
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
+
+
+def _round_up(value: int, alignment: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def _get_element_size_bytes(dtype):
+    if dtype == ttnn.bfloat16:
+        return 2
+    if dtype == ttnn.float32:
+        return 4
+    raise ValueError(f"Unsupported dtype for sdpa: {dtype}")
 
 
 class PostSDPA:
@@ -275,35 +288,65 @@ class PostSDPA:
             # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
             full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
 
-            # SDPA tensor properties
+            # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
             sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
             sdpa_input_ms_sample = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
 
-            # SDPA L tensor: [8, 4096] total, width-sharded across 8 workers
-            # Per-worker: [8, 512] = 8 rows x 16 tiles (32-wide each)
-            sdpa_l_tiles_per_worker = 16  # 512 / 32 = 16 tiles per worker
-            # Use same chunking formula as original sdpa_reduce_to_all op
-            sdpa_max_tiles_per_chunk = 8
-            sdpa_min_num_l_chunks = (sdpa_l_tiles_per_worker + sdpa_max_tiles_per_chunk - 1) // sdpa_max_tiles_per_chunk
-            sdpa_num_l_chunks = max(sdpa_min_num_l_chunks, 4)  # Minimum 4 chunks
-            sdpa_tiles_per_l_chunk = sdpa_l_tiles_per_worker // sdpa_num_l_chunks  # 16 / 4 = 4 tiles per chunk
-            print(
-                f"DEBUG: sdpa_num_l_chunks={sdpa_num_l_chunks}, sdpa_tiles_per_l_chunk={sdpa_tiles_per_l_chunk}, sdpa_l_tiles_per_worker={sdpa_l_tiles_per_worker}"
+            # Get actual tile dimensions from input tensor (matches original op)
+            sdpa_tile = sdpa_input_l_sample.tile
+            sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
+            sdpa_element_size_bytes = _get_element_size_bytes(sdpa_input_l_sample.dtype)
+            sdpa_input_page_size_bytes = sdpa_element_size_bytes * sdpa_tile_height * sdpa_tile_width
+            sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
+
+            # Get shard spec to calculate tile counts (matches original op)
+            sdpa_shard_spec = sdpa_input_l_sample.memory_config().shard_spec
+            sdpa_input_l_num_pages = (sdpa_shard_spec.shape[0] // sdpa_tile_height) * (
+                sdpa_shard_spec.shape[1] // sdpa_tile_width
             )
 
-            # SDPA tile sizes
-            sdpa_l_tile_size = tile_32x32_size  # 32x32 tile for L
-            sdpa_ms_tile_size = tile_1x32_size  # 1x32 tile for MS
-            sdpa_l_chunk_size_bytes = sdpa_tiles_per_l_chunk * sdpa_l_tile_size
+            # Calculate out_tiles using same formula as original op
+            PNH = 8
+            DH = sdpa_input_l_num_pages * sdpa_tile_width
+            DHt = DH // sdpa_tile_width
+            PNHt = PNH // sdpa_tile_height
+            Sq_chunk_t = PNHt
+            sdpa_out_tiles = Sq_chunk_t * DHt
+
+            # Chunking formula (identical to original op)
+            sdpa_max_tiles_per_chunk = 8
+            sdpa_min_num_l_chunks = (sdpa_out_tiles + sdpa_max_tiles_per_chunk - 1) // sdpa_max_tiles_per_chunk
+            sdpa_num_l_chunks = max(sdpa_min_num_l_chunks, 4)
+            if sdpa_out_tiles % sdpa_num_l_chunks != 0:
+                raise ValueError(
+                    f"sdpa_out_tiles ({sdpa_out_tiles}) must be divisible by sdpa_num_l_chunks ({sdpa_num_l_chunks})"
+                )
+
+            sdpa_tiles_per_l_chunk = sdpa_out_tiles // sdpa_num_l_chunks
+            sdpa_l_chunk_size_bytes = sdpa_tiles_per_l_chunk * sdpa_input_page_size_bytes
+
+            # Alias for backward compatibility with CB descriptor code
+            sdpa_l_tiles_per_worker = sdpa_out_tiles
+
+            logger.info(
+                f"sdpa_num_l_chunks={sdpa_num_l_chunks}, sdpa_tiles_per_l_chunk={sdpa_tiles_per_l_chunk}, "
+                f"sdpa_out_tiles={sdpa_out_tiles}, sdpa_input_page_size_bytes={sdpa_input_page_size_bytes}"
+            )
+
+            # SDPA tile sizes (get from actual tensor, not hardcoded)
+            sdpa_l_tile_size = sdpa_input_page_size_bytes  # Actual tile size from input
+            sdpa_ms_tile_size = _round_up(sdpa_input_page_size_bytes, sdpa_l1_alignment)  # Aligned for MS
+            logger.info(f"sdpa_l_chunk_size_bytes={sdpa_l_chunk_size_bytes}, sdpa_l_tile_size={sdpa_l_tile_size}")
 
             # SDPA scatter parameters (scatter output to matmul1 cores)
-            # Each SDPA worker scatters 8 rows of [1, 512] to 8 matmul1 cores
-            sdpa_scatter_num_rows = 8  # Rows per worker to scatter
-            sdpa_scatter_num_tiles = 16  # 512 / 32 = 16 tiles per row
-            sdpa_scatter_src_tile_size = sdpa_l_tile_size  # 32x32 source
+            # Each SDPA worker scatters rows to matmul1 cores (one row per tile when using 8x32 tiles)
+            sdpa_scatter_num_rows = sdpa_tile_height  # Rows per tile (8 for 8x32 tiles)
+            sdpa_scatter_num_tiles = sdpa_l_tiles_per_worker  # Tiles per worker
+            sdpa_scatter_src_tile_size = sdpa_l_tile_size  # Source tile size
             sdpa_scatter_dst_tile_size = tile_1x32_size  # 1x32 destination (row-extracted)
-            sdpa_scatter_face_size = 512  # 16 rows * 32 cols * 1 byte (half of 32x32 tile)
-            sdpa_scatter_row_face_size = 64  # 32 cols * 2 bytes per row
+            # Face size = half tile bytes (tile_height/2 rows * tile_width cols * element_size)
+            sdpa_scatter_face_size = (sdpa_tile_height // 2) * sdpa_tile_width * sdpa_element_size_bytes
+            sdpa_scatter_row_face_size = sdpa_tile_width * sdpa_element_size_bytes  # One row in face
 
             # SDPA CB indices (14-24, after existing CBs 0-13)
             sdpa_cb_local_l = 14
@@ -918,11 +961,12 @@ class PostSDPA:
                     cb_list.append(sdpa_r1_neighbor_l_cb_descriptor)
 
                     # CB 17: SDPA R1 neighbor MS (scratch, not backed by tensor)
+                    # Must use sdpa_tile (e.g., 8x32) to match MS input tensor tile format
                     sdpa_r1_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_r1_neighbor_ms,
                         data_format=data_format,
                         page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(TILE_1x32),
+                        tile=ttnn.TileDescriptor(sdpa_tile),
                     )
                     sdpa_r1_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
                         total_size=sdpa_ms_tile_size,
@@ -932,11 +976,12 @@ class PostSDPA:
                     cb_list.append(sdpa_r1_neighbor_ms_cb_descriptor)
 
                     # CB 18: SDPA R1 result L (scratch, reused for scatter)
+                    # Use actual tile from SDPA input tensor (e.g., 8x32), not hardcoded 32x32
                     sdpa_r1_result_l_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_r1_result_l,
                         data_format=data_format,
                         page_size=sdpa_l_tile_size,
-                        tile=ttnn.TileDescriptor(TILE_32x32),
+                        tile=ttnn.TileDescriptor(sdpa_tile),
                     )
                     sdpa_r1_result_l_cb_descriptor = ttnn.CBDescriptor(
                         total_size=sdpa_l_tiles_per_worker * sdpa_l_tile_size,
@@ -946,11 +991,12 @@ class PostSDPA:
                     cb_list.append(sdpa_r1_result_l_cb_descriptor)
 
                     # CB 19: SDPA R1 result MS (scratch)
+                    # Must use sdpa_tile to match MS input tensor tile format
                     sdpa_r1_result_ms_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_r1_result_ms,
                         data_format=data_format,
                         page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(TILE_1x32),
+                        tile=ttnn.TileDescriptor(sdpa_tile),
                     )
                     sdpa_r1_result_ms_cb_descriptor = ttnn.CBDescriptor(
                         total_size=sdpa_ms_tile_size,
@@ -966,11 +1012,12 @@ class PostSDPA:
                     cb_list.append(sdpa_r2_neighbor_l_cb_descriptor)
 
                     # CB 21: SDPA R2 neighbor MS (scratch)
+                    # Must use sdpa_tile to match MS input tensor tile format
                     sdpa_r2_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_r2_neighbor_ms,
                         data_format=data_format,
                         page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(TILE_1x32),
+                        tile=ttnn.TileDescriptor(sdpa_tile),
                     )
                     sdpa_r2_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
                         total_size=sdpa_ms_tile_size,
@@ -986,11 +1033,12 @@ class PostSDPA:
                     cb_list.append(sdpa_l_out_cb_descriptor)
 
                     # CB 23: SDPA MS output (scratch, only used for R1 intermediate)
+                    # Must use sdpa_tile to match MS input tensor tile format
                     sdpa_ms_out_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_ms_out,
                         data_format=data_format,
                         page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(TILE_1x32),
+                        tile=ttnn.TileDescriptor(sdpa_tile),
                     )
                     sdpa_ms_out_cb_descriptor = ttnn.CBDescriptor(
                         total_size=sdpa_ms_tile_size,
@@ -1265,7 +1313,7 @@ class PostSDPA:
                     print("ccl col:", col)
                     print("ccl neighbor row:", neighbor_row)
                     print("ccl neighbor col:", neighbor_col)
-                    print("fabric node id (local):", fabric_node_id)
+                    print(f"fabric node id (local): {fabric_node_id} umd device id: {device.id()}")
                     print("fabric node id (neighbor):", neighbor_fabric_node_id)
                     # Setup sender fabric connection
                     sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
@@ -1417,16 +1465,17 @@ class PostSDPA:
                         # Type A/B determination (like original op)
                         is_type_a = ((row + worker_idx) % 2) == 0
 
-                        # Type A: R1 via FWD (BRISC), R2 via BWD (NCRISC)
-                        # Type B: R1 via BWD (NCRISC), R2 via FWD (BRISC)
+                        # Type A: R1 via FWD (BRISC) to forward neighbor, R2 via BWD (NCRISC) to backward neighbor
+                        # Type B: R1 via BWD (NCRISC) to backward neighbor, R2 via FWD (BRISC) to forward neighbor
                         if is_type_a:
-                            # R1 config: FWD forwarder (BRISC buffer region)
+                            # R1 config: FWD forwarder (BRISC buffer region) → forward neighbor
                             r1_fwd_buffer_base = forwarder_buffer_base
                             r1_fwd_sem_id = sdpa_fwd_r1_sem_id  # Forward R1 semaphore (ID 8)
                             r1_slot_idx = fwd_r1_count[link_idx] * sdpa_slots_per_worker
                             fwd_r1_count[link_idx] += 1
                             r1_fwd_slot_addr = r1_fwd_buffer_base + r1_slot_idx * sdpa_fwd_slot_size
-                            # R2 config: BWD forwarder (NCRISC buffer region)
+                            r1_dst_fabric_node_id = fwd_fabric_node_id  # Type A sends R1 to forward neighbor
+                            # R2 config: BWD forwarder (NCRISC buffer region) → backward neighbor
                             r2_fwd_buffer_base = forwarder_buffer_base + ncrisc_buffer_offset
                             r2_fwd_sem_id = sdpa_bwd_r2_sem_id  # Backward R2 semaphore (ID 11)
                             r2_slot_idx = bwd_r2_count[link_idx] * sdpa_slots_per_worker
@@ -1434,14 +1483,16 @@ class PostSDPA:
                             r2_fwd_slot_addr = (
                                 r2_fwd_buffer_base + sdpa_fwd_r2_buffer_offset + r2_slot_idx * sdpa_fwd_slot_size
                             )
+                            r2_dst_fabric_node_id = bwd_fabric_node_id  # Type A sends R2 to backward neighbor
                         else:
-                            # R1 config: BWD forwarder (NCRISC buffer region)
+                            # R1 config: BWD forwarder (NCRISC buffer region) → backward neighbor
                             r1_fwd_buffer_base = forwarder_buffer_base + ncrisc_buffer_offset
                             r1_fwd_sem_id = sdpa_bwd_r1_sem_id  # Backward R1 semaphore (ID 10)
                             r1_slot_idx = bwd_r1_count[link_idx] * sdpa_slots_per_worker
                             bwd_r1_count[link_idx] += 1
                             r1_fwd_slot_addr = r1_fwd_buffer_base + r1_slot_idx * sdpa_fwd_slot_size
-                            # R2 config: FWD forwarder (BRISC buffer region)
+                            r1_dst_fabric_node_id = bwd_fabric_node_id  # Type B sends R1 to backward neighbor
+                            # R2 config: FWD forwarder (BRISC buffer region) → forward neighbor
                             r2_fwd_buffer_base = forwarder_buffer_base
                             r2_fwd_sem_id = sdpa_fwd_r2_sem_id  # Forward R2 semaphore (ID 9)
                             r2_slot_idx = fwd_r2_count[link_idx] * sdpa_slots_per_worker
@@ -1449,14 +1500,15 @@ class PostSDPA:
                             r2_fwd_slot_addr = (
                                 r2_fwd_buffer_base + sdpa_fwd_r2_buffer_offset + r2_slot_idx * sdpa_fwd_slot_size
                             )
+                            r2_dst_fabric_node_id = fwd_fabric_node_id  # Type B sends R2 to forward neighbor
 
                         brisc_rt_args = [
-                            int(fwd_fabric_node_id.mesh_id),  # r1_dst_mesh_id (send to forward neighbor)
-                            fwd_fabric_node_id.chip_id,  # r1_dst_chip_id
+                            int(r1_dst_fabric_node_id.mesh_id),  # r1_dst_mesh_id (varies by type!)
+                            r1_dst_fabric_node_id.chip_id,  # r1_dst_chip_id
                             sdpa_r1_recv_device.buffer_address(),  # r1_neighbor_dst_addr
                             sdpa_semaphore1_addr,  # r1_neighbor_sem_addr
-                            int(bwd_fabric_node_id.mesh_id),  # r2_dst_mesh_id (send to backward neighbor)
-                            bwd_fabric_node_id.chip_id,  # r2_dst_chip_id
+                            int(r2_dst_fabric_node_id.mesh_id),  # r2_dst_mesh_id (varies by type!)
+                            r2_dst_fabric_node_id.chip_id,  # r2_dst_chip_id
                             sdpa_r2_recv_device.buffer_address(),  # r2_neighbor_dst_addr
                             sdpa_semaphore2_addr,  # r2_neighbor_sem_addr
                             worker_core_noc.x,  # current_core_x (NOC coordinates)
