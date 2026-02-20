@@ -1452,9 +1452,6 @@ class MLA1D(AbstractModule):
         # wkv_b1 (interleaved in0 + DRAM HEIGHT sharded in1)
         # Pad batch dimension to match DRAM sharded weight layout
         num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
-        if num_heads_local_padded != num_heads_local:
-            pad_heads = num_heads_local_padded - num_heads_local
-            tt_q_nope = ttnn.pad(tt_q_nope, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
 
         wkv_b1_program_config = build_prefill_matmul_program_config(
             seq_len, k=qk_nope_head_dim, n=kv_lora_rank, batch=num_heads_local_padded
@@ -1462,10 +1459,6 @@ class MLA1D(AbstractModule):
         tt_q_nope = ttnn.linear(
             tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
         )  # [1, num_heads_local_padded, seq_len, kv_lora_rank]
-
-        # Slice off batch padding from wkv_b1 output
-        if num_heads_local_padded != num_heads_local:
-            tt_q_nope = ttnn.slice(tt_q_nope, [0, 0, 0, 0], [1, num_heads_local, seq_len, kv_lora_rank])
 
         # Q RoPE
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
@@ -1530,9 +1523,6 @@ class MLA1D(AbstractModule):
         # wkv_b2 (interleaved in0 + DRAM HEIGHT sharded in1)
         # Pad batch dimension to match DRAM sharded weight layout
         num_heads_padded = pad_batch_to_dram_banks(num_heads)
-        if num_heads_padded != num_heads:
-            pad_heads = num_heads_padded - num_heads
-            v_out = ttnn.pad(v_out, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
 
         wkv_b2_program_config = build_prefill_matmul_program_config(
             seq_len, k=kv_lora_rank, n=v_head_dim, batch=num_heads_padded
@@ -1543,8 +1533,6 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(attn_out)
 
         # Slice off batch padding from wkv_b2 output
-        if num_heads_padded != num_heads:
-            v_out = ttnn.slice(v_out, [0, 0, 0, 0], [1, num_heads, seq_len, v_head_dim])
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
