@@ -719,7 +719,7 @@ def test_wan_time_text_image_embedding(
     seq_len: int,
     embed_dim: int,
 ) -> None:
-    torch_dtype = torch.bfloat32
+    torch_dtype = torch.float32
     torch.manual_seed(12334)
     # Create Torch model
     inner_dim = 5120

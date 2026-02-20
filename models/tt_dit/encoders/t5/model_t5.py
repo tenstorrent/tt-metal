@@ -179,7 +179,11 @@ class T5RMSNorm(RMSNorm):
             mesh_device=mesh_device,
         )
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=True
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
