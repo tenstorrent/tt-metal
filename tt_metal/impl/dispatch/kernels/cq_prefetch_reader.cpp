@@ -23,7 +23,7 @@
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
-constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
+constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignment
 static_assert(sizeof(CQPrefetchCmd) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 static_assert(sizeof(CQPrefetchCmdLarge) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 struct CQPrefetchHToPrefetchDHeader_s {
@@ -1052,19 +1052,17 @@ void kernel_main() {
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
+    static_assert(is_d_variant, "cq_prefetch_reader only supports _hd and _d variants; _h is excluded");
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
-    } else if (is_d_variant) {
-        kernel_main_d();
     } else {
-        ASSERT(0);
+        kernel_main_d();
     }
     IDLE_ERISC_RETURN();
 
-    // The reader stub never writes pages to the downstream CB (all relay functions are
-    // stubbed), so the CBWriter's page accounting is always at its initial state and
-    // wait_all_pages would hang waiting for credits that never arrive.  Skip it here;
-    // the writer (NCRISC) sends the terminate directly to the dispatcher instead.
+    // Termination is driven out-of-band by the writer (NCRISC) which sends
+    // CQ_DISPATCH_CMD_TERMINATE directly to the dispatchers. The normal
+    // wait_all_pages() drain is therefore skipped here.
 
     noc_async_full_barrier();
 

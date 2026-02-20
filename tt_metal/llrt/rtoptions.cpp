@@ -667,7 +667,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Split the prefetch_hd kernel into a reader (BRISC) and a writer stub (NCRISC) on the same core.
         // Default: false (single prefetch_hd kernel on BRISC)
         // Usage: export TT_METAL_SPLIT_PREFETCHER=1
-        case EnvVarID::TT_METAL_SPLIT_PREFETCHER: this->split_prefetcher = true; break;
+        case EnvVarID::TT_METAL_SPLIT_PREFETCHER: this->split_prefetcher = is_env_enabled(value); break;
 
         // ========================================
         // PROFILING & PERFORMANCE
