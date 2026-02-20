@@ -440,11 +440,6 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), attributes.memory_config));
 }
 
-BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ProgramFactory{};
-}
-
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_tensor = tensor_args.output_tensor;

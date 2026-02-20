@@ -18,7 +18,7 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
     xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
-    xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
     return xqkv_fused
 
 
@@ -112,11 +112,11 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
     out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
     tensor.deallocate(True)
-    out = ttnn.add(out, weights.o_proj_bias, output_tensor=out)
+    ttnn.add(out, weights.o_proj_bias, output_tensor=out)
     return out
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: int, hidden_size: int):
+def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """
     Apply tensor parallel allreduce if needed.
 
