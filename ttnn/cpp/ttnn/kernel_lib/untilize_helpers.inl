@@ -120,12 +120,14 @@ ALWI void untilize(uint32_t num_blocks) {
     constexpr uint32_t sub_block_width = use_block_based_pack ?
         (block_width_tiles / num_sub_blocks) : block_width_tiles;
 
-    // Validate CB capacity
-    ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles);
+    // Validate CB capacity.
+    // Guarded because get_local_cb_interface() references cb_interface, which is
+    // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
+    PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
     if constexpr (use_block_based_pack) {
-        ASSERT(get_cb_num_pages(input_cb) >= sub_block_width);
+        UNPACK(ASSERT(get_cb_num_pages(input_cb) >= sub_block_width));
     } else {
-        ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles);
+        UNPACK(ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles));
     }
 
     // =================================================================
