@@ -669,12 +669,29 @@ def _generate_rebind_lines(
     return lines
 
 
+def _emit_phase_cb_arrays(
+    per_phase_cb_slots: List[List[int]],
+    num_transitions: int,
+) -> List[str]:
+    """Emit ``constexpr std::array<uint32_t, N> phase_K_cbs = {...};`` for each transition."""
+    lines: List[str] = []
+    for phase_idx, phase_slots in enumerate(per_phase_cb_slots):
+        if phase_idx >= num_transitions:
+            break
+        slots = sorted(phase_slots)
+        n = len(slots)
+        slot_str = ", ".join(str(s) for s in slots)
+        lines.append(f"constexpr std::array<uint32_t, {n}> phase_{phase_idx}_cbs = {{{{{slot_str}}}}};")
+    lines.append("")
+    return lines
+
+
 def _generate_barrier_namespace_riscv0(
-    sweep_cb_indices: List[int],
     multi_barrier: MultiBarrierSpec,
     rebind_info: Dict[int, List[Tuple[int, int, int]]],
     op_semaphore_info: List[Tuple[int, int]],
     sources: List[Tuple[int, str]],
+    per_phase_cb_slots: List[List[int]],
 ) -> List[str]:
     """Generate ``namespace barrier {{ }}`` for RISCV0 (reader/BRISC).
 
@@ -693,25 +710,30 @@ def _generate_barrier_namespace_riscv0(
     lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
     lines.append("")
 
-    # 1. reset_cbs() — BRISC-side CB reset
-    lines.append("// BRISC-side CB reset: equalize stream registers + reset pointers to CB start.")
-    lines.append("FORCE_INLINE void reset_cbs() {")
-    for cb_idx in sweep_cb_indices:
-        lines.append(f"    {{")
-        lines.append(f"        uint16_t remaining = (uint16_t)(*get_cb_tiles_received_ptr({cb_idx}))")
-        lines.append(f"                          - (uint16_t)(*get_cb_tiles_acked_ptr({cb_idx}));")
-        lines.append(f"        volatile tt_reg_ptr uint32_t* acked_ptr = (volatile tt_reg_ptr uint32_t*)")
-        lines.append(f"            ((uint32_t)(uintptr_t)get_cb_tiles_acked_ptr({cb_idx}));")
-        lines.append(f"        for (uint16_t i = 0; i < remaining; i++) {{")
-        lines.append(f"            acked_ptr[0] += 1;")
-        lines.append(f"        }}")
-        lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-        lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
-        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
-        lines.append(f"    }}")
+    # 1. Parameterized reset function + per-phase CB index arrays.
+    # Only touches CBs used in the just-completed phase — untouched CBs are already at start.
+    lines.append("// Equalize stream registers + reset FIFO pointers for the given CB indices.")
+    lines.append("template <size_t N>")
+    lines.append("__attribute__((noinline)) void reset_cbs(const std::array<uint32_t, N>& cbs) {")
+    lines.append("    for (uint32_t i = 0; i < N; i++) {")
+    lines.append("        uint32_t cb = cbs[i];")
+    lines.append("        uint32_t received = (uint32_t)(uint16_t)(*get_cb_tiles_received_ptr(cb));")
+    lines.append("        uint32_t acked = (uint32_t)(uint16_t)(*get_cb_tiles_acked_ptr(cb));")
+    lines.append("        if (received != acked) {")
+    lines.append("            volatile tt_reg_ptr uint32_t* acked_ptr = (volatile tt_reg_ptr uint32_t*)")
+    lines.append("                ((uint32_t)(uintptr_t)get_cb_tiles_acked_ptr(cb));")
+    lines.append("            while ((uint16_t)(*get_cb_tiles_acked_ptr(cb)) != received) {")
+    lines.append("                acked_ptr[0] += 1;")
+    lines.append("            }")
+    lines.append("        }")
+    lines.append("        uint32_t fifo_start = get_local_cb_interface(cb).fifo_limit")
+    lines.append("                            - get_local_cb_interface(cb).fifo_size;")
+    lines.append("        get_local_cb_interface(cb).fifo_rd_ptr = fifo_start;")
+    lines.append("        get_local_cb_interface(cb).fifo_wr_ptr = fifo_start;")
+    lines.append("    }")
     lines.append("}")
     lines.append("")
+    lines.extend(_emit_phase_cb_arrays(per_phase_cb_slots, len(dispatch)))
 
     # 2. Segment namespaces (multicast barrier)
     # RT arg layout: [compute_done, writer_done, seg0_arrive, seg0_release, seg1_arrive, ...]
@@ -782,21 +804,20 @@ def _generate_barrier_namespace_riscv0(
     lines.append("")
     lines.append("    FORCE_INLINE void reset() {")
     lines.append('        DeviceZoneScopedN("barrier-reset");')
-    lines.append("        reset_cbs();")
-    # Op semaphore reset (all transitions)
     if op_semaphore_info:
         lines.append("        // Reset op semaphores")
         for sem_id, initial_value in op_semaphore_info:
             lines.append(
                 f"        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_value};"
             )
-    # Dispatch: rebind + segment sync
     for entry in dispatch:
         done_val = entry["done_val"]
         seg_idx = entry["seg_idx"]
         rebinds = entry["rebinds"]
         next_phase_idx = entry["next_phase_idx"]
+        completed_phase_idx = done_val - 1
         lines.append(f"        if (done == {done_val}) {{")
+        lines.append(f"            reset_cbs(phase_{completed_phase_idx}_cbs);")
         if rebinds and next_phase_idx is not None:
             lines.extend(_generate_rebind_lines(rebinds, next_phase_idx, "            "))
         lines.append(f"            segment_{seg_idx}::sync();")
@@ -823,10 +844,10 @@ def _generate_barrier_namespace_riscv0(
 
 
 def _generate_barrier_namespace_riscv1(
-    sweep_cb_indices: List[int],
     multi_barrier: MultiBarrierSpec,
     rebind_info: Dict[int, List[Tuple[int, int, int]]],
     sources: List[Tuple[int, str]],
+    per_phase_cb_slots: List[List[int]],
 ) -> List[str]:
     """Generate ``namespace barrier {{ }}`` for RISCV1 (writer/NCRISC).
 
@@ -845,19 +866,20 @@ def _generate_barrier_namespace_riscv1(
     lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
     lines.append("")
 
-    # 1. resync_cbs() — NCRISC CB pointer reset
-    if sweep_cb_indices:
-        lines.append("// Resync NCRISC local CB pointers to CB start between phases.")
-        lines.append("FORCE_INLINE void resync_cbs() {")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
-            lines.append(f"    }}")
-        lines.append("}")
-        lines.append("")
+    # 1. Parameterized resync function + per-phase CB arrays
+    lines.append("// Resync NCRISC local CB pointers to CB start between phases.")
+    lines.append("template <size_t N>")
+    lines.append("__attribute__((noinline)) void resync_cbs(const std::array<uint32_t, N>& cbs) {")
+    lines.append("    for (uint32_t i = 0; i < N; i++) {")
+    lines.append("        uint32_t cb = cbs[i];")
+    lines.append("        uint32_t fifo_start = get_local_cb_interface(cb).fifo_limit")
+    lines.append("                            - get_local_cb_interface(cb).fifo_size;")
+    lines.append("        get_local_cb_interface(cb).fifo_rd_ptr = fifo_start;")
+    lines.append("        get_local_cb_interface(cb).fifo_wr_ptr = fifo_start;")
+    lines.append("    }")
+    lines.append("}")
+    lines.append("")
+    lines.extend(_emit_phase_cb_arrays(per_phase_cb_slots, len(dispatch)))
 
     # 2. Segment namespaces (spin-wait on release)
     # RT arg layout: [writer_done, seg0_release, seg1_release, ...]
@@ -894,22 +916,18 @@ def _generate_barrier_namespace_riscv1(
     lines.append("")
     lines.append("    FORCE_INLINE void reset() {")
     lines.append('        DeviceZoneScopedN("barrier-reset");')
-    # Segment sync dispatch
     for entry in dispatch:
-        lines.append(f"        if (done == {entry['done_val']}) {{")
-        lines.append(f"            segment_{entry['seg_idx']}::sync();")
+        done_val = entry["done_val"]
+        seg_idx = entry["seg_idx"]
+        rebinds = entry["rebinds"]
+        next_phase_idx = entry["next_phase_idx"]
+        completed_phase_idx = done_val - 1
+        lines.append(f"        if (done == {done_val}) {{")
+        lines.append(f"            segment_{seg_idx}::sync();")
+        lines.append(f"            resync_cbs(phase_{completed_phase_idx}_cbs);")
+        if rebinds and next_phase_idx is not None:
+            lines.extend(_generate_rebind_lines(rebinds, next_phase_idx, "            "))
         lines.append(f"        }}")
-    # Resync CBs
-    if sweep_cb_indices:
-        lines.append("        resync_cbs();")
-    # Rebind dispatch
-    has_rebinds = any(entry["rebinds"] for entry in dispatch)
-    if has_rebinds:
-        for entry in dispatch:
-            if entry["rebinds"]:
-                lines.append(f"        if (done == {entry['done_val']}) {{")
-                lines.extend(_generate_rebind_lines(entry["rebinds"], entry["next_phase_idx"], "            "))
-                lines.append(f"        }}")
     lines.append("    }")
     lines.append("} // namespace phase")
     lines.append("")
@@ -930,10 +948,10 @@ def _generate_barrier_namespace_riscv1(
 
 
 def _generate_barrier_namespace_compute(
-    sweep_cb_indices: List[int],
     multi_barrier: MultiBarrierSpec,
     rebind_info: Dict[int, List[Tuple[int, int, int]]],
     sources: List[Tuple[int, str]],
+    per_phase_cb_slots: List[List[int]],
 ) -> List[str]:
     """Generate ``namespace barrier {{ }}`` for compute (TRISC0/TRISC2).
 
@@ -952,39 +970,36 @@ def _generate_barrier_namespace_compute(
     lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
     lines.append("")
 
-    # 1. resync_cbs() — compute-side CB state resync
-    if sweep_cb_indices:
-        lines.append("// Resync compute-side local CB state after BRISC reset.")
-        lines.append("// TRISC0: sync tiles_acked + reset fifo_rd_ptr to CB start.")
-        lines.append("// TRISC2: sync tiles_received + reset fifo_wr_ptr to CB start.")
-        lines.append("FORCE_INLINE void resync_cbs() {")
-        lines.append("#ifdef TRISC_UNPACK")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(
-                f"        uint16_t stream_acked = (uint16_t)reg_read((uint32_t)get_cb_tiles_acked_ptr({cb_idx}));"
-            )
-            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_acked = stream_acked;")
-            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
-            lines.append(f"    }}")
-        lines.append("#endif")
-        lines.append("#ifdef TRISC_PACK")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(
-                f"        uint16_t stream_received = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr({cb_idx}));"
-            )
-            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_received = stream_received;")
-            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
-            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_tile_ptr = 0;")
-            lines.append(f"    }}")
-        lines.append("#endif")
-        lines.append("}")
-        lines.append("")
+    # 1. Parameterized resync function + per-phase CB arrays
+    lines.append("// Resync compute-side local CB state after BRISC reset.")
+    lines.append("// TRISC0: sync tiles_acked + reset fifo_rd_ptr to CB start.")
+    lines.append("// TRISC2: sync tiles_received + reset fifo_wr_ptr to CB start.")
+    lines.append("template <size_t N>")
+    lines.append("__attribute__((noinline)) void resync_cbs(const std::array<uint32_t, N>& cbs) {")
+    lines.append("#ifdef TRISC_UNPACK")
+    lines.append("    for (uint32_t i = 0; i < N; i++) {")
+    lines.append("        uint32_t cb = cbs[i];")
+    lines.append("        uint16_t stream_acked = (uint16_t)reg_read((uint32_t)get_cb_tiles_acked_ptr(cb));")
+    lines.append("        get_local_cb_interface(cb).tiles_acked = stream_acked;")
+    lines.append("        uint32_t fifo_start = get_local_cb_interface(cb).fifo_limit")
+    lines.append("                            - get_local_cb_interface(cb).fifo_size;")
+    lines.append("        get_local_cb_interface(cb).fifo_rd_ptr = fifo_start;")
+    lines.append("    }")
+    lines.append("#endif")
+    lines.append("#ifdef TRISC_PACK")
+    lines.append("    for (uint32_t i = 0; i < N; i++) {")
+    lines.append("        uint32_t cb = cbs[i];")
+    lines.append("        uint16_t stream_received = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr(cb));")
+    lines.append("        get_local_cb_interface(cb).tiles_received = stream_received;")
+    lines.append("        uint32_t fifo_start = get_local_cb_interface(cb).fifo_limit")
+    lines.append("                            - get_local_cb_interface(cb).fifo_size;")
+    lines.append("        get_local_cb_interface(cb).fifo_wr_ptr = fifo_start;")
+    lines.append("        get_local_cb_interface(cb).fifo_wr_tile_ptr = 0;")
+    lines.append("    }")
+    lines.append("#endif")
+    lines.append("}")
+    lines.append("")
+    lines.extend(_emit_phase_cb_arrays(per_phase_cb_slots, len(dispatch)))
 
     # 2. Segment namespaces (spin-wait on release)
     # RT arg layout: [compute_done, seg0_release, seg1_release, ...]
@@ -1020,26 +1035,20 @@ def _generate_barrier_namespace_compute(
     lines.append("")
     lines.append("    FORCE_INLINE void reset() {")
     lines.append('        DeviceZoneScopedN("barrier-reset");')
-    # Segment sync dispatch
     for entry in dispatch:
-        lines.append(f"        if (done == {entry['done_val']}) {{")
-        lines.append(f"            segment_{entry['seg_idx']}::sync();")
+        done_val = entry["done_val"]
+        seg_idx = entry["seg_idx"]
+        rebinds = entry["rebinds"]
+        next_phase_idx = entry["next_phase_idx"]
+        completed_phase_idx = done_val - 1
+        lines.append(f"        if (done == {done_val}) {{")
+        lines.append(f"            segment_{seg_idx}::sync();")
+        lines.append(f"            resync_cbs(phase_{completed_phase_idx}_cbs);")
+        if rebinds and next_phase_idx is not None:
+            lines.append("#ifndef TRISC_MATH")
+            lines.extend(_generate_rebind_lines(rebinds, next_phase_idx, "            ", for_compute=True))
+            lines.append("#endif")
         lines.append(f"        }}")
-    # Resync CBs
-    if sweep_cb_indices:
-        lines.append("        resync_cbs();")
-    # Rebind dispatch (with >> 4 shift for compute)
-    has_rebinds = any(entry["rebinds"] for entry in dispatch)
-    if has_rebinds:
-        lines.append("#ifndef TRISC_MATH")
-        for entry in dispatch:
-            if entry["rebinds"]:
-                lines.append(f"        if (done == {entry['done_val']}) {{")
-                lines.extend(
-                    _generate_rebind_lines(entry["rebinds"], entry["next_phase_idx"], "            ", for_compute=True)
-                )
-                lines.append(f"        }}")
-        lines.append("#endif")
     lines.append("    }")
     lines.append("} // namespace phase")
     lines.append("")
@@ -1144,7 +1153,7 @@ def _generate_fused_riscv0_source(
     role_key: Any,
     phases: List[PhaseInfo],
     ct_arg_offsets: Dict[int, int],
-    sweep_cb_indices: List[int],
+    per_phase_cb_slots: List[List[int]],
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
@@ -1196,6 +1205,7 @@ def _generate_fused_riscv0_source(
     lines.append("")
     lines.extend(includes)
     lines.append('#include "tools/profiler/kernel_profiler.hpp"')
+    lines.append("#include <array>")
     lines.append("")
 
     # Build phase name lookup
@@ -1236,7 +1246,11 @@ def _generate_fused_riscv0_source(
     if needs_barrier:
         lines.extend(
             _generate_barrier_namespace_riscv0(
-                sweep_cb_indices, multi_barrier, rebind_info or {}, op_semaphore_info or [], reader_sources
+                multi_barrier,
+                rebind_info or {},
+                op_semaphore_info or [],
+                reader_sources,
+                per_phase_cb_slots,
             )
         )
 
@@ -1274,7 +1288,7 @@ def _generate_fused_riscv1_source(
     role_key: Any,
     phases: List[PhaseInfo],
     ct_arg_offsets: Dict[int, int],
-    sweep_cb_indices: List[int],
+    per_phase_cb_slots: List[List[int]],
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
     rt_arg_offsets: Optional[Dict[int, int]] = None,
@@ -1322,6 +1336,7 @@ def _generate_fused_riscv1_source(
     lines.append("")
     lines.extend(includes)
     lines.append('#include "tools/profiler/kernel_profiler.hpp"')
+    lines.append("#include <array>")
     lines.append("")
 
     # Build phase name lookup
@@ -1358,7 +1373,7 @@ def _generate_fused_riscv1_source(
 
     if needs_barrier:
         lines.extend(
-            _generate_barrier_namespace_riscv1(sweep_cb_indices, multi_barrier, rebind_info or {}, writer_sources)
+            _generate_barrier_namespace_riscv1(multi_barrier, rebind_info or {}, writer_sources, per_phase_cb_slots)
         )
 
     lines.append("void kernel_main() {")
@@ -1393,8 +1408,8 @@ def _generate_fused_compute_source(
     phase_kernels: List[Dict[str, Any]],
     role_key: Any,
     phases: List[PhaseInfo],
+    per_phase_cb_slots: List[List[int]],
     ct_arg_offsets: Optional[Dict[int, int]] = None,
-    sweep_cb_indices: Optional[List[int]] = None,
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
     rt_arg_offsets: Optional[Dict[int, int]] = None,
@@ -1446,6 +1461,7 @@ def _generate_fused_compute_source(
     lines.append("")
     lines.extend(includes)
     lines.append('#include "tools/profiler/kernel_profiler.hpp"')
+    lines.append("#include <array>")
     lines.append("")
 
     # Build phase name lookup
@@ -1483,7 +1499,10 @@ def _generate_fused_compute_source(
     if needs_barrier:
         lines.extend(
             _generate_barrier_namespace_compute(
-                sweep_cb_indices or [], multi_barrier, rebind_info or {}, compute_sources
+                multi_barrier,
+                rebind_info or {},
+                compute_sources,
+                per_phase_cb_slots,
             )
         )
 
@@ -2055,8 +2074,12 @@ def _build_fused_descriptor(
         for cb_desc in merged_cbs:
             cb_desc.core_ranges = target_core_range
 
-    # Sweep indices = all allocated CB pool slots
-    sweep_cb_indices = sorted(pool.get_all_slot_indices())
+    # Per-phase CB slot sets (for targeted reset between phases)
+    per_phase_cb_slots: List[List[int]] = []
+    for i in range(len(phases)):
+        remap = pool.get_remap(i)
+        slots = sorted(set(remap.values()))
+        per_phase_cb_slots.append(slots)
 
     # Collect all unique op semaphore (id, initial_value) pairs used by any phase.
     op_semaphore_info: List[Tuple[int, int]] = []
@@ -2098,7 +2121,7 @@ def _build_fused_descriptor(
                 role_key,
                 phases,
                 ct_offsets,
-                sweep_cb_indices,
+                per_phase_cb_slots,
                 rebind_info=rebind_info,
                 op_semaphore_info=op_semaphore_info,
                 multi_barrier=multi_barrier,
@@ -2115,7 +2138,7 @@ def _build_fused_descriptor(
                 role_key,
                 phases,
                 ct_offsets,
-                sweep_cb_indices,
+                per_phase_cb_slots,
                 rebind_info=rebind_info,
                 multi_barrier=multi_barrier,
                 rt_arg_offsets=rt_offsets,
@@ -2130,8 +2153,8 @@ def _build_fused_descriptor(
                 phase_kernels,
                 role_key,
                 phases,
-                ct_offsets,
-                sweep_cb_indices,
+                per_phase_cb_slots,
+                ct_arg_offsets=ct_offsets,
                 rebind_info=rebind_info,
                 multi_barrier=multi_barrier,
                 rt_arg_offsets=rt_offsets,

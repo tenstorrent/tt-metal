@@ -5329,6 +5329,153 @@ class TestMatmulFusionChains:
         assert passing_a, f"Branch A PCC: {pcc_a}"
         assert passing_b, f"Branch B PCC: {pcc_b}"
 
+    def test_sharded_ln_rms_ln(self, device):
+        """Block-sharded LN → RMS → LN on 4x4 cores for profiling comparison.
+
+        Block-sharded input/output so norm readers do L1 reads (no DRAM).
+        Compare tracy output with DRAM-interleaved tests to see barrier
+        overhead relative to compute.
+
+        Layout (16 cores, 4x4 grid):
+            LN → RMS → LN  all on (0,0)-(3,3)
+
+        Input (128, 512) block-sharded: shard (32, 128) = 1 M-tile per core.
+        4 rows × 4 cols, each shard = (32, 128).
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+
+        # Block-sharded: 4x4 grid, shard (32, 128) = 1 M-tile per core
+        # Total: (4*32, 4*128) = (128, 512)
+        shard_spec = ttnn.ShardSpec(cores, (32, 128), ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        )
+
+        torch_input = torch.randn(1, 1, 128, 512, dtype=torch.bfloat16)
+        torch_gamma = torch.ones(1, 1, 1, 512, dtype=torch.bfloat16)
+        torch_beta = torch.zeros(1, 1, 1, 512, dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem
+        )
+        tt_gamma = self._tt(torch_gamma, device)
+        tt_beta = self._tt(torch_beta, device)
+
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        ln1 = layer_norm.layer_norm(
+            tt_input,
+            core_range_set=cores,
+            weight=tt_gamma,
+            bias=tt_beta,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+            memory_config=sharded_mem,
+        )
+        rms = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores,
+            weight=tt_gamma,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+            memory_config=sharded_mem,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms.output_tensors[0],
+            core_range_set=cores,
+            weight=tt_gamma,
+            bias=tt_beta,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+            memory_config=sharded_mem,
+        )
+
+        fused = Sequential(ln1, rms, ln2).build(device)
+        outputs = composite.launch([fused])
+
+        result = ttnn.to_torch(outputs[0][0])
+        temp1 = torch_layer_norm(torch_input.float(), torch_gamma.float(), torch_beta.float())
+        temp2 = torch_rms_norm(temp1, torch_gamma.float())
+        golden = torch_layer_norm(temp2, torch_gamma.float(), torch_beta.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        assert passing, f"Sharded LN→RMS→LN PCC: {pcc}"
+
+    def test_sharded_ln_rms_ln_2x2(self, device):
+        """Block-sharded LN → RMS → LN on 2x2 cores for barrier scaling comparison."""
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+
+        # Block-sharded: 2x2 grid, shard (32, 128) = 1 M-tile per core
+        # Total: (2*32, 2*128) = (64, 256)
+        shard_spec = ttnn.ShardSpec(cores, (32, 128), ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        )
+
+        torch_input = torch.randn(1, 1, 64, 256, dtype=torch.bfloat16)
+        torch_gamma = torch.ones(1, 1, 1, 256, dtype=torch.bfloat16)
+        torch_beta = torch.zeros(1, 1, 1, 256, dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem
+        )
+        tt_gamma = self._tt(torch_gamma, device)
+        tt_beta = self._tt(torch_beta, device)
+
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        ln1 = layer_norm.layer_norm(
+            tt_input,
+            core_range_set=cores,
+            weight=tt_gamma,
+            bias=tt_beta,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+            memory_config=sharded_mem,
+        )
+        rms = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores,
+            weight=tt_gamma,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+            memory_config=sharded_mem,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms.output_tensors[0],
+            core_range_set=cores,
+            weight=tt_gamma,
+            bias=tt_beta,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+            memory_config=sharded_mem,
+        )
+
+        fused = Sequential(ln1, rms, ln2).build(device)
+        outputs = composite.launch([fused])
+
+        result = ttnn.to_torch(outputs[0][0])
+        temp1 = torch_layer_norm(torch_input.float(), torch_gamma.float(), torch_beta.float())
+        temp2 = torch_rms_norm(temp1, torch_gamma.float())
+        golden = torch_layer_norm(temp2, torch_gamma.float(), torch_beta.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        assert passing, f"Sharded LN→RMS→LN 2x2 PCC: {pcc}"
+
     def test_multicore_rms_matmul_rms(self, device):
         """Multi-core 3-phase: RMS → Matmul → RMS on 4x2 grid (8 cores)."""
         from models.experimental.ops.descriptors.fusion import Sequential
