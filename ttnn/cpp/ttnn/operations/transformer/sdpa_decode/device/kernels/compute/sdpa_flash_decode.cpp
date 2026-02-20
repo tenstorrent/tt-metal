@@ -344,23 +344,41 @@ void kernel_main() {
                     mask_cb_to_use = cb_sliding_window_mask_in;  // Use sliding window mask buffer
                 }
 
-                matmul_blocks(
-                    cb_q_in,
-                    cb_k_in,
-                    cb_qk_im,
-                    Sq_chunk_t,
-                    Sk_chunk_t_dynamic,
-                    DHt,
-                    qk_num_blocks,
-                    qk_in0_num_subblocks_dynamic,
-                    qk_in1_num_subblocks_dynamic,
-                    qk_in0_block_w,
-                    qk_subblock_h_dynamic,
-                    qk_subblock_w_dynamic,
-                    true,
-                    add_mask_fusion,
-                    mask_cb_to_use,
-                    cb_zero_in);
+                if constexpr (qk_num_blocks > 1) {
+                    // Pipelined QK: K arrives in column blocks, compute starts on
+                    // partial K while reader fetches the next block.
+                    matmul_blocks_pipelined(
+                        cb_q_in,
+                        cb_k_in,
+                        cb_qk_im,
+                        Sq_chunk_t,
+                        Sk_chunk_t_dynamic,
+                        DHt,
+                        qk_num_blocks,
+                        qk_in0_block_w,
+                        true,
+                        add_mask_fusion,
+                        mask_cb_to_use,
+                        cb_zero_in);
+                } else {
+                    matmul_blocks(
+                        cb_q_in,
+                        cb_k_in,
+                        cb_qk_im,
+                        Sq_chunk_t,
+                        Sk_chunk_t_dynamic,
+                        DHt,
+                        qk_num_blocks,
+                        qk_in0_num_subblocks_dynamic,
+                        qk_in1_num_subblocks_dynamic,
+                        qk_in0_block_w,
+                        qk_subblock_h_dynamic,
+                        qk_subblock_w_dynamic,
+                        true,
+                        add_mask_fusion,
+                        mask_cb_to_use,
+                        cb_zero_in);
+                }
 
                 /* QK += MASK */
                 // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.

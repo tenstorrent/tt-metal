@@ -1258,6 +1258,98 @@ ALWI void matmul_blocks(
     cb_pop_front(in1_cb, K * N);
 }
 
+/**
+ * Pipelined variant of matmul_blocks for sub-blocking the inner dimension.
+ *
+ * Instead of waiting for ALL in1 tiles at once, waits incrementally for column
+ * blocks (in0_block_w columns at a time). This allows compute to start on the
+ * first block while the reader fetches subsequent blocks from DRAM.
+ *
+ * Reader pushes in1 blocks incrementally (per-block reserve/push).
+ * Compute waits incrementally, accumulates across blocks in DST, then pops all.
+ *
+ * V reuse safety (when in1_cb is the K CB and reader reuses K for V):
+ *   cb_pop_front only advances the read pointer — L1 data is NOT cleared.
+ *   The reader copies V from K's L1 address into the V CB with a
+ *   noc_async_read_barrier() BEFORE starting the next chunk's K writes.
+ *   Therefore K's L1 data cannot be overwritten until after V is safe in
+ *   the V CB, regardless of when compute pops K.
+ *
+ * Precondition: M * N <= dst_size (all output tiles fit in DST registers)
+ * Precondition: in0_cb has M * K tiles produced (stays in CB for all blocks)
+ * Precondition: in1_cb receives in0_block_w * N tiles per block via incremental push
+ * Postcondition: in0_cb is unchanged, in1_cb is empty
+ * Postcondition: out_cb has M * N tiles produced
+ */
+ALWI void matmul_blocks_pipelined(
+    const uint32_t& in0_cb,
+    const uint32_t& in1_cb,
+    const uint32_t& out_cb,
+    const uint32_t& M,
+    const uint32_t& N,
+    const uint32_t& K,  // full inner dimension (= num_blocks * in0_block_w)
+    const uint32_t& num_blocks,
+    const uint32_t& in0_block_w,  // inner dim tiles per block
+    const bool& transpose,
+    const bool& add_mask = false,
+    const uint32_t& mask_cb = 0,
+    const uint32_t& zero_cb = 0) {
+    const uint32_t output_num_tiles = M * N;
+    const uint32_t block_tiles = in0_block_w * N;
+
+    mm_block_init_short(in0_cb, in1_cb, transpose, N, M, in0_block_w);
+
+    reconfig_data_format(in1_cb, in0_cb);
+    cb_wait_front(in0_cb, M * K);  // Q: all tiles present, stays in CB
+    cb_reserve_back(out_cb, output_num_tiles);
+
+    tile_regs_acquire();
+
+    for (uint32_t block = 0; block < num_blocks; ++block) {
+        // Incremental wait: tiles accumulate in CB, no pop between blocks
+        cb_wait_front(in1_cb, (block + 1) * block_tiles);
+
+        uint32_t in0_index_offset = 0;
+        for (uint32_t m = 0; m < M; ++m) {
+            uint32_t dst_index = m * N;
+
+            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                uint32_t in0_index = in0_index_offset + block * in0_block_w + inner_dim;
+                // Block offset since tiles accumulate (no pop)
+                uint32_t in1_idx = block * block_tiles + inner_dim * N;
+                matmul_block(in0_cb, in1_cb, in0_index, in1_idx, dst_index, transpose, N, M, in0_block_w);
+            }
+            in0_index_offset += K;  // stride to next Q row
+        }
+    }
+
+    // Pop all K blocks (one pop per block since they were pushed individually).
+    // Safe w.r.t. V reuse: cb_pop_front only moves the read pointer; the
+    // actual L1 data persists until the reader overwrites it.  The reader's
+    // noc_async_read_barrier() for V completes before any new K data is
+    // written, so V is always copied out before K's L1 region is reused.
+    cb_pop_front(in1_cb, num_blocks * block_tiles);
+
+    // All blocks accumulated in DST — apply mask and pack
+    if (add_mask) {
+        cb_wait_front(mask_cb, output_num_tiles);
+        cb_wait_front(zero_cb, 1);
+        add_tiles_init(zero_cb, mask_cb, true);
+        for (uint32_t i = 0; i < output_num_tiles; i++) {
+            add_tiles(zero_cb, mask_cb, 0, i, i);
+        }
+    }
+
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < output_num_tiles; i++) {
+        pack_tile<true>(i, out_cb, i);
+    }
+    tile_regs_release();
+
+    cb_push_back(out_cb, output_num_tiles);
+}
+
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     // precondition: in0_cb has M*K produced

@@ -313,9 +313,43 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const uint32_t max_dynamic_chunk_size = dst_size;
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
 
+    // Compute reuse_k early so it can influence CB sizing
+    const uint32_t reuse_k = tensor_args.v.has_value() ? 0 : 1;
+
+    // Sub-block the QK inner dimension to overlap K DRAM reads with compute.
+    // Reader streams K blocks directly into the K CB; compute starts on the first
+    // block while subsequent blocks are still being fetched from DRAM.
+    // Requires: static chunk size, output fits in DST, reuse_k for V reuse from K CB.
+    // Note: Sk_chunk_t==0 means DYNAMIC_CHUNK_SIZE is active, which disables
+    // sub-blocking (qk_num_blocks stays 1, the pipelined path compiles away).
+    const bool enable_qk_subblocking = (Sk_chunk_t > 0 && PNHt * Sk_chunk_t <= dst_size && reuse_k == 1);
+
+    uint32_t qk_in0_block_w = DHt;
+    uint32_t qk_num_blocks = 1;
+    if (enable_qk_subblocking) {
+        // Prefer 3-6 blocks: >=3 blocks gives enough pipeline depth for the
+        // reader to stay ahead of compute (each block is ~2-4 DRAM reads),
+        // while <=6 keeps per-block CB overhead low.  Fall back to 2 blocks
+        // if DHt isn't divisible by 3-6 (still better than no pipelining).
+        for (uint32_t target_blocks = 3; target_blocks <= 6; ++target_blocks) {
+            if (DHt % target_blocks == 0) {
+                qk_in0_block_w = DHt / target_blocks;
+                qk_num_blocks = target_blocks;
+                break;
+            }
+        }
+        if (qk_num_blocks == 1 && DHt % 2 == 0) {
+            qk_in0_block_w = DHt / 2;
+            qk_num_blocks = 2;
+        }
+    }
+
     uint32_t q_tiles = PNHt * DHt;
-    uint32_t k_tiles = Sk_chunk_t_cb_size * DHt * 2;  // double buffer
-    uint32_t v_tiles = Sk_chunk_t_cb_size * vDHt * 2;  // double buffer
+    // Double-buffered (2x chunk): compute holds one full chunk while reader
+    // fills the next.  In the pipelined path, sub-blocks accumulate within
+    // a single chunk; cross-chunk overlap still requires double buffering.
+    uint32_t k_tiles = Sk_chunk_t_cb_size * DHt * 2;
+    uint32_t v_tiles = Sk_chunk_t_cb_size * vDHt * 2;
     uint32_t qk_tiles = PNHt * Sk_chunk_t_cb_size;
     uint32_t out_im_tiles = PNHt * vDHt;
     uint32_t out0_t = PNHt * vDHt;
@@ -330,10 +364,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
-
-    // Host code is responsible for determining matmul configuration
-    const uint32_t qk_in0_block_w = DHt;
-    const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
 
     uint32_t qk_out_subblock_w = 0;
     uint32_t qk_out_subblock_h = 0;
@@ -775,8 +805,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const uint32_t q_chunk_size_bytes =
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
 
-    const uint32_t reuse_k = tensor_args.v.has_value() ? 0 : 1;
-
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
         PNHt,
@@ -810,6 +838,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         full_tile.get_tile_size(q_df),
         sliding_window_size.value_or(0),
         original_block_size,
+        qk_in0_block_w,
+        qk_num_blocks,
     };
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);

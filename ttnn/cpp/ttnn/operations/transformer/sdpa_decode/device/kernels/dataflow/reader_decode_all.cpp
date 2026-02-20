@@ -48,8 +48,10 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(30);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
     constexpr bool has_block_padding = is_paged_attention && original_block_size > 0 && original_block_size < 32;
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(32);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(33);
 
-    constexpr auto k_args = TensorAccessorArgs<32>();
+    constexpr auto k_args = TensorAccessorArgs<34>();
     constexpr auto q_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -283,24 +285,66 @@ void kernel_main() {
                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t_dynamic;
                 uint64_t k_base_read_ptr;
                 {
-                    // Read K chunk in row-major order (to simplify page mapping). Write tiles to CB in transposed
-                    // order.
-                    k_base_read_ptr = read_k<
-                        cb_k_in,
-                        DHt,
-                        num_kv_heads,
-                        block_size_t,
-                        k_tile_bytes,
-                        barrier_threshold,
-                        is_page_table_sharded>(
-                        k_chunk_tiles,
-                        cur_head,
-                        Sk_chunk_t_dynamic,
-                        k_chunk_start_row_num,
-                        k_reader,
-                        page_table_ptr_u16,
-                        page_table_ptr_u32,
-                        barrier_count);
+                    if constexpr (qk_num_blocks > 1 && reuse_k) {
+                        // Pipelined K: stream from DRAM block-by-block into K CB.
+                        // Compute starts QK on the first block while later blocks
+                        // are still being fetched.  V is copied from K's L1 below
+                        // with a barrier before the next chunk overwrites it.
+                        uint32_t block_tiles = qk_in0_block_w * Sk_chunk_t_dynamic;
+                        for (uint32_t block = 0; block < qk_num_blocks; ++block) {
+                            cb_reserve_back(cb_k_in, block_tiles);
+                            uint32_t k_write_base = get_write_ptr(cb_k_in);
+                            if (block == 0) {
+                                k_base_read_ptr = get_noc_addr(k_write_base);
+                            }
+
+                            // Read this column-block from DRAM into K CB (transposed layout)
+                            for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+                                uint32_t k_write_ptr_col = k_write_base + row * k_tile_bytes;
+                                uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
+
+                                uint32_t physical_k_tile_id =
+                                    (is_page_table_sharded)
+                                        ? virtual_seq_tile_id_to_physical_tile_id<
+                                              uint16_t,
+                                              num_kv_heads,
+                                              block_size_t,
+                                              DHt>(virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
+                                        : virtual_seq_tile_id_to_physical_tile_id<
+                                              uint32_t,
+                                              num_kv_heads,
+                                              block_size_t,
+                                              DHt>(virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
+                                physical_k_tile_id += block * qk_in0_block_w;
+
+                                for (uint32_t col = 0; col < qk_in0_block_w; ++col) {
+                                    noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                                    physical_k_tile_id += 1;
+                                    k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;
+                                }
+                            }
+                            noc_async_read_barrier();
+                            cb_push_back(cb_k_in, block_tiles);
+                        }
+                    } else {
+                        // Original path: read K chunk directly into K CB (transposed layout)
+                        k_base_read_ptr = read_k<
+                            cb_k_in,
+                            DHt,
+                            num_kv_heads,
+                            block_size_t,
+                            k_tile_bytes,
+                            barrier_threshold,
+                            is_page_table_sharded>(
+                            k_chunk_tiles,
+                            cur_head,
+                            Sk_chunk_t_dynamic,
+                            k_chunk_start_row_num,
+                            k_reader,
+                            page_table_ptr_u16,
+                            page_table_ptr_u32,
+                            barrier_count);
+                    }
                 }
 
                 if constexpr (use_attention_mask) {
@@ -347,32 +391,60 @@ void kernel_main() {
             const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * vDHt;
             uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
 
-            read_kv_mask_chunks<
-                DHt,
-                vDHt,
-                barrier_threshold,
-                mask_tile_bytes,
-                PNHt,
-                use_attention_mask,
-                cb_k_in,
-                cb_v_in,
-                cb_mask_in,
-                reuse_k>(
-                k_chunk_start,
-                k_chunk_end,
-                k_start_tile_id,
-                v_start_tile_id,
-                mask_start_tile_id,
-                Sk_chunk_t_dynamic,
-                k_chunk_tiles,
-                v_chunk_tiles,
-                mask_chunk_tiles,
-                k_reader,
-                v_reader,
-                mask_reader,
-                k_tile_bytes,
-                v_tile_bytes,
-                PSt);
+            if constexpr (qk_num_blocks > 1 && reuse_k) {  // v_start_tile_id unused: V reused from K's L1
+                read_kv_mask_chunks_pipelined<
+                    DHt,
+                    vDHt,
+                    barrier_threshold,
+                    mask_tile_bytes,
+                    PNHt,
+                    use_attention_mask,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in,
+                    qk_in0_block_w,
+                    qk_num_blocks>(
+                    k_chunk_start,
+                    k_chunk_end,
+                    k_start_tile_id,
+                    mask_start_tile_id,
+                    Sk_chunk_t_dynamic,
+                    k_chunk_tiles,
+                    v_chunk_tiles,
+                    mask_chunk_tiles,
+                    k_reader,
+                    mask_reader,
+                    k_tile_bytes,
+                    v_tile_bytes,
+                    PSt);
+            } else {
+                read_kv_mask_chunks<
+                    DHt,
+                    vDHt,
+                    barrier_threshold,
+                    mask_tile_bytes,
+                    PNHt,
+                    use_attention_mask,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in,
+                    reuse_k>(
+                    k_chunk_start,
+                    k_chunk_end,
+                    k_start_tile_id,
+                    v_start_tile_id,
+                    mask_start_tile_id,
+                    Sk_chunk_t_dynamic,
+                    k_chunk_tiles,
+                    v_chunk_tiles,
+                    mask_chunk_tiles,
+                    k_reader,
+                    v_reader,
+                    mask_reader,
+                    k_tile_bytes,
+                    v_tile_bytes,
+                    PSt);
+            }
         }
     }
 }

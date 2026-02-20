@@ -251,7 +251,7 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 128  # TODO: Make dynamic?
-        k_chunk_size = 128  # TODO: Make dynamic?
+        k_chunk_size = 128
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -497,13 +497,30 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 0  # Unused in decode mode
-        k_chunk_size = 128  # TODO: Make dynamic?
+        k_chunk_size = 128
 
-        sdpa_program_config = ttnn.SDPAProgramConfig(
+        # P2: two program configs selected at runtime based on max(cur_pos).
+        #
+        # Short-context (max_cur_pos < k_chunk_size, i.e. 1 K-chunk):
+        #   max_cores_per_head_batch=1 → every active core is a standalone reducer,
+        #   no K-split workers, no REDUCE/WORKER-SEND overhead.
+        #
+        # Long-context (max_cur_pos >= k_chunk_size, i.e. ≥2 K-chunks):
+        #   max_cores_per_head_batch=4 → 4 K-split workers per head-batch group,
+        #   matching the physical limit (num_cores / B_eff = 64 / 16 = 4 on N150).
+        sdpa_program_config_short = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
+            max_cores_per_head_batch=1,
+        )
+        sdpa_program_config_long = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+            max_cores_per_head_batch=4,
         )
 
         flash_mla_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -545,9 +562,11 @@ class MLA1D(AbstractModule):
         flash_mla_config = {
             "head_dim_v": kv_lora_rank,
             "scale": scale,
-            "program_config": sdpa_program_config,
+            "program_config_short": sdpa_program_config_short,
+            "program_config_long": sdpa_program_config_long,
             "compute_kernel_config": flash_mla_compute_kernel_config,
             "memory_config": flash_mla_out_mem_config,
+            "k_chunk_size": k_chunk_size,
         }
         flash_mla_out_reshard_config = ReshardConfig(
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -898,7 +917,7 @@ class MLA1D(AbstractModule):
         tt_q = cls._fwd_decode_all_to_all_pre_flash_mla(tt_q, cfg)
 
         # Flash MLA
-
+        # TODO: Pass max_cur_pos from caller to avoid device-to-host sync in _fwd_decode_flash_mla
         attn_out = cls._fwd_decode_flash_mla(tt_q, kvpe_cache, page_table, position_idxs, cfg)
 
         # Wkv_b2
@@ -1292,14 +1311,29 @@ class MLA1D(AbstractModule):
         page_table: ttnn.Tensor,
         position_idxs: ttnn.Tensor,
         cfg: RunDecodeConfig,
+        max_cur_pos: int | None = None,
     ) -> ttnn.Tensor:
+        flash_mla_kwargs = dict(cfg["flash_mla"])
+
+        # P2: select program config based on max context length.
+        # Uses two pre-compiled cached programs to avoid recompilation:
+        #   short (max_cores_per_head_batch=1): max_cur_pos < k_chunk_size (1 chunk, no K-split)
+        #   long  (max_cores_per_head_batch=4): max_cur_pos >= k_chunk_size (K-split across workers)
+        if "program_config_short" in flash_mla_kwargs:
+            k_chunk_size = flash_mla_kwargs.pop("k_chunk_size")
+            pc_short = flash_mla_kwargs.pop("program_config_short")
+            pc_long = flash_mla_kwargs.pop("program_config_long")
+            if max_cur_pos is None:
+                max_cur_pos = int(ttnn.to_torch(position_idxs).max())
+            flash_mla_kwargs["program_config"] = pc_short if max_cur_pos < k_chunk_size else pc_long
+
         # 1,4,128,576 L1 height sharded 8x9 [32,576]
         attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             tt_q,
             kvpe_cache,
             page_table_tensor=page_table,
             cur_pos_tensor=position_idxs,
-            **cfg["flash_mla"],
+            **flash_mla_kwargs,
         )  #  [1, bsz_local, num_heads, kv_lora_rank]
         ttnn.deallocate(tt_q)
         # 1,4,128,512 height sharded 8x9 [32,512]

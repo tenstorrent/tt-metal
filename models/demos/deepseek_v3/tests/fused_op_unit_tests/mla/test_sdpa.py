@@ -38,10 +38,16 @@ KVPE_DIM = KV_LORA_RANK + QK_ROPE_HEAD_DIM  # 576
 NKV = 1  # MLA always has nkv=1
 
 
-def build_decode_flash_mla_config(device, batch, num_heads):
+def build_decode_flash_mla_config(device, batch, num_heads, seq_len, k_chunk_size=256):
     """Build the flash_mla config dict and Q memory config matching mla1d.py decode_model_config.
 
     Reproduces the SDPA config from MLA1D.decode_model_config lines 496-549.
+
+    P1: max_cores_per_head_batch is sized to the compile-time chunk count so the
+        factory never allocates idle K-split workers.
+    P2: two program configs are built (short/long context) and stored under
+        program_config_short / program_config_long.  _fwd_decode_flash_mla picks
+        the right one at runtime based on max(cur_pos).
     """
     grid_size = device.compute_with_storage_grid_size()
     num_cores = grid_size.x * grid_size.y
@@ -68,12 +74,34 @@ def build_decode_flash_mla_config(device, batch, num_heads):
         use_height_and_width_as_shard_shape=True,
     )
 
-    # SDPA program config: match mla1d.py lines 500-505
-    sdpa_program_config = ttnn.SDPAProgramConfig(
+    # P1: compute max K-chunks for the configured sequence length so
+    # max_cores_per_head_batch never exceeds the number of actual chunks.
+    # Sweep results (HiFi4, batch=4, QPF=4):
+    #   seq=128  kcs=128: mcphb=1 optimal (27.3µs), K-split adds REDUCE overhead for 1 chunk
+    #   seq=1024 kcs=256: mcphb=2 optimal (90.3µs), balances parallelism vs REDUCE sync
+    max_start_idx = seq_len // 2
+    padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
+    k_num_chunks_max = max(1, padded_layer_len // k_chunk_size)
+
+    # mcphb=1 for single chunk (no benefit from K-split), mcphb=2 for multi-chunk
+    max_cores_long = min(2, k_num_chunks_max)
+
+    # Short-context config — no K-split, every core is a standalone reducer
+    sdpa_program_config_short = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        q_chunk_size=0,  # Unused in decode
-        k_chunk_size=128,
+        q_chunk_size=0,
+        k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        max_cores_per_head_batch=1,
+    )
+
+    # Long-context config — K-split across 2 workers per group
+    sdpa_program_config_long = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=0,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=max_cores_long,
     )
 
     # Compute kernel config: match mla1d.py lines 507-512
@@ -87,13 +115,15 @@ def build_decode_flash_mla_config(device, batch, num_heads):
     # Scale: match mla1d.py lines 535-538 (without rope_factor adjustment for simplicity)
     scale = QK_HEAD_DIM**-0.5
 
-    # flash_mla config dict: match mla1d.py lines 543-549
+    # flash_mla config dict: both program configs stored; _fwd_decode_flash_mla selects at runtime
     flash_mla_config = {
         "head_dim_v": KV_LORA_RANK,
         "scale": scale,
-        "program_config": sdpa_program_config,
+        "program_config_short": sdpa_program_config_short,
+        "program_config_long": sdpa_program_config_long,
         "compute_kernel_config": compute_kernel_config,
         "memory_config": out_mem_config,
+        "k_chunk_size": k_chunk_size,
     }
 
     return flash_mla_config, q_mem_config
@@ -102,8 +132,8 @@ def build_decode_flash_mla_config(device, batch, num_heads):
 @pytest.mark.parametrize(
     "batch, seq_len",
     [
-        (4, 128),  # DeepSeek V3 per-device batch, short seq
-        (4, 1024),  # DeepSeek V3 per-device batch, long seq
+        (4, 128),  # DeepSeek V3 per-device batch, short seq (chain active)
+        (4, 1024),  # DeepSeek V3 per-device batch, long seq (chain disabled, K-split)
     ],
 )
 @pytest.mark.parametrize("block_size", [32])
@@ -128,8 +158,10 @@ def test_mla1d_sdpa_decode(
     """
     nh = NUM_HEADS
 
-    # Build SDPA config matching mla1d.py
-    flash_mla_config, q_mem_config = build_decode_flash_mla_config(device, batch, nh)
+    # Build SDPA config matching mla1d.py (P1/P2: sized to seq_len, two configs)
+    # Use k_chunk_size=128 for short seqs to avoid padding beyond K tensor length
+    kcs = 128 if seq_len <= 256 else 256
+    flash_mla_config, q_mem_config = build_decode_flash_mla_config(device, batch, nh, seq_len, k_chunk_size=kcs)
     cfg = {"flash_mla": flash_mla_config}
     scale = flash_mla_config["scale"]
 
@@ -150,7 +182,7 @@ def test_mla1d_sdpa_decode(
     # Position indices (spread across sequence)
     max_start_idx = seq_len // 2
     start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
-    padded_layer_len = nearest_y(max_start_idx + 1, 128)
+    padded_layer_len = nearest_y(max_start_idx + 1, flash_mla_config["k_chunk_size"])
 
     # TT tensors
     tt_q = ttnn.from_torch(
@@ -183,7 +215,9 @@ def test_mla1d_sdpa_decode(
     )
 
     # Run through MLA1D._fwd_decode_flash_mla (the actual mla1d.py code)
-    attn_out = MLA1D._fwd_decode_flash_mla(tt_q, kvpe_cache, tt_page_table, position_idxs, cfg)
+    attn_out = MLA1D._fwd_decode_flash_mla(
+        tt_q, kvpe_cache, tt_page_table, position_idxs, cfg, max_cur_pos=max_start_idx
+    )
 
     # Torch reference
     ref_out = scaled_dot_product_attention_reference(q, k, v, start_indices, padded_layer_len, scale)
