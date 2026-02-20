@@ -30,30 +30,17 @@ static void expect_neighbors(
     EXPECT_EQ(actual_set, expected_set) << "Node " << node_id << " has wrong neighbors";
 }
 
-// Helper for FlattenedMeshNodeInfo - checks neighbors by unique_id
+// Helper for checking neighbors by node ID (now using uint32_t directly)
 static void expect_neighbors_by_id(
-    const AdjacencyGraph<PhysicalGroupingDescriptor::FlattenedMeshNodeInfo>& graph,
-    uint32_t node_unique_id,
-    const std::vector<uint32_t>& expected_neighbor_ids) {
-    // Find the node with the given unique_id
-    PhysicalGroupingDescriptor::FlattenedMeshNodeInfo target_node;
-    bool found = false;
-    for (const auto& node : graph.get_nodes()) {
-        if (node.unique_id == node_unique_id) {
-            target_node = node;
-            found = true;
-            break;
-        }
-    }
-    ASSERT_TRUE(found) << "Node with unique_id " << node_unique_id << " not found";
+    const AdjacencyGraph<uint32_t>& graph, uint32_t node_id, const std::vector<uint32_t>& expected_neighbor_ids) {
+    const auto& nodes = graph.get_nodes();
+    ASSERT_TRUE(std::find(nodes.begin(), nodes.end(), node_id) != nodes.end())
+        << "Node with id " << node_id << " not found";
 
-    const auto& neighbors = graph.get_neighbors(target_node);
-    std::set<uint32_t> actual_ids;
-    for (const auto& neighbor : neighbors) {
-        actual_ids.insert(neighbor.unique_id);
-    }
+    const auto& neighbors = graph.get_neighbors(node_id);
+    std::set<uint32_t> actual_ids(neighbors.begin(), neighbors.end());
     std::set<uint32_t> expected_set(expected_neighbor_ids.begin(), expected_neighbor_ids.end());
-    EXPECT_EQ(actual_ids, expected_set) << "Node " << node_unique_id << " has wrong neighbors";
+    EXPECT_EQ(actual_ids, expected_set) << "Node " << node_id << " has wrong neighbors";
 }
 
 // Helper to get common groupings (TRAY_1-4, hosts) - can be prepended to any test proto
@@ -1030,8 +1017,10 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8
     EXPECT_EQ(mesh_8x16.asic_count, 128u) << "8x16_Mesh should have 128 ASICs (4 hosts * 32 ASICs each)";
     EXPECT_EQ(mesh_8x16.items.size(), 4u) << "8x16_Mesh should have 4 instances (hosts)";
 
-    // Build the flattened adjacency mesh
-    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_8x16);
+    // Build the flattened adjacency mesh (returns vector - one per possibility)
+    auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_8x16);
+    ASSERT_FALSE(flattened_meshes.empty()) << "Expected at least one flattened mesh";
+    const auto& flattened_mesh = flattened_meshes.front().adjacency_graph;
 
     // Verify the result is a valid adjacency graph
     // The flattened mesh should have 128 nodes (one per ASIC)
@@ -1041,8 +1030,8 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8
     // Verify that nodes are connected (each node should have neighbors in a 2D mesh)
     for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
     }
 }
 
@@ -1053,27 +1042,29 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x4Mesh) {
 
     GroupingInfo mesh_4x4;
     bool found = false;
-    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
-        if (mesh.name == "4x4_Mesh") {
+    for (const auto& mesh : desc.get_groupings_by_type("MESH")) {
+        if (mesh.asic_count == 16u && mesh.items.size() == 2u && mesh.name.find("4x4") != std::string::npos) {
             mesh_4x4 = mesh;
             found = true;
             break;
         }
     }
-    ASSERT_TRUE(found) << "Expected to find '4x4_Mesh' grouping";
+    ASSERT_TRUE(found) << "Expected to find 4x4 mesh grouping (e.g. 4x4_Mesh WH/BH)";
 
     EXPECT_EQ(mesh_4x4.asic_count, 16u) << "4x4_Mesh should have 16 ASICs (2 trays * 8 ASICs each)";
     EXPECT_EQ(mesh_4x4.items.size(), 2u) << "4x4_Mesh should have 2 instances (trays)";
 
-    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x4);
+    auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_4x4);
+    ASSERT_FALSE(flattened_meshes.empty());
+    const auto& flattened_mesh = flattened_meshes.front().adjacency_graph;
 
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 16u) << "Flattened mesh should have 16 nodes";
 
     for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
     }
 }
 
@@ -1084,27 +1075,29 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x8Mesh) {
 
     GroupingInfo mesh_2x8;
     bool found = false;
-    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
-        if (mesh.name == "2x8_Mesh") {
+    for (const auto& mesh : desc.get_groupings_by_type("MESH")) {
+        if (mesh.asic_count == 16u && mesh.items.size() == 2u && mesh.name.find("2x8") != std::string::npos) {
             mesh_2x8 = mesh;
             found = true;
             break;
         }
     }
-    ASSERT_TRUE(found) << "Expected to find '2x8_Mesh' grouping";
+    ASSERT_TRUE(found) << "Expected to find 2x8 mesh grouping (e.g. 2x8_Mesh WH/BH)";
 
     EXPECT_EQ(mesh_2x8.asic_count, 16u) << "2x8_Mesh should have 16 ASICs (2 trays * 8 ASICs each)";
     EXPECT_EQ(mesh_2x8.items.size(), 2u) << "2x8_Mesh should have 2 instances (trays)";
 
-    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_2x8);
+    auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_2x8);
+    ASSERT_FALSE(flattened_meshes.empty());
+    const auto& flattened_mesh = flattened_meshes.front().adjacency_graph;
 
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 16u) << "Flattened mesh should have 16 nodes";
 
     for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 3u) << "Node " << node.unique_id << " should have at most 3 neighbors";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 3u) << "Node " << node << " should have at most 3 neighbors";
     }
 }
 
@@ -1127,15 +1120,17 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
     EXPECT_EQ(mesh_halftray.asic_count, 4u) << "2x2_Mesh_Halftray should have 4 ASICs (1 halftray)";
     EXPECT_EQ(mesh_halftray.items.size(), 1u) << "2x2_Mesh_Halftray should have 1 instance (halftray)";
 
-    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_halftray);
+    auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_halftray);
+    ASSERT_FALSE(flattened_meshes.empty());
+    const auto& flattened_mesh = flattened_meshes.front().adjacency_graph;
 
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 4u) << "Flattened mesh should have 4 nodes";
 
     for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors (2x2 mesh)";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors (2x2 mesh)";
     }
 }
 
@@ -1189,11 +1184,15 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
         }
     }
 
-    auto flat_1x1 = desc.build_flattened_adjacency_mesh(mesh_1x1);
+    auto flat_1x1_meshes = desc.build_flattened_adjacency_mesh(mesh_1x1);
+    ASSERT_FALSE(flat_1x1_meshes.empty());
+    const auto& flat_1x1 = flat_1x1_meshes.front().adjacency_graph;
     EXPECT_EQ(flat_1x1.get_nodes().size(), 1u);  // 1 tray with 1 ASIC (from required groupings)
     expect_neighbors_by_id(flat_1x1, 0, {});     // Single node has no neighbors
 
-    auto flat_1x4 = desc.build_flattened_adjacency_mesh(mesh_1x4);
+    auto flat_1x4_meshes = desc.build_flattened_adjacency_mesh(mesh_1x4);
+    ASSERT_FALSE(flat_1x4_meshes.empty());
+    const auto& flat_1x4 = flat_1x4_meshes.front().adjacency_graph;
     EXPECT_EQ(flat_1x4.get_nodes().size(), 4u);  // 4 trays x 1 ASIC each
     // 1x4 chain: endpoints have 1 neighbor, interior nodes have 2 (row-major IDs 0..3)
     expect_neighbors_by_id(flat_1x4, 0, {1});
@@ -1217,10 +1216,10 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
     auto all_mesh_groupings = pgd.get_groupings_by_type("MESH");
     ASSERT_FALSE(all_mesh_groupings.empty()) << "No MESH groupings found in PGD";
 
-    // Find specific mesh groupings by name
+    // Find specific mesh groupings by name or by dimensions (name can have WH/BH suffix)
     auto find_mesh_by_name = [&all_mesh_groupings](const std::string& name) -> const GroupingInfo* {
         for (const auto& mesh : all_mesh_groupings) {
-            if (mesh.name == name) {
+            if (mesh.name == name || mesh.name.find(name) == 0) {
                 return &mesh;
             }
         }
@@ -1424,20 +1423,18 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_4x4Mesh) {
     // dual_4x4 has 2 meshes in a graph, so we should have 2 MESH instances
     ASSERT_GE(valid_groupings.at("MESH").size(), 1u) << "Should have at least one MESH instance";
 
-    // Check that we have matches for the 4x4_Mesh grouping (16 ASICs)
-    // Note: Duplicate names are uniquified, so we expect "4x4_Mesh" and "4x4_Mesh_1"
+    // Check that we have matches for the 4x4 mesh grouping (16 ASICs)
+    // Names in triple_16x8 are "4x4_Mesh WH", "4x4_Mesh BH", etc.
     size_t total_4x4_matches = 0;
     for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
         for (const auto& grouping : groupings) {
-            if (grouping.asic_count == 16u && (grouping.name == "4x4_Mesh" || grouping.name == "4x4_Mesh_1")) {
+            if (grouping.asic_count == 16u && grouping.name.find("4x4") != std::string::npos) {
                 total_4x4_matches++;
                 EXPECT_EQ(grouping.asic_count, 16u) << "Should have 16 ASICs";
-                EXPECT_TRUE(grouping.name == "4x4_Mesh" || grouping.name == "4x4_Mesh_1")
-                    << "Should match 4x4_Mesh grouping (name: " << grouping.name << ")";
             }
         }
     }
-    EXPECT_GE(total_4x4_matches, 2u) << "Should have at least two 4x4_Mesh matches";
+    EXPECT_GE(total_4x4_matches, 2u) << "Should have at least two 4x4 mesh matches";
 
     // Check that we have FABRIC level grouping (G0)
     ASSERT_EQ(valid_groupings.count("FABRIC"), 1u) << "Should have FABRIC instance type";
@@ -1481,20 +1478,18 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_2x8Mesh) {
     // wh_galaxy_split has multiple meshes in a graph
     ASSERT_GE(valid_groupings.at("MESH").size(), 1u) << "Should have at least one MESH instance";
 
-    // Check that we have matches for the 2x8_Mesh grouping (16 ASICs)
-    // Note: Duplicate names are uniquified, so we expect "2x8_Mesh" and "2x8_Mesh_1"
+    // Check that we have matches for the 2x8 mesh grouping (16 ASICs)
+    // Names in triple_16x8 are "2x8_Mesh WH", "2x8_Mesh BH", etc.
     size_t total_2x8_matches = 0;
     for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
         for (const auto& grouping : groupings) {
-            if (grouping.asic_count == 16u && (grouping.name == "2x8_Mesh" || grouping.name == "2x8_Mesh_1")) {
+            if (grouping.asic_count == 16u && grouping.name.find("2x8") != std::string::npos) {
                 total_2x8_matches++;
                 EXPECT_EQ(grouping.asic_count, 16u) << "Should have 16 ASICs";
-                EXPECT_TRUE(grouping.name == "2x8_Mesh" || grouping.name == "2x8_Mesh_1")
-                    << "Should match 2x8_Mesh grouping (name: " << grouping.name << ")";
             }
         }
     }
-    EXPECT_GE(total_2x8_matches, 1u) << "Should have at least one 2x8_Mesh match";
+    EXPECT_GE(total_2x8_matches, 1u) << "Should have at least one 2x8 mesh match";
 
     // Check that we have FABRIC level grouping (G0)
     ASSERT_EQ(valid_groupings.count("FABRIC"), 1u) << "Should have FABRIC instance type";
