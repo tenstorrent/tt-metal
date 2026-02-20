@@ -17,6 +17,7 @@
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
+#include "prefetch_writer.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
@@ -99,6 +100,8 @@ FDKernel* FDKernel::Generate(
         case DISPATCH_D:
             return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
         case DISPATCH_S: return new DispatchSKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+        case PREFETCH_HD_WRITER:
+            return new PrefetchWriterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
         case FABRIC_MUX:
             return new tt::tt_metal::RelayMux(
                 node_id, device_id, servicing_device_id, cq_id, noc_selection, false, tunnel_index);

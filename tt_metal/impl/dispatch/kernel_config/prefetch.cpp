@@ -528,10 +528,19 @@ void PrefetchKernel::CreateKernel() {
     defines["OFFSETOF_TO_DEV_ID"] = std::to_string(static_config_.offsetof_to_dev_id.value_or(0));
     defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
 
+    // Stash defines for use by PrefetchWriterKernel (same-core NCRISC stub).
+    kernel_defines_ = defines;
+
+    // When the split-prefetcher mode is active, load the reader-only kernel on BRISC so that the
+    // companion PrefetchWriterKernel can occupy NCRISC of the same core.
+    const bool use_split = is_hd() && MetalContext::instance().rtoptions().get_split_prefetcher();
+    const std::string kernel_path =
+        use_split ? "tt_metal/impl/dispatch/kernels/cq_prefetch_reader.cpp" : dispatch_kernel_file_names[PREFETCH];
+
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
-        dispatch_kernel_file_names[PREFETCH],
+        kernel_path,
         {},
         defines,
         false,

@@ -218,6 +218,8 @@ target_sources(
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp
             impl/dispatch/kernels/cq_prefetch.cpp
+            impl/dispatch/kernels/cq_prefetch_reader.cpp
+            impl/dispatch/kernels/cq_prefetch_writer.cpp
             fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
             fabric/impl/kernels/tt_fabric_mux.cpp
             kernels/compute/blank.cpp
