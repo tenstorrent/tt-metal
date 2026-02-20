@@ -193,6 +193,39 @@ def test_reshape_sharded_rm(device, n, c, h, w):
 
 
 @pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [4])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [64])
+def test_reshape_sharded_permute_rm(device, n, c, h, w):
+    if device.core_grid.y < 8:
+        pytest.skip("n300 does not have 8x8 grid")
+
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.reshape(n, c, h * 2, w // 2)
+    torch_output_tensor = torch_output_tensor.permute(1, 0, 2, 3)
+
+    core_grid = ttnn.CoreGrid(x=8, y=8)
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor.shape,
+        core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+
+    tt_output_tensor = ttnn.experimental.view(tt_input_tensor, n, c, h * 2, w // 2)
+    tt_output_tensor = ttnn.permute(tt_output_tensor, (1, 0, 2, 3))
+
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert_equal(torch_output_tensor, tt_output_tensor)
+
+
+@pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
