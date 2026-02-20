@@ -67,7 +67,7 @@ class TtMoeLayer(LightweightModule):
             device=mesh_device,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2)
+        self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2, keepdim=True)
 
         top2_mask = torch.full((1, 1, 1, 32), fill_value=torch.finfo(torch.float).min)
         top2_mask[:, :, :, :2] = 0.0
@@ -78,7 +78,7 @@ class TtMoeLayer(LightweightModule):
             device=mesh_device,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2)
+        self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2, keepdim=True)
 
         reduce_mask_torch = torch.zeros(1, 1, self.tile_size, self.tile_size * 8)
         for i in range(self.tile_size):
@@ -119,7 +119,7 @@ class TtMoeLayer(LightweightModule):
             topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
             mask_B2 = ttnn.eqz(topk_indices)
             mask_B2 = ttnn.typecast(mask_B2, dtype=ttnn.bfloat16)
-            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3)
+            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3, keepdim=True)
             topk_values.deallocate(True)
             topk_indices.deallocate(True)
             mask_B2.deallocate(True)
@@ -128,11 +128,7 @@ class TtMoeLayer(LightweightModule):
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
 
-        if mode == Mode.PREFILL:
-            weights_1SB1 = ttnn.unsqueeze(weights_1SB1, dim=3)
-            results_11BH = ttnn.mul(weights, weights_1SB1)
-        else:
-            results_11BH = ttnn.mul(weights, weights_1SB1)
+        results_11BH = ttnn.mul(weights, weights_1SB1)
 
         weights.deallocate(True)
         weights_1SB1.deallocate(True)

@@ -13,10 +13,10 @@
 namespace ttml::metal::optimizers::sgd_fused::device {
 
 struct SGDFusedDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
+    using operation_attributes_t = ttml::metal::optimizers::sgd_fused::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::optimizers::sgd_fused::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::optimizers::sgd_fused::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::optimizers::sgd_fused::device::tensor_return_value_t;
     using program_factory_t = std::variant<SGDFusedProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

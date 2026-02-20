@@ -15,7 +15,7 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
 from ....utils.test import line_params, ring_params
 
 
@@ -158,8 +158,12 @@ def test_wan_attention(
         rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
         rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
         # Rope cos and sin sequence fractured and head fractured
-        tt_rope_cos = bf16_tensor(rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
-        tt_rope_sin = bf16_tensor(rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+        tt_rope_cos = from_torch(
+            rope_cos_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None]
+        )
+        tt_rope_sin = from_torch(
+            rope_sin_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None]
+        )
 
         # Create transformation matrix for RoPE
         trans_mat = get_rot_transformation_mat()

@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
@@ -494,11 +495,7 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
     assert len(block_shape) == tensor.ndim and all(
         inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
     )
-    for i, block_dim in enumerate(block_shape):
-        inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
-    tensor = tensor.float() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
-    del inv_scale
-    return tensor
+    return dequantize_tensor(tensor, inv_scale, block_shape)
 
 
 def get_state_dicts(

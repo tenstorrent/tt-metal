@@ -245,6 +245,7 @@ def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_locat
     ), f"Inference time with trace is {inference_time}s, while expected time is {expected_inference_time}s"
 
 
+@pytest.mark.timeout(500)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}], indirect=True
@@ -252,7 +253,7 @@ def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_locat
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (1, 50, 3600, 5.0) if is_wormhole_b0() else (1, 50, 3600, 3.15),  # Wormhole B0 vs Blackhole performance
+        (1, 50, 3600, 4.5) if is_wormhole_b0() else (1, 50, 3600, 2.8),  # Wormhole B0 vs Blackhole performance
     ],
 )
 def test_stable_diffusion_perf(

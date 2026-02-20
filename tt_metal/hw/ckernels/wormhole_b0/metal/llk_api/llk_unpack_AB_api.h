@@ -83,25 +83,3 @@ inline void llk_unpack_AB(
     _llk_unpack_AB_<BType>(address_a, address_b);
     WAYPOINT("UABD");
 }
-
-template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
-inline void llk_unpack_AB_reduce_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t acc_to_dest = 0) {
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const bool narrow_tile =
-        get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
-    // TODO NC: Move to TRISC1 tt-metal#36411
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-    }
-
-    _llk_unpack_AB_reduce_init_<dim, BType, enforce_fp32_accumulation>(
-        face_r_dim, num_faces, narrow_tile, transpose, within_face_16x16_transpose);
-}

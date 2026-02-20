@@ -243,6 +243,8 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions @te
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience @tenstorrent/codeowner-bypass
 tests/sweep_framework/ @stevendae @bbradelTT @ntarafdar @pavlejosipovic @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass

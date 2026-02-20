@@ -95,7 +95,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensu
             layout=ttnn.TILE_LAYOUT,
         )
         logger.info("Run Llama_MLP")
-        tt_output = tt_model.forward_prefill(tt_input, mode)
+        tt_output = tt_model.forward_prefill(tt_input, batch_size)
 
         tt_output_torch = ttnn.to_torch(
             tt_output,
