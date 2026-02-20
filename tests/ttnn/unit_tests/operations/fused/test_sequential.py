@@ -5254,66 +5254,80 @@ class TestMatmulFusionChains:
         passing, pcc = comp_pcc(golden, result, pcc=0.98)
         assert passing, f"MM→RMS→MM PCC: {pcc}"
 
-    @pytest.mark.skip(reason="OpGraph core_range_override doesn't handle matmul's per-core runtime arg layout yet")
     def test_stem_rms_branch_matmuls(self, device):
-        """Branching: stem RMS → Parallel(matmul_a, matmul_b) on disjoint cores."""
+        """Branching: stem RMS → Parallel(matmul_a, matmul_b) on disjoint cores.
+
+        Tree (8 cores, single row):
+            RMS [(0,0)-(7,0)] → matmul_a [(0,0)-(3,0)]  left 4 cores
+                               → matmul_b [(4,0)-(7,0)]  right 4 cores
+
+        Stem: RMS norm on (256, 128) = 8 M-tiles × 4 width-tiles.
+        DRAM-interleaved norm assigns 1 core per height-tile → 8 cores.
+
+        Each branch: matmul (256, 128) × (128, 128) = (256, 128) on 4 cores.
+        grid(4,1), per_core_M=2, per_core_N=4, in0_block_w=4.
+        M distributed across all 4 cores (2 M-tiles/core × 4 = 8), per_core_N = full N.
+        """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors import composite
 
         torch.manual_seed(42)
-        hidden = 128
 
-        # Stem: 4 cores (0,0)-(3,0), branches: A=(0,0)-(1,0), B=(2,0)-(3,0)
-        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
-        branch_a_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
-        branch_b_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        # Stem: 8 cores (single row)
+        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        # Left branch: (0,0)-(3,0) = 4 cores
+        branch_a_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        # Right branch: (4,0)-(7,0) = 4 cores
+        branch_b_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
 
-        # Input: 4 height tiles (one per core)
-        torch_input = torch.randn(1, 1, 128, hidden, dtype=torch.bfloat16)
-        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
-        torch_b_a = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
-        torch_b_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        # Input: 8 M-tiles × 4 K-tiles = (256, 128)
+        torch_input = torch.randn(1, 1, 256, 128, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, 128, dtype=torch.bfloat16)
+        # B: K=4 tiles × N=4 tiles = (128, 128)
+        torch_B = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
+
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+        # grid(4,1): M distributed across 4 cores, per_core_N = full N = 4
+        mm_config = self._make_mm_config(grid_x=4, grid_y=1, in0_block_w=4, per_core_M=2, per_core_N=4)
+        mm_compute = self._make_compute_config(fp32=True, math_approx_mode=False)
 
         stem = rms_norm.rms_norm(
             self._tt(torch_input, device),
             core_range_set=stem_cores,
             weight=self._tt(torch_w, device),
             epsilon=1e-5,
+            compute_kernel_config=ln_compute,
         )
 
-        mm_config = self._make_mm_config(grid_x=2, grid_y=1)
-        compute_config = self._make_compute_config()
+        tt_B = self._tt(torch_B, device)
         branch_a = matmul_desc(
             stem.output_tensors[0],
-            self._tt(torch_b_a, device),
+            tt_B,
             core_range_set=branch_a_cores,
             program_config=mm_config,
-            compute_kernel_config=compute_config,
+            compute_kernel_config=mm_compute,
         )
         branch_b = matmul_desc(
             stem.output_tensors[0],
-            self._tt(torch_b_b, device),
+            tt_B,
             core_range_set=branch_b_cores,
             program_config=mm_config,
-            compute_kernel_config=compute_config,
+            compute_kernel_config=mm_compute,
         )
 
         fused = Sequential(stem, Parallel(branch_a, branch_b)).build(device)
         outputs = composite.launch([fused])
 
-        golden_stem = torch_rms_norm(torch_input.float(), torch_w.float())
-        golden_a = golden_stem @ torch_b_a.float()
-        golden_b = golden_stem @ torch_b_b.float()
-
         result_a = ttnn.to_torch(outputs[0][0])
         result_b = ttnn.to_torch(outputs[0][1])
 
-        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
-        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
-        assert passing_a, f"Branch A (matmul) PCC: {pcc_a}"
-        assert passing_b, f"Branch B (matmul) PCC: {pcc_b}"
+        golden = torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_B.float()
+        passing_a, pcc_a = comp_pcc(golden, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden, result_b, pcc=0.98)
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
 
     def test_multicore_rms_matmul_rms(self, device):
         """Multi-core 3-phase: RMS → Matmul → RMS on 4x2 grid (8 cores)."""
@@ -6064,6 +6078,62 @@ class TestMatmulFusionStress:
         passing, pcc = comp_pcc(golden, result, pcc=0.97)
         assert passing, f"Multi-core LN→MM→RMS PCC: {pcc}"
 
+    def test_rms_matmul_ln_2x2(self, device):
+        """3-phase RMS→MM→LN on 2×2 grid (4 cores).
+
+        Exercises: multi-core 3-phase chain with all three op types on a
+        square grid layout.  fp32_dest_acc_en=True across all phases.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+        mm_compute = self._make_compute_config(fp32=True, math_approx_mode=False)
+
+        # 4 cores × 1 height tile each = 4 tiles = 128 rows
+        torch_input = torch.randn(1, 1, 128, hidden, dtype=torch.bfloat16)
+        torch_w_rms = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_b_mm = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w_ln = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias_ln = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        rms = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=core_range,
+            weight=self._tt(torch_w_rms, device),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        mm = matmul_desc(
+            rms.output_tensors[0],
+            self._tt(torch_b_mm, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(grid_x=2, grid_y=2),
+            compute_kernel_config=mm_compute,
+        )
+        ln = layer_norm.layer_norm(
+            mm.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w_ln, device),
+            bias=self._tt(torch_bias_ln, device),
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(rms, mm, ln).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_rms_norm(torch_input.float(), torch_w_rms.float())
+        t = t @ torch_b_mm.float()
+        golden = torch_layer_norm(t, torch_w_ln.float(), torch_bias_ln.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"Multi-core RMS→MM→LN PCC: {pcc}"
+
     # ------------------------------------------------------------------ #
     # Parallel heterogeneous chains
     # ------------------------------------------------------------------ #
@@ -6388,9 +6458,9 @@ class TestMatmulFusionStress:
 class TestNestedParallelStress:
     """Stress tests for deeply nested Sequential/Parallel trees with long chains.
 
-    All branching tests use norm ops (LN/RMS) since matmul doesn't yet support
-    core_range_override in the OpGraph path. Matmul is used in linear stem
-    portions before the split.
+    All branching tests use norm ops (LN/RMS). Matmul also works in branching
+    paths since the per-core group architecture correctly handles per-core
+    runtime args via coordinate-based indexing.
 
     Core layout convention:
         NCHt (num height tiles) >= num_cores, one tile = 32 rows.
@@ -7067,3 +7137,82 @@ class TestNestedParallelStress:
         assert passing_ll, f"LL (RMS+bias) PCC: {pcc_ll}"
         assert passing_lr, f"LR (RMS) PCC: {pcc_lr}"
         assert passing_r, f"Right (LN) PCC: {pcc_r}"
+
+    def test_stem_rms_branch_ln_and_rms_opgraph(self, device):
+        """Branching: stem RMS → Parallel(LN, RMS) via build_op_graph API.
+
+        Tree (8 cores):
+            RMS [0-7] → LN  [0-3]
+                       → RMS [4-7]
+
+        Exercises: per-core group architecture with heterogeneous norm branches
+        using the OpGraph (tree) API.  Two core groups are formed — one per
+        branch — each running the stem phase then its own branch phase.
+        """
+        from models.experimental.ops.descriptors.fusion import OpNode, build_op_graph
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        branch_a_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        branch_b_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        # 8 tiles (256 rows), 1 per core
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        def _tt(t):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        stem = rms_norm.rms_norm(
+            _tt(torch_input),
+            core_range_set=stem_cores,
+            weight=_tt(torch_w),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        branch_a = layer_norm.layer_norm(
+            stem.output_tensors[0],
+            core_range_set=branch_a_cores,
+            weight=_tt(torch_w),
+            bias=_tt(torch_bias),
+            epsilon=1e-5,
+        )
+        branch_b = rms_norm.rms_norm(
+            stem.output_tensors[0],
+            core_range_set=branch_b_cores,
+            weight=_tt(torch_w),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        fused = build_op_graph(
+            root_phases=[stem],
+            children=[OpNode(branch_a), OpNode(branch_b)],
+            device=device,
+        )
+        outputs = composite.launch([fused])
+
+        g_stem = torch_rms_norm(torch_input.float(), torch_w.float())
+        golden_a = torch_layer_norm(g_stem, torch_w.float(), torch_bias.float())
+        golden_b = torch_rms_norm(g_stem, torch_w.float())
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[0][1])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.97)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        assert passing_a, f"Branch A (LN) PCC: {pcc_a}"
+        assert passing_b, f"Branch B (RMS) PCC: {pcc_b}"

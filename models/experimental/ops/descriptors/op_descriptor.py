@@ -20,6 +20,7 @@ class OpDescriptor(NamedTuple):
     descriptor: "ttnn.ProgramDescriptor"
     input_tensors: List["ttnn.Tensor"]
     output_tensors: List["ttnn.Tensor"]
+    name: str = ""
 
 
 # FusedOp moved to models.experimental.ops.descriptors.fusion.fusion

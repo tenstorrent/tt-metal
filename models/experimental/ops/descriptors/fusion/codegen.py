@@ -510,6 +510,7 @@ def _generate_phase_namespace(
     kernel_source: str,
     defines: List[Tuple[str, str]],
     ct_arg_offset: int,
+    phase_name: str = "",
 ) -> List[str]:
     """Generate a complete namespace block for one phase.
 
@@ -520,6 +521,7 @@ def _generate_phase_namespace(
         namespace phase_N {
             <pre_main transformed>
             void run() {
+                DeviceZoneScopedN("op_name");  // if phase_name set
                 <transformed kernel body>
             }
         } // namespace phase_N
@@ -536,7 +538,8 @@ def _generate_phase_namespace(
     ns_name = f"phase_{phase_idx}"
     lines: List[str] = []
 
-    lines.append(f"// ---- Phase {phase_idx} ----")
+    label = f"Phase {phase_idx}: {phase_name}" if phase_name else f"Phase {phase_idx}"
+    lines.append(f"// ==== {label} ====")
 
     # Per-phase defines (outside namespace — preprocessor is namespace-unaware)
     if defines:
@@ -560,6 +563,8 @@ def _generate_phase_namespace(
     transformed = _transform_phase_source(body, phase_idx, ct_arg_offset)
 
     lines.append("void run() {")
+    if phase_name:
+        lines.append(f'    DeviceZoneScopedN("{phase_name}");')
     for line in transformed.split("\n"):
         lines.append(f"    {line}")
     lines.append("}")
@@ -1184,7 +1189,11 @@ def _generate_fused_riscv0_source(
     lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
+    lines.append('#include "tools/profiler/kernel_profiler.hpp"')
     lines.append("")
+
+    # Build phase name lookup
+    phase_names = {p.phase_idx: p.op_descriptor.name for p in phases}
 
     # File-scope: namespace blocks from inlined headers (must stay at global scope)
     if file_scope_blocks:
@@ -1204,7 +1213,16 @@ def _generate_fused_riscv0_source(
         pre_main = pre_mains.get(phase_idx, "")
         defines = per_phase_defines.get(phase_idx, [])
         ct_offset = ct_arg_offsets.get(phase_idx, 0)
-        lines.extend(_generate_phase_namespace(phase_idx, pre_main, raw_source, defines, ct_offset))
+        lines.extend(
+            _generate_phase_namespace(
+                phase_idx,
+                pre_main,
+                raw_source,
+                defines,
+                ct_offset,
+                phase_name=phase_names.get(phase_idx, ""),
+            )
+        )
 
     needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
@@ -1228,6 +1246,9 @@ def _generate_fused_riscv0_source(
         has_trailing = last_phase_idx in multi_barrier.transition_map
 
     for count, (phase_idx, _) in enumerate(reader_sources):
+        pname = phase_names.get(phase_idx, "")
+        label = f"Phase {phase_idx}: {pname}" if pname else f"Phase {phase_idx}"
+        lines.append(f"    // {label}")
         lines.append(f"    phase_{phase_idx}::run();")
         is_last = count == len(reader_sources) - 1
         if needs_barrier and (not is_last or has_trailing):
@@ -1294,7 +1315,11 @@ def _generate_fused_riscv1_source(
     lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
+    lines.append('#include "tools/profiler/kernel_profiler.hpp"')
     lines.append("")
+
+    # Build phase name lookup
+    phase_names = {p.phase_idx: p.op_descriptor.name for p in phases}
 
     # File-scope: namespace blocks from inlined headers
     if file_scope_blocks:
@@ -1312,7 +1337,16 @@ def _generate_fused_riscv1_source(
         pre_main = pre_mains.get(phase_idx, "")
         defines = per_phase_defines.get(phase_idx, [])
         ct_offset = ct_arg_offsets.get(phase_idx, 0)
-        lines.extend(_generate_phase_namespace(phase_idx, pre_main, raw_source, defines, ct_offset))
+        lines.extend(
+            _generate_phase_namespace(
+                phase_idx,
+                pre_main,
+                raw_source,
+                defines,
+                ct_offset,
+                phase_name=phase_names.get(phase_idx, ""),
+            )
+        )
 
     needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
@@ -1332,6 +1366,9 @@ def _generate_fused_riscv1_source(
         has_trailing = last_phase_idx in multi_barrier.transition_map
 
     for count, (phase_idx, _) in enumerate(writer_sources):
+        pname = phase_names.get(phase_idx, "")
+        label = f"Phase {phase_idx}: {pname}" if pname else f"Phase {phase_idx}"
+        lines.append(f"    // {label}")
         lines.append(f"    phase_{phase_idx}::run();")
         is_last = count == len(writer_sources) - 1
         if needs_barrier and (not is_last or has_trailing):
@@ -1402,7 +1439,11 @@ def _generate_fused_compute_source(
     lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
+    lines.append('#include "tools/profiler/kernel_profiler.hpp"')
     lines.append("")
+
+    # Build phase name lookup
+    phase_names = {p.phase_idx: p.op_descriptor.name for p in phases}
 
     # File-scope: namespace blocks from inlined headers
     if file_scope_blocks:
@@ -1420,7 +1461,16 @@ def _generate_fused_compute_source(
         pre_main = pre_mains.get(phase_idx, "")
         defines = per_phase_defines.get(phase_idx, [])
         ct_offset = ct_arg_offsets.get(phase_idx, 0)
-        lines.extend(_generate_phase_namespace(phase_idx, pre_main, raw_source, defines, ct_offset))
+        lines.extend(
+            _generate_phase_namespace(
+                phase_idx,
+                pre_main,
+                raw_source,
+                defines,
+                ct_offset,
+                phase_name=phase_names.get(phase_idx, ""),
+            )
+        )
 
     needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
@@ -1442,6 +1492,9 @@ def _generate_fused_compute_source(
         has_trailing = last_phase_idx in multi_barrier.transition_map
 
     for count, (phase_idx, _) in enumerate(compute_sources):
+        pname = phase_names.get(phase_idx, "")
+        label = f"Phase {phase_idx}: {pname}" if pname else f"Phase {phase_idx}"
+        lines.append(f"    // {label}")
         lines.append(f"    phase_{phase_idx}::run();")
         is_last = count == len(compute_sources) - 1
         if needs_barrier and (not is_last or has_trailing):
@@ -1464,7 +1517,7 @@ def _generate_fused_compute_source(
 def _compute_runtime_arg_offsets(
     phase_kernels: List[Dict[str, Any]],
     kernel_type: str,
-    core_range_override: Optional[Any] = None,
+    target_core_range: Optional[Any] = None,
 ) -> Dict[int, int]:
     """Compute per-phase runtime arg offsets.
 
@@ -1474,9 +1527,10 @@ def _compute_runtime_arg_offsets(
     RuntimeArgsView API: runtime_args[col_idx] -> RuntimeArgsColProxy,
     runtime_args[col_idx][0] -> VectorUInt32 of args for that core.
 
-    If core_range_override is set, use those core ranges to determine which
-    cores to count args for (needed for OpGraph paths where stem ops cover
-    all cores but only a subset runs this path's kernel).
+    If target_core_range is set, use those core ranges to determine which
+    cores to count args for (needed when building a fused kernel for a
+    core group where stem ops cover all cores but only a subset runs
+    this group's kernel).
     """
     offsets: Dict[int, int] = {}
     cumulative = 0
@@ -1490,8 +1544,8 @@ def _compute_runtime_arg_offsets(
         # Count runtime args for this phase (max across cores).
         # RuntimeArgsView uses coordinate-based 2D indexing: [x][y] -> CoreCoord(x,y).
         max_args = 0
-        if core_range_override is not None:
-            core_coords = _get_core_coords_from_ranges(core_range_override)
+        if target_core_range is not None:
+            core_coords = _get_core_coords_from_ranges(target_core_range)
         else:
             core_coords = _get_core_coords_from_ranges(kernel.core_ranges)
         for core in core_coords:
@@ -1499,10 +1553,10 @@ def _compute_runtime_arg_offsets(
                 args = kernel.runtime_args[core.x][core.y]
                 max_args = max(max_args, len(args))
             except (IndexError, KeyError):
-                if core_range_override is not None:
+                if target_core_range is not None:
                     logger.warning(
                         "Phase %d %s: no runtime args for core (%d,%d) "
-                        "with core_range_override (stem op may not cover this core)",
+                        "with target_core_range (stem op may not cover this core)",
                         i,
                         kernel_type,
                         core.x,
@@ -1527,7 +1581,7 @@ def _get_core_coords_from_ranges(core_ranges: Any) -> List[Any]:
 def _concatenate_runtime_args(
     phase_kernels: List[Dict[str, Any]],
     kernel_type: str,
-    core_range_override: Optional[Any] = None,
+    target_core_range: Optional[Any] = None,
 ) -> List[Tuple[Any, List[int]]]:
     """Concatenate per-core runtime args from all phases.
 
@@ -1537,12 +1591,12 @@ def _concatenate_runtime_args(
     maps to CoreCoord(x, y). We must use actual core coordinates, not
     sequential indices.
 
-    If core_range_override is set, use those core ranges instead of the
-    kernel's native ranges.  This filters stem ops' args to only the cores
-    in this path's branch range (OpGraph support).
+    If target_core_range is set, use those core ranges instead of the
+    kernel's native ranges.  This extracts per-core args for the specific
+    cores in this group's range (OpGraph support).
     """
-    if core_range_override is not None:
-        core_coords = _get_core_coords_from_ranges(core_range_override)
+    if target_core_range is not None:
+        core_coords = _get_core_coords_from_ranges(target_core_range)
     else:
         # Find core_ranges from first available kernel
         core_coords = None
@@ -1584,10 +1638,10 @@ def _concatenate_runtime_args(
                 # No args for this core — pad entire phase width
                 if phase_max_args > 0:
                     col_args[col_idx].extend([0] * phase_max_args)
-                if core_range_override is not None:
+                if target_core_range is not None:
                     logger.warning(
                         "Phase %d %s: no runtime args for core (%d,%d) "
-                        "with core_range_override (stem op may not cover this core)",
+                        "with target_core_range (stem op may not cover this core)",
                         phase_idx,
                         kernel_type,
                         core.x,
@@ -1938,7 +1992,7 @@ def _validate_rectangular_grid(phys_coords: List[Any], config: BarrierConfig) ->
 def _build_fused_descriptor(
     phases: List[PhaseInfo],
     device: Any,
-    core_range_override: Optional[Any] = None,
+    target_core_range: Optional[Any] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
 ) -> _BuildResult:
     """Build a fused ProgramDescriptor with multi-segment barrier sync.
@@ -1950,9 +2004,10 @@ def _build_fused_descriptor(
     Args:
         phases: List of PhaseInfo objects for each phase.
         device: The device for GlobalSemaphore allocation.
-        core_range_override: If set, overrides role keys and fused kernel
-            core_ranges. Used by OpGraphBuilder for paths where stem ops
-            have wider core ranges than the path's leaf branch.
+        target_core_range: If set, the fused kernel binary will run on
+            this core range. Used by OpGraphBuilder when building a kernel
+            for a core group where phases may have different native ranges
+            (e.g. stem covers 16 cores but this group's cores are 8).
         multi_barrier: Multi-segment barrier spec. Required for multi-phase
             chains. Provides barrier segment configs and transition map.
     """
@@ -1963,7 +2018,7 @@ def _build_fused_descriptor(
     role_keys: List[Tuple[str, frozenset]] = []
     role_keys_set: Set[Tuple[str, frozenset]] = set()
     for kernel_desc in phases[0].op_descriptor.descriptor.kernels:
-        rk = _get_role_key(kernel_desc, core_range_override)
+        rk = _get_role_key(kernel_desc, target_core_range)
         if rk not in role_keys_set:
             role_keys.append(rk)
             role_keys_set.add(rk)
@@ -1973,7 +2028,7 @@ def _build_fused_descriptor(
     for phase_idx, phase in enumerate(phases):
         role_map: Dict[Any, Any] = {}
         for kernel_desc in phase.op_descriptor.descriptor.kernels:
-            rk = _get_role_key(kernel_desc, core_range_override)
+            rk = _get_role_key(kernel_desc, target_core_range)
             role_map[rk] = kernel_desc
         phase_kernels.append(role_map)
 
@@ -1989,10 +2044,10 @@ def _build_fused_descriptor(
     # Build merged CB descriptors from pool (modifies buffer_index in-place)
     merged_cbs = pool.build_merged_cb_descriptors(phases)
 
-    # Override CB core_ranges when building a path through an OpGraph.
-    if core_range_override is not None:
+    # Set CB core_ranges to the target when building for a specific core group.
+    if target_core_range is not None:
         for cb_desc in merged_cbs:
-            cb_desc.core_ranges = core_range_override
+            cb_desc.core_ranges = target_core_range
 
     # Sweep indices = all allocated CB pool slots
     sweep_cb_indices = sorted(pool.get_all_slot_indices())
@@ -2013,8 +2068,8 @@ def _build_fused_descriptor(
         risc_type, core_key = role_key
 
         # Get role-specific core_ranges
-        if core_range_override is not None:
-            role_core_ranges = core_range_override
+        if target_core_range is not None:
+            role_core_ranges = target_core_range
         else:
             role_core_ranges = None
             for pk in phase_kernels:
@@ -2028,7 +2083,7 @@ def _build_fused_descriptor(
 
         # Merge compile-time args and compute offsets
         ct_args, ct_offsets = _merge_compile_time_args(phase_kernels, role_key)
-        rt_offsets = _compute_runtime_arg_offsets(phase_kernels, role_key, core_range_override=core_range_override)
+        rt_offsets = _compute_runtime_arg_offsets(phase_kernels, role_key, target_core_range=target_core_range)
 
         # Generate fused source and determine barrier addresses per RISC type
         if risc_type == "riscv_0":
@@ -2087,7 +2142,7 @@ def _build_fused_descriptor(
             continue
 
         # Concatenate runtime args and append barrier addresses
-        rt_args = _concatenate_runtime_args(phase_kernels, role_key, core_range_override=core_range_override)
+        rt_args = _concatenate_runtime_args(phase_kernels, role_key, target_core_range=target_core_range)
         rt_args, barrier_offset = _append_barrier_runtime_args(rt_args, barrier_addrs)
 
         # Merge named compile-time args
