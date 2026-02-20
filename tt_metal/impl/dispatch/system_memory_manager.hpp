@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 using ChipId = int;
@@ -94,6 +95,13 @@ public:
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
+    // Allocate a region from the hugepage space after all CQ regions.
+    // Returns {host_virtual_ptr, device_absolute_addr}. The region is zeroed.
+    // Returns {nullptr, 0} if no hugepage space is available (e.g., mock device).
+    std::pair<void*, uint32_t> allocate_region(uint32_t size);
+
+    uint32_t get_channel_offset() const { return channel_offset; }
+
 private:
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
@@ -113,6 +121,12 @@ private:
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset = 0;
+
+    // Bump allocator for the free hugepage region after all CQs.
+    uint32_t free_region_start_ = 0;        // absolute device address of free space start
+    uint32_t free_region_size_ = 0;         // total bytes of free space
+    uint32_t free_region_bump_ = 0;         // bytes already allocated from free region
+    char* free_region_host_ptr_ = nullptr;  // host virtual pointer to free region start
 };
 
 }  // namespace tt::tt_metal

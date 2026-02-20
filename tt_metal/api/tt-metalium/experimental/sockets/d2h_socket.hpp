@@ -26,7 +26,7 @@ public:
     void notify_sender();
     uint32_t get_page_size() const { return page_size_; }
     uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
-    uint32_t* get_read_ptr() const { return data_buffer_->data() + (read_ptr_ / sizeof(uint32_t)); }
+    uint32_t* get_read_ptr() const;
     void set_page_size(uint32_t page_size);
     void barrier();
 
@@ -50,6 +50,11 @@ private:
     uint32_t fifo_curr_size_ = 0;
     uint32_t l1_data_buffer_address_ = 0;
     uint32_t l1_data_buffer_size_ = 0;
+
+    // Hugepage fallback (used on Wormhole when IOMMU is unavailable)
+    bool using_hugepage_ = false;
+    uint32_t* hugepage_data_host_ptr_ = nullptr;
+    volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
 };
 
 }  // namespace tt::tt_metal::distributed

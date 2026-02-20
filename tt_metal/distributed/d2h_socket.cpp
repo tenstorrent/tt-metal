@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <immintrin.h>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -42,38 +43,83 @@ D2HSocket::D2HSocket(
     sender_devce_range_set.merge(MeshCoordinateRange(sender_core.device_coord));
     auto sender_core_range_set = CoreRangeSet(CoreRange(sender_core.core_coord));
 
-    data_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(fifo_size_ / sizeof(uint32_t), 0);
-    bytes_sent_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
-
-    tt::tt_metal::HostBuffer data_buffer_view(
-        tt::stl::Span<uint32_t>(data_buffer_->data(), data_buffer_->size()), tt::tt_metal::MemoryPin(data_buffer_));
-    tt::tt_metal::HostBuffer bytes_sent_buffer_view(
-        tt::stl::Span<uint32_t>(bytes_sent_buffer_->data(), bytes_sent_buffer_->size()),
-        tt::tt_metal::MemoryPin(bytes_sent_buffer_));
-
-    data_pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, sender_devce_range_set, data_buffer_view, true);
-
-    bytes_sent_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
-        *mesh_device, sender_devce_range_set, bytes_sent_buffer_view, true);
-
     auto* device = mesh_device->get_device(sender_core_.device_coord);
     TT_FATAL(device != nullptr, "D2HSocket: Failed to get device for sender_core");
     auto device_id = device->id();
 
-    const auto& bytes_sent_noc_addr = bytes_sent_pinned_memory_->get_noc_addr(device_id);
-    const auto& data_noc_addr = data_pinned_memory_->get_noc_addr(device_id);
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& hal = MetalContext::instance().hal();
+    bool can_use_pinned_memory = cluster.is_iommu_enabled() || hal.get_supports_64_bit_pcie_addressing();
 
-    uint32_t data_pcie_xy_enc = data_noc_addr.value().pcie_xy_enc;
-    uint32_t bytes_sent_pcie_xy_enc = bytes_sent_noc_addr.value().pcie_xy_enc;
-    TT_FATAL(
-        data_pcie_xy_enc == bytes_sent_pcie_xy_enc,
-        "Data and bytes_sent pinned memory must be mapped to the same PCIe core.");
+    uint32_t data_pcie_xy_enc = 0;
+    uint32_t data_addr_lo = 0;
+    uint32_t data_addr_hi = 0;
+    uint32_t bytes_sent_addr_lo = 0;
+    uint32_t bytes_sent_addr_hi = 0;
 
-    uint32_t data_addr_lo = static_cast<uint32_t>(data_noc_addr.value().addr & 0xFFFFFFFFull);
-    uint32_t data_addr_hi = static_cast<uint32_t>(data_noc_addr.value().addr >> 32);
-    uint32_t bytes_sent_addr_lo = static_cast<uint32_t>(bytes_sent_noc_addr.value().addr & 0xFFFFFFFFull);
-    uint32_t bytes_sent_addr_hi = static_cast<uint32_t>(bytes_sent_noc_addr.value().addr >> 32);
+    if (can_use_pinned_memory) {
+        // Standard path: use PinnedMemory (Blackhole or IOMMU-enabled systems)
+        data_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(fifo_size_ / sizeof(uint32_t), 0);
+        bytes_sent_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
+
+        tt::tt_metal::HostBuffer data_buffer_view(
+            tt::stl::Span<uint32_t>(data_buffer_->data(), data_buffer_->size()), tt::tt_metal::MemoryPin(data_buffer_));
+        tt::tt_metal::HostBuffer bytes_sent_buffer_view(
+            tt::stl::Span<uint32_t>(bytes_sent_buffer_->data(), bytes_sent_buffer_->size()),
+            tt::tt_metal::MemoryPin(bytes_sent_buffer_));
+
+        data_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device, sender_devce_range_set, data_buffer_view, true);
+        bytes_sent_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device, sender_devce_range_set, bytes_sent_buffer_view, true);
+
+        const auto& bytes_sent_noc_addr = bytes_sent_pinned_memory_->get_noc_addr(device_id);
+        const auto& data_noc_addr = data_pinned_memory_->get_noc_addr(device_id);
+
+        data_pcie_xy_enc = data_noc_addr.value().pcie_xy_enc;
+        uint32_t bytes_sent_pcie_xy_enc = bytes_sent_noc_addr.value().pcie_xy_enc;
+        TT_FATAL(
+            data_pcie_xy_enc == bytes_sent_pcie_xy_enc,
+            "Data and bytes_sent pinned memory must be mapped to the same PCIe core.");
+
+        data_addr_lo = static_cast<uint32_t>(data_noc_addr.value().addr & 0xFFFFFFFFull);
+        data_addr_hi = static_cast<uint32_t>(data_noc_addr.value().addr >> 32);
+        bytes_sent_addr_lo = static_cast<uint32_t>(bytes_sent_noc_addr.value().addr & 0xFFFFFFFFull);
+        bytes_sent_addr_hi = static_cast<uint32_t>(bytes_sent_noc_addr.value().addr >> 32);
+    } else {
+        // Hugepage fallback path: Wormhole with IOMMU disabled (passthrough)
+        using_hugepage_ = true;
+
+        auto& sysmem_mgr = device->sysmem_manager();
+
+        auto [data_host_ptr, data_dev_addr] = sysmem_mgr.allocate_region(fifo_size);
+        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
+
+        hugepage_data_host_ptr_ = static_cast<uint32_t*>(data_host_ptr);
+        hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
+
+        ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
+        const auto& soc = cluster.get_soc_desc(mmio_device_id);
+        const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+        TT_ASSERT(!pcie_cores.empty());
+        auto pcie_xy = pcie_cores.front();
+        data_pcie_xy_enc = hal.noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
+
+        data_addr_lo = data_dev_addr;
+        data_addr_hi = 0;
+        bytes_sent_addr_lo = bs_dev_addr;
+        bytes_sent_addr_hi = 0;
+
+        log_info(
+            tt::LogMetal,
+            "D2HSocket: Using hugepage fallback for device {} "
+            "(data_dev_addr=0x{:x}, bs_dev_addr=0x{:x}, pcie_xy_enc=0x{:x})",
+            device_id,
+            data_dev_addr,
+            bs_dev_addr,
+            data_pcie_xy_enc);
+    }
+
     read_ptr_ = 0;
 
     auto num_cores = sender_core_range_set.size();
@@ -137,6 +183,13 @@ D2HSocket::D2HSocket(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
 }
 
+uint32_t* D2HSocket::get_read_ptr() const {
+    if (using_hugepage_) {
+        return hugepage_data_host_ptr_ + (read_ptr_ / sizeof(uint32_t));
+    }
+    return data_buffer_->data() + (read_ptr_ / sizeof(uint32_t));
+}
+
 void D2HSocket::set_page_size(uint32_t page_size) {
     const auto pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     TT_FATAL(page_size % pcie_alignment == 0, "Page size must be PCIE-aligned.");
@@ -150,7 +203,8 @@ void D2HSocket::set_page_size(uint32_t page_size) {
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
 
         while (bytes_recv < bytes_adjustment) {
-            volatile uint32_t bytes_sent_value = bytes_sent_buffer_->at(0);
+            volatile uint32_t bytes_sent_value =
+                using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_buffer_->at(0);
             bytes_recv = bytes_sent_value - bytes_acked_;
             bytes_sent_ = bytes_sent_value;
         }
@@ -165,7 +219,8 @@ void D2HSocket::set_page_size(uint32_t page_size) {
 uint32_t D2HSocket::pages_available() {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking available pages.");
 
-    volatile uint32_t* bytes_sent_ptr = const_cast<volatile uint32_t*>(&bytes_sent_buffer_->at(0));
+    volatile uint32_t* bytes_sent_ptr =
+        using_hugepage_ ? hugepage_bytes_sent_host_ptr_ : const_cast<volatile uint32_t*>(&bytes_sent_buffer_->at(0));
     _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(bytes_sent_ptr)));
     _mm_lfence();
 
@@ -186,7 +241,8 @@ void D2HSocket::wait_for_pages(uint32_t num_pages) {
     }
 
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
-    volatile uint32_t* bytes_sent_ptr = const_cast<volatile uint32_t*>(&bytes_sent_buffer_->at(0));
+    volatile uint32_t* bytes_sent_ptr =
+        using_hugepage_ ? hugepage_bytes_sent_host_ptr_ : const_cast<volatile uint32_t*>(&bytes_sent_buffer_->at(0));
     while (bytes_recv < num_bytes) {
         _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(bytes_sent_ptr)));
         _mm_lfence();
@@ -222,9 +278,9 @@ void D2HSocket::notify_sender() {
 }
 
 void D2HSocket::barrier() {
-    volatile uint32_t bytes_sent_value = bytes_sent_buffer_->at(0);
+    volatile uint32_t bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_buffer_->at(0);
     while (bytes_acked_ - bytes_sent_value != 0) {
-        bytes_sent_value = bytes_sent_buffer_->at(0);
+        bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_buffer_->at(0);
     }
 }
 
