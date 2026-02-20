@@ -154,8 +154,8 @@ class TopKRouter(BaseRouter):
 
         Returns:
             Tuple of:
-                - expert_indices: Selected expert indices [batch*seq_len, num_experts_per_tok]
                 - expert_weights: Normalized weights in dense format
+                - expert_indices: Selected expert indices [batch*seq_len, num_experts_per_tok]
         """
         if self.weight is None or self.bias is None:
             raise ValueError("Router weights not loaded. Call load_weights() first.")
@@ -198,7 +198,8 @@ class TopKRouter(BaseRouter):
         # Clean up
         ttnn.deallocate(router_logits)
 
-        return expert_indices, expert_weights
+        # Return weights first to match MoeGateRouter's return order
+        return expert_weights, expert_indices
 
     def _topk_selection(self, logits: ttnn.Tensor, k: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """

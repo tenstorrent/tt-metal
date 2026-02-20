@@ -9,7 +9,6 @@ different MoE architectures including DeepSeek-V3 and GPT-OSS through simplified
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -461,18 +460,8 @@ class MoEBlock:
             x_was_gathered = True
 
         # Router forward
-        # Note: TopKRouter returns (indices, weights), MoeGateRouter returns (weights, indices)
-        if isinstance(self.router, TopKRouter):
-            indices, weights = self.router.forward(x, mode)
-        else:
-            weights, indices = self.router.forward(x, mode)
-
-        # Debug capture for router outputs
-        if os.environ.get("GPT_OSS_DEBUG", "") == "1":
-            logger.info(f"[DEBUG] Router outputs - weights shape: {weights.shape}, indices shape: {indices.shape}")
-            if hasattr(self, "debug_state"):
-                self.debug_state["router_weights_tt"] = weights
-                self.debug_state["router_indices_tt"] = indices
+        # Both routers now return (weights, indices) consistently
+        weights, indices = self.router.forward(x, mode)
 
         # Prepare weights for experts
         weights_prepared = self._prepare_expert_weights(weights)
