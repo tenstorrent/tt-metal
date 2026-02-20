@@ -85,6 +85,7 @@ def main() -> None:
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
+    cache_gen_error = None
     try:
         logger.info(f"Generating cache in {temp_cache_dir}")
         gen = DeepseekGenerator(
@@ -94,6 +95,9 @@ def main() -> None:
             override_num_layers=args.override_num_layers,
         )
         logger.info(f"Cache was generated in {temp_cache_dir}")
+    except Exception as e:
+        cache_gen_error = e
+        logger.error(f"Cache generation failed on this host: {e}")
     finally:
         ttnn.synchronize_device(mesh_device)
         for submesh in mesh_device.get_submeshes():
@@ -102,8 +106,13 @@ def main() -> None:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
     if ttnn.distributed_context_is_initialized():
-        logger.info("Waiting for all hosts to finish cache generation and validation before moving files")
+        # Always reach the barrier regardless of success/failure so no host hangs
+        # waiting for a peer that already exited with an error.
+        logger.info("Waiting for all hosts to finish cache generation before moving files")
         ttnn.distributed_context_barrier()
+
+    if cache_gen_error is not None:
+        raise cache_gen_error
 
     if (not ttnn.distributed_context_is_initialized()) or (int(ttnn.distributed_context_get_rank()) == 0):
         move_cache(temp_cache_dir, cache_dir, archive_dir)
