@@ -28,7 +28,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
+        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided). Security: Only GitHub gist/raw URLs allowed, validated before download."
 
 jobs:
   load-test-matrix:
@@ -45,6 +45,20 @@ jobs:
       - name: Install dependencies
         run: |
           pip3 install PyYAML
+      - name: Validate tests YAML URL (security check)
+        if: ${{ inputs.tests-yaml-gist-url != '' }}
+        run: |
+          URL="${{ inputs.tests-yaml-gist-url }}"
+
+          # Only allow GitHub gist URLs or raw.githubusercontent.com URLs
+          if [[ ! "$URL" =~ ^https://gist\.githubusercontent\.com/ ]] && \
+             [[ ! "$URL" =~ ^https://raw\.githubusercontent\.com/ ]]; then
+            echo "Error: tests-yaml-gist-url must be from gist.githubusercontent.com or raw.githubusercontent.com"
+            echo "Error: Provided URL: $URL"
+            exit 1
+          fi
+
+          echo "✓ URL validation passed: $URL"
       - name: Download tests YAML from gist (if provided)
         if: ${{ inputs.tests-yaml-gist-url != '' }}
         run: |

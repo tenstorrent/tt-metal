@@ -23,7 +23,7 @@ on:
         default: ""
         type: string
       tests-yaml-gist-url:
-        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
+        description: "URL to GitHub gist/raw containing release_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
         required: false
         default: ""
         type: string
