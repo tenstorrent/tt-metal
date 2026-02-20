@@ -148,6 +148,10 @@ std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuil
     if (params.core_type == HalProgrammableCoreType::TENSIX && params.processor_class == HalProcessorClassType::DM) {
         return "dm0";
     }
+    if (params.core_type == HalProgrammableCoreType::TENSIX &&
+        params.processor_class == HalProcessorClassType::COMPUTE) {
+        return fmt::format("trisc{}", params.processor_id % 4);
+    }
     return target_name(params);
 }
 

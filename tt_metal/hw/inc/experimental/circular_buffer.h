@@ -30,7 +30,11 @@ public:
 
     void reserve_back(int32_t num_pages) {
 #ifdef COMPILE_FOR_TRISC
+#ifndef ARCH_QUASAR
         PACK((llk_wait_for_free_tiles<false, false, false>(cb_id_, num_pages)));
+#else
+        PACK((llk_wait_for_free_tiles(cb_id_, num_pages)));
+#endif
 #else
         cb_reserve_back(cb_id_, num_pages);
 #endif
@@ -38,7 +42,11 @@ public:
 
     void push_back(int32_t num_pages) {
 #ifdef COMPILE_FOR_TRISC
+#ifndef ARCH_QUASAR
         PACK((llk_push_tiles<false, false>(cb_id_, num_pages)));
+#else
+        PACK((llk_push_tiles(cb_id_, num_pages)));
+#endif
 #else
         cb_push_back(cb_id_, num_pages);
 #endif
