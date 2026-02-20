@@ -37,6 +37,7 @@ SK_CHUNK_T = 16
 HEAD_DIM_T = 4
 SUBBLOCK_H = 1
 MM_THROTTLE_LEVEL = 0
+EXP_APPROX_MODE = 0
 TILE = 32
 SEED = 1234
 
@@ -156,6 +157,7 @@ def save_test_inputs(
     head_dim_t,
     subblock_h,
     mm_throttle_level,
+    exp_approx_mode,
 ):
     """Save input files and C++ command to a permanent directory."""
     out_dir = os.path.join(TEST_INPUTS_DIR, test_id)
@@ -189,6 +191,8 @@ def save_test_inputs(
         str(subblock_h),
         "--mm_throttle_level",
         str(mm_throttle_level),
+        "--exp_approx_mode",
+        str(int(exp_approx_mode)),
     ]
 
     import json
@@ -218,6 +222,7 @@ def run_sdpa_single_core_test(
     head_dim_t=HEAD_DIM_T,
     subblock_h=SUBBLOCK_H,
     mm_throttle_level=MM_THROTTLE_LEVEL,
+    exp_approx_mode=EXP_APPROX_MODE,
     pcc_threshold=PCC_THRESHOLD,
 ):
     torch.manual_seed(SEED)
@@ -267,6 +272,7 @@ def run_sdpa_single_core_test(
             head_dim_t,
             subblock_h,
             mm_throttle_level,
+            exp_approx_mode,
         )
         pytest.skip("--save-inputs: files generated, skipping C++ execution")
 
@@ -296,6 +302,8 @@ def run_sdpa_single_core_test(
             str(subblock_h),
             "--mm_throttle_level",
             str(mm_throttle_level),
+            "--exp_approx_mode",
+            str(int(exp_approx_mode)),
         ]
 
         logger.info(f"Running: {' '.join(cmd)}")

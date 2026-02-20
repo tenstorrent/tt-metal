@@ -58,7 +58,8 @@ void sdpa_single_core(
     const uint32_t num_q_chunks,
     const uint32_t num_k_chunks,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const uint32_t mm_throttle_level = 0) {
+    const uint32_t mm_throttle_level = 0,
+    const bool exp_approx_mode = false) {
     TT_FATAL(subblock_h == 1 || subblock_h == 2, "subblock_h must be 1 or 2. Got {}.", subblock_h);
     TT_FATAL(mm_throttle_level <= 5, "mm_throttle_level must be 0-5. Got {}.", mm_throttle_level);
     TT_FATAL(
@@ -221,7 +222,6 @@ void sdpa_single_core(
         sub_exp_granularity);
 
     std::map<std::string, std::string> defines;
-    constexpr bool exp_approx_mode = true;
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (mm_throttle_level > 0) {
         defines["MM_THROTTLE"] = std::to_string(mm_throttle_level);
@@ -335,7 +335,8 @@ void sdpa_single_core_test(
     const uint32_t num_k_chunks,
     const std::string& test_dir,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const uint32_t mm_throttle_level = 0) {
+    const uint32_t mm_throttle_level = 0,
+    const bool exp_approx_mode = false) {
     TT_FATAL(subblock_h == 1 || subblock_h == 2, "subblock_h must be 1 or 2. Got {}.", subblock_h);
     TT_FATAL(mm_throttle_level <= 5, "mm_throttle_level must be 0-5. Got {}.", mm_throttle_level);
     TT_FATAL(
@@ -482,7 +483,6 @@ void sdpa_single_core_test(
         sub_exp_granularity);
 
     std::map<std::string, std::string> defines;
-    constexpr bool exp_approx_mode = true;
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (mm_throttle_level > 0) {
         defines["MM_THROTTLE"] = std::to_string(mm_throttle_level);
@@ -628,11 +628,12 @@ int main(int argc, char* argv[]) {
             uint32_t num_k_chunks = get_arg_uint(argc, argv, "--num_k_chunks", 5);
             uint32_t subblock_h = get_arg_uint(argc, argv, "--subblock_h", 1);
             uint32_t mm_throttle_level = get_arg_uint(argc, argv, "--mm_throttle_level", 0);
+            bool exp_approx_mode = get_arg_uint(argc, argv, "--exp_approx_mode", 0) != 0;
             uint32_t Sv_chunk_t = Sk_chunk_t;  // Always equal
 
             fmt::print(
                 "Test mode: dir={}, Sq_chunk_t={}, Sk_chunk_t={}, head_dim_t={}, "
-                "num_q_chunks={}, num_k_chunks={}, subblock_h={}, mm_throttle={}\n",
+                "num_q_chunks={}, num_k_chunks={}, subblock_h={}, mm_throttle={}, exp_approx_mode={}\n",
                 test_dir,
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -640,7 +641,8 @@ int main(int argc, char* argv[]) {
                 num_q_chunks,
                 num_k_chunks,
                 subblock_h,
-                mm_throttle_level);
+                mm_throttle_level,
+                exp_approx_mode);
 
             sdpa_single_core_test(
                 Sq_chunk_t,
@@ -652,7 +654,8 @@ int main(int argc, char* argv[]) {
                 num_k_chunks,
                 test_dir,
                 mesh_device,
-                mm_throttle_level);
+                mm_throttle_level,
+                exp_approx_mode);
         } else {
             // Existing benchmark path (zero data)
             constexpr uint32_t Sq_chunk_t = 7;
@@ -660,9 +663,10 @@ int main(int argc, char* argv[]) {
             constexpr uint32_t Sv_chunk_t = 16;
             constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
             constexpr uint32_t subblock_h = 1;
-            constexpr uint32_t num_q_chunks = 3;
+            constexpr uint32_t num_q_chunks = 1;
             constexpr uint32_t num_k_chunks = 5;
-            constexpr uint32_t mm_throttle_level = 1;
+            constexpr uint32_t mm_throttle_level = 0;
+            constexpr bool exp_approx_mode = false;
 
             sdpa_single_core(
                 Sq_chunk_t,
@@ -673,7 +677,8 @@ int main(int argc, char* argv[]) {
                 num_q_chunks,
                 num_k_chunks,
                 mesh_device,
-                mm_throttle_level);
+                mm_throttle_level,
+                exp_approx_mode);
         }
 
         pass &= mesh_device->close();
