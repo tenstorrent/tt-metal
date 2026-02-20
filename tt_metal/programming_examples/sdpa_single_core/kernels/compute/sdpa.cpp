@@ -1082,7 +1082,7 @@ void sdpa_inner_loop(
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=0" << ENDL());
                     {
                         SDPA_DeviceZoneScopedN_5("SUB EXP");
-                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                             alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
                     }
 
@@ -1115,7 +1115,7 @@ void sdpa_inner_loop(
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=1" << ENDL());
                     {
                         SDPA_DeviceZoneScopedN_5("SUB EXP");
-                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                             alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
                     }
                     // alias_cur_sum: full-CB push (Sq_chunk_t tiles on Sq_chunk_t-tile CB).
@@ -1154,7 +1154,7 @@ void sdpa_inner_loop(
                     // Non-overlap path: drain + full matmul
                     MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << ENDL());
                     for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                             alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
                     }
                     // alias_cur_sum: full-CB push (Sq_chunk_t tiles on Sq_chunk_t-tile CB).
