@@ -215,15 +215,17 @@ python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init {spec_path} --op-p
 
 ### Step 1: Map Computation to Helpers
 
-1. **Read relevant helper headers** in `ttnn/cpp/ttnn/kernel_lib/`:
+**ALWAYS prefer helpers over raw calls.** Helpers are tested, handle CB sync and DST management internally, and eliminate entire categories of bugs. Only fall back to raw calls when NO suitable helper exists for the computation phase.
+
+1. **Read ALL helper headers** in `ttnn/cpp/ttnn/kernel_lib/`:
    - `reduce_helpers_compute.hpp` - reduce() with policies
    - `binary_op_helpers.hpp` - add/sub/mul/square with broadcast
    - `tilize_helpers.hpp`, `untilize_helpers.hpp` - format conversion
    - `reduce_helpers_dataflow.hpp`, `scalar_helpers.hpp` - scaler generation
 
-2. **For each compute phase**: Does a helper exist?
-   - YES → Note exact helper call with all template parameters
-   - NO → Brief note on raw implementation pattern
+2. **For each compute phase**, search for a matching helper:
+   - **Helper exists** → USE IT. Note exact helper call with all template parameters. This is not optional — if a helper covers the phase, it MUST be used.
+   - **No helper exists** → Brief note on raw implementation pattern. Document WHY no helper applies (e.g., "no helper for element-wise reciprocal").
 
 ---
 
@@ -359,7 +361,7 @@ The orchestrator enforces a minimum of 3 shapes per stage and will reject regist
 
 ## Key Principles
 
-1. **Helpers first**: When a helper exists, use it (tested, handles edge cases)
+1. **Helpers are MANDATORY when available**: If a helper covers the computation, use it — no exceptions. Raw calls are a last resort, not a design choice.
 2. **Concise output**: Focus on what kernel-writer needs, not design exploration
 3. **Validate broadcasts**: Verify dimension matches valid regions (most common error)
 4. **No recomputation**: Multi-read results get dedicated persistent CBs
