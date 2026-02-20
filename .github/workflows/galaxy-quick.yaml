@@ -35,7 +35,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       extra-tag:
-        required: true
+        required: false
         type: string
         default: "in-service"
   schedule:
