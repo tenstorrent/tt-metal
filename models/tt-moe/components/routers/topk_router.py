@@ -5,7 +5,7 @@
 TopK Router implementation for GPT-OSS MoE models.
 
 This router selects the top-k experts for each token using a learned linear
-transformation followed by softmax normalization. Unlike the MoEGateRouter
+transformation followed by softmax normalization. Unlike the GroupedTopKRouter
 used by DeepSeek, this router doesn't apply score correction bias.
 """
 

@@ -4,11 +4,11 @@
 """Router implementations for MoE."""
 
 from .base_router import BaseRouter
-from .moe_gate import MoEGateRouter
+from .grouped_topk_router import GroupedTopKRouter
 from .topk_router import TopKRouter
 
 __all__ = [
     "BaseRouter",
-    "MoEGateRouter",
+    "GroupedTopKRouter",
     "TopKRouter",
 ]

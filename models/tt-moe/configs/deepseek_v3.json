@@ -11,7 +11,7 @@
     "shared_expert_placement": "internal",
 
     "router": {
-      "type": "moe_gate",
+      "type": "grouped_topk",
       "score_correction_bias": true
     },
 

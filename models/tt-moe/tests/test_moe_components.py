@@ -23,7 +23,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 # Add demos directory for reference utilities
 sys.path.append(str(Path(__file__).parent.parent.parent / "demos" / "deepseek_v3"))
 
-from components.routers.moe_gate import MoEGateRouter
+from components.routers.grouped_topk_router import GroupedTopKRouter
 from utils.ccl import CCL
 
 # Test configuration constants
@@ -152,7 +152,7 @@ def test_02_router_forward(mesh_device):
     }
 
     # Create router instance
-    router = MoEGateRouter(router_config, mesh_device)
+    router = GroupedTopKRouter(router_config, mesh_device)
 
     # Load mock weights for the router
     mock_weights = {
@@ -1123,7 +1123,7 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
     [
         {
             "name": "deepseek",
-            "router_type": "moe_gate",
+            "router_type": "grouped_topk",
             "num_experts": 256,
             "experts_per_tok": 8,
             "hidden_size": 7168,
@@ -1167,8 +1167,8 @@ def test_09_routers_comparison(mesh_device, arch_config):
     logger.info(f"Input: batch={batch_size}, seq={seq_len}, hidden={hidden_size}")
 
     # Import the appropriate router
-    if router_type == "moe_gate":
-        from components.routers.moe_gate import MoEGateRouter
+    if router_type == "grouped_topk":
+        from components.routers.grouped_topk_router import GroupedTopKRouter
 
         router_config = {
             "hidden_size": hidden_size,
@@ -1181,7 +1181,7 @@ def test_09_routers_comparison(mesh_device, arch_config):
             "score_correction_bias": score_correction_bias,
             "memory_config": memory_config_str,
         }
-        router = MoEGateRouter(router_config, mesh_device)
+        router = GroupedTopKRouter(router_config, mesh_device)
     elif router_type == "topk":
         # Check if TopKRouter exists
         try:
@@ -1206,7 +1206,7 @@ def test_09_routers_comparison(mesh_device, arch_config):
     if router_type == "topk":
         # TopKRouter needs bias as well
         mock_weights["bias"] = torch.zeros(num_experts, dtype=torch.bfloat16)
-    elif score_correction_bias and router_type == "moe_gate":
+    elif score_correction_bias and router_type == "grouped_topk":
         mock_weights["e_score_correction_bias"] = torch.zeros(num_experts, dtype=torch.bfloat16)
 
     router.load_weights(mock_weights)

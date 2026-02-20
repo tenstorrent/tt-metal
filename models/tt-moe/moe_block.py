@@ -22,14 +22,14 @@ try:
     from .components.collective.all_to_all_ops import AllToAllConfig
     from .components.experts.distributed_expert import DistributedExpert
     from .components.experts.shared_expert import SharedExpert
-    from .components.routers.moe_gate import MoEGateRouter
+    from .components.routers.grouped_topk_router import GroupedTopKRouter
     from .components.routers.topk_router import TopKRouter
     from .utils.lazy_state_dict import LazyStateDict
 except ImportError:
     from components.collective.all_to_all_ops import AllToAllConfig
     from components.experts.distributed_expert import DistributedExpert
     from components.experts.shared_expert import SharedExpert
-    from components.routers.moe_gate import MoEGateRouter
+    from components.routers.grouped_topk_router import GroupedTopKRouter
     from components.routers.topk_router import TopKRouter
     from utils.lazy_state_dict import LazyStateDict
 
@@ -134,7 +134,7 @@ class MoEBlock:
             "n_routed_experts": self.num_experts,  # Always same as num_experts
         }
 
-        if router_type == "moe_gate":
+        if router_type == "grouped_topk":
             # DeepSeek-style router
             router_params.update(
                 {
@@ -146,7 +146,7 @@ class MoEBlock:
                     "compute_kernel_config": "HIFI2",
                 }
             )
-            self.router = MoEGateRouter(router_params, self.mesh_device)
+            self.router = GroupedTopKRouter(router_params, self.mesh_device)
 
         elif router_type == "topk":
             # GPT-OSS style router
@@ -307,7 +307,7 @@ class MoEBlock:
         """Extract router weights from state dict."""
         router_state = {}
 
-        if isinstance(self.router, MoEGateRouter):
+        if isinstance(self.router, GroupedTopKRouter):
             # DeepSeek style
             for key in ["mlp.gate.weight", "mlp.gate.e_score_correction_bias"]:
                 if key in state_dict:

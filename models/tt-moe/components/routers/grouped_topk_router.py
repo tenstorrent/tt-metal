@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MoEGate router implementation for DeepSeek-V3 style routing."""
+"""Grouped TopK router implementation for DeepSeek-V3 style routing."""
 
 import torch
 
@@ -13,9 +13,9 @@ except ImportError:
     from components.routers.base_router import BaseRouter
 
 
-class MoEGateRouter(BaseRouter):
+class GroupedTopKRouter(BaseRouter):
     """
-    MoEGate router with score correction bias and expert scaling.
+    Grouped TopK router with score correction bias and expert scaling.
 
     This router implements the DeepSeek-V3 style routing with:
     - Score correction bias for expert selection
@@ -25,7 +25,7 @@ class MoEGateRouter(BaseRouter):
 
     def __init__(self, config: dict, mesh_device: ttnn.MeshDevice):
         """
-        Initialize MoEGate router.
+        Initialize GroupedTopKRouter.
 
         Args:
             config: Router configuration containing:
@@ -153,9 +153,9 @@ class MoEGateRouter(BaseRouter):
 
     def forward(self, x: ttnn.Tensor, mode: str = "decode"):
         """
-        Forward pass through MoEGate router.
+        Forward pass through GroupedTopKRouter.
 
-        This implements the DeepSeek MoEGate logic:
+        This implements the DeepSeek grouped topk logic:
         1. Linear projection to get expert logits
         2. Sigmoid activation to get scores
         3. Add score correction bias
