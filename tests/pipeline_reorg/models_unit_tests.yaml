@@ -1,0 +1,102 @@
+# This file defines the test matrix for the Models Unit Tests pipelines.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined).
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes.
+#     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: Llama 3.1-8B unit tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest --timeout 600 models/tt_transformers/tests/test_embedding.py
+    pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+  model: llama3.1-8b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 1
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.3-70B unit tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    pytest --timeout 900 models/tt_transformers/tests/test_embedding.py
+    pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 900 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 900 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
+  model: llama3.3-70b
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.2-1B unit tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-1B-Instruct
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+  model: llama3.2-1b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 3
+    wh_n300:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.2-3B unit tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.2-3B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-3B-Instruct
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+  model: llama3.2-3b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 3
+    wh_n300:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.3-70B unit tests (Galaxy)
+  cmd: |
+    export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+  model: llama3.3-70b-galaxy
+  skus:
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
