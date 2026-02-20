@@ -47,6 +47,8 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
     tensor_size_datums = tensor_size_bytes // 4
 
     device_coord = ttnn.MeshCoordinate(0, 0)
@@ -118,6 +120,11 @@ def test_host_io_loopback_with_embedding(
     """Test H2D/D2H loopback with an embedding tensor loaded to DRAM."""
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     embedding_dtype = torch.bfloat16
     token_dtype = torch.uint32
@@ -225,6 +232,11 @@ def test_host_io_loopback_with_embedding(
 def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     tensor_size_datums = tensor_size_bytes // 4
 
@@ -421,6 +433,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     embedding_dtype = torch.bfloat16
     token_dtype = torch.uint32
