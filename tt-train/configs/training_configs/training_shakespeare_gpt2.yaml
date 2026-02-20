@@ -13,7 +13,7 @@ training_config:
   use_kahan_summation: false
   gradient_accumulation_steps: 1
   data_path: "data/tokenized_shakespeare.csv"
-  model_config: "configs/model_configs/gpt2s.yaml"
+  model_config: "tt-train/configs/model_configs/gpt2s.yaml"
   tokenizer_type: "bpe"
 
 device_config:
