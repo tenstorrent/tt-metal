@@ -88,11 +88,11 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
 
 Tensor::Tensor(tt::tt_metal::HostTensor host_tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    backing_tensor(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(host_tensor))) {}
+    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(host_tensor))) {}
 
 Tensor::Tensor(tt::tt_metal::DeviceTensor device_tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    backing_tensor(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(device_tensor))) {
+    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(device_tensor))) {
     if (auto mesh_buffer = device_storage().mesh_buffer) {
         mesh_device_ = mesh_buffer->device();
     }
@@ -103,8 +103,8 @@ Tensor& Tensor::operator=(const Tensor& other) {
         return *this;
     }
     this->tensor_id = other.tensor_id;
-    if (this->backing_tensor != other.backing_tensor) {
-        this->backing_tensor = other.backing_tensor;
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->tensor_attributes = other.tensor_attributes;
     }
     this->mesh_device_ = other.mesh_device_;
     return *this;
@@ -113,8 +113,8 @@ Tensor& Tensor::operator=(const Tensor& other) {
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
     other.tensor_id = INVALID_TENSOR_ID;
-    if (this->backing_tensor != other.backing_tensor) {
-        this->backing_tensor = std::move(other.backing_tensor);
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->tensor_attributes = std::move(other.tensor_attributes);
     }
     this->mesh_device_ = other.mesh_device_;
     return *this;
@@ -125,7 +125,7 @@ Tensor::Tensor(const Tensor& other) = default;
 Tensor::~Tensor() { this->deallocate(/*force=*/false); }
 
 void Tensor::deallocate(bool force) {
-    if (backing_tensor == nullptr) {
+    if (tensor_attributes == nullptr) {
         return;
     }
 
@@ -136,8 +136,8 @@ void Tensor::deallocate(bool force) {
     };
 
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    if (storage_type() == StorageType::DEVICE && can_deallocate(backing_tensor, force)) {
-        std::get<DeviceTensor>(*backing_tensor).deallocate();
+    if (storage_type() == StorageType::DEVICE && can_deallocate(tensor_attributes, force)) {
+        std::get<DeviceTensor>(*tensor_attributes).deallocate();
     }
     // GraphTracker::instance().track_function_end();
 }
@@ -432,11 +432,11 @@ Tensor Tensor::reshape(
 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
     Tensor result = *this;
-    result.backing_tensor = std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::visit(
+    result.tensor_attributes = std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::visit(
         [&](auto& tensor) -> std::variant<HostTensor, DeviceTensor> {
             return tensor.with_tensor_topology(std::move(tensor_topology));
         },
-        *backing_tensor));
+        *tensor_attributes));
     return result;
 }
 
@@ -453,7 +453,7 @@ StorageType Tensor::storage_type() const {
             [](const HostTensor&) { return StorageType::HOST; },
             [](const DeviceTensor&) { return StorageType::DEVICE; },
         },
-        *this->backing_tensor);
+        *this->tensor_attributes);
 }
 
 tt::tt_metal::Shape Tensor::strides() const {
@@ -561,7 +561,7 @@ DataType Tensor::dtype() const { return tensor_spec().tensor_layout().get_data_t
 Layout Tensor::layout() const { return tensor_spec().tensor_layout().get_layout(); }
 
 const TensorSpec& Tensor::tensor_spec() const {
-    return std::visit([](const auto& tensor) -> const TensorSpec& { return tensor.tensor_spec(); }, *backing_tensor);
+    return std::visit([](const auto& tensor) -> const TensorSpec& { return tensor.tensor_spec(); }, *tensor_attributes);
 }
 
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
@@ -571,23 +571,23 @@ const DeviceStorage& Tensor::device_storage() const& { return device_tensor().ge
 const HostStorage& Tensor::host_storage() const& { return host_tensor().get_storage(); }
 
 const HostTensor& Tensor::host_tensor() const& {
-    const auto* host_tensor = std::get_if<HostTensor>(backing_tensor.get());
+    const auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());
     TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got DeviceTensor");
     return *host_tensor;
 }
 
 const DeviceTensor& Tensor::device_tensor() const& {
-    const auto* device_tensor = std::get_if<DeviceTensor>(backing_tensor.get());
+    const auto* device_tensor = std::get_if<DeviceTensor>(tensor_attributes.get());
     TT_FATAL(device_tensor != nullptr, "Expected Tensor with DeviceTensor, got HostTensor");
     return *device_tensor;
 }
 
 DeviceTensor Tensor::device_tensor() && {
-    auto* device_tensor = std::get_if<DeviceTensor>(backing_tensor.get());
+    auto* device_tensor = std::get_if<DeviceTensor>(tensor_attributes.get());
     TT_FATAL(device_tensor != nullptr, "Expected Tensor with DeviceTensor, got HostTensor");
     DeviceTensor result = std::move(*device_tensor);
     // Reset current tensor to a default constructed DeviceTensor (move-from state)
-    backing_tensor.reset();
+    tensor_attributes.reset();
     return result;
 }
 
@@ -608,7 +608,7 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 
 const TensorTopology& Tensor::tensor_topology() const {
     return std::visit(
-        [](const auto& tensor) -> const TensorTopology& { return tensor.tensor_topology(); }, *backing_tensor);
+        [](const auto& tensor) -> const TensorTopology& { return tensor.tensor_topology(); }, *tensor_attributes);
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
