@@ -25,10 +25,6 @@ namespace tt::tt_metal {
 class Hal;
 class MetalContext;
 class DeviceManager;
-class dispatch_core_manager;
-class DispatchQueryManager;
-class DispatchMemMap;
-class DPrintServer;
 
 class ContextDescriptor {
 public:
