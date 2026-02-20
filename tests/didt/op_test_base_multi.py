@@ -82,7 +82,7 @@ class OpTestBaseMulti:
             mesh_mapper=self.from_torch_mesh_mapper,
         )
 
-    def generate_tt_input_from_torch(self, torch_tensor, dtype, layout, mem_config):
+    def generate_tt_input_from_torch(self, torch_tensor, dtype, layout, mem_config, ind):
         return ttnn.from_torch(
             torch_tensor,
             dtype=dtype,
@@ -136,7 +136,8 @@ class OpTestBaseMulti:
 
         logger.info("Pushing inputs to devices...")
         self.inputs = [
-            self.generate_tt_input_from_torch(b, a.dtype, a.layout, a.mem_config) for b, a in zip(B, self.arguments)
+            self.generate_tt_input_from_torch(b, a.dtype, a.layout, a.mem_config, i)
+            for i, (b, a) in enumerate(zip(B, self.arguments))
         ]
 
         logger.info("Activations and inputs pushed to devices!")
