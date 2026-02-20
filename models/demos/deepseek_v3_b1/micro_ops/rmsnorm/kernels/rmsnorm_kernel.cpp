@@ -47,22 +47,22 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
-    // CTArgs type alias (required for Op template)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
-        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
-        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
-
     // Named compile-time args
     constexpr uint32_t input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
     constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
     constexpr uint32_t output_cb = get_named_compile_time_arg_val("rmsnorm_output_cb");
 
+    // CTArgs type alias (required for Op template)
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        input_cb,
+        gamma_cb,
+        output_cb>;
+
     // Compute args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-        .input_cb = input_cb,
-        .gamma_cb = gamma_cb,
-        .output_cb = output_cb,
         .epsilon = get_common_arg_val<uint32_t>(0),  // epsilon
         .scalar = get_common_arg_val<float>(1),      // scalar (1/sqrt(num_elements))
     };
