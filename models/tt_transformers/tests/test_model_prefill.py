@@ -170,16 +170,16 @@ def test_model_inference(
     generator = Generator([tt_model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
 
     generator.warmup_model_prefill(
-        kv_cache=tt_kv_cache,
-        enable_trace=True if paged_attention_config else False,
+        kv_cache=[tt_kv_cache],
+        enable_trace=True if paged_attention else False,
         can_sample_on_device=generator.metal_supports_on_device_sampling(),
         non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
     )
     generator.warmup_model_decode(
-        kv_cache=tt_kv_cache,
-        enable_trace=True if paged_attention_config else False,
+        kv_cache=[tt_kv_cache],
+        enable_trace=True if paged_attention else False,
         max_batch_size=batch_size,
-        num_blocks=paged_attention_config.max_num_blocks,
+        num_blocks=paged_attention_config.max_num_blocks if paged_attention else None,
         can_sample_on_device=generator.metal_supports_on_device_sampling(),
         non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
     )

@@ -154,14 +154,6 @@ def test_model_inference(
         can_sample_on_device=generator.metal_supports_on_device_sampling(),
         non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
     )
-    generator.warmup_model_decode(
-        kv_cache=[tt_kv_cache],
-        enable_trace=True if paged_attention else False,
-        max_batch_size=batch_size,
-        num_blocks=page_params["page_max_num_blocks"],
-        can_sample_on_device=generator.metal_supports_on_device_sampling(),
-        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
-    )
 
     logger.info("Finished loading TT model.")
 
