@@ -1074,7 +1074,7 @@ void run_single_galaxy_rate_pipeline(
 
     if (is_pipeline_start) {
         // Sender: start_coord -> my_exit (local), then my_exit -> downstream_entry (cross-mesh)
-        auto start_coord = my_entry;
+        const auto& start_coord = my_entry;
         auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_rank, downstream_rank);
 
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
@@ -1144,7 +1144,7 @@ void run_single_galaxy_rate_pipeline(
     } else if (is_pipeline_end) {
         // Receiver: upstream_exit -> my_entry (cross-mesh), then my_entry -> end_coord (local)
         auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
-        auto end_coord = my_exit;
+        const auto& end_coord = my_exit;
 
         const tt::tt_fabric::MeshId upstream_mesh_id =
             std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
