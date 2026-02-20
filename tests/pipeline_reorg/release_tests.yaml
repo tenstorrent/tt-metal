@@ -902,6 +902,16 @@
   team: models
   model-name: whisper
 
+- name: whisper P150 nightly
+  cmd: |
+    pytest models/demos/audio/whisper/demo/demo.py -k "nightly"
+  skus:
+    bh_p150_perf:
+      timeout: 70
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: whisper
+
 - name: llama3.1-8b P150 performance
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
@@ -911,6 +921,26 @@
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: llama3.1-8b
+
+- name: llama3.1-8b P150 stress
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
+  skus:
+    bh_p150_perf:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b
+
+- name: unet-shallow P150 performance
+  cmd: |
+    pytest models/demos/cv/unet/demo/demo.py
+  skus:
+    bh_p150_perf:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: unet-shallow
 
 # LLMBox Multi-card tests
 - name: llama3.1-8b LLMBox performance batch-32
@@ -954,7 +984,37 @@
   team: models
   model-name: llama3.1-8b
 
+- name: Flux.1-dev LoudBox performance (bh_2x4sp0tp1)
+  cmd: |
+    HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "bh_2x4sp0tp1" --timeout=600
+  skus:
+    bh_loudbox:
+      timeout: 70
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+  model-name: flux.1-dev
+
+- name: Wan2.2-T2V-A14B LoudBox performance
+  cmd: |
+    HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x8sp0tp1 and resolution_480p and t2v" --timeout=1200
+  skus:
+    bh_loudbox:
+      timeout: 70
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+  model-name: wan2.2-t2v-a14b
+
 # P300 Multi-card tests
+- name: Flux.1-dev P300 performance (1x2sp0tp1)
+  cmd: |
+    HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1" --timeout=600
+  skus:
+    bh_p300:
+      timeout: 70
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  model-name: flux.1-dev
+
 - name: llama3.1-8b P300 data-parallel performance
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 --timeout=600
