@@ -99,6 +99,7 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().compile(mesh_device);
     program.impl().allocate_circular_buffers(mesh_device);
     program.impl().validate_circular_buffer_region(mesh_device);
+    program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(mesh_device);
     program.impl().validate_dataflow_buffer_region(mesh_device);
 }
