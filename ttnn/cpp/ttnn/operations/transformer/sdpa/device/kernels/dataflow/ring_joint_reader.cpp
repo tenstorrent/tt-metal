@@ -163,6 +163,8 @@ void kernel_main() {
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+            const uint32_t q_low_idx = q_chunk * Sq_chunk_t;
+            const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
             // DPRINT << "Q CHUNK " << q_chunk << ENDL();
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
@@ -189,7 +191,8 @@ void kernel_main() {
                 false /*transpose*/
             );
 
-            uint32_t k_high = (is_causal && ring_iter == 0 ? q_chunk + 1 : num_kv_chunks);
+            uint32_t k_high =
+                (is_causal && ring_iter == 0 ? (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t : num_kv_chunks);
 
             for (uint32_t k_chunk = 0; k_chunk < k_high; ++k_chunk) {
                 /**
