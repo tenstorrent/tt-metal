@@ -460,6 +460,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             b_dram_addr};
         if (!(use_welford && large_tensor_needed)) {
             reader_args.push_back(W);
+            reader_args.push_back(packed_one_value);
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
