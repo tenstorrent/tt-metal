@@ -16,8 +16,6 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-
 // TODO: Candidate for moving to details folder after refactoring.
 #include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
 
