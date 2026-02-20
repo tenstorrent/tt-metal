@@ -118,9 +118,9 @@ bool fits_in_l1_check(
 namespace ttml::metal::ops::layernorm_fw::device {
 
 struct LayerNormForwardKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
+    tt::tt_metal::KernelHandle reader{};
+    tt::tt_metal::KernelHandle writer{};
+    tt::tt_metal::KernelHandle compute_group_1{};
     tt::tt_metal::KernelHandle compute_group_2{};
 };
 
