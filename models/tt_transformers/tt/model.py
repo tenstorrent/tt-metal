@@ -461,7 +461,10 @@ class Transformer(LightweightModule):
                 tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+            if getattr(self.args, "skip_lm_head_all_gather", False):
+                tt_out = self.concat_host_output(tt_out).float()
+            else:
+                tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
         tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
@@ -543,7 +546,7 @@ class Transformer(LightweightModule):
             return tt_toks, tt_log_probs
 
         # Gather the output across all devices and untilize the tensor (for argmax)
-        if self.args.num_devices > 1:
+        if self.args.num_devices > 1 and not getattr(self.args, "skip_lm_head_all_gather", False):
             cluster_axis = 0 if self.args.is_galaxy else None
             num_links = 2 if self.args.is_galaxy else 1
             tt_logits = ttnn.experimental.all_gather_async(

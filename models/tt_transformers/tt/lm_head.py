@@ -138,7 +138,7 @@ class LMHead(LightweightModule):
                     )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=getattr(self.args, "lm_head_math_fidelity", ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -182,7 +182,7 @@ class LMHead(LightweightModule):
 
         # Concatenate the outputs
         # outputs shape: a list of tensors, each tensor is 1,1,32,size_per_device per device
-        # For large vocabs (e.g. 193k in Llasa-3B), the concat output exceeds L1 capacity.
+        # For large vocabs, the concat output exceeds L1 capacity.
         # Use DRAM in that case. The result goes directly to all_reduce, so impact is minimal.
         LLAMA_VOCAB_SIZE = 128256  # Standard LLaMA vocab that fits in L1
         use_dram_concat = use_prefetcher or self.padded_vocab_size > LLAMA_VOCAB_SIZE
@@ -200,17 +200,19 @@ class LMHead(LightweightModule):
                 memory_config=self.args.get_lm_head_reshard_mem_config(self.prefetcher),
             )
 
-        output = tt_all_reduce(
-            output,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=1,
-            dim=3 if self.args.is_galaxy else 0,
-            memory_config=output.memory_config(),
-            dtype=self.args.ccl_dtype,
-            sharded=False,
-            use_composite=True,
-            subdevice_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
-        )
+        # Skip all_reduce if the model is column-sharded and x is replicated
+        if not getattr(self.args, "skip_lm_head_all_reduce", False):
+            output = tt_all_reduce(
+                output,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                dim=3 if self.args.is_galaxy else 0,
+                memory_config=output.memory_config(),
+                dtype=self.args.ccl_dtype,
+                sharded=False,
+                use_composite=True,
+                subdevice_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
+            )
 
         return output
