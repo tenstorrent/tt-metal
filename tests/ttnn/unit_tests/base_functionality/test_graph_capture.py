@@ -358,7 +358,7 @@ def test_graph_capture_without_dtype_json_output(device):
     assert item0["operation"] == "FullDeviceOperation"
     assert len(item0["arguments"]) == 2
     assert item0["arguments"][0]["arg0"] == {
-        "unsupported type": "std::reference_wrapper<ttnn::prim::operation_attributes_t const>"
+        "unsupported type": "std::reference_wrapper<ttnn::operations::full::operation_attributes_t const>"
     }
     assert item0["arguments"][1]["arg1"] == {
         "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"
