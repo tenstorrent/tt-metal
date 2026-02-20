@@ -13,7 +13,6 @@ from models.experimental.tt_symbiote.core.utils import tree_map
 from tracy import signpost
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
     compare_fn_outputs,
@@ -198,8 +197,6 @@ class DispatchManager:
     def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
         from models.experimental.tt_symbiote.core.dispatcher import dispatch_to_ttnn
 
-        if get_tensor_run_implementation().verbose:
-            print(f"Dispatching {func.name()} to TTNN backend.")
         begin = time.time()
         res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
         end = time.time()
@@ -215,12 +212,10 @@ class DispatchManager:
             {},
             end - begin,
         )
-        if get_tensor_run_implementation().verbose:
-            print(f"Finished {func.name()} on TTNN backend.")
         return res
 
     @staticmethod
-    def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
+    def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs, wrap=True):
         from models.experimental.tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
 
         # no_dispatch is only needed if you use enable_python_mode.
@@ -245,7 +240,7 @@ class DispatchManager:
                 {},
                 end - begin,
             )
-            rs = tree_map(wrap_from_torch, func_res)
+            rs = tree_map(wrap_from_torch, func_res) if wrap else func_res
         return rs
 
     @staticmethod
@@ -552,6 +547,7 @@ class NormalRun:
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
+        begin_full = time.time()
         transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
         # TODO: fix kwds not being passed correctly
@@ -578,68 +574,20 @@ class NormalRun:
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
+        end_full = time.time()
+        DispatchManager.record_timing(
+            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
+        )
         return result
 
 
 class LightweightRun(NormalRun):
     @staticmethod
-    def to_torch(self):
-        """Convert to PyTorch tensor."""
+    def torch_dispatch(cls, func, types, args=(), kwargs=None):
+        """Dispatch torch operations to TTNN when possible."""
 
-        def _to_torch(self):
-            is_mesh_device = self.ttnn_distributed_tensor_config is not None
-            if is_mesh_device:
-                result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
-            else:
-                result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-            return result
-
-        result = self.elem
-        if self.ttnn_tensor is not None and self.elem is None:
-            result = _to_torch(self)
-        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        if result.device.type == "meta" and self.ttnn_tensor is not None:
-            result = _to_torch(self)
-        self.elem = result if self.elem is None else self.elem
-        return self.elem
-
-    @staticmethod
-    def to_ttnn(self):
-        """Convert to TTNN tensor, creating if necessary."""
-        if self.ttnn_tensor is not None:
-            return self.ttnn_tensor
-        assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        # convert elem to ttnn tensor here
-        if self.elem.device.type == "meta":
-            raise RuntimeError(
-                "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
-            )
-        if self.elem.dtype not in TORCH_TO_TTNN:
-            raise RuntimeError(f"Unsupported dtype {self.elem.dtype} for conversion to TTNN tensor.")
-        self.ttnn_tensor = ttnn.from_torch(
-            self.elem.cpu(),
-            dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
-            mesh_mapper=self.ttnn_distributed_tensor_config.mesh_mapper
-            if self.ttnn_distributed_tensor_config
-            else None,
-            layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
-        )
-        return self.ttnn_tensor
-
-    @staticmethod
-    def module_run(self, *args, **kwds):
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-        assert self.device is not None, "Device must be set for TTNN module execution."
-        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args = tree_map(transform, args)
-        # TODO: fix kwds not being passed correctly
-        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
-        func_kwargs = tree_map(transform, other_kwargs)
-        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
-        self.preprocess_weights()
-        self.move_weights_to_device()
-        result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
-        return result
+        rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs, wrap=False)
+        return rs
 
 
 class NormalRunWithFallback(NormalRun):
@@ -922,7 +870,7 @@ def is_trace_enabled(module) -> bool:
     return isinstance(module, tuple(_TRACE_ENABLED_CLASSES)) and not isinstance(module, tuple(_TRACE_DISABLED_CLASSES))
 
 
-class TracedRun(NormalRun):
+class TracedRun(LightweightRun):
     """
     Traced execution mode with automatic caching.
     Only traces modules decorated with @trace_enabled.
@@ -1050,7 +998,7 @@ class TracedRun(NormalRun):
     @staticmethod
     def module_run(self, *args, **kwds):
         assert self.device is not None, "Device must be set for TTNN module execution."
-
+        begin_full = time.time()
         # Transform inputs
         transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
@@ -1122,6 +1070,10 @@ class TracedRun(NormalRun):
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
+        end_full = time.time()
+        DispatchManager.record_timing(
+            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
+        )
         return post_process_ttnn_module_output(self, result)
 
 
@@ -1194,4 +1146,10 @@ def get_tensor_run_implementation():
             )
         result = _RUN_MODE_REGISTRY[env_mode]
     result.signpost_mode = signpost_mode
+    if issubclass(result, LightweightRun):
+        from models.experimental.tt_symbiote.core.dispatchers import get_active_dispatcher, cpu_dispatcher
+
+        assert (
+            get_active_dispatcher() == cpu_dispatcher
+        ), f"CPU dispatcher needs to be active to run {result.__name__} run mode. `export TT_SYMBIOTE_DISPATCHER=CPU`"
     return result
