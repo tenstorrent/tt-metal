@@ -67,8 +67,24 @@ jobs:
         skip-tt-train: false
         enable-lto: false
 
+  determine-test-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled-skus: ${{ steps.select-skus.outputs.enabled-skus }}
+    steps:
+      - name: Select SKUs based on platform
+        id: select-skus
+        run: |
+          if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
+            # Main platform runs all tests including multi-card
+            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf_release,wh_galaxy_release,bh_p150,bh_p150_perf,bh_llmbox,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
+          else
+            # Other platforms run only single-card tests
+            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,bh_p150,bh_p150_perf,bh_p300" >> "$GITHUB_OUTPUT"
+          fi
+
   release-demo-tests:
-    needs: build-artifact
+    needs: [build-artifact, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/release-demo-tests-impl.yaml
@@ -76,7 +92,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: "wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf_release,wh_galaxy_release,bh_p150,bh_p150_perf,bh_llmbox,bh_loudbox,bh_p300"
+      enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
 
   # We need to tag the image used to reproduce the release later
