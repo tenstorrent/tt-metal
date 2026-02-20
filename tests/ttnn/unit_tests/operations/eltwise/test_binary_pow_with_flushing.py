@@ -12,10 +12,10 @@ import matplotlib.pyplot as plt
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 # BF16
-# pytest /home/ubuntu/tt-metal/tests/ttnn/unit_tests/operations/eltwise/test_binary_pow_accuracy.py::test_pow_tt_BF16_exhaustive_test
+# pytest /home/ubuntu/tt-metal/tests/ttnn/unit_tests/operations/eltwise/test_binary_pow_with_flushing.py::test_pow_tt_BF16_exhaustive_test
 
 # FP32
-# pytest /home/ubuntu/tt-metal/tests/ttnn/unit_tests/operations/eltwise/test_binary_pow_accuracy.py::test_pow_tt_FP32_exhaustive_test
+# pytest /home/ubuntu/tt-metal/tests/ttnn/unit_tests/operations/eltwise/test_binary_pow_with_flushing.py::test_pow_tt_FP32_exhaustive_test
 
 
 def flush_subnormal_values(tensor):
