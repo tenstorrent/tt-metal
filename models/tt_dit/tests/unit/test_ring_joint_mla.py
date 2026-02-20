@@ -9,7 +9,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention import fa_rand
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
