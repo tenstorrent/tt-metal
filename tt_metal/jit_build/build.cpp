@@ -77,7 +77,7 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
     if (ec) {
-        std::filesystem::copy_file(target, link);
+        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
     }
 }
 
