@@ -24,6 +24,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_multi_core_kernel.cpp
     test_multi_dm_add_two_ints.cpp
     test_multiple_programs.cpp
+    test_quasar_basic_trisc.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp
     test_stress_noc_mcast.cpp

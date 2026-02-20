@@ -12,7 +12,6 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../../unified_kernels/eltwise_mul.hpp"
-#include "api/debug/dprint.h"
 
 // Compile-time role flag for dead code elimination via if constexpr
 struct Core {
@@ -106,17 +105,47 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_cb_mul_in1"),
         get_named_compile_time_arg_val("dram_mm_cb_mul_out"),
         get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
-        get_named_compile_time_arg_val("dram_mm_cb_out"),
-        get_named_compile_time_arg_val("dram_mm_per_core_n"),
+        get_named_compile_time_arg_val("dram_mm_cb_out"),         // cb_in0_wait
+        get_named_compile_time_arg_val("dram_mm_per_core_n"),     // cb_in0_wait_tiles
+        get_named_compile_time_arg_val("dram_mm_cb_mul_in1"),     // cb_in1_wait (same as cb_in1)
+        get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),  // cb_in1_wait_tiles (same as num_tiles)
         get_named_compile_time_arg_val("dram_mm_cb_scalar"),
         get_named_compile_time_arg_val("dram_mm_mul_fp32_dest_acc_en")>;
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ========================================================================
-    // DRAM Streaming Matmul operation
+    // DRAM Streaming Matmul operation (looped for testing CB-boundary wrapping)
     // ========================================================================
-    deepseek_b1_ops::DRAMStreamingMatmul::Op<DRAMMMCTArgs, Core::is_active_core> dram_mm;
-    dram_mm();
+    constexpr uint32_t num_loop_iters = get_named_compile_time_arg_val("dram_mm_num_loop_iters");
+    constexpr uint32_t cb_in1_buf_addr = get_named_compile_time_arg_val("dram_mm_cb_in1_buf_addr");
+
+    for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<
+            DRAMMMCTArgs,
+            Core::is_active_core,
+            true,                  // PopIn0 = true first, re-setup below
+            (num_loop_iters > 1),  // ResetCBIn1 when looping
+            cb_in1_buf_addr>
+            dram_mm;
+        dram_mm();
+
+#if defined(COMPILE_FOR_NCRISC)
+        // Between iterations: wait for compute to finish output, free cb_out, re-setup cb_in0
+        if constexpr (Core::is_active_core && num_loop_iters > 1) {
+            if (iter < num_loop_iters - 1) {
+                // Wait for TRISC to finish pushing all output tiles, then pop to free space
+                constexpr uint32_t out_num_tiles = get_named_compile_time_arg_val("dram_mm_out_num_tiles");
+                constexpr uint32_t cb_out = get_named_compile_time_arg_val("dram_mm_cb_out");
+                cb_wait_front(cb_out, out_num_tiles);
+                cb_pop_front(cb_out, out_num_tiles);
+                // Re-setup in0 sharded buffer (PopIn0 consumed it)
+                unified_kernels::setup_sharded_buffer(cb_in0, num_tiles_k);
+            }
+        }
+#endif
+    }
 
     // ========================================================================
     // Optional fused element-wise multiply (16x16 tiles)
