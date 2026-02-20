@@ -428,7 +428,11 @@ def _remap_to_ring(all_instances, all_connections, combined_bindings):
         ((desc_a, remap[id_a]), (desc_b, remap[id_b]), ch, extras)
         for (desc_a, id_a), (desc_b, id_b), ch, extras in all_connections
     ]
-    new_bindings = [{**b, "mesh_id": remap[b["mesh_id"]]} for b in combined_bindings]
+    # Update both mesh_id and rank so that MPI rank N occupies ring position N.
+    new_bindings = sorted(
+        [{**b, "rank": remap[b["mesh_id"]], "mesh_id": remap[b["mesh_id"]]} for b in combined_bindings],
+        key=lambda b: b["rank"],
+    )
     return new_instances, new_connections, new_bindings
 
 
