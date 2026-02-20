@@ -1499,6 +1499,12 @@ void sdpa_inner_loop(
             } else {
                 q_high_idx = Skt;
             }
+        } else if (sdpa_type == RING && is_causal) {
+            const uint32_t nb = q_iter / (local_q_start * q_num_chunks);
+            const uint32_t nq = (q_iter % (local_q_start * q_num_chunks)) / q_num_chunks;
+            const uint32_t q_chunk = q_iter % q_num_chunks;
+            q_low_idx = q_chunk * Sq_chunk_t;
+            q_high_idx = q_low_idx + Sq_chunk_t;
         }
 
         // Set up ping pong buffers
@@ -1510,8 +1516,8 @@ void sdpa_inner_loop(
         uint32_t alias_mm2_cur_out = cb_out_im_B;
 
         uint32_t k_chunk_end;
-        if constexpr (sdpa_type == STANDARD) {
-            // if ((sdpa_type == STANDARD) || (sdpa_type == RING && is_causal)) {
+        // if constexpr (sdpa_type == STANDARD) {
+        if ((sdpa_type == STANDARD) || (sdpa_type == RING && is_causal)) {
             // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_idx.
             k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
         } else {  // RING or JOINT.
@@ -1520,6 +1526,7 @@ void sdpa_inner_loop(
 
         uint32_t processed_k_chunks = 0;
 
+        DPRINT << "Q CHUNK: " << q_iter << " K chunks: " << k_chunk_end << ENDL();
         for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
@@ -1562,7 +1569,7 @@ void sdpa_inner_loop(
              */
 
             bool apply_mask = false;
-            if constexpr (sdpa_type == RING) {
+            if (sdpa_type == RING && !is_causal) {
                 apply_mask =
                     (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
                     (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
@@ -1592,9 +1599,9 @@ void sdpa_inner_loop(
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-            } else if (sdpa_type == RING && is_causal) {
-                cb_pop_front(cb_mask_in, qk_chunk_tiles);
-            }
+            }  // else if (sdpa_type == RING && is_causal) {
+            //     cb_pop_front(cb_mask_in, qk_chunk_tiles);
+            // }
 
             /**
              * reduce_c can perform both reduce_max and eltwise max with previous result.
@@ -2095,6 +2102,7 @@ void sdpa_ring(
     const uint32_t out_num_blocks,
     const uint32_t global_q_start,
     const uint32_t global_q_end,
+    const uint32_t q_num_chunks,
     const uint32_t iter_k_chunk_start,
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
@@ -2159,12 +2167,12 @@ void sdpa_ring(
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        global_q_start,  // iter_q_start
-        global_q_end,    // iter_q_end
-        0,               // q_num_chunks (not used)
-        0,               // local_q_start (not used)
-        0,               // chunked_q_chunk_offset (not used)
-        iter_k_chunk_start,
+        global_q_start,      // iter_q_start
+        global_q_end,        // iter_q_end
+        q_num_chunks,        // q_num_chunks (number of local q chunks)
+        iter_k_chunk_start,  // local_q_start (actually NH)
+        0,                   // chunked_q_chunk_offset (not used)
+        0,
         iter_k_chunk_end,
         q_chunk_tiles,
         k_chunk_tiles,
