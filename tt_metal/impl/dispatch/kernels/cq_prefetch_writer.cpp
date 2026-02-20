@@ -15,13 +15,21 @@
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "api/debug/dprint.h"
 
-// Reference all defines to ensure they are valid and the kernel compiles with the
-// same define set as cq_prefetch_reader.cpp.
-[[maybe_unused]] constexpr uint32_t pw_downstream_cb_base = DOWNSTREAM_CB_BASE;
+// Constants used to interact with the downstream dispatchers.
+// fd_core_type is already defined in cq_common.hpp.
+constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
+constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
+constexpr uint32_t dispatch_s_buffer_base = DISPATCH_S_BUFFER_BASE;
+constexpr uint32_t scratch_db_base = SCRATCH_DB_BASE;
+constexpr uint32_t downstream_cb_sem_id = DOWNSTREAM_CB_SEM_ID;
+constexpr uint32_t downstream_dispatch_s_cb_sem_id = DOWNSTREAM_DISPATCH_S_CB_SEM_ID;
+
+// Reference remaining defines to keep the compilation set consistent with cq_prefetch_reader.cpp.
+[[maybe_unused]] constexpr uint32_t pw_my_downstream_cb_sem_id = MY_DOWNSTREAM_CB_SEM_ID;
+[[maybe_unused]] constexpr uint32_t pw_my_dispatch_s_cb_sem_id = MY_DISPATCH_S_CB_SEM_ID;
 [[maybe_unused]] constexpr uint32_t pw_downstream_cb_log_page_size = DOWNSTREAM_CB_LOG_PAGE_SIZE;
 [[maybe_unused]] constexpr uint32_t pw_downstream_cb_pages = DOWNSTREAM_CB_PAGES;
-[[maybe_unused]] constexpr uint32_t pw_my_downstream_cb_sem_id = MY_DOWNSTREAM_CB_SEM_ID;
-[[maybe_unused]] constexpr uint32_t pw_downstream_cb_sem_id = DOWNSTREAM_CB_SEM_ID;
 [[maybe_unused]] constexpr uint32_t pw_pcie_base = PCIE_BASE;
 [[maybe_unused]] constexpr uint32_t pw_pcie_size = PCIE_SIZE;
 [[maybe_unused]] constexpr uint32_t pw_prefetch_q_base = PREFETCH_Q_BASE;
@@ -30,7 +38,6 @@
 [[maybe_unused]] constexpr uint32_t pw_prefetch_q_pcie_rd_ptr_addr = PREFETCH_Q_PCIE_RD_PTR_ADDR;
 [[maybe_unused]] constexpr uint32_t pw_cmddat_q_base = CMDDAT_Q_BASE;
 [[maybe_unused]] constexpr uint32_t pw_cmddat_q_size = CMDDAT_Q_SIZE;
-[[maybe_unused]] constexpr uint32_t pw_scratch_db_base = SCRATCH_DB_BASE;
 [[maybe_unused]] constexpr uint32_t pw_scratch_db_size = SCRATCH_DB_SIZE;
 [[maybe_unused]] constexpr uint32_t pw_downstream_sync_sem_id = DOWNSTREAM_SYNC_SEM_ID;
 [[maybe_unused]] constexpr uint32_t pw_cmddat_q_pages = CMDDAT_Q_PAGES;
@@ -38,9 +45,6 @@
 [[maybe_unused]] constexpr uint32_t pw_upstream_cb_sem_id = UPSTREAM_CB_SEM_ID;
 [[maybe_unused]] constexpr uint32_t pw_cmddat_q_log_page_size = CMDDAT_Q_LOG_PAGE_SIZE;
 [[maybe_unused]] constexpr uint32_t pw_cmddat_q_blocks = CMDDAT_Q_BLOCKS;
-[[maybe_unused]] constexpr uint32_t pw_dispatch_s_buffer_base = DISPATCH_S_BUFFER_BASE;
-[[maybe_unused]] constexpr uint32_t pw_my_dispatch_s_cb_sem_id = MY_DISPATCH_S_CB_SEM_ID;
-[[maybe_unused]] constexpr uint32_t pw_downstream_dispatch_s_cb_sem_id = DOWNSTREAM_DISPATCH_S_CB_SEM_ID;
 [[maybe_unused]] constexpr uint32_t pw_dispatch_s_buffer_size = DISPATCH_S_BUFFER_SIZE;
 [[maybe_unused]] constexpr uint32_t pw_dispatch_s_cb_log_page_size = DISPATCH_S_CB_LOG_PAGE_SIZE;
 [[maybe_unused]] constexpr uint32_t pw_ringbuffer_size = RINGBUFFER_SIZE;
@@ -70,6 +74,29 @@
 [[maybe_unused]] constexpr uint32_t pw_is_h_variant = IS_H_VARIANT;
 
 void kernel_main() {
-    DPRINT << "prefetch_writer: start" << ENDL();
-    DPRINT << "prefetch_writer: out" << ENDL();
+    // Build a TERMINATE command in local L1 (scratch), NOC-write it to each downstream
+    // dispatcher's CB, then signal each dispatcher via its semaphore.
+    // No synchronisation with the reader (BRISC) is needed at this stub stage.
+
+    volatile tt_l1_ptr CQDispatchCmd* local_cmd =
+        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(scratch_db_base);
+    local_cmd->base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
+
+    // --- Regular dispatcher ---
+    noc_async_write(
+        scratch_db_base,
+        get_noc_addr_helper(downstream_noc_xy, downstream_cb_base),
+        sizeof(CQDispatchCmd));
+    noc_async_writes_flushed();
+    noc_semaphore_inc(
+        get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_cb_sem_id)), 1);
+
+    // --- Subordinate dispatcher (dispatch_s) ---
+    noc_async_write(
+        scratch_db_base,
+        get_noc_addr_helper(dispatch_s_noc_xy, dispatch_s_buffer_base),
+        sizeof(CQDispatchCmd));
+    noc_async_writes_flushed();
+    noc_semaphore_inc(
+        get_noc_addr_helper(dispatch_s_noc_xy, get_semaphore<fd_core_type>(downstream_dispatch_s_cb_sem_id)), 1);
 }
