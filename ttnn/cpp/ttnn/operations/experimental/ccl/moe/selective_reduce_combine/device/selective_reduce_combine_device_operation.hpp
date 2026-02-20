@@ -32,14 +32,8 @@ struct SelectiveReduceCombineDeviceOperation {
 
     // Mandatory methods
 
-    // Select the program factory based on the operation attributes and tensor args
-    // static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     // Validate the operation when it creates a program.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-
-    // Empty as there doesn't seem to be any complicated hashing requirement
-    // static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output shapes based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -55,19 +49,19 @@ ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_metadata_tensor,
     const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
-    const uint32_t hidden_size,
-    const uint32_t batch_size,
-    const uint32_t seq_size,
-    const uint32_t select_experts_k,
-    const uint32_t experts,
+    uint32_t hidden_size,
+    uint32_t batch_size,
+    uint32_t seq_size,
+    uint32_t select_experts_k,
+    uint32_t experts,
     const std::optional<uint32_t>& axis,
     tt::tt_fabric::Topology topology,
-    const uint32_t num_links,
-    const uint32_t num_token_parallel_cores,
-    const uint32_t num_data_parallel_cores,
-    const std::vector<ttnn::CoreCoord>& worker_core_range_set,
+    uint32_t num_links,
+    uint32_t num_token_parallel_cores,
+    uint32_t num_data_parallel_cores,
+    const std::vector<ttnn::CoreCoord>& worker_cores,
     const CoreRangeSet& mux_core_range_set,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);
 }  // namespace ttnn::prim
