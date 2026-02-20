@@ -56,33 +56,43 @@ except ImportError:
     # Fallback: define inline if generic_ops_tracer not found
     def get_base_dir():
         """Get the tt-metal base directory from script location, PYTHONPATH, or current working directory"""
+
+        # Helper function to find base with model_tracer
+        def find_base_with_model_tracer(start_dir):
+            """Walk up from start_dir to find a directory containing model_tracer/traced_operations"""
+            current = os.path.abspath(start_dir)
+            while current != "/":
+                traced_ops_dir = os.path.join(current, "model_tracer", "traced_operations")
+                if os.path.exists(traced_ops_dir):
+                    return current
+                parent = os.path.dirname(current)
+                if parent == current:  # Reached root
+                    break
+                current = parent
+            return None
+
         # First try to get base dir from this script's location
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        if "tt-metal" in script_dir:
-            parts = script_dir.split("tt-metal")
-            base = parts[0] + "tt-metal"
-            # Verify model_tracer exists there
-            if os.path.exists(os.path.join(base, "model_tracer")):
-                return base
+        base = find_base_with_model_tracer(script_dir)
+        if base:
+            return base
+
+        # Try current working directory
+        current_dir = os.getcwd()
+        base = find_base_with_model_tracer(current_dir)
+        if base:
+            return base
 
         # Try PYTHONPATH
         pythonpath = os.environ.get("PYTHONPATH", "")
         if pythonpath:
             paths = pythonpath.split(":")
             for path in paths:
-                if "tt-metal" in path:
-                    if path.endswith("tt-metal"):
-                        return path
-                    parts = path.split("tt-metal")
-                    if parts:
-                        return parts[0] + "tt-metal"
+                base = find_base_with_model_tracer(path)
+                if base:
+                    return base
 
-        # Try current working directory
-        current_dir = os.getcwd()
-        if "tt-metal" in current_dir:
-            parts = current_dir.split("tt-metal")
-            return parts[0] + "tt-metal"
-
+        # Fallback to current directory
         return current_dir
 
 
