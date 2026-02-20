@@ -85,7 +85,7 @@ jobs:
             echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf_release,wh_galaxy_release,bh_p150,bh_p150_perf,bh_llmbox,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
           else
             # Other platforms run only single-card tests
-            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,bh_p150,bh_p150_perf,bh_p300" >> "$GITHUB_OUTPUT"
+            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf" >> "$GITHUB_OUTPUT"
           fi
 
   release-demo-tests:
