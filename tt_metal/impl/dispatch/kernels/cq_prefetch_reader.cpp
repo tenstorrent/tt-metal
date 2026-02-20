@@ -1045,6 +1045,7 @@ void kernel_main_hd() {
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
         cmd_ptr += stride;
     }
+
 }
 
 void kernel_main() {
@@ -1070,8 +1071,10 @@ void kernel_main() {
     }
     IDLE_ERISC_RETURN();
 
-    // Confirm expected number of pages, spinning here is a leak
-    DispatchRelayInlineState::cb_writer.wait_all_pages(downstream_cb_pages);
+    // The reader stub never writes pages to the downstream CB (all relay functions are
+    // stubbed), so the CBWriter's page accounting is always at its initial state and
+    // wait_all_pages would hang waiting for credits that never arrive.  Skip it here;
+    // the writer (NCRISC) sends the terminate directly to the dispatcher instead.
 
     noc_async_full_barrier();
 
