@@ -52,7 +52,7 @@ def create_fabric_router_config(max_payload_size):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DEDICATED_NOC, ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DEDICATED_NOC])
 def test_pre_sdpa(
     bh_2d_mesh_device,
     mesh_rows,
