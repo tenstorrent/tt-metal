@@ -13,9 +13,11 @@ Usage:
 """
 
 import sys
+import io
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 # Output directory - local to demo folder
 DEMO_DIR = Path(__file__).parent
@@ -55,9 +57,32 @@ def main():
         if ep_idx not in episode_samples and len(episode_samples) < 5:
             episode_samples[ep_idx] = sample
 
-            # Save images
-            img1 = sample["observation.images.image"]
-            img2 = sample["observation.images.image2"]
+            # Save images - handle dict format from datasets library
+            img1_data = sample["observation.images.image"]
+            img2_data = sample["observation.images.image2"]
+
+            # Convert to PIL Image if needed (datasets returns dict with bytes/path)
+            if isinstance(img1_data, dict):
+                if "bytes" in img1_data and img1_data["bytes"]:
+                    img1 = Image.open(io.BytesIO(img1_data["bytes"]))
+                elif "path" in img1_data and img1_data["path"]:
+                    img1 = Image.open(img1_data["path"])
+                else:
+                    print(f"   ⚠️ Unknown image format: {img1_data.keys()}")
+                    continue
+            else:
+                img1 = img1_data
+
+            if isinstance(img2_data, dict):
+                if "bytes" in img2_data and img2_data["bytes"]:
+                    img2 = Image.open(io.BytesIO(img2_data["bytes"]))
+                elif "path" in img2_data and img2_data["path"]:
+                    img2 = Image.open(img2_data["path"])
+                else:
+                    print(f"   ⚠️ Unknown image format: {img2_data.keys()}")
+                    continue
+            else:
+                img2 = img2_data
 
             # Save main image
             filename1 = f"sample_{sample_count}_main.png"

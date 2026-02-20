@@ -54,6 +54,14 @@ class PrefixEmbeddingTTNN:
         self.embed_image_fn = embed_image_fn
         self.embed_language_fn = embed_language_fn
 
+        self.prefix_att_masks = ttnn.zeros(
+            (1, 544),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
     def embed_images(
         self,
         images: List[torch.Tensor],
@@ -180,13 +188,7 @@ class PrefixEmbeddingTTNN:
         batch_size = prefix_embs.shape[0]
 
         # Create zeros mask directly on device (no host transfer needed)
-        prefix_att_masks = ttnn.zeros(
-            (batch_size, total_tokens),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        prefix_att_masks = self.prefix_att_masks
 
         ttnn.ReadDeviceProfiler(
             self.device

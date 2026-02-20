@@ -73,6 +73,20 @@ class PI0ModelTTNN:
             action_horizon=config.action_horizon,
         )
 
+        pad_steps = ((self.denoise_config.num_steps + 31) // 32) * 32
+
+        # Create timestep indices on device using ttnn.arange
+        self.timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
+
+        x_t_torch = torch.randn(1, self.config.action_horizon, self.config.action_dim)
+        self.x_t_ttnn = ttnn.from_torch(
+            x_t_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
         # Initialize components
         self._init_components()
 
@@ -182,25 +196,9 @@ class PI0ModelTTNN:
         batch_size = lang_tokens.shape[0]
 
         # Convert inputs to TTNN
-        lang_tokens_ttnn = ttnn.from_torch(
-            lang_tokens,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
-        lang_masks_ttnn = ttnn.from_torch(
-            lang_masks.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-
-        state_ttnn = ttnn.from_torch(
-            state,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
+        lang_tokens_ttnn = lang_tokens
+        lang_masks_ttnn = lang_masks
+        state_ttnn = state
 
         # Step 1: Embed prefix (images + language) using TTNN
         prefix_embs, prefix_pad, prefix_att = self.embed_prefix(images, img_masks, lang_tokens_ttnn, lang_masks_ttnn)
@@ -217,7 +215,7 @@ class PI0ModelTTNN:
         pad_steps = ((num_steps + 31) // 32) * 32
 
         # Create timestep indices on device using ttnn.arange
-        timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
+        timestep_indices = self.timestep_indices
         timestep_indices = ttnn.to_layout(timestep_indices, ttnn.TILE_LAYOUT)
 
         # Convert to timestep values: 1.0 - index / num_steps
@@ -232,14 +230,7 @@ class PI0ModelTTNN:
         # Step 3: Sample initial noise (small tensor - host generation is fine)
         # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
         # The tensor is small (batch * 50 * 32 = 1600 floats), so transfer is negligible
-        x_t_torch = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
-        x_t_ttnn = ttnn.from_torch(
-            x_t_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        x_t_ttnn = self.x_t_ttnn
 
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):
@@ -281,7 +272,7 @@ class PI0ModelTTNN:
             )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
-        return ttnn.to_torch(x_t_ttnn)
+        return x_t_ttnn
 
     @classmethod
     def from_pretrained(

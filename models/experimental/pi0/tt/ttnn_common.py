@@ -42,6 +42,7 @@ def create_sinusoidal_pos_embedding_ttnn(
     min_period: float = 4e-3,
     max_period: float = 4.0,
     device: Optional[ttnn.Device] = None,
+    indices: Optional[ttnn.Tensor] = None,
 ) -> ttnn.Tensor:
     """
     Create sinusoidal positional embeddings for timesteps (pure TTNN version).
@@ -68,7 +69,6 @@ def create_sinusoidal_pos_embedding_ttnn(
 
     # Create fraction [0, 1/(n-1), 2/(n-1), ..., 1] using TTNN
     # ttnn.arange creates [0, 1, 2, ..., n-1], divide by (n-1) to get [0, 1]
-    indices = ttnn.arange(0, half_dim, 1, device=device, dtype=ttnn.float32)
     indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
     if half_dim > 1:
         fraction = ttnn.multiply(indices, 1.0 / (half_dim - 1))

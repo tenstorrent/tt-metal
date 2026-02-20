@@ -138,6 +138,8 @@ def test_pcc_pi0_ttnn(device):
 
     # Initialize models
     model_torch = PI0ModelTorch(config, weight_loader)
+
+    torch.manual_seed(SEED)
     model_ttnn = PI0ModelTTNN(config, weight_loader, device)
 
     # Run PyTorch
@@ -152,15 +154,54 @@ def test_pcc_pi0_ttnn(device):
         )
 
     # Run TTNN
-    torch.manual_seed(SEED)
     with torch.no_grad():
-        ttnn_actions = model_ttnn.sample_actions(
-            images=inputs["images"],
-            img_masks=inputs["img_masks"],
-            lang_tokens=inputs["lang_tokens"],
-            lang_masks=inputs["lang_masks"],
-            state=inputs["state"],
+        # Convert images to TTNN tensors
+        images_ttnn = [
+            ttnn.from_torch(
+                img,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for img in inputs["images"]
+        ]
+
+        # Convert lang_tokens to TTNN tensor (uint32 for embedding lookup)
+        lang_tokens_ttnn = ttnn.from_torch(
+            inputs["lang_tokens"],
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
         )
+
+        # Convert lang_masks to TTNN tensor
+        lang_masks_ttnn = ttnn.from_torch(
+            inputs["lang_masks"].float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        # Convert state to TTNN tensor
+        state_ttnn = ttnn.from_torch(
+            inputs["state"],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        ttnn_actions = model_ttnn.sample_actions(
+            images=images_ttnn,
+            img_masks=inputs["img_masks"],
+            lang_tokens=lang_tokens_ttnn,
+            lang_masks=lang_masks_ttnn,
+            state=state_ttnn,
+        )
+
+    # Convert TTNN output to torch for comparison
+    if isinstance(ttnn_actions, ttnn.Tensor):
+        ttnn_actions = ttnn.to_torch(ttnn_actions)
 
     # Compute PCC
     pcc = compute_pcc(torch_actions, ttnn_actions)
@@ -214,6 +255,7 @@ def main():
         model_torch = PI0ModelTorch(config, weight_loader)
         print("   ✅ PyTorch model initialized (reference/)")
 
+        torch.manual_seed(SEED)
         model_ttnn = PI0ModelTTNN(config, weight_loader, device)
         print("   ✅ TTNN model initialized (tt/)")
 
@@ -240,7 +282,6 @@ def main():
         print(f"   PyTorch: {torch_actions.shape}, {torch_time:.2f}ms")
 
         # TTNN
-        torch.manual_seed(SEED)
         start = time.time()
         with torch.no_grad():
             ttnn_actions = model_ttnn.sample_actions(
