@@ -1526,61 +1526,59 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
     uint64_t current_addr = sub_cmd->addr;
     uint32_t current_length = sub_cmd->length;
-    uint32_t amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
-    uint32_t amt_read = 0;
     uint32_t scratch_read_addr = scratch_db_top[0];
 
-    while (amt_read < amt_to_read) {
-        uint32_t amt_to_read2 =
-            (scratch_db_half_size - amt_read > current_length) ? current_length : scratch_db_half_size - amt_read;
-        noc_read_64bit_any_len<true>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read2);
-        scratch_read_addr += amt_to_read2;
-        amt_read += amt_to_read2;
-        current_addr += amt_to_read2;
-        current_length -= amt_to_read2;
+    // Initialize the src NoC address once, since all sub-commands will use the same address.
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdl, CQ_NOC_send, CQ_NOC_WAIT>(
+        noc_index, noc_xy_addr, 0, 0, 0);
 
-        // If we've consumed the current sub-command, move to the next one
-        if (current_length == 0) {
-            sub_cmd++;
-            current_addr = sub_cmd->addr;
-            current_length = sub_cmd->length;
-        }
-    }
-    noc_async_read_barrier();
+    // Total amount to read into the scratch db half from all sub-commands (that fit)
+    uint32_t amt_to_read_to_scratch_db = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
 
-    // Second step - read into DB[x], write from DB[x], toggle x, iterate
-    // Writes are fast, reads are slow
-    uint32_t db_toggle = 0;
-    uint32_t scratch_write_addr;
-    total_length -= amt_read;
-    while (total_length != 0) {
-        // This ensures that writes from prior iteration are done
-        // TODO(pgk); we can do better on WH w/ tagging
-        noc_async_writes_flushed();
+    uint32_t amt_read = amt_to_read_to_scratch_db;
 
-        db_toggle ^= 1;
-        scratch_read_addr = scratch_db_top[db_toggle];
-        scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+    auto fill_scratch_db = [&]() {
+        while (amt_to_read_to_scratch_db > 0) {
+            uint32_t amt_to_read_sub_cmd =
+                amt_to_read_to_scratch_db > current_length ? current_length : amt_to_read_to_scratch_db;
+            noc_read_64bit_any_len<false>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read_sub_cmd);
+            scratch_read_addr += amt_to_read_sub_cmd;
 
-        uint32_t amt_to_write = amt_read;
-        amt_read = 0;
-        amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
-        while (amt_read < amt_to_read) {
-            uint32_t amt_to_read2 =
-                (scratch_db_half_size - amt_read > current_length) ? current_length : scratch_db_half_size - amt_read;
-            noc_read_64bit_any_len<false>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read2);
-            scratch_read_addr += amt_to_read2;
-            amt_read += amt_to_read2;
-            current_addr += amt_to_read2;
-            current_length -= amt_to_read2;
+            amt_to_read_to_scratch_db -= amt_to_read_sub_cmd;
+            current_addr += amt_to_read_sub_cmd;
+            current_length -= amt_to_read_sub_cmd;
 
-            // If we've consumed the current sub-command, move to the next one
+            // If we've consumed the current sub-command, move to the next one. This will read off the end of the
+            // commands, but that's ok as we don't use that data and the next address is valid.
             if (current_length == 0) {
                 sub_cmd++;
                 current_addr = sub_cmd->addr;
                 current_length = sub_cmd->length;
             }
         }
+    };
+
+    fill_scratch_db();
+    noc_async_read_barrier();
+
+    // Second step - read into DB[x], write from DB[x], toggle x, iterate
+    // Writes are fast, reads are slow
+    uint32_t scratch_write_start_addr = scratch_db_top[0];
+    uint32_t scratch_read_start_addr = scratch_db_top[1];
+    total_length -= amt_read;
+    while (total_length != 0) {
+        // This ensures that writes from prior iteration are done
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_writes_flushed();
+
+        scratch_read_addr = scratch_read_start_addr;
+        uint32_t scratch_write_addr = scratch_write_start_addr;
+        std::swap(scratch_read_start_addr, scratch_write_start_addr);
+
+        uint32_t amt_to_write = amt_read;
+        amt_to_read_to_scratch_db = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
+        amt_read = amt_to_read_to_scratch_db;
+        fill_scratch_db();
 
         // Third step - write from DB
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
@@ -1593,9 +1591,8 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
     }
 
     // Third step - write from DB
-    scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read;
-    uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+    uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
@@ -1636,8 +1633,6 @@ uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_
                    l1_cache) < l1_cache_elements_rounded);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
         (volatile uint32_t tt_l1_ptr*)(data_ptr), amt, l1_cache_pos);
-    // Store a sentinal non 0 value at the end to save a test/branch in read path
-    ((CQPrefetchRelayLinearPackedSubCmd*)&l1_cache_pos[amt])->length = 1;
 
     process_relay_linear_packed_sub_cmds(noc_xy_addr, total_length, l1_cache);
     return stride;
@@ -1653,10 +1648,6 @@ static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uint32_t stride = cmd->relay_linear_packed.stride;
 
     void* end = copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
-
-    // Store a sentinal non 0 value at the end to save a test/branch in read path
-    ((CQPrefetchRelayLinearPackedSubCmd*)end)->length = 1;
-
     process_relay_linear_packed_sub_cmds(noc_xy_addr, total_length, l1_cache);
     return stride;
 }

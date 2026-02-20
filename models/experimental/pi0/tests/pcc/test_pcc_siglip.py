@@ -104,9 +104,18 @@ def test_pcc_siglip_vision_tower(device, use_pretrained):
     model_torch = SigLIPVisionTowerTorch(config, vision_weights)
     out_torch = model_torch.forward(pixel_values)
 
+    # Convert to TTNN tensor for TTNN model
+    pixel_values_ttnn = ttnn.from_torch(
+        pixel_values,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     # TTNN forward
     model_ttnn = SigLIPVisionTowerTTNN(config, vision_weights, device)
-    out_ttnn = model_ttnn.forward(pixel_values)
+    out_ttnn = model_ttnn.forward(pixel_values_ttnn)
 
     # Convert to torch
     if isinstance(out_ttnn, ttnn.Tensor):

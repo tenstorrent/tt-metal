@@ -188,6 +188,10 @@ public:
 
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
+    // Check if the graph topology policy (for inter-mesh connections) is relaxed
+    // Returns false (STRICT) if MeshGraphDescriptor is not available or if graph topology policy is STRICT
+    bool is_inter_mesh_policy_relaxed() const;
+
     // Get the MeshGraphDescriptor instance (if available)
     // Returns nullptr if MeshGraph was created via generate_mesh_graph_of_shape()
     const MeshGraphDescriptor& get_mesh_graph_descriptor() const {
@@ -238,6 +242,7 @@ private:
     std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
     std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+    bool inter_mesh_relaxed_policy_ = false;  // Default to STRICT (false = not relaxed)
 
     // Store the MeshGraphDescriptor instance if created from a descriptor file
     std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;

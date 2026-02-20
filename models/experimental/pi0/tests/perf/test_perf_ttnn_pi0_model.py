@@ -74,7 +74,7 @@ def create_config() -> PI0ModelConfig:
     return config
 
 
-def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
+def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
     """Create test inputs."""
     image_size = config.siglip_config.image_size
 
@@ -85,6 +85,57 @@ def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
     lang_masks = torch.ones(batch_size, 32, dtype=torch.bool)
 
     state = torch.randn(batch_size, config.state_dim, dtype=torch.float32)
+
+    images[0] = ttnn.from_torch(
+        images[0],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    images[1] = ttnn.from_torch(
+        images[1],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    img_masks[0] = ttnn.from_torch(
+        img_masks[0].float(),  # (batch_size,)
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    img_masks[1] = ttnn.from_torch(
+        img_masks[1].float(),  # (batch_size,)
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    lang_tokens = ttnn.from_torch(
+        lang_tokens,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    lang_masks = ttnn.from_torch(
+        lang_masks,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    state = ttnn.from_torch(
+        state,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
 
     return {
         "images": images,
@@ -108,7 +159,7 @@ def run_pi0_inference(
 
     # Create config and inputs
     config = create_config()
-    inputs = create_test_inputs(config, batch_size)
+    inputs = create_test_inputs(config, device, batch_size)
 
     # Load model
     print(f"\n📋 Loading PI0 TTNN model (tt/)...")

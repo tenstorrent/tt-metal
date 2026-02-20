@@ -407,6 +407,48 @@ def test_post_sdpa(
         logger.info("Created global semaphores for CCL synchronization")
 
     # ========================================================================
+    # SDPA KV Cache tensor for CB overlap
+    # Matches flash_mla's double-buffered KV CB sizing: shard = (256, 576) per core,
+    # giving 156672 bytes/core in bfloat8_b — same as flash_mla's cb_k_in.
+    # ========================================================================
+    KNOPE_DIM = 512
+    KROPE_DIM = 64
+    kvpe_dim = KNOPE_DIM + KROPE_DIM  # 576
+    sdpa_kv_cache_num_cores_x = compute_grid_size.x
+    sdpa_kv_cache_num_cores_y = compute_grid_size.y
+    sdpa_kv_cache_num_cores = sdpa_kv_cache_num_cores_x * sdpa_kv_cache_num_cores_y
+    sdpa_kv_cache_shard_height = 256  # 2 * k_chunk_size (128), matching flash_mla double-buffer
+    sdpa_kv_cache_total_height = sdpa_kv_cache_shard_height * sdpa_kv_cache_num_cores
+
+    sdpa_kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(sdpa_kv_cache_num_cores_x - 1, sdpa_kv_cache_num_cores_y - 1),
+                )
+            }
+        ),
+        (sdpa_kv_cache_shard_height, kvpe_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.randn((1, 1, sdpa_kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_kv_cache_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    logger.info(
+        f"Created sdpa_kv_cache buffer for CB overlap: shard ({sdpa_kv_cache_shard_height}, {kvpe_dim}) on {sdpa_kv_cache_num_cores} cores"
+    )
+
+    # ========================================================================
     # Run fused operation
     # ========================================================================
     logger.info(f"Running post_sdpa fused operation (ccl_enabled={ccl_enabled})...")
@@ -423,6 +465,7 @@ def test_post_sdpa(
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
         ccl_enabled=ccl_enabled,
+        sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
     )
     ttnn.synchronize_device(submesh)
 

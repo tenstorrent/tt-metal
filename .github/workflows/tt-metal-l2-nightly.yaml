@@ -61,7 +61,7 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,data_movement,transformers)'
+        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers)'
         required: false
         type: string
         default: ''
@@ -265,6 +265,7 @@ jobs:
       run_moreh_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',moreh,') }}
       run_data_movement_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',data_movement,') }}
       run_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',fused,') }}
+      run_reduction_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',reduction,') }}
       run_misc_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',misc,') }}
   ttnn-ops-docs-check:
     needs: [build-artifact, generate-arch-matrix]

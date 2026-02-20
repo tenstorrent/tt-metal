@@ -275,6 +275,10 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
+    // core require remapper being enabled
+    void finalize_dataflow_buffer_configs();
+
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
@@ -389,6 +393,11 @@ private:
     // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
+
+    void finalize_single_dfb_config(
+        std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
+        const CoreCoord& core,
+        bool use_remapper);
 
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 

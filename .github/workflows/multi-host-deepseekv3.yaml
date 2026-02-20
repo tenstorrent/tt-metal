@@ -126,7 +126,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_unit_tests
 
       - name: Run quad DeepSeek V3 unit tests
@@ -150,7 +150,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_unit_tests
 
       # ── DeepSeek V3 module tests ────────────────────────────────────────
@@ -175,7 +175,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
 
       - name: Run quad DeepSeek V3 module tests
@@ -199,7 +199,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_module_tests
 
       # ── Teacher forced accuracy tests ───────────────────────────────────
@@ -224,7 +224,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_teacher_forced
 
       - name: Upload dual teacher forced accuracy artifacts
@@ -258,7 +258,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
@@ -293,7 +293,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
 
       - name: Upload dual demo output artifacts
@@ -327,7 +327,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
 
       - name: Upload quad demo output artifacts
@@ -362,7 +362,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
 
       - name: Upload dual demo stress output artifacts
@@ -396,7 +396,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress
 
       - name: Upload quad demo stress output artifacts

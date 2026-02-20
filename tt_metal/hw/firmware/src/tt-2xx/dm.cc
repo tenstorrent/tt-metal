@@ -96,7 +96,7 @@ void deassert_trisc() {
     deassert_trisc_reset();
 }
 // Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
-thread_local ::experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
 
 void device_setup() {
@@ -133,7 +133,7 @@ inline void run_triscs(uint32_t enables) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc1 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc2 = RUN_SYNC_MSG_GO;
-        subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+        // subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -279,7 +279,8 @@ extern "C" uint32_t _start1() {
                 // prev_noc_mode = noc_mode;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                    (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                          launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -389,8 +390,8 @@ extern "C" uint32_t _start1() {
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);

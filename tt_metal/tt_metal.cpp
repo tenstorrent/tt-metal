@@ -412,6 +412,8 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
+void ReleaseOwnership() { MetalContext::destroy_instance(); }
+
 void print_page(
     uint32_t dev_page_id,
     CoreCoord core,
@@ -743,6 +745,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
 
         detail::CompileProgram(device, program);
+        program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
             program.impl().finalize_offsets(device);
         }

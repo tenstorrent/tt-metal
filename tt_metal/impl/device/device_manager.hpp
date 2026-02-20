@@ -24,6 +24,7 @@ class IDevice;
 class FirmwareInitializer;
 enum class InitializerKey;
 
+// Initializes and Teardowns device firmware
 class DeviceManager {
 public:
     ~DeviceManager();
@@ -49,8 +50,14 @@ public:
     // Called by the mesh device
     void initialize_profiler();
     void initialize_fabric_and_dispatch_fw();
+    // Initialize dispatch firmware (compile + configure device CQs). This may be used by dispatchcontext to
+    // re-enable fast dispatch after it was disabled at runtime.
+    void initialize_dispatch_firmware(bool force_recreate_topology);
+    void reset_dispatch_topology();
     // API needed due to Issue #19729
     std::size_t get_max_num_eth_cores_across_all_devices() const;
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
 
 private:
     uint8_t num_hw_cqs_{};
@@ -67,6 +74,7 @@ private:
     std::vector<std::unique_ptr<Device>> devices_;
 
     bool skip_remote_devices_{};
+    const std::unordered_set<CoreCoord> empty_container_;
 
     std::shared_ptr<ContextDescriptor> descriptor_;
     std::map<InitializerKey, std::unique_ptr<FirmwareInitializer>> initializers_;
@@ -84,9 +92,6 @@ private:
     void add_devices_to_pool(const std::vector<ChipId>& device_ids);
     Device* get_device(ChipId id) const;
     std::vector<Device*> get_all_active_devices_impl() const;
-
-    // Initialize dispatch firmware (compile + configure device CQs).
-    void initialize_dispatch_firmware();
 
     friend class experimental::DispatchContext;
 };

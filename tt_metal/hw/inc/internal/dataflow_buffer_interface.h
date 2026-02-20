@@ -14,6 +14,8 @@ enum AccessPattern : uint8_t {  // this should be put into experimental/hostdev 
     UNKNOWN,
 };
 
+constexpr uint8_t NUM_DFBS = 32;
+
 constexpr uint8_t NUM_TENSIX = 4;
 constexpr uint8_t NUM_TILE_COUNTERS_PER_TENSIX = 32;
 constexpr uint8_t NUM_TENSIX_TILE_COUNTERS_FOR_DM = 16;
@@ -66,30 +68,34 @@ struct dfb_initializer_t {  // 24 bytes
     uint16_t capacity;
     struct {
         uint16_t dm_mask : 8;         // bits 0-7: DM RISC mask
-        uint16_t tensix_mask : 4;     // bits 8-11: Tensix RISC mask
-        uint16_t reserved : 3;        // bits 12-14: unused
-        uint16_t tc_initialized : 1;  // bit 15: tile counter initialized flag
+        uint16_t tensix_mask : 4;     // bits 8-11: Neo RISC mask
+        uint16_t reserved : 4;        // bits 12-15: reserved
     } risc_mask_bits;
+    uint8_t num_producers;
     uint8_t num_txn_ids;
     uint8_t txn_ids[NUM_TXN_IDS];
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t remapper_consumer_mask;  // used to program remapper, for a L:R mapping, indicates which riscs make up R
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 44 bytes
     uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR];
     uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
+                            // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
     PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint8_t num_tcs_to_rr;
+    struct {
+        uint8_t num_tcs_to_rr : 4;   // 0..8, number of TCs to round-robin (max 4 but keeping space)
+        uint8_t tc_init_done : 1;
+        uint8_t reserved : 3;
+    } __attribute__((packed)) num_tcs_and_init;
     struct {
         uint8_t remapper_pair_index : 6;  // bits 0-5: 0..63
         uint8_t remapper_en : 1;          // bit 6
-        uint8_t should_init_tc : 1;  // bit 7: 1 = this RISC should initialize tile counters and program the remapper
+        uint8_t is_producer : 1;  // bit 7: indicates if this RISC is a producer
     } __attribute__((packed)) flags;
-    uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
-                            // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
-    uint8_t padding[2];
+    uint8_t remapper_consumer_ids_mask;  // Bitmask of clientTypes (id_R) for this producer's consumers
+    uint8_t producer_client_type;        // clientL for this producer when using remapper
 } __attribute__((packed));
 
 // intra tensix dfb

@@ -17,9 +17,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3_b1.blitz_decode_weights import shuffle_weights_for_interleaved_qnope_qrope
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
 
 
 def create_fabric_router_config(max_payload_size):
@@ -190,6 +190,7 @@ def test_pre_sdpa(
     # Matmul2 output width (interleaved Qnope/Qrope)
     matmul2_width = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM + NUM_QROPE_HEADS * QROPE_HEAD_DIM  # 8192 + 4096 = 12288
     matmul2_weights_shape = (1536, matmul2_width)
+    num_tp = mesh_cols  # TP parallelism across mesh columns (2 for 4x2, 1 for 1x1)
     qnope_num_cores = QNOPE_GRID_COLS * matmul2_grid_y  # 64 cores
     qrope_num_cores = QROPE_GRID_COLS * matmul2_grid_y  # 32 cores
 
@@ -253,20 +254,41 @@ def test_pre_sdpa(
     )
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
-    # Matmul2 weights - create unshuffled first, then shuffle for device
-    torch_matmul2_weights_unshuffled = torch.randn(matmul2_weights_shape, dtype=torch.bfloat16)
-    torch_matmul2_weights_shuffled = shuffle_weights_for_interleaved_qnope_qrope(
-        torch_matmul2_weights_unshuffled,
-        num_qnope_heads=NUM_QNOPE_HEADS,
-        num_qrope_heads=NUM_QROPE_HEADS,
-        qnope_head_dim=QNOPE_HEAD_DIM,
-        qrope_head_dim=QROPE_HEAD_DIM,
-        heads_per_row=HEADS_PER_ROW,
+    # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
+    # Golden receives this directly; per-TP slices are extracted for shuffling + mesh distribution.
+    total_qnope_heads = num_tp * NUM_QNOPE_HEADS
+    total_qrope_heads = num_tp * NUM_QROPE_HEADS
+    total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
+    total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
+    torch_matmul2_weights_full_unshuffled = torch.randn(
+        (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
-    # Matmul3 weights - [num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
-    # but [qnope_head_dim, qnope_out_dim] per core for device (height sharded)
-    torch_matmul3_weights = torch.randn((NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+    per_tp_qnope_dim = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM
+    per_tp_qrope_dim = NUM_QROPE_HEADS * QROPE_HEAD_DIM
+    full_qnope = torch_matmul2_weights_full_unshuffled[:, :total_qnope_dim]
+    full_qrope = torch_matmul2_weights_full_unshuffled[:, total_qnope_dim:]
+
+    matmul2_tp_slices_shuffled = []
+    for tp in range(num_tp):
+        tp_qnope = full_qnope[:, tp * per_tp_qnope_dim : (tp + 1) * per_tp_qnope_dim]
+        tp_qrope = full_qrope[:, tp * per_tp_qrope_dim : (tp + 1) * per_tp_qrope_dim]
+        tp_unshuffled = torch.cat([tp_qnope, tp_qrope], dim=1)
+        shuffled = shuffle_weights_for_interleaved_qnope_qrope(
+            tp_unshuffled,
+            num_qnope_heads=NUM_QNOPE_HEADS,
+            num_qrope_heads=NUM_QROPE_HEADS,
+            qnope_head_dim=QNOPE_HEAD_DIM,
+            qrope_head_dim=QROPE_HEAD_DIM,
+            heads_per_row=HEADS_PER_ROW,
+        )
+        matmul2_tp_slices_shuffled.append(shuffled)
+
+    torch_matmul2_weights_shuffled = torch.cat(matmul2_tp_slices_shuffled, dim=1)
+
+    # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
+    # Each TP slice of 64 heads is height-sharded on 64 cores per device.
+    torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
 
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
@@ -400,7 +422,7 @@ def test_pre_sdpa(
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=matmul2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(None, 1)),
     )
 
     # RMSNorm2 gamma tensor
@@ -425,8 +447,9 @@ def test_pre_sdpa(
     # Matmul3 weights tensor - height sharded on Qnope grid (64 cores)
     # Each core gets [128, 512] = shape per core
     qnope_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(QNOPE_GRID_COLS - 1, matmul2_grid_y - 1))
-    # Flatten matmul3 weights for height sharding: [num_heads * K, N] = [64 * 128, 512] = [8192, 512]
-    torch_matmul3_weights_flat = torch_matmul3_weights.reshape(NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
+    # Flatten matmul3 weights for height sharding: [num_tp * num_heads * K, N] = [num_tp * 8192, 512]
+    # Each TP slice of 64 heads ([8192, 512]) is height-sharded on 64 cores per device.
+    torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
     matmul3_shard_shape = (QNOPE_HEAD_DIM, QNOPE_OUT_DIM)  # [128, 512] per core
     matmul3_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({qnope_grid}),
@@ -443,7 +466,7 @@ def test_pre_sdpa(
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=matmul3_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(None, 0)),
     )
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
@@ -731,13 +754,14 @@ def test_pre_sdpa(
     # ========================================================================
     logger.info("Computing golden reference...")
 
-    # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE)
-    _, _, torch_sdpa_expected, torch_kv_cache_expected = PreSDPA.golden(
+    # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE).
+    # Full tensor with num_tp * 64 heads; output is split per-TP for comparison.
+    _, _, torch_sdpa_expected_full, torch_kv_cache_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
         torch_rmsnorm2_gamma,
-        torch_matmul2_weights_unshuffled,  # Use unshuffled weights
+        torch_matmul2_weights_full_unshuffled,
         torch_matmul3_weights,
         torch_sin,
         torch_cos,
@@ -745,8 +769,8 @@ def test_pre_sdpa(
         torch_dkv_matmul_weights,
         torch_dkv_rmsnorm_gamma,
         epsilon=epsilon,
-        num_qnope_heads=NUM_QNOPE_HEADS,
-        num_qrope_heads=NUM_QROPE_HEADS,
+        num_qnope_heads=total_qnope_heads,
+        num_qrope_heads=total_qrope_heads,
         qnope_head_dim=QNOPE_HEAD_DIM,
         qrope_head_dim=QROPE_HEAD_DIM,
         heads_per_row=HEADS_PER_ROW,
@@ -756,63 +780,83 @@ def test_pre_sdpa(
 
     slice_size = sdpa_input_output_shape[0]
     expected_width = COMBINED_HEAD_SIZE  # 576
-
-    # KV Cache is same across devices in 4x2 submesh
     expected_nope = torch_kv_cache_expected[..., :KNOPE_DIM]
     expected_rope = torch_kv_cache_expected[..., KNOPE_DIM:]
 
+    sdpa_pcc_by_tp = {}
+    kv_nope_pcc_first = None
+    kv_rope_pcc_first = None
+
     for device_idx in range(mesh_rows * mesh_cols):
+        tp_group = device_idx % mesh_cols  # TP group determined by mesh column
+
+        # ---- PreSDPA Output (TP-sharded: replicated across rows, different across columns) ----
         start = device_idx * slice_size
         end = start + slice_size
-        # Trim to expected width for comparison
         received = sdpa_input_output_torch[start:end, :expected_width]
 
-        # Golden SDPA Input shape: [64, 576] (already reshaped by golden function)
-        # Each row is one head: [qnope[512], qrope[64]]
-        # 8 cores × 8 heads = 64 rows
-        torch_sdpa_input_expected_flat = torch_sdpa_expected
+        # Golden SDPA output is [num_tp * 64, 576]; slice per TP group.
+        # Each row is one head: [qnope[512], qrope[64]], 8 cores x 8 heads = 64 rows per TP.
+        tp_start = tp_group * slice_size
+        tp_end = tp_start + slice_size
+        torch_sdpa_input_expected_flat = torch_sdpa_expected_full[tp_start:tp_end, :]
         if received.shape != torch_sdpa_input_expected_flat.shape:
             logger.error(
-                f"Shape mismatch at device {device_idx}: got {received.shape}, expected {torch_sdpa_input_expected_flat.shape}"
+                f"PreSDPA Output shape mismatch at device {device_idx} (TP={tp_group}): "
+                f"got {received.shape}, expected {torch_sdpa_input_expected_flat.shape}"
             )
             continue
 
         max_diff = torch.max(torch.abs(received - torch_sdpa_input_expected_flat)).item()
         mean_diff = torch.mean(torch.abs(received - torch_sdpa_input_expected_flat)).item()
+        logger.info(f"Device {device_idx} (TP={tp_group}) PreSDPA Output: Max diff={max_diff}, Mean diff={mean_diff}")
 
-        logger.info(f"Device {device_idx}: Max diff={max_diff}, Mean diff={mean_diff}")
+        passing, sdpa_pcc = comp_pcc(torch_sdpa_input_expected_flat, received, 0.99)
+        logger.info(f"Device {device_idx} (TP={tp_group}) PreSDPA Output PCC: {sdpa_pcc}")
+        assert passing, f"Device {device_idx} (TP={tp_group}) PreSDPA Output PCC check failed: {sdpa_pcc}"
 
-        passing, pcc_message = comp_pcc(torch_sdpa_input_expected_flat, received, 0.99)
-        logger.info(f"Device {device_idx}: {pcc_message}")
+        if tp_group in sdpa_pcc_by_tp:
+            assert sdpa_pcc == sdpa_pcc_by_tp[tp_group], (
+                f"Device {device_idx} (TP={tp_group}) PreSDPA Output PCC mismatch across replicated dim: "
+                f"got {sdpa_pcc}, expected {sdpa_pcc_by_tp[tp_group]}"
+            )
+        else:
+            sdpa_pcc_by_tp[tp_group] = sdpa_pcc
 
-        assert (
-            passing
-        ), f"Device {device_idx} failed: {pcc_message}"  # Read back from kv cache tensor in DRAM to check PCC
-
-        compare_kv_cache = kv_cache_output_torch[..., position_id, :]
-
-        # Split into nope (first 512 elements) and rope (last 64 elements)
+        # ---- KV Cache (fully replicated, no TP) ----
+        compare_kv_cache = kv_cache_output_torch[device_idx, ..., position_id, :]
         compare_nope = compare_kv_cache[..., :KNOPE_DIM]
         compare_rope = compare_kv_cache[..., KNOPE_DIM:]
 
-        # Check nope portion
         nope_max_diff = torch.max(torch.abs(expected_nope - compare_nope)).item()
         nope_mean_diff = torch.mean(torch.abs(expected_nope - compare_nope)).item()
-        logger.info(f"KV Cache NOPE absolute difference: {nope_max_diff}")
-        logger.info(f"KV Cache NOPE mean absolute difference: {nope_mean_diff}")
-        nope_passing, nope_pcc_message = comp_pcc(compare_nope, expected_nope, 0.98)
-        logger.info(f"KV Cache NOPE PCC: {nope_pcc_message}")
+        logger.info(f"Device {device_idx} KV Cache NOPE: Max diff={nope_max_diff}, Mean diff={nope_mean_diff}")
+        nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+        logger.info(f"Device {device_idx} KV Cache NOPE PCC: {nope_pcc}")
+        assert nope_passing, f"Device {device_idx} KV Cache NOPE PCC check failed: {nope_pcc}"
 
-        # Check rope portion
+        if kv_nope_pcc_first is not None:
+            assert nope_pcc == kv_nope_pcc_first, (
+                f"Device {device_idx} KV Cache NOPE PCC mismatch across replicated dim: "
+                f"got {nope_pcc}, expected {kv_nope_pcc_first}"
+            )
+        else:
+            kv_nope_pcc_first = nope_pcc
+
         rope_max_diff = torch.max(torch.abs(expected_rope - compare_rope)).item()
         rope_mean_diff = torch.mean(torch.abs(expected_rope - compare_rope)).item()
-        logger.info(f"KV Cache ROPE absolute difference: {rope_max_diff}")
-        logger.info(f"KV Cache ROPE mean absolute difference: {rope_mean_diff}")
-        rope_passing, rope_pcc_message = comp_pcc(compare_rope, expected_rope, 0.98)
-        logger.info(f"KV Cache ROPE PCC: {rope_pcc_message}")
+        logger.info(f"Device {device_idx} KV Cache ROPE: Max diff={rope_max_diff}, Mean diff={rope_mean_diff}")
+        rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+        logger.info(f"Device {device_idx} KV Cache ROPE PCC: {rope_pcc}")
+        assert rope_passing, f"Device {device_idx} KV Cache ROPE PCC check failed: {rope_pcc}"
 
-        assert nope_passing, f"KV Cache NOPE verification failed: {nope_pcc_message}"
-        assert rope_passing, f"KV Cache ROPE verification failed: {rope_pcc_message}"
+        if kv_rope_pcc_first is not None:
+            assert rope_pcc == kv_rope_pcc_first, (
+                f"Device {device_idx} KV Cache ROPE PCC mismatch across replicated dim: "
+                f"got {rope_pcc}, expected {kv_rope_pcc_first}"
+            )
+        else:
+            kv_rope_pcc_first = rope_pcc
 
     logger.info("✓ PreSDPA mesh test passed!")
 

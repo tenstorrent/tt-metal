@@ -152,6 +152,8 @@ def main():
     torch_model = PI0ModelTorch(config, weight_loader)
 
     device = ttnn.open_device(device_id=0, l1_small_size=24576)
+
+    torch.manual_seed(SEED)
     ttnn_model = PI0ModelTTNN(config, weight_loader, device)
 
     # Run inference
@@ -167,16 +169,52 @@ def main():
             state=state,
         )
 
-    torch.manual_seed(SEED)
+    # TTNN
     with torch.no_grad():
+        # Convert images to TTNN tensors
+        images_ttnn = [
+            ttnn.from_torch(
+                img,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for img in tensor_images
+        ]
+
+        # Convert other inputs to TTNN tensors
+        lang_tokens_ttnn = ttnn.from_torch(
+            lang_tokens,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        lang_masks_ttnn = ttnn.from_torch(
+            lang_masks.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        state_ttnn = ttnn.from_torch(
+            state,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
         ttnn_actions = ttnn_model.sample_actions(
-            images=tensor_images,
+            images=images_ttnn,
             img_masks=img_masks,
-            lang_tokens=lang_tokens,
-            lang_masks=lang_masks,
-            state=state,
+            lang_tokens=lang_tokens_ttnn,
+            lang_masks=lang_masks_ttnn,
+            state=state_ttnn,
         )
     ttnn.synchronize_device(device)
+
+    # Convert TTNN output to torch for comparison
+    if isinstance(ttnn_actions, ttnn.Tensor):
+        ttnn_actions = ttnn.to_torch(ttnn_actions)
 
     pcc = compute_pcc(torch_actions, ttnn_actions).item()
     print(f"PCC: {pcc:.4f}")

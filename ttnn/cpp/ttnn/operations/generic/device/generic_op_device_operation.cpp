@@ -56,6 +56,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
             kernel.source_type,
             kernel.core_ranges,
             kernel.compile_time_args,
+            kernel.named_compile_time_args,
             kernel.defines,
             kernel.common_runtime_args.size(),
             kernel.runtime_args.size(),
@@ -72,7 +73,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
-        size_t hash = cb.core_ranges.size();
+        size_t hash = cb.total_size;
         for (const auto& core_range : cb.core_ranges.ranges()) {
             ttsl::hash::hash_combine(hash, core_range);
         }

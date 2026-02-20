@@ -178,8 +178,15 @@ def test_siglip(device, use_pretrained: bool) -> float:
     out_torch = model_torch.forward(x)
 
     # TTNN - call forward() directly
+    x_ttnn = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     model_ttnn = SigLIPVisionTowerTTNN(config, weights, device)
-    out_ttnn = model_ttnn.forward(x)
+    out_ttnn = model_ttnn.forward(x_ttnn)
 
     # Convert to torch if needed
     if isinstance(out_ttnn, ttnn.Tensor):
@@ -213,8 +220,15 @@ def test_paligemma(device, use_pretrained: bool) -> float:
     out_torch = model_torch.embed_image(x)
 
     # TTNN
+    x_ttnn = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     model_ttnn = PaliGemmaBackboneTTNN(config, weights, device)
-    out_ttnn = model_ttnn.embed_image(x)
+    out_ttnn = model_ttnn.embed_image(x_ttnn)
 
     # Convert TTNN tensor to torch if needed
     if isinstance(out_ttnn, ttnn.Tensor):
