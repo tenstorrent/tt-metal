@@ -75,6 +75,7 @@ jobs:
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
             cmd: |
               pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
+              TT_METAL_SLOW_DISPATCH_MODE=1 pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_deepseek_ccl_ops.py
               pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
             timeout: 15
             test-type: fast
