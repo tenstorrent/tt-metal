@@ -124,3 +124,54 @@ def ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
     if tensor.layout != ttnn.TILE_LAYOUT:
         return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return tensor
+
+
+def optimized_tree_map_with_only_dict_list(*args, **kwargs):
+    # don't use pytorch
+    from collections.abc import Mapping, Sequence
+
+    func = args[0]
+    data_structures = args[1:]
+    if all(isinstance(ds, Mapping) for ds in data_structures):
+        keys = data_structures[0].keys()
+        if not all(ds.keys() == keys for ds in data_structures):
+            raise ValueError("All dicts must have the same keys")
+        return {
+            key: optimized_tree_map_with_only_dict_list(func, *(ds[key] for ds in data_structures), **kwargs)
+            for key in keys
+        }
+    elif all(isinstance(ds, Sequence) and not isinstance(ds, str) for ds in data_structures):
+        if not all(len(ds) == len(data_structures[0]) for ds in data_structures):
+            raise ValueError("All lists must have the same length")
+        return [
+            optimized_tree_map_with_only_dict_list(func, *(ds[i] for ds in data_structures), **kwargs)
+            for i in range(len(data_structures[0]))
+        ]
+    return func(*data_structures, **kwargs)
+
+
+def tree_map(*args, **kwargs):
+    import time
+    from models.experimental.tt_symbiote.core.run_config import DispatchManager
+
+    start_time = time.time()
+    result = optimized_tree_map_with_only_dict_list(*args, **kwargs)
+    end_time = time.time()
+    DispatchManager.record_timing(
+        "Torch",
+        (
+            ""
+            if DispatchManager.current_module_name is None
+            else DispatchManager.current_module_name + f".{args[0].__name__}"
+        ),
+        args[0].__name__,
+        {},
+        end_time - start_time,
+    )
+    return result
+
+
+def wrap_from_torch(data_structure):
+    from models.experimental.tt_symbiote.core.run_config import wrap_from_torch as wrap_from_torch_impl
+
+    return tree_map(wrap_from_torch_impl, data_structure)
