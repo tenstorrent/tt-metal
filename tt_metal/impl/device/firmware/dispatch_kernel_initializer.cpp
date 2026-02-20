@@ -27,9 +27,28 @@ void wait_until_cores_done(
 namespace tt::tt_metal {
 
 DispatchKernelInitializer::DispatchKernelInitializer(
-    std::shared_ptr<const ContextDescriptor> descriptor, dispatch_core_manager& dispatch_core_manager) :
-    FirmwareInitializer(std::move(descriptor)), dispatch_core_manager_(dispatch_core_manager) {
-    dispatch_topology_ = std::make_unique<tt::tt_metal::DispatchTopology>(*descriptor_, dispatch_core_manager_);
+    std::shared_ptr<const ContextDescriptor> descriptor,
+    dispatch_core_manager& dispatch_core_manager,
+    DeviceManager* device_manager,
+    const GetControlPlaneFn& get_control_plane,
+    const GetDispatchQueryManagerFn& get_dispatch_query_manager,
+    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
+    const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
+    FirmwareInitializer(std::move(descriptor)),
+    dispatch_core_manager_(dispatch_core_manager),
+    device_manager_(device_manager),
+    get_control_plane_(get_control_plane),
+    get_dispatch_query_manager_(get_dispatch_query_manager),
+    get_max_num_eth_cores_(get_max_num_eth_cores),
+    get_reads_dispatch_cores_(get_reads_dispatch_cores) {
+    dispatch_topology_ = std::make_unique<tt::tt_metal::DispatchTopology>(
+        *descriptor_,
+        dispatch_core_manager_,
+        device_manager_,
+        get_control_plane_,
+        get_dispatch_query_manager_,
+        get_max_num_eth_cores_,
+        get_reads_dispatch_cores_);
 }
 
 void DispatchKernelInitializer::populate_fd_kernels_only(const std::vector<Device*>& devices) {

@@ -939,7 +939,7 @@ tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return f
 
 std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-    return std::make_shared<ContextDescriptor>(
+    return std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
         *hal_,
         *cluster_,
         rtoptions_,
@@ -955,7 +955,7 @@ std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
         worker_l1_size,
         dispatch_core_config_,
         l1_bank_remap_,
-        rtoptions_.get_mock_cluster_desc_path());
+        rtoptions_.get_mock_cluster_desc_path()));
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
