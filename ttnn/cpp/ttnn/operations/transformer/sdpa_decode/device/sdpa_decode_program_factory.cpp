@@ -106,12 +106,17 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         B *= q_heads_parallel_factor;  // adjust batch size to account for Q sharding
     }
 
+    // original_block_size: the unpadded block size in elements (e.g., 16 for block_size=16).
+    // When block_size < TILE_HEIGHT, tiles have zero-padded rows that must be masked.
+    uint32_t original_block_size = 0;
     if (is_paged_attention) {
         uint32_t block_size = k_shape[2];
+        original_block_size = input_tensor_k.logical_shape()[2];
         page_block_size_t = block_size / TILE_HEIGHT;
         // get real S using the page_table_tensor
         S = page_table_tensor.value().padded_shape()[-1] * S;
     }
+    const bool has_block_padding = is_paged_attention && original_block_size < TILE_HEIGHT;
     uint32_t Bkv = k_shape[0];
     uint32_t St = S / TILE_HEIGHT;
     uint32_t DHt = DH / TILE_WIDTH;
@@ -565,6 +570,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         CreateCircularBuffer(program, core_grid, c_sliding_window_mask_config);
     }
 
+    // block padding mask (when block_size < TILE_HEIGHT, masks zero-padded rows in each K tile)
+    if (has_block_padding) {
+        auto c_block_pad_mask_config = CircularBufferConfig(qk_tiles * mask_tile_size, {{CBIndex::c_14, mask_df}})
+                                           .set_page_size(CBIndex::c_14, mask_tile_size)
+                                           .set_tile_dims(CBIndex::c_14, mask_tile);
+        CreateCircularBuffer(program, core_grid, c_block_pad_mask_config);
+    }
+
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CBIndex::c_24, im_df}})
                                   .set_page_size(CBIndex::c_24, im_tile_size)
@@ -795,6 +808,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         is_page_table_sharded,
         full_tile.get_tile_size(q_df),
         sliding_window_size.value_or(0),
+        original_block_size,
     };
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
@@ -839,6 +853,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         q_heads_parallel_factor,
         sliding_window_size.value_or(0),
         num_tree_reduction_rounds,
+        original_block_size,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -874,6 +889,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         scale_union.u,
         sliding_window_size.value_or(0),
         num_tree_reduction_rounds,
+        original_block_size,
     };
 
     // Determine granularity for compute loops
