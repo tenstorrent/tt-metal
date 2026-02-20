@@ -23,6 +23,10 @@ run_test_with_watcher() {
 
     run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher"
 
+    echo "Running test_prefetcher with split prefetcher..";
+
+    run_test "env TT_METAL_SPLIT_PREFETCHER=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher --gtest_filter=*SplitPrefetcherJitCompile*"
+
     #############################################
     # TEST_DISPATCHER TESTS                     #
     #############################################
