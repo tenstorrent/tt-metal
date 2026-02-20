@@ -113,7 +113,7 @@ public:
 
     virtual Config config() const = 0;
 
-    std::string compute_hash() const;
+    uint64_t compute_hash() const;
 
     const std::string& get_full_kernel_name() const override;
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;

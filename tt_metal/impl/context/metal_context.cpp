@@ -251,7 +251,7 @@ void MetalContext::initialize(
 
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            futures.emplace_back(detail::async([this, device_id, fw_compile_hash]() {
+            futures.emplace_back(detail::async([this, device_id]() {
                 // Clear L1/DRAM if requested - skip for mock devices
                 if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
                     if (rtoptions_.get_clear_l1()) {
@@ -268,17 +268,11 @@ void MetalContext::initialize(
 
                 // Skip firmware building for mock devices
                 if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-                    // Create build env for this device, and build FW if it's not built already
+                    // Create build env for this device, and build FW if it's not built already.
+                    // build_firmware ensures that the FW is built only once for a given build key
+                    // (which captures the fw_compile_hash).
                     BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-                    // fw_build_key is a combination of build_key and fw_compile_hash
-                    // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-                    // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
-                    // Uses full 64-bit fw_compile_hash for proper change detection
-                    uint64_t fw_build_key =
-                        BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
-
-                    jit_build_once(
-                        fw_build_key, [device_id] { BuildEnvManager::get_instance().build_firmware(device_id); });
+                    BuildEnvManager::get_instance().build_firmware(device_id);
 
                     // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                     // activated. This is required since ethernet cores context switch between application and routing

@@ -50,7 +50,6 @@ public:
     JitBuildEnv();
     void init(
         uint64_t build_key,
-        size_t fw_compile_hash,
         tt::ARCH arch,
         uint32_t max_cbs,
         const std::map<std::string, std::string>& device_kernel_defines);

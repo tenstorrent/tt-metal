@@ -33,6 +33,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/stable_hash.hpp"
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
 
@@ -361,21 +362,31 @@ std::string ComputeKernel::config_hash() const {
         unpack_mode_descriptor);
 }
 
-std::string Kernel::compute_hash() const {
-    size_t define_hash_value = 0;
+uint64_t Kernel::compute_hash() const {
+    tt::FNV1a hasher;
     for (const auto& [define, value] : this->defines_) {
-        ttsl::hash::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
+        hasher.update(define);
+        hasher.update(value);
     }
 
-    size_t named_args_hash_value = ttsl::hash::hash_objects_with_default_seed(this->named_compile_time_args_);
-
-    return fmt::format(
-        "{}_{}_{}_{}_{}",
-        std::hash<std::string>{}(this->kernel_src_.source_),
-        fmt::join(this->compile_time_args_, "_"),
-        define_hash_value,
-        named_args_hash_value,
-        this->config_hash());
+    // named_compile_time_args_ is unordered_map; sort by key for consistent hash.
+    auto sorted_iters = []<typename T>(const T& umap) {
+        std::vector<typename T::const_iterator> iters;
+        iters.reserve(umap.size());
+        for (auto it = umap.begin(); it != umap.end(); ++it) {
+            iters.push_back(it);
+        }
+        std::ranges::sort(iters, [](const auto& a, const auto& b) { return a->first < b->first; });
+        return iters;
+    };
+    for (const auto& it : sorted_iters(this->named_compile_time_args_)) {
+        hasher.update(it->first);
+        hasher.update(static_cast<uint64_t>(it->second));
+    }
+    hasher.update(this->kernel_src_.source_);
+    hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
+    hasher.update(this->config_hash());
+    return hasher.digest();
 }
 
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {

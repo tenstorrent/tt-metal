@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "depend.hpp"
-#include "jit_build_utils.hpp"
+#include "common/stable_hash.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -62,7 +62,7 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 namespace {
 
 uint64_t hash_file_content(std::istream& file) {
-    utils::FNV1a hasher;
+    tt::FNV1a hasher;
     hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return hasher.digest();
 }
