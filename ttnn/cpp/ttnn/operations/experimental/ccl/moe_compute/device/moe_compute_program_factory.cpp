@@ -121,11 +121,11 @@ namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
-    constexpr auto comine_cores_return_index = 5;
+    constexpr auto combine_cores_return_index = 5;
 
     const auto get_cores_return = get_cores(mesh_device);
 
-    return std::get<comine_cores_return_index>(get_cores_return);
+    return std::get<combine_cores_return_index>(get_cores_return);
 }
 
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(

@@ -426,7 +426,7 @@ void kernel_main() {
     uint32_t tilize_chunk_ready_wait_value = num_tilize_cores - 1;
     uint64_t tilize_chunk_ready_drain_semaphore_noc_addr =
         get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_semaphore_addr, noc_index);
-    uint64_t tilze_chunk_ready_mcast_addr = get_safe_multicast_noc_addr(
+    uint64_t tilize_chunk_ready_mcast_addr = get_safe_multicast_noc_addr(
         tilize_mcast_start_x,
         tilize_mcast_start_y,
         tilize_mcast_end_x,
@@ -709,7 +709,7 @@ void kernel_main() {
                     // Local value is from when drain-sync waits until gather process is done (8a and 5b)
                     noc_semaphore_set_multicast(
                         tilize_chunk_ready_semaphore_addr,
-                        tilze_chunk_ready_mcast_addr,
+                        tilize_chunk_ready_mcast_addr,
                         tilize_bounding_box_num_cores - 1,
                         false,
                         noc_index);

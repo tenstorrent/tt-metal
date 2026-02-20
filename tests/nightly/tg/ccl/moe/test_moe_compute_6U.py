@@ -11,7 +11,7 @@ import random
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_pcc
 
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
@@ -383,18 +383,6 @@ def create_torch_w0(L, E, K, N):
     Returns:
         torch_w0: Tensor of shape (L, E, K, N)
     """
-    # torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
 
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w0
@@ -413,18 +401,6 @@ def create_torch_w1(L, E, K, N):
     Returns:
         torch_w1: Tensor of shape (L, E, K, N)
     """
-    # torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = -1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
 
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w1
@@ -443,18 +419,7 @@ def create_torch_w2(L, E, N, K):
     Returns:
         torch_w2: Tensor of shape (L, E, N, K)
     """
-    # torch_w2 = torch.empty((L, E, N, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for n_chunk in range(N // 32):
-    #             n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #             n_val = 0.001 * n_chunk
-    #             for k_chunk in range(K // 32):
-    #                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #                 k_val = k_chunk
-    #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
+
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
     return torch_w2
 
@@ -919,7 +884,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     """
     Create an L1 sharded memory config for a tensor to be completely on specified cores.
     """
-    num_cores = core_range_set.num_cores()
     total_elements = 1
     for dim in tensor_shape:
         total_elements *= dim
@@ -934,7 +898,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     else:
         bytes_per_element = 2
 
-    total_bytes = total_elements * bytes_per_element
     # Shard evenly across cores, but for "completely on one core" we use 1 core
     shard_height = tensor_shape[0] if len(tensor_shape) > 0 else 1
     shard_width = tensor_shape[1] if len(tensor_shape) > 1 else total_elements
