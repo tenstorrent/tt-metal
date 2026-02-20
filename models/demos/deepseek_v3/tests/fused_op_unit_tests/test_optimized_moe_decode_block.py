@@ -929,7 +929,7 @@ def test_optimized_moe_decode_block(
             batch,
             seq,
             select_experts_k,
-            experts_per_cluster,
+            experts,
             cluster_axis,
             topology=ttnn.Topology.Ring,
             num_links=4,
