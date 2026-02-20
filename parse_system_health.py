@@ -23,17 +23,40 @@ def parse_system_health_output(text: str) -> Dict[int, Dict]:
     lines = text.strip().split("\n")
 
     for line in lines:
-        # Parse chip header: "Chip: 3 PCIe: 2 Unique ID: 824632441ec0"
-        chip_match = re.match(r"Chip:\s+(\d+)\s+PCIe:\s+(\d+)\s+Unique ID:\s+(\w+)", line)
+        # Skip log prefix lines (timestamps, warnings, info)
+        # These lines start with dates or have pipe separators
+        if re.match(r"^\d{4}-\d{2}-\d{2}", line) or " | " in line:
+            continue
+
+        # Stop processing when we hit the warning summary section
+        # This section repeats all DOWN links and would create duplicates
+        if "warning" in line.lower() and "Chip:" in line:
+            break
+
+        # Parse chip header: "Chip: 3 PCIe: 2 Unique ID: 824632441ec0 Tray: 1 N5"
+        # The Tray and N fields are optional
+        chip_match = re.match(r"^Chip:\s+(\d+)\s+PCIe:\s+(\d+)\s+Unique ID:\s+(\w+)(?:\s+Tray:\s+(\d+)\s+(\w+))?", line)
         if chip_match:
             chip_id = int(chip_match.group(1))
             pcie_id = int(chip_match.group(2))
             unique_id = chip_match.group(3)
+            tray = chip_match.group(4) if chip_match.group(4) else None
+            node = chip_match.group(5) if chip_match.group(5) else None
             current_chip = chip_id
-            chips[chip_id] = {"pcie": pcie_id, "unique_id": unique_id, "connections": [], "down_links": []}
+
+            # Only create new entry if this chip hasn't been seen yet
+            if chip_id not in chips:
+                chips[chip_id] = {
+                    "pcie": pcie_id,
+                    "unique_id": unique_id,
+                    "tray": tray,
+                    "node": node,
+                    "connections": [],
+                    "down_links": [],
+                }
             continue
 
-        # Parse ethernet channel: "eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 0 core (x=0,y=4)"
+        # Parse ethernet channel: "eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 0 core (x=0,y=4)"
         if current_chip is not None and "eth channel" in line:
             eth_match = re.search(r"eth channel (\d+) core \(x=(\d+),y=(\d+)\) link (UP|DOWN)", line)
             if eth_match:
@@ -43,7 +66,7 @@ def parse_system_health_output(text: str) -> Dict[int, Dict]:
 
                 if status == "UP":
                     # Check if connected to another chip
-                    conn_match = re.search(r"connected to Chip (\d+) core", line)
+                    conn_match = re.search(r"connected to Chip (\d+)", line)
                     if conn_match:
                         connected_chip = int(conn_match.group(1))
                         chips[current_chip]["connections"].append(
@@ -56,15 +79,22 @@ def parse_system_health_output(text: str) -> Dict[int, Dict]:
 
 
 def build_connectivity_map(chips: Dict[int, Dict]) -> Dict[Tuple[int, int], List[int]]:
-    """Build a map of chip pairs to their connecting channels."""
+    """Build a map of chip pairs to their connecting channels.
+
+    Only count from the lower chip ID to avoid counting bidirectional links twice.
+    Each physical link appears in both chips' connection lists, so we only process
+    connections where source_chip < target_chip.
+    """
     connectivity = defaultdict(set)
 
     for chip_id, chip_data in chips.items():
         for conn in chip_data["connections"]:
-            # Create sorted tuple to avoid duplicates (0,1) and (1,0)
-            pair = tuple(sorted([chip_id, conn["connected_to"]]))
-            # Use set to avoid counting bidirectional links twice
-            connectivity[pair].add(conn["channel"])
+            connected_to = conn["connected_to"]
+            # Only count from lower to higher chip ID to avoid double-counting
+            # Each physical link is reported by both chips, so we only process it once
+            if chip_id < connected_to:
+                pair = (chip_id, connected_to)
+                connectivity[pair].add(conn["channel"])
 
     # Convert sets to sorted lists
     return {k: sorted(list(v)) for k, v in connectivity.items()}
@@ -111,7 +141,11 @@ def generate_markdown_report(chips: Dict[int, Dict], connectivity: Dict[Tuple[in
     md.append("### Chip Details:\n")
     for chip_id in sorted(chips.keys()):
         chip = chips[chip_id]
-        md.append(f"**Chip {chip_id}** (PCIe: {chip['pcie']}, ID: {chip['unique_id']})")
+        header = f"**Chip {chip_id}** (PCIe: {chip['pcie']}, ID: {chip['unique_id']}"
+        if chip.get("tray") and chip.get("node"):
+            header += f", Tray: {chip['tray']} {chip['node']}"
+        header += ")"
+        md.append(header)
         md.append(f"  - Active links: {len(chip['connections'])}")
         md.append(f"  - Down links: {len(chip['down_links'])}")
         md.append("")
@@ -125,23 +159,61 @@ def generate_mermaid_diagram(chips: Dict[int, Dict], connectivity: Dict[Tuple[in
 
     lines.append("```mermaid")
     lines.append("graph TD")
-    lines.append("    %% Chip nodes")
 
-    # Define nodes with chip information
-    for chip_id in sorted(chips.keys()):
-        chip = chips[chip_id]
-        has_down = len(chip["down_links"]) > 0
+    # Check if chips have tray information
+    has_trays = any(chip.get("tray") is not None for chip in chips.values())
 
-        # Create node label with chip info
-        label = f"Chip {chip_id}<br/>PCIe: {chip['pcie']}<br/>ID: {chip['unique_id'][:8]}..."
+    if has_trays:
+        # Group chips by tray
+        from collections import defaultdict
 
-        # Add styling based on whether there are down links
-        if has_down:
-            lines.append(f'    C{chip_id}["{label}"]:::warning')
-        else:
-            lines.append(f'    C{chip_id}["{label}"]:::healthy')
+        trays = defaultdict(list)
+        for chip_id, chip in chips.items():
+            tray = chip.get("tray", "Unknown")
+            trays[tray].append(chip_id)
 
-    lines.append("")
+        # Generate subgraphs per tray
+        for tray_id in sorted(trays.keys(), key=lambda x: int(x) if x != "Unknown" else 999):
+            lines.append(f"    subgraph Tray_{tray_id}")
+
+            for chip_id in sorted(trays[tray_id]):
+                chip = chips[chip_id]
+                has_down = len(chip["down_links"]) > 0
+
+                # Create node label with chip info
+                label = f"Chip {chip_id}<br/>PCIe: {chip['pcie']}"
+                if chip.get("node"):
+                    label += f"<br/>{chip['node']}"
+
+                # Add styling based on whether there are down links
+                if has_down:
+                    lines.append(f'        C{chip_id}["{label}"]:::warning')
+                else:
+                    lines.append(f'        C{chip_id}["{label}"]:::healthy')
+
+            lines.append("    end")
+        lines.append("")
+    else:
+        # Default: no subgraphs
+        lines.append("    %% Chip nodes")
+        for chip_id in sorted(chips.keys()):
+            chip = chips[chip_id]
+            has_down = len(chip["down_links"]) > 0
+
+            # Create node label with chip info
+            label = f"Chip {chip_id}<br/>PCIe: {chip['pcie']}<br/>ID: {chip['unique_id'][:8]}..."
+
+            # Add Tray and Node information if available
+            if chip.get("tray") and chip.get("node"):
+                label += f"<br/>Tray {chip['tray']} {chip['node']}"
+
+            # Add styling based on whether there are down links
+            if has_down:
+                lines.append(f'    C{chip_id}["{label}"]:::warning')
+            else:
+                lines.append(f'    C{chip_id}["{label}"]:::healthy')
+        lines.append("")
+
     lines.append("    %% Connections")
 
     # Add edges for connections
