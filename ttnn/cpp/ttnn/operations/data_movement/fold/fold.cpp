@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/data_movement/fold/device/fold_device_op.hpp"
 
 #include "fold.hpp"
 

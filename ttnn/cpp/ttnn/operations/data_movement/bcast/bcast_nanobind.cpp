@@ -56,7 +56,7 @@ void bind_bcast(nb::module_& mod) {
 
     ttnn::bind_function<"bcast">(
         mod,
-        doc.c_str(),
+        doc,
         ttnn::overload_t(
             &ttnn::bcast,
             nb::arg("input_a").noconvert(),

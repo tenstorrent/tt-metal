@@ -38,7 +38,7 @@ void bind_concat(nb::module_& mod) {
 
     ttnn::bind_function<"concat">(
         mod,
-        doc.c_str(),
+        doc,
         ttnn::overload_t(
             &ttnn::concat,
             nb::arg("tensors"),
