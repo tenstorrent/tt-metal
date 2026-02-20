@@ -446,6 +446,34 @@ class Attention(LightweightModule):
         return ttnn.reshape(x5, (*tuple(x.shape)[:-1], d))
     
 
+    def _sample_rotary_prefix_torch(self, x_md, R, shard_idx=0, pos=31):
+        x_shard = ttnn.get_device_tensors(x_md)[shard_idx]
+    
+        # Slice rotary prefix
+        x_rot = ttnn.slice(
+            x_shard,
+            (0, 0, 0, 0),
+            (x_shard.shape[0], x_shard.shape[1], x_shard.shape[2], R),
+        )
+    
+        idx2_max = x_rot.shape[2]
+        p = min(pos, idx2_max - 1)
+    
+        x_one = ttnn.slice(x_rot, (0, 0, p, 0), (1, 1, p + 1, R))
+        return ttnn.to_torch(x_one).reshape(-1)
+
+
+    def _norm_check_rope(self, before_vec, after_vec, tag="", tol=5e-2):
+            # RoPE is a rotation → norm should be preserved (within bf16/quant noise).
+            nb = before_vec.float().norm().item()
+            na = after_vec.float().norm().item()
+            diff = abs(nb - na)
+            print(f"[RoPE norm]{tag} before={nb:.6f} after={na:.6f} diff={diff:.6e}")
+            if diff > tol:
+                print(f"[RoPE norm]{tag} WARNING diff>{tol} (possible pairing/layout mismatch or wrong cos/sin)")    
+
+
+
     def _apply_partial_rope(
         self,
         x,
@@ -455,73 +483,75 @@ class Attention(LightweightModule):
         current_pos=None,
     ):
         """
-        Phi-1 partial RoPE, NeoX half-split pairing.
-
-        Assumptions:
-          - x last dim is head_dim D and is already in NeoX half-split order:
-              x = [x1 (0..D/2-1), x2 (D/2..D-1)]
-          - rot_mats = (cos, sin) are in llama/meta "pairwise duplicated" layout along last dim:
-              [c0, c0, c1, c1, c2, c2, ...]  (same for sin)
-            We convert to per-pair vectors by taking even indices: cos_pair = cos[..., 0::2]
+        Phi-1 partial RoPE (HF-compatible).
+    
+        HF Phi applies RoPE with rotate_half on a HALF-SPLIT of the rotary prefix:
+          out = x_rot * cos + rotate_half(x_rot) * sin
+          rotate_half([x1, x2]) = [-x2, x1]
+        and only on the first rotary_dim (R) dims of the head_dim (D).
+    
+        This implementation works for both:
+          - Prefill: x shape [B, H, S, D], cos/sin shape [1, 1, S, R] or [B?, ?, S, R]
+          - Decode:  x shape [1, H, B, D] (your convention), current_pos provides positions,
+                    cos/sin provided as tables [1, 1, max_seq, R] (or compatible)
+    
+        IMPORTANT corrections vs your previous code:
+          - No interleaved<->grouped transforms for Phi (no even/odd regrouping)
+          - No cos/sin 0::2 slicing. If cos/sin are "duplicated", Phi duplication is across halves ([c,c]),
+            so we either keep full width R or dedup via :R//2 + reconstruct. Here we keep full width R.
         """
-        
+
         D = self.head_dim
-        half = D // 2
         assert D % 2 == 0
-        assert self.rotary_dim % 2 == 0
-        assert self.rotary_dim <= D
-
-        # number of complex pairs to rotate (per half)
-        rot_pairs = self.rotary_dim // 2
-        assert rot_pairs <= half
-
+        R = self.rotary_dim
+        assert R % 2 == 0
+        assert R <= D
+        rot_pairs = R // 2
+    
         restore_memcfg = x.memory_config()
         restore_layout = x.layout
         restore_dtype = x.dtype
-
+    
         def ensure_interleaved(t):
-            # Keep it simple/robust: do RoPE in interleaved
             return (
                 ttnn.sharded_to_interleaved(t, ttnn.DRAM_MEMORY_CONFIG, t.dtype)
                 if t.is_sharded()
                 else t
             )
-
+    
+        # Work interleaved for robustness
         x_i = ensure_interleaved(x)
-        # If x is interleaved, convert to grouped (NeoX half-split) before applying partial RoPE
-        x_i = self._rope_interleaved_to_grouped(x_i)
-
-
-        # --- Prepare cos/sin in "per-pair" form ---
+    
+        # --- Prepare cos/sin (FULL WIDTH R, HF-style) ---
         cos = ensure_interleaved(rot_mats[0])
         sin = ensure_interleaved(rot_mats[1])
-
-        # Convert llama/meta duplicated layout -> per-pair vectors
-        # cos_pair shape: [..., half], sin_pair shape: [..., half]
-        cos_pair = ttnn.slice(cos, (0, 0, 0, 0), (cos.shape[0], cos.shape[1], cos.shape[2], cos.shape[3]))
-        sin_pair = ttnn.slice(sin, (0, 0, 0, 0), (sin.shape[0], sin.shape[1], sin.shape[2], sin.shape[3]))
-        # take even indices along last dim
-        cos_pair = ttnn.slice(cos_pair, (0, 0, 0, 0), (cos.shape[0], cos.shape[1], cos.shape[2], D), (1, 1, 1, 2))
-        sin_pair = ttnn.slice(sin_pair, (0, 0, 0, 0), (sin.shape[0], sin.shape[1], sin.shape[2], D), (1, 1, 1, 2))
-        # Now last dim == half
-
-        # Prefill: trim cos/sin seq len to match x seq len if needed
+    
+        # Trim last dim to R if needed (sometimes rot mats are sized to D)
+        if cos.shape[3] != R:
+            cos = ttnn.slice(cos, (0, 0, 0, 0), (cos.shape[0], cos.shape[1], cos.shape[2], R))
+        if sin.shape[3] != R:
+            sin = ttnn.slice(sin, (0, 0, 0, 0), (sin.shape[0], sin.shape[1], sin.shape[2], R))
+    
+        # Prefill: trim seq len to match x seq len if needed
         if not is_decode_mode:
-            # Your code assumes seq dim at index 2; keep that convention.
+            # Your convention: seq dim at index 2
             S = x_i.shape[2]
-            if cos_pair.shape[2] != S:
-                cos_pair = ttnn.slice(cos_pair, (0, 0, 0, 0), (cos_pair.shape[0], cos_pair.shape[1], S, cos_pair.shape[3]))
-                sin_pair = ttnn.slice(sin_pair, (0, 0, 0, 0), (sin_pair.shape[0], sin_pair.shape[1], S, sin_pair.shape[3]))
-
+            if cos.shape[2] != S:
+                cos = ttnn.slice(cos, (0, 0, 0, 0), (cos.shape[0], cos.shape[1], S, cos.shape[3]))
+            if sin.shape[2] != S:
+                sin = ttnn.slice(sin, (0, 0, 0, 0), (sin.shape[0], sin.shape[1], S, sin.shape[3]))
+    
         # Decode: gather the right row(s) using current_pos
+        # Expect rot mats as tables with shape [1, 1, max_seq, R] (or compatible)
         if is_decode_mode:
             assert current_pos is not None, "decode mode needs current_pos"
-            assert cos_pair.shape[0] == 1 and cos_pair.shape[1] == 1
-
-            # table: [max_seq, half]
-            cos_tbl = ttnn.reshape(cos_pair, (cos_pair.shape[2], cos_pair.shape[3]))
-            sin_tbl = ttnn.reshape(sin_pair, (sin_pair.shape[2], sin_pair.shape[3]))
-
+            assert cos.shape[0] == 1 and cos.shape[1] == 1, "expected cos table [1,1,max_seq,R]"
+            assert sin.shape[0] == 1 and sin.shape[1] == 1, "expected sin table [1,1,max_seq,R]"
+    
+            # tables: [max_seq, R]
+            cos_tbl = ttnn.reshape(cos, (cos.shape[2], cos.shape[3]))
+            sin_tbl = ttnn.reshape(sin, (sin.shape[2], sin.shape[3]))
+    
             pos = current_pos
             if pos.is_sharded():
                 pos = ttnn.sharded_to_interleaved(pos, ttnn.DRAM_MEMORY_CONFIG, pos.dtype)
@@ -529,52 +559,52 @@ class Attention(LightweightModule):
                 pos = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
             if pos.dtype != ttnn.uint32:
                 pos = ttnn.typecast(pos, ttnn.uint32)
-
-            # [B] -> [B, half]
+    
+            # [B] -> [B, R]
             cos_bd = ttnn.embedding(pos, cos_tbl)
             sin_bd = ttnn.embedding(pos, sin_tbl)
-
+    
             # reshape to broadcast with x decode shape [1, H, B, D]
-            cos_pair = ttnn.reshape(cos_bd, (1, 1, cos_bd.shape[0], cos_bd.shape[1]))
-            sin_pair = ttnn.reshape(sin_bd, (1, 1, sin_bd.shape[0], sin_bd.shape[1]))
-
-        # --- NeoX half-split rotate on rotary prefix ---
-        # Split x: x1|x2, each [..., half]
-        x1 = ttnn.slice(x_i, (0, 0, 0, 0), (x_i.shape[0], x_i.shape[1], x_i.shape[2], half))
-        x2 = ttnn.slice(x_i, (0, 0, 0, half), (x_i.shape[0], x_i.shape[1], x_i.shape[2], D))
-
-        # rotary prefix and passthrough tail within each half
-        x1r = ttnn.slice(x1, (0, 0, 0, 0), (x1.shape[0], x1.shape[1], x1.shape[2], rot_pairs))
-        x2r = ttnn.slice(x2, (0, 0, 0, 0), (x2.shape[0], x2.shape[1], x2.shape[2], rot_pairs))
-        x1p = ttnn.slice(x1, (0, 0, 0, rot_pairs), (x1.shape[0], x1.shape[1], x1.shape[2], half))
-        x2p = ttnn.slice(x2, (0, 0, 0, rot_pairs), (x2.shape[0], x2.shape[1], x2.shape[2], half))
-
-        cos_r = ttnn.slice(cos_pair, (0, 0, 0, 0), (cos_pair.shape[0], cos_pair.shape[1], cos_pair.shape[2], rot_pairs))
-        sin_r = ttnn.slice(sin_pair, (0, 0, 0, 0), (sin_pair.shape[0], sin_pair.shape[1], sin_pair.shape[2], rot_pairs))
-
-        # y1 = x1*cos - x2*sin
-        # y2 = x2*cos + x1*sin
-        y1r = ttnn.sub(ttnn.mul(x1r, cos_r), ttnn.mul(x2r, sin_r))
-        y2r = ttnn.add(ttnn.mul(x2r, cos_r), ttnn.mul(x1r, sin_r))
-
-        y1 = ttnn.concat([y1r, x1p], dim=-1)
-        y2 = ttnn.concat([y2r, x2p], dim=-1)
-        y  = ttnn.concat([y1, y2], dim=-1)
-
-
-        y = self._rope_grouped_to_interleaved(y)
-
+            cos = ttnn.reshape(cos_bd, (1, 1, cos_bd.shape[0], cos_bd.shape[1]))  # [1,1,B,R]
+            sin = ttnn.reshape(sin_bd, (1, 1, sin_bd.shape[0], sin_bd.shape[1]))  # [1,1,B,R]
+    
+        # --- Apply HF Phi rotate_half on rotary prefix ---
+        # Split x into rotary prefix and pass-through tail (x is interleaved)
+        x_rot_i = ttnn.slice(x_i, (0, 0, 0, 0), (x_i.shape[0], x_i.shape[1], x_i.shape[2], R))
+        x_pas   = ttnn.slice(x_i, (0, 0, 0, R), (x_i.shape[0], x_i.shape[1], x_i.shape[2], D))
+        
+        # IMPORTANT: rot_mats are NeoX-style (even/odd interleaved).
+        # Convert x_rot and cos/sin to grouped (evens..., odds...) so half-split rotate_half matches HF Phi.
+        x_rot = self._rope_interleaved_to_grouped(x_rot_i)
+        cos_g = self._rope_interleaved_to_grouped(cos)
+        sin_g = self._rope_interleaved_to_grouped(sin)
+        
+        # rotate_half on grouped layout: [-x2, x1] where split is within rotary prefix halves
+        x1 = ttnn.slice(x_rot, (0, 0, 0, 0),         (x_rot.shape[0], x_rot.shape[1], x_rot.shape[2], rot_pairs))
+        x2 = ttnn.slice(x_rot, (0, 0, 0, rot_pairs),(x_rot.shape[0], x_rot.shape[1], x_rot.shape[2], R))
+        rot = ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+        
+        out_rot_g = ttnn.add(ttnn.mul(x_rot, cos_g), ttnn.mul(rot, sin_g))
+        
+        # Convert result back to interleaved to match the original x layout
+        out_rot_i = self._rope_grouped_to_interleaved(out_rot_g)
+        
+        # Stitch back rotary prefix + passthrough
+        y = ttnn.concat([out_rot_i, x_pas], dim=-1)
+        
+    
         # Restore layout/dtype (best-effort)
         if y.layout != restore_layout:
             y = ttnn.to_layout(y, restore_layout)
         if y.dtype != restore_dtype:
             y = ttnn.typecast(y, restore_dtype)
-
+    
         # Reshard if original was sharded
         if x.is_sharded():
             y = ttnn.interleaved_to_sharded(y, restore_memcfg)
-
+    
         return y
+    
 
 
 
@@ -945,19 +975,103 @@ class Attention(LightweightModule):
         ###
         # Rotary embeddings
         ###
+        
+        def quick_rope_style_check(rot_mats, shard_idx=0, pos=0, tol=1e-5):
+            cos_md, sin_md = rot_mats[0], rot_mats[1]
+        
+            # Take one shard
+            cos = ttnn.get_device_tensors(cos_md)[shard_idx]
+            sin = ttnn.get_device_tensors(sin_md)[shard_idx]
+        
+            # Expect something like [1,1,S,R] or [1,1,max_seq,R]
+            # Slice to a tiny tensor: [1,1,1,R] at sequence index = pos
+            R = cos.shape[-1]
+            cos_small = ttnn.slice(cos, (0, 0, pos, 0), (1, 1, pos + 1, R))
+            sin_small = ttnn.slice(sin, (0, 0, pos, 0), (1, 1, pos + 1, R))
+        
+            # Now transfer only the tiny slice
+            cos_t = ttnn.to_torch(cos_small).reshape(-1)  # length R
+            sin_t = ttnn.to_torch(sin_small).reshape(-1)
+        
+            half = R // 2
+            hf_cos = (cos_t[:half] - cos_t[half:]).abs().max().item()
+            hf_sin = (sin_t[:half] - sin_t[half:]).abs().max().item()
+            neox_cos = (cos_t[0::2] - cos_t[1::2]).abs().max().item()
+            neox_sin = (sin_t[0::2] - sin_t[1::2]).abs().max().item()
+        
+            print(f"[RoPE] HF-half err  cos/sin = {hf_cos:.3e}, {hf_sin:.3e}")
+            print(f"[RoPE] NeoX e/o err cos/sin = {neox_cos:.3e}, {neox_sin:.3e}")
+        
+            if hf_cos < tol and hf_sin < tol:
+                print("=> HF Phi style ([c,c] across halves)")
+            elif neox_cos < tol and neox_sin < tol:
+                print("=> NeoX style ([c0,c0,c1,c1] even/odd)")
+            else:
+                print("=> Neither clean (maybe not duplicated or different layout)")
+                
+
+        #quick_rope_style_check(rot_mats, shard_idx=0, pos=31)
+        #quick_rope_style_check(rot_mats, shard_idx=0, pos=127)
+        
+        def debug_x_slice(x_md, shard_idx=0, flat_index=0, take_dims=16):
+            # take one shard
+            x_shard = ttnn.get_device_tensors(x_md)[shard_idx]
+        
+            D = x_shard.shape[-1]
+        
+            # reshape to [N, D] and pick one row (flat_index)
+            # (This avoids needing to know whether it's [B,H,S,D] or [1,H,B,D])
+            x_small = ttnn.reshape(x_shard, (x_shard.volume() // D, D))
+        
+            # slice out just one row: [1, D]
+            row = ttnn.slice(x_small, (flat_index, 0), (flat_index + 1, D))
+        
+            # also slice to only first take_dims for faster print
+            row = ttnn.slice(row, (0, 0), (1, min(take_dims, D)))
+        
+            xt = ttnn.to_torch(row).reshape(-1)
+            print("x sample:", xt.tolist())
+            return xt
+
+    
+        def pairing_debug(vec):
+            # vec is 1D torch tensor length D (or R)
+            D = vec.numel()
+            assert D % 2 == 0
+            half = D // 2
+        
+            # how different are the two halves (grouped split)?
+            half_diff = (vec[:half] - vec[half:]).abs().mean().item()
+        
+            # how different are even/odd neighbors (interleaved pairs)?
+            eo_diff = (vec[0::2] - vec[1::2]).abs().mean().item()
+        
+            print(f"mean |half0-half1| = {half_diff:.6f}")
+            print(f"mean |even-odd|    = {eo_diff:.6f}")
+                 
+            
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
+
+        #v = debug_x_slice(q_heads_1QSD_pre_rot, shard_idx=0, flat_index=0, take_dims=64)
+        #pairing_debug(v)
+    
+
         if self.is_phi1:
             #with open("self_prefill.txt", "a") as f:
                 #f.write(f"self prefill q_heads_1QSD block: {self.__dict__}\n")
+            #R = self.rotary_dim
+            #before = self._sample_rotary_prefix_torch(q_heads_1QSD_pre_rot, R, shard_idx=0, pos=31)
             q_heads_1QSD = self._apply_partial_rope(
                 q_heads_1QSD_pre_rot,
                 rot_mats,
                 self.transformation_mats["prefill"],
                 is_decode_mode=False,
             )
+            #after = self._sample_rotary_prefix_torch(q_heads_1QSD, R, shard_idx=0, pos=31)
+            #self._norm_check_rope(before, after, tag=" prefill Q", tol=5e-2)
         else:
             q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
                 q_heads_1QSD_pre_rot,
@@ -975,12 +1089,16 @@ class Attention(LightweightModule):
         if self.is_phi1:
             #with open("self_prefill.txt", "a") as f:
                 #f.write(f"self prefill k_heads_1KSD block: {self.__dict__}\n")
+            #R = self.rotary_dim
+            #before = self._sample_rotary_prefix_torch(k_heads_1KSD_pre_rot, R, shard_idx=0, pos=31)
             k_heads_1KSD = self._apply_partial_rope(
                 k_heads_1KSD_pre_rot,
                 rot_mats,
                 self.transformation_mats["prefill"],
                 is_decode_mode=False,
             )
+            #after = self._sample_rotary_prefix_torch(k_heads_1KSD, R, shard_idx=0, pos=31)
+            #self._norm_check_rope(before, after, tag=" prefill K", tol=5e-2)
         else:
             k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
                 k_heads_1KSD_pre_rot,

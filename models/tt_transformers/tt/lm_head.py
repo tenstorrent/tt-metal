@@ -169,16 +169,18 @@ class LMHead(LightweightModule):
             outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
         )
 
-        output = tt_all_gather(
+        output = tt_all_reduce(
             output,
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            dim=3,  # vocab is last dim
-            num_links=self.args.num_all_gather_links,
+            dim=3 if self.args.is_galaxy else 0,
+            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+            num_all_gather_links=self.args.num_all_gather_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            sharded=False,
             dtype=self.args.ccl_dtype,
+            sharded=False,
+            use_composite=True,
         )
 
         return output

@@ -202,6 +202,7 @@ class LayerNorm(LightweightModule):
         
         
 
+
         # Match RMSNorm behavior: if we normalized sharded but caller wants interleaved, de-shard
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(y)
