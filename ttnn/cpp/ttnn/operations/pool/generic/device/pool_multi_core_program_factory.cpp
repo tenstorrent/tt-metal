@@ -234,14 +234,13 @@ std::vector<uint32_t> generate_core_starting_indices(
         default: TT_FATAL(false, "Unsupported shard scheme");
     };
     for (const auto& item : shard_boundaries) {
-        const auto& [output_shard_start, output_shard_end] = item.output_range;
-        const auto& [input_shard_start, input_shard_end] = item.input_range;
+        const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
             starting_indices.push_back(0);
             continue;
         }
-        TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
+        TT_ASSERT(item.input_range.first == op_trace_metadata[output_shard_start]);
         for (uint32_t r = 0; r < repeat_factor; r++) {
             starting_indices.push_back(op_trace_metadata[output_shard_start]);
         }
@@ -281,7 +280,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
-    const MemoryConfig& /*out_mem_config*/,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used,
@@ -895,8 +893,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         return_indices,
         kernel_h,
         kernel_w,
-        out_h,
-        out_w,
         input.memory_config(),
         outputs[0].memory_config(),
         pool_type,
@@ -1087,7 +1083,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         dilation_h,
         dilation_w,
         num_shards_c,
-        out_mem_config,
         compute_kernel_config,
         divisor_override,
         op_attr.memory_used,
