@@ -49,7 +49,6 @@ def move_cache(temp_cache_dir: Path, cache_dir: Path, archive_dir: Optional[Path
             # moves from cache_dir to archive_dir
             archive_dst = archive_dir / timestamp / rel
             archive_dst.parent.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Archiving '{dst}' -> '{archive_dst}'")
             shutil.move(str(dst), str(archive_dst))
 
         # moves from temp_cache_dir to cache_dir
@@ -106,7 +105,7 @@ def main() -> None:
         logger.info("Waiting for all hosts to finish cache generation and validation before moving files")
         ttnn.distributed_context_barrier()
 
-    if not ttnn.distributed_context_is_initialized() or ttnn.distributed_context_get_rank() == 0:
+    if (not ttnn.distributed_context_is_initialized()) or (int(ttnn.distributed_context_get_rank()) == 0):
         move_cache(temp_cache_dir, cache_dir, archive_dir)
 
     logger.info("Cache generation complete.")
