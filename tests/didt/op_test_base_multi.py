@@ -214,3 +214,8 @@ class OpTestBaseMulti:
 
 def test():
     pass
+
+
+def get_blackhole_grid_size(mesh_device):
+    # TODO assert is_blackhole()
+    return mesh_device.compute_with_storage_grid_size()
