@@ -26,6 +26,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
+#include "common/stable_hash.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -96,7 +97,6 @@ JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
     uint64_t build_key,
-    size_t fw_compile_hash,
     tt::ARCH arch,
     uint32_t max_cbs,
     const std::map<std::string, std::string>& device_kernel_defines) {
@@ -299,18 +299,15 @@ void JitBuildEnv::init(
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
-    jit_build::utils::FNV1a hasher;
+    tt::FNV1a hasher;
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
-    hasher.update(cflags_.begin(), cflags_.end());
-    hasher.update(lflags_.begin(), lflags_.end());
-    hasher.update(defines_.begin(), defines_.end());
+    hasher.update(cflags_);
+    hasher.update(lflags_);
+    hasher.update(defines_);
     build_key_ = hasher.digest();
 
-    // Firmware build path is a combination of build_key and fw_compile_hash
-    // If either change, the firmware build path will change and FW will be rebuilt
-    // if it's not already in MetalContext::firmware_built_keys_
-    this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key_, fw_compile_hash);
+    this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
 }
 
