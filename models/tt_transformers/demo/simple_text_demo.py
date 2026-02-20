@@ -621,7 +621,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
