@@ -2967,6 +2967,33 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
     }
 }
 
+TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/triple_8x16_cluster_psd.textproto";
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
+
+        auto mesh_grouping = mesh_groupings[0];
+
+        std::vector<std::string> errors;
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_grouping, psd, errors);
+
+        // Test and see how it goes
+        EXPECT_EQ(asic_ids.size(), 3u)
+            << "Expected validation to pass: 16x8_Mesh grouping should map to triple-16x8 PSD";
+    }
+}
+
 // Test POD and SUPERPOD level groupings - should fail (cannot be flattened as they're too high level)
 TEST(PhysicalGroupingDescriptorPsdTests, ValidateGroupingWithPsd_PodAndSuperpodLevel) {
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
