@@ -640,16 +640,38 @@ class DistributedExpert:
 
         # First reshape if needed
         indices_shape = topk_expert_indices.shape
+
         if (
             len(indices_shape) == 4
+            and indices_shape[0] == 1
+            and indices_shape[1] == 1
             and indices_shape[2] == tokens_per_device
             and indices_shape[3] == num_experts_per_tok
         ):
-            # Already in the right shape
+            # Already in the exact right shape [1, 1, tokens_per_device, K]
             reshaped_indices = topk_expert_indices
-        else:
-            # Need to reshape
+        elif len(indices_shape) == 4:
+            # Shape is [batch, 1, seq, K], need to flatten to [1, 1, batch*seq, K]
+            # This handles the GPT-OSS case where input is [4, 1, 1, 4] -> [1, 1, 4, 4]
+            batch_dim = indices_shape[0]
+            seq_dim = indices_shape[2]
+
+            if batch_dim * seq_dim == tokens_per_device:
+                # Can safely reshape
+                # IMPORTANT: Keep in ROW_MAJOR layout for uint16 reshape
+                # TILE_LAYOUT doesn't support uint16 reshape operations
+                reshaped_indices = ttnn.reshape(
+                    topk_expert_indices, shape=(1, 1, tokens_per_device, num_experts_per_tok)
+                )
+            else:
+                raise ValueError(
+                    f"Cannot reshape indices from {indices_shape} to (1, 1, {tokens_per_device}, {num_experts_per_tok})"
+                )
+        elif len(indices_shape) == 2:
+            # Shape is [tokens, K], reshape to [1, 1, tokens, K]
             reshaped_indices = ttnn.reshape(topk_expert_indices, shape=(1, 1, tokens_per_device, num_experts_per_tok))
+        else:
+            raise ValueError(f"Unexpected indices shape: {indices_shape}")
 
         # Convert to ROW_MAJOR layout - this changes dtype but we'll fix it
         topk_indices_rm = ttnn.to_layout(reshaped_indices, ttnn.ROW_MAJOR_LAYOUT)

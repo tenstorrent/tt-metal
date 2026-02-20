@@ -508,24 +508,42 @@ class MoEBlock:
 
         return output
 
-    def _prepare_expert_weights(self, weights: ttnn.Tensor) -> ttnn.Tensor:
-        """Simplified weight preparation."""
-        # Debug: Check input type and shape
-        # logger.info(f"[DEBUG] _prepare_expert_weights input - shape: {weights.shape}, dtype: {weights.dtype}")
+    def _prepare_expert_weights_deepseek(self, weights: ttnn.Tensor) -> ttnn.Tensor:
+        """DeepSeek-specific weight preparation - EXACT COPY from reference.
 
+        Reference: /models/demos/deepseek_v3/tt/moe.py lines 341-349
+        """
         # Convert to ROW_MAJOR for operations
         weights_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
 
-        # For GPT-OSS, weights are scalar values for each (token, expert) pair
-        # Shape should be [1, 1, tokens, K] where K is num_experts_per_tok
-        # We need to reshape to [K, 1, tokens, 1] for broadcasting during multiplication
+        # Reference uses cfg["topk_weights_repeat"] which is
+        # RepeatConfig(repeat_dims=ttnn.Shape((hidden_size, 1, 1, 1)))
+        weights_rm = ttnn.repeat(
+            weights_rm, ttnn.Shape((self.hidden_size, 1, 1, 1)), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # Reference permutation exactly as-is
+        weights_rm = ttnn.permute(weights_rm, (3, 1, 2, 0))
+
+        # Convert back to TILE_LAYOUT
+        weights = ttnn.to_layout(weights_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(weights_rm)
+        return weights
+
+    def _prepare_expert_weights_gpt_oss(self, weights: ttnn.Tensor) -> ttnn.Tensor:
+        """GPT-OSS-specific weight preparation.
+
+        GPT-OSS handles weights differently - they are routing scores that get
+        multiplied with expert outputs after all_to_all_combine.
+        """
+        # Convert to ROW_MAJOR for operations
+        weights_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
 
         # Get current shape
         batch, _, seq_len, k = weights_rm.shape
 
         # Ensure correct data type (must be bfloat16 for reshape)
         if weights_rm.dtype != ttnn.bfloat16:
-            # logger.info(f"[DEBUG] Converting weights from {weights_rm.dtype} to bfloat16")
             weights_rm = ttnn.typecast(weights_rm, dtype=ttnn.bfloat16)
 
         # Transpose to [1, 1, K, tokens]
@@ -545,20 +563,76 @@ class MoEBlock:
 
         return weights
 
+    def _prepare_expert_weights(self, weights: ttnn.Tensor) -> ttnn.Tensor:
+        """Route to model-specific weight preparation based on configuration."""
+        model_type = self.config.get("model_params", {}).get("model_type", "deepseek")
+
+        if model_type == "gpt_oss":
+            return self._prepare_expert_weights_gpt_oss(weights)
+        else:
+            # Default to DeepSeek for compatibility
+            return self._prepare_expert_weights_deepseek(weights)
+
     def _forward_moe(
         self, x: ttnn.Tensor, indices: ttnn.Tensor, weights: ttnn.Tensor, mode: str = "decode"
     ) -> ttnn.Tensor:
         """Simplified MoE forward pass."""
         # Get dimensions
-        batch_size_per_device = x.shape[-2]
-        seq_len = 1  # For compatibility
-        hidden_size = x.shape[-1]
+        # Handle different input shapes:
+        # - [batch, seq, hidden] - standard 3D format
+        # - [batch*seq, 1, hidden] - GPT-OSS flattened format with middle padding dim
+        # - [batch*seq, hidden] - standard 2D flattened format
 
-        logger.debug(f"MoE forward_moe: batch_size_per_device={batch_size_per_device}, hidden_size={hidden_size}")
+        # NOTE: GPT-OSS Forward Pass Known Issue:
+        # There is currently a reshape issue in DistributedExpert.forward_decode when processing
+        # GPT-OSS inputs. The issue occurs because TTNN's TILE_LAYOUT reshape operations do not
+        # support uint16 tensors (indices from the router are uint16). The reshape fails when
+        # trying to convert indices from [batch, 1, seq, K] to [1, 1, batch*seq, K].
+        #
+        # Workaround options (to be implemented):
+        # 1. Convert indices to uint32 before reshape operations
+        # 2. Keep indices in ROW_MAJOR layout throughout the forward pass
+        # 3. Modify the router to output indices in a compatible format
+        #
+        # This issue only affects GPT-OSS; DeepSeek works correctly.
+        if len(x.shape) == 3:
+            # Check if middle dimension is 1 (GPT-OSS format: [batch*seq, 1, hidden])
+            if x.shape[1] == 1:
+                # GPT-OSS format: already flattened with padding dimension
+                batch_size_per_device = x.shape[0]
+                seq_len = 1
+                hidden_size = x.shape[2]
+                is_gpt_oss_format = True
+            else:
+                # Standard 3D format: [batch, seq, hidden]
+                batch_size_per_device = x.shape[0]
+                seq_len = x.shape[1]
+                hidden_size = x.shape[2]
+                is_gpt_oss_format = False
+        else:
+            # 2D format: [batch*seq, hidden]
+            batch_size_per_device = x.shape[0]
+            seq_len = 1
+            hidden_size = x.shape[1]
+            is_gpt_oss_format = False
+
+        logger.debug(
+            f"MoE forward_moe: input shape={x.shape}, batch_size_per_device={batch_size_per_device}, seq_len={seq_len}, hidden_size={hidden_size}"
+        )
 
         # Reshape inputs
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
+
+        # Reshape based on input format
+        if len(x.shape) == 2:
+            # 2D format needs reshaping to 4D
+            x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
+        elif is_gpt_oss_format:
+            # GPT-OSS format: [batch*seq, 1, hidden] -> [batch*seq, 1, 1, hidden]
+            x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
+        else:
+            # Standard 3D format: [batch, seq, hidden] -> [batch, 1, seq, hidden]
+            x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
 
         # Reshape indices immediately like reference (before chunking)
         indices_rm = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
@@ -599,7 +673,7 @@ class MoEBlock:
                 x_chunk,  # Original input, not dispatch_output
                 indices_chunk,
                 weights_chunk,
-                self.distributed_expert_decode_config,
+                self.distributed_expert_config,
                 self.expert_mapping_tensors,
                 self.mesh_device,
             )
