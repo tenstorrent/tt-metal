@@ -7,9 +7,10 @@ Tests for prepare_weights: building DeepSeekV3Weights from a state dict.
 
 - test_prepare_dense_layer_single_layer: one dense layer with random weights.
 - test_prepare_moe_layer_single_layer: one MoE layer with random weights.
+- test_save_load_dense_layer_single_layer / test_save_load_moe_layer_single_layer: save then load one layer.
 - test_prepare_dense_layer_single_layer_4x2: one dense layer on 4x2 mesh.
 - test_prepare_moe_layer_single_layer_4x2: one MoE layer on 4x2 mesh.
-- test_prepare_real_weights: placeholder for future real checkpoint testing.
+- test_save_load_moe_layer_single_layer_4x2: save then load one MoE layer on 4x2 submesh.
 """
 
 import time
@@ -215,7 +216,10 @@ def test_save_load_dense_layer_single_layer(device, tmp_path):
     assert (layer_dir / "kv_b12.tensorbin").exists()
 
     deallocate_weights(weights)
+    t0 = time.perf_counter()
     layer = load_layer(tmp_path, device, 0)
+    elapsed = time.perf_counter() - t0
+    logger.info("load_layer (dense, single device): {:.3f} s", elapsed)
     orig = weights.layers[0]
     assert isinstance(layer, DeepSeekV3DenseLayerWeights)
 
@@ -263,7 +267,10 @@ def test_save_load_moe_layer_single_layer(device, tmp_path):
     assert (layer_dir / "gate_up.tensorbin").exists()
 
     deallocate_weights(weights)
+    t0 = time.perf_counter()
     layer = load_layer(tmp_path, device, 0)
+    elapsed = time.perf_counter() - t0
+    logger.info("load_layer (moe, single device): {:.3f} s", elapsed)
     orig = weights.layers[0]
     assert isinstance(layer, DeepSeekV3MoELayerWeights)
 
@@ -372,7 +379,68 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
 
 
-@pytest.mark.skip(reason="Future: run with real HF checkpoint; not implemented yet.")
-def test_prepare_real_weights(device):
-    """Placeholder for testing prepare_weights with real model weights."""
-    pytest.fail("Real-weight test not implemented yet.")
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
+    """Save one MoE layer (4x2 submesh) to disk, load it back, assert metadata and fused-tensor sharing."""
+    if not is_slow_dispatch():
+        pytest.skip("prepare_weights tests require slow dispatch mode (TT_METAL_SLOW_DISPATCH_MODE=1)")
+    num_devices = 4 * 2
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires 8 devices (4x2 mesh)")
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    device_grid = submesh.compute_with_storage_grid_size()
+    if device_grid.x < 12 or device_grid.y < 10:
+        pytest.skip(f"Per-device grid {device_grid.x}x{device_grid.y} too small for blitz decode (need 12x10+)")
+    num_cores = device_grid.x * device_grid.y
+    if num_cores < 128:
+        pytest.skip(f"Per-device has {num_cores} compute cores; GATE_UP overlap spec requires 128 cores")
+
+    state = _layer_state_dict(0, is_moe=True, for_multi_device=True, seed=43)
+    weights = prepare_weights(state, submesh, num_layers=1, first_k_dense_replace=0)
+    orig = weights.layers[0]
+    save_layer(
+        orig,
+        tmp_path,
+        0,
+        hf_model_name="test-moe-model-4x2",
+        hf_state_dict_name="test-moe-state-dict.safetensors",
+        device_mesh_shape=(4, 2),
+    )
+
+    assert (tmp_path / "layer_000" / "manifest.json").exists()
+    layer_dir = tmp_path / "layer_000"
+    assert (layer_dir / "gate_up.tensorbin").exists()
+    orig_shared_down_shape = getattr(orig, "shared_down_proj", None)
+    if orig_shared_down_shape is not None:
+        orig_shared_down_shape = orig_shared_down_shape.shape
+        assert (layer_dir / "shared_down_proj.tensorbin").exists()
+
+    deallocate_weights(weights)
+    t0 = time.perf_counter()
+    layer = load_layer(tmp_path, submesh, 0)
+    elapsed = time.perf_counter() - t0
+    logger.info("load_layer (moe, 4x2 submesh): {:.3f} s", elapsed)
+    assert isinstance(layer, DeepSeekV3MoELayerWeights)
+
+    _assert_overlapped_tensors_match(orig.q_a_proj, layer.q_a_proj)
+    _assert_overlapped_tensors_match(orig.q_b_proj, layer.q_b_proj)
+    _assert_overlapped_tensors_match(orig.kv_a_proj, layer.kv_a_proj)
+    _assert_overlapped_tensors_match(orig.o_proj, layer.o_proj)
+    _assert_overlapped_tensors_match(orig.gate_mm, layer.gate_mm)
+    _assert_overlapped_tensors_match(orig.attn_norm, layer.attn_norm)
+    _assert_overlapped_tensors_match(orig.q_norm, layer.q_norm)
+    _assert_overlapped_tensors_match(orig.kv_norm, layer.kv_norm)
+    _assert_overlapped_tensors_match(orig.ffn_norm, layer.ffn_norm)
+    _assert_overlapped_tensors_match(orig.kv_b1_proj, layer.kv_b1_proj)
+    _assert_overlapped_tensors_match(orig.kv_b2_proj, layer.kv_b2_proj)
+    _assert_overlapped_tensors_match(orig.shared_gate_proj, layer.shared_gate_proj)
+    _assert_overlapped_tensors_match(orig.shared_up_proj, layer.shared_up_proj)
+
+    assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+    if orig_shared_down_shape is not None:
+        assert getattr(layer, "shared_down_proj", None) is not None
+        assert layer.shared_down_proj.shape == orig_shared_down_shape

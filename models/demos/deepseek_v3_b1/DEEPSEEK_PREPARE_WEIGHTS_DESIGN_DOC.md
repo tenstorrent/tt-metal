@@ -125,6 +125,33 @@ So: **full HF tensors → prepare_weights (transform only) → blitz (shard to d
 | shared_gate_proj / shared_up_proj | (7168, 2048) | (7168, 256) per device |
 | q_a_proj, kv_a_proj, gate_mm, norms | — | Replicated (full shape per device) |
 
+### 5.4 How HF weights map onto MoE and MLP implementation
+
+DeepSeek V3 has **two layer types**: the first few layers are **dense** (one MLP, no routing); the rest are **MoE** (router + shared expert + 32 routed experts). The table below maps HF state-dict keys to what **prepare_weights** produces and which **fused ops** in this directory consume them.
+
+**Layer types in HF:**
+
+- **Dense layers** (e.g. `i = 0, 1, 2`): `model.layers.{i}.mlp` has a single “expert” with `gate_proj`, `up_proj`, `down_proj` (no `gate`, no `shared_experts`, no `experts`).
+- **MoE layers** (e.g. `i = 3..60`): `model.layers.{i}.mlp` has `gate` (router), `shared_experts.gate_proj/up_proj/down_proj`, and `experts.{0..31}.gate_proj/up_proj/down_proj`.
+
+**Implementation in this directory:**
+
+| HF concept | HF keys (under `model.layers.{i}.`) | prepare_weights / blitz | Fused op that uses it |
+|------------|-------------------------------------|--------------------------|------------------------|
+| **Attention** (all layers) | self_attn.q_a_proj, q_b_proj, kv_a_proj_with_mqa, kv_b_proj, o_proj + norms | Yes → OverlappedTensors in q_ab_kv_a, kv_b12, o_proj_gate_mm_norms | Pre-SDPA, Post-SDPA (not covered in this table in detail). |
+| **Router** (MoE only) | mlp.gate.weight | Yes → gate_mm in o_proj_gate_mm_norms | **MoeOp**: gate matmul (step 2); expects gate_mm on L1. |
+| **Shared expert gate/up** (MoE only) | mlp.shared_experts.gate_proj.weight, up_proj.weight | Yes → gate_up fusion (shared_gate_proj, shared_up_proj) | **SharedExpertOp**: fused gate/up matmul (steps 2–4); reads gate_up L1 buffer. |
+| **Shared expert down** (MoE only) | mlp.shared_experts.down_proj.weight | Yes → plain tensor shared_down_proj (TP-sharded) | **SharedExpertOp** + **DownProj**: down_proj matmul (step 7); reads shared_down_proj. |
+| **Dense MLP** (dense layers only) | mlp.gate_proj, mlp.up_proj, mlp.down_proj | **No** (Phase 2) | **MlpOp** (test_mlp.py): one “expert” gate/up/down; today tests use synthetic weights, not HF. |
+| **Routed experts** (MoE only) | mlp.experts.{e}.gate_proj, up_proj, down_proj (e=0..31) | **No** (Phase 3) | **MoeOp** (MoeRoutedExpertOp): gate_proj, up_proj, down_proj per expert from **DRAM**; today tests use create_expert_matmul_tensors (synthetic). |
+
+**Summary:**
+
+- **Dense layers:** HF has one set of `mlp.gate_proj`, `mlp.up_proj`, `mlp.down_proj`. The **MlpOp** path (test_mlp.py) implements that single-expert MLP; **prepare_weights** does not yet load these three (Phase 2).
+- **MoE layers:** HF has (1) router `mlp.gate`, (2) shared expert `mlp.shared_experts.{gate,up,down}_proj`, (3) 32 routed experts `mlp.experts.{e}.{gate,up,down}_proj`. We **do** load (1) and (2) via prepare_weights → gate_mm, gate_up fusion, and shared_down_proj. The **MoeOp** uses gate_mm and the **SharedExpertOp** uses gate_up + shared_down_proj. Routed expert weights (3) are **not** in prepare_weights yet; the MoE op expects them in DRAM (e.g. from create_expert_matmul_tensors in tests).
+
+So: **HF dense MLP** → MlpOp (one gate/up/down); **HF MoE** → MoeOp (router + SharedExpertOp for shared expert + DRAM experts for routed). prepare_weights currently feeds only attention + router + shared expert; dense MLP and routed experts are future work.
+
 ---
 
 ## 6. kv_b_proj Split

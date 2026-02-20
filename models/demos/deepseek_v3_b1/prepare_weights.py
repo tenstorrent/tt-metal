@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
@@ -313,11 +314,6 @@ def deallocate_weights(weights: DeepSeekV3Weights) -> None:
                 ttnn.deallocate(ot.fused_tensor, force=True)
 
 
-# ---------------------------------------------------------------------------
-# Serialization (save_weights / load_weights)
-# ---------------------------------------------------------------------------
-
-
 def _core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:
     """Serialize CoreRangeSet to JSON-serializable list of [[sx, sy], [ex, ey]]."""
     result = []
@@ -399,9 +395,13 @@ def save_layer(
     Creates one directory with manifest.json and per-fusion-group .tensorbin files.
     Caller must provide hf_model_name and hf_state_dict_name for the manifest.
     """
+    logger.info(f"Saving layer {layer_idx} to {path}...")
+
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     layer_dir = path / f"layer_{layer_idx:03d}"
+    logger.info(f"Saving layer {layer_idx} to {layer_dir}...")
+
     layer_dir.mkdir(parents=True, exist_ok=True)
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -413,17 +413,23 @@ def save_layer(
             by_fused[fid] = []
         by_fused[fid].append((name, ot))
 
+    logger.info(f"Creating fusion groups for layer {layer_idx}...")
     fusion_groups: dict[str, dict] = {}
     for fid, group_fields in by_fused.items():
         group_name = _FIELD_TO_FUSION_GROUP.get(group_fields[0][0])
         if group_name is None:
             raise KeyError(f"Unknown field for fusion group: {group_fields[0][0]}")
         tensorbin_name = f"{group_name}.tensorbin"
+
+        logger.info(f"Saving {tensorbin_name}...")
         ttnn.dump_tensor(layer_dir / tensorbin_name, group_fields[0][1].fused_tensor)
+        logger.info(f"Saved {tensorbin_name} to {layer_dir / tensorbin_name}...")
+
         fusion_groups[group_name] = {
             "tensorbin": tensorbin_name,
             "fields": {name: _overlapped_tensor_to_json(ot) for name, ot in group_fields},
         }
+    logger.info(f"Created fusion groups for layer {layer_idx}...")
 
     is_moe = isinstance(layer, DeepSeekV3MoELayerWeights)
     manifest = {
@@ -462,6 +468,7 @@ def load_layer(
     fusion_groups = manifest["fusion_groups"]
 
     if layer_type == "dense":
+        logger.info(f"Loading all dense tensors for layer {layer_idx}...")
         q_ab = fusion_groups["q_ab_kv_a"]
         fused_q = ttnn.load_tensor(layer_dir / q_ab["tensorbin"], device=device)
         q_a_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["q_a_proj"])
@@ -480,6 +487,7 @@ def load_layer(
         fused_kv = ttnn.load_tensor(layer_dir / kv_grp["tensorbin"], device=device)
         kv_b1_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b1_proj"])
         kv_b2_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b2_proj"])
+        logger.info(f"Loaded all dense tensors for layer {layer_idx}...")
 
         return DeepSeekV3DenseLayerWeights(
             q_a_proj=q_a_proj,
@@ -494,6 +502,7 @@ def load_layer(
             kv_b2_proj=kv_b2_proj,
         )
     else:
+        logger.info(f"Loading all dense tensors for layer {layer_idx}...")
         q_ab = fusion_groups["q_ab_kv_a"]
         fused_q = ttnn.load_tensor(layer_dir / q_ab["tensorbin"], device=device)
         q_a_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["q_a_proj"])
@@ -518,6 +527,7 @@ def load_layer(
         fused_gu = ttnn.load_tensor(layer_dir / gu_grp["tensorbin"], device=device)
         shared_gate_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_gate_proj"])
         shared_up_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_up_proj"])
+        logger.info(f"Loaded all MoE tensors for layer {layer_idx}...")
 
         return DeepSeekV3MoELayerWeights(
             q_a_proj=q_a_proj,
