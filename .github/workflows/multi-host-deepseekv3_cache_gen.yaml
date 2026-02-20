@@ -1,7 +1,7 @@
 name: DeepSeek V3 Multi-Host Cache Generation
 on:
   # schedule:
-    # - cron: '0 13 * * 6'  # Every Saturday at 13:00 UTC
+  #   - cron: '0 4 * * 0'  # Every Sunday at 04:00 UTC
   workflow_dispatch:
     inputs:
       cache-dir:
