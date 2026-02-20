@@ -157,15 +157,16 @@ def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
 
 def _get_role_key(
     kernel_desc: "ttnn.KernelDescriptor",
-    core_range_override: Optional[Any] = None,
+    target_core_range: Optional[Any] = None,
 ) -> Tuple[str, frozenset]:
     """Return (risc_type, core_ranges_key) identifying this kernel's role.
 
-    If core_range_override is set, all kernels are mapped to that range
+    If target_core_range is set, all kernels are mapped to that range
     regardless of their native core_ranges.  This collapses kernels with
-    different ranges (e.g. stem vs branch) into the same role.
+    different ranges (e.g. stem vs branch) into the same role when building
+    a fused kernel for a specific core group.
     """
-    cr = core_range_override if core_range_override is not None else kernel_desc.core_ranges
+    cr = target_core_range if target_core_range is not None else kernel_desc.core_ranges
     return (_get_risc_type(kernel_desc), _core_ranges_key(cr))
 
 

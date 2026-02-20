@@ -15,6 +15,7 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     Sequential,
 )
 from models.experimental.ops.descriptors.fusion.graph import (
+    CoreGroup,
     OpGraphBuilder,
     OpNode,
     build_op_graph,
@@ -43,6 +44,7 @@ __all__ = [
     "FusedOp",
     # Graph API
     "OpNode",
+    "CoreGroup",
     "OpGraphBuilder",
     "build_op_graph",
     # CB management

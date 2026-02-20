@@ -9,6 +9,10 @@ Builds fused descriptors from a tree of OpNode objects. Each node holds one
 operation. Parent->child edges encode sequential ordering; sibling nodes run
 in parallel on disjoint core subsets.
 
+The builder uses a per-core group approach: it walks the tree to determine
+each core's phase sequence, groups cores with identical sequences, and builds
+one fused kernel binary per group.
+
 Usage::
 
     root = OpNode(ln_op, children=[OpNode(rms_op_A), OpNode(rms_op_B)])
@@ -16,6 +20,7 @@ Usage::
     # Returns a single FusedOp, suitable for composite.launch()
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set, Tuple
 
@@ -59,6 +64,28 @@ class OpNode:
 
     op: OpDescriptor
     children: List["OpNode"] = field(default_factory=list)
+
+
+@dataclass
+class CoreGroup:
+    """A group of cores that execute the same phase sequence.
+
+    Each group becomes one fused kernel binary.  The group's core_range
+    is derived from the kernel descriptors of the leaf node in each
+    core's root-to-leaf path through the tree.
+
+    Attributes:
+        core_range: CoreRangeSet of cores in this group.
+        phases: Ordered list of OpDescriptors these cores execute.
+        barrier_scopes: CoreRangeSet per phase transition
+            (len = len(phases) - 1).  Each entry is the effective leaf
+            range of the tree node at that position, determining which
+            cores must synchronize at that transition.
+    """
+
+    core_range: Any
+    phases: List[OpDescriptor]
+    barrier_scopes: List[Any]
 
 
 # =============================================================================
@@ -124,9 +151,18 @@ class OpGraphBuilder:
 
     The fusion tree is a standard tree where each node holds one operation.
     Parent->child edges encode sequential ordering; sibling nodes run in
-    parallel on disjoint core subsets.  For each root-to-leaf path, a
-    separate fused kernel binary is generated.  Nodes sharing a path
-    segment synchronize via shared GlobalSemaphore addresses.
+    parallel on disjoint core subsets.
+
+    The builder uses a per-core group approach:
+
+    1. Walk the tree to determine each core's phase sequence.
+    2. Group cores with identical phase sequences into :class:`CoreGroup`
+       objects.
+    3. Build one fused kernel binary per group.
+    4. Merge all group binaries into a single ProgramDescriptor.
+
+    Groups sharing a barrier scope (e.g. the stem) reuse the same
+    GlobalSemaphore addresses for cross-kernel synchronization.
 
     Usage::
 
@@ -143,8 +179,8 @@ class OpGraphBuilder:
         """Build a fused descriptor from the tree.
 
         Returns a single self-contained FusedOp.  For branching trees,
-        path ProgramDescriptors are merged internally so the result can be
-        dispatched as one unit via ``composite.launch([result])``.
+        group ProgramDescriptors are merged internally so the result can
+        be dispatched as one unit via ``composite.launch([result])``.
 
         Output tensors are ordered by leaf in left-to-right DFS order.
 
@@ -189,8 +225,8 @@ class OpGraphBuilder:
             if device is None:
                 raise ValueError("Cannot auto-extract device: no tensors found in tree. " "Pass device explicitly.")
 
-        # Trace all root-to-leaf paths
-        paths = self._trace_paths()
+        # Compute per-core groups
+        groups = self._compute_core_groups()
 
         # Compute union of all leaf core ranges
         union_range = self._compute_union_ranges()
@@ -202,77 +238,184 @@ class OpGraphBuilder:
         writer_done_addr = ttnn.get_global_semaphore_address(sem_writer_done)
         all_sem_refs = [sem_compute_done, sem_writer_done]
 
-        # Pre-allocate barrier configs for each unique core range across all
-        # path segments.  Paths that share a segment MUST use the same
-        # arrive/release GlobalSemaphore L1 addresses so that cores running
-        # different kernel binaries synchronize at the same barrier.
+        # Pre-allocate barrier configs for each unique barrier scope across
+        # all groups.  Groups sharing a scope MUST use the same arrive/release
+        # GlobalSemaphore L1 addresses so that cores running different kernel
+        # binaries synchronize at the same barrier.
         segment_cache: Dict[frozenset, BarrierConfig] = {}
-        for path in paths:
-            for core_range, _ in path:
-                key = _core_ranges_key(core_range)
+        for group in groups:
+            for scope in group.barrier_scopes:
+                key = _core_ranges_key(scope)
                 if key not in segment_cache:
-                    segment_cache[key] = _create_barrier_segment_config(device, core_range)
+                    segment_cache[key] = _create_barrier_segment_config(device, scope)
                     all_sem_refs.extend(segment_cache[key]._sem_refs)
 
-        results = []
-        for path in paths:
-            # Save CB descriptor state before building each path.
-            path_prog_descs = [op.descriptor for _, phases in path for op in phases]
-            saved_cb_state = _save_cb_state(path_prog_descs)
+        # When there are multiple groups (branching tree), phases may have
+        # different native core ranges than the group's range (e.g. stem
+        # covers 16 cores, group only covers 8).  In this case, we need to
+        # pass target_core_range to restrict the fused kernel to the group.
+        multi_group = len(groups) > 1
 
-            result = self._build_path(
+        results = []
+        for group in groups:
+            # Save CB descriptor state before building each group.
+            group_prog_descs = [op.descriptor for op in group.phases]
+            saved_cb_state = _save_cb_state(group_prog_descs)
+
+            result = self._build_group(
                 device,
-                path,
+                group,
                 compute_done_addr,
                 writer_done_addr,
                 all_sem_refs,
                 segment_cache,
+                needs_target_core_range=multi_group,
             )
             results.append(result)
 
-            # Restore original state so the next path sees uncorrupted indices
+            # Restore original state so the next group sees uncorrupted indices
             _restore_cb_state(saved_cb_state)
             _verify_cb_restore(saved_cb_state)
 
         return _merge_build_results(results)
 
-    def _trace_paths(self) -> List[List[Tuple[Any, List[OpDescriptor]]]]:
-        """Trace all root-to-leaf paths through the tree.
+    def _compute_core_groups(self) -> List[CoreGroup]:
+        """Compute per-core phase sequences and group by identity.
 
-        Returns a list of paths.  Each path is a list of
-        ``(core_range, [phases])`` segments.  Consecutive nodes with the
-        same core range are grouped into one segment.
+        Walks the tree pre-order.  For each node, records its op and
+        barrier scope (effective leaf range) for every core in the node's
+        range.  Cores with identical phase sequences are grouped together.
+
+        Returns list of CoreGroups, one per unique phase sequence.
         """
-        raw_paths: List[List[Tuple[Any, OpDescriptor]]] = []
+        # Per-core entries: coord -> [(OpDescriptor, barrier_scope_CoreRangeSet)]
+        per_core: Dict[Tuple[int, int], List[Tuple[OpDescriptor, Any]]] = defaultdict(list)
 
-        def _collect(node: OpNode, prefix: List[Tuple[Any, OpDescriptor]]):
-            if not node.children:
-                # Leaf: use the node's own core range
-                core_range = _get_node_core_range(node)
-                raw_paths.append(prefix + [(core_range, node.op)])
-            else:
-                # Internal node: use effective range (union of descendant leaves)
-                eff_coords = self._effective_leaf_range(node)
-                eff_range = _coords_to_core_range_set(eff_coords)
-                current = prefix + [(eff_range, node.op)]
-                for child in node.children:
-                    _collect(child, current)
+        def _walk(node: OpNode):
+            eff_coords = self._effective_leaf_range(node)
+            eff_range = _coords_to_core_range_set(eff_coords)
+            node_coords = _core_range_set_to_coords(_get_node_core_range(node))
+            for coord in node_coords:
+                per_core[coord].append((node.op, eff_range))
+            for child in node.children:
+                _walk(child)
 
-        _collect(self._root, [])
-        return [self._group_into_segments(raw) for raw in raw_paths]
+        _walk(self._root)
+
+        # Group cores by identical phase sequence (by op identity)
+        groups_by_key: Dict[tuple, Set[Tuple[int, int]]] = defaultdict(set)
+        for coord, entries in per_core.items():
+            key = tuple(id(op) for op, _ in entries)
+            groups_by_key[key].add(coord)
+
+        # Build CoreGroups
+        result = []
+        for key, coords in groups_by_key.items():
+            representative = per_core[next(iter(coords))]
+            core_range = _coords_to_core_range_set(coords)
+            phases = [op for op, _ in representative]
+            barrier_scopes = [eff_range for _, eff_range in representative[:-1]]
+            result.append(
+                CoreGroup(
+                    core_range=core_range,
+                    phases=phases,
+                    barrier_scopes=barrier_scopes,
+                )
+            )
+
+        return result
+
+    def _build_group(
+        self,
+        device: Any,
+        group: CoreGroup,
+        compute_done_addr: int,
+        writer_done_addr: int,
+        shared_sem_refs: List[Any],
+        segment_cache: Dict[frozenset, BarrierConfig],
+        needs_target_core_range: bool = False,
+    ) -> _BuildResult:
+        """Build a fused _BuildResult for one core group.
+
+        Args:
+            needs_target_core_range: If True, pass the group's core_range
+                as target_core_range to _build_fused_descriptor.  This is
+                needed for branching trees where the stem's native core
+                range differs from the group's (leaf) core range.  For
+                single-group linear chains, this should be False.
+        """
+        from models.experimental.ops.descriptors.fusion.codegen import (
+            _build_fused_descriptor,
+            _create_phase_info,
+        )
+
+        # Build barrier segments and transition map from barrier scopes
+        segments, transition_map = self._build_group_barriers(
+            group.barrier_scopes,
+            segment_cache,
+        )
+
+        # Build MultiBarrierSpec
+        multi_barrier = MultiBarrierSpec(
+            segments=segments,
+            compute_done_addr=compute_done_addr,
+            writer_done_addr=writer_done_addr,
+            transition_map=transition_map,
+            _sem_refs=list(shared_sem_refs),
+        )
+
+        # Build PhaseInfo list and call _build_fused_descriptor
+        phase_infos = [_create_phase_info(op, i) for i, op in enumerate(group.phases)]
+
+        # Only set target_core_range for branching trees where phases may
+        # have different native core ranges than the group's core range.
+        target_cr = group.core_range if needs_target_core_range else None
+
+        return _build_fused_descriptor(
+            phase_infos,
+            device,
+            target_core_range=target_cr,
+            multi_barrier=multi_barrier,
+        )
 
     @staticmethod
-    def _group_into_segments(
-        raw_path: List[Tuple[Any, OpDescriptor]],
-    ) -> List[Tuple[Any, List[OpDescriptor]]]:
-        """Group consecutive same-range nodes into segments."""
-        segments: List[Tuple[Any, List[OpDescriptor]]] = []
-        for core_range, op in raw_path:
-            if segments and _core_ranges_key(segments[-1][0]) == _core_ranges_key(core_range):
-                segments[-1][1].append(op)
-            else:
-                segments.append((core_range, [op]))
-        return segments
+    def _build_group_barriers(
+        barrier_scopes: List[Any],
+        segment_cache: Dict[frozenset, BarrierConfig],
+    ) -> Tuple[List[BarrierSegment], Dict[int, Tuple[int, int]]]:
+        """Build barrier segments and transition map from barrier scopes.
+
+        Consecutive transitions with the same barrier scope share a segment.
+        The ``segment_cache`` ensures groups sharing a scope (e.g. the stem)
+        use the same GlobalSemaphore addresses for synchronization.
+
+        Returns (segments, transition_map).
+        """
+        segments: List[BarrierSegment] = []
+        transition_map: Dict[int, Tuple[int, int]] = {}
+
+        prev_scope_key = None
+        seg_idx = -1
+        call_idx = 0
+
+        for t_idx, scope in enumerate(barrier_scopes):
+            scope_key = _core_ranges_key(scope)
+            if scope_key != prev_scope_key:
+                # New barrier segment
+                barrier_cfg = segment_cache[scope_key]
+                seg = BarrierSegment(
+                    config=barrier_cfg,
+                    arrive_addr=barrier_cfg.global_arrive_addr,
+                    release_addr=barrier_cfg.global_release_addr,
+                )
+                segments.append(seg)
+                seg_idx += 1
+                call_idx = 0
+                prev_scope_key = scope_key
+            transition_map[t_idx] = (seg_idx, call_idx)
+            call_idx += 1
+
+        return segments, transition_map
 
     def _compute_union_ranges(self) -> Any:
         """Compute the union CoreRangeSet of all leaf core ranges."""
@@ -340,115 +483,6 @@ class OpGraphBuilder:
             coords |= OpGraphBuilder._effective_leaf_range(child)
         return coords
 
-    def _build_path(
-        self,
-        device: Any,
-        path: List[Tuple[Any, List[OpDescriptor]]],
-        compute_done_addr: int,
-        writer_done_addr: int,
-        shared_sem_refs: List[Any],
-        segment_cache: Dict[frozenset, BarrierConfig],
-    ) -> _BuildResult:
-        """Build a fused _BuildResult for one root-to-leaf path."""
-        from models.experimental.ops.descriptors.fusion.codegen import (
-            _build_fused_descriptor,
-            _create_phase_info,
-        )
-
-        # Flatten phases and determine leaf core range
-        all_phases: List[OpDescriptor] = []
-        for _, phases in path:
-            all_phases.extend(phases)
-
-        # Leaf core range = last segment's core range.
-        leaf_core_range = path[-1][0] if len(path) > 1 else None
-
-        # Build barrier segments and transition map
-        segments, transition_map = self._build_barrier_segments(
-            path,
-            all_phases,
-            segment_cache,
-        )
-
-        # Build MultiBarrierSpec
-        multi_barrier = MultiBarrierSpec(
-            segments=segments,
-            compute_done_addr=compute_done_addr,
-            writer_done_addr=writer_done_addr,
-            transition_map=transition_map,
-            _sem_refs=list(shared_sem_refs),
-        )
-
-        # Build PhaseInfo list and call _build_fused_descriptor
-        phase_infos = [_create_phase_info(op, i) for i, op in enumerate(all_phases)]
-
-        return _build_fused_descriptor(
-            phase_infos,
-            device,
-            core_range_override=leaf_core_range,
-            multi_barrier=multi_barrier,
-        )
-
-    def _build_barrier_segments(
-        self,
-        path: List[Tuple[Any, List[OpDescriptor]]],
-        all_phases: List[OpDescriptor],
-        segment_cache: Dict[frozenset, BarrierConfig],
-    ) -> Tuple[List[BarrierSegment], Dict[int, Tuple[int, int]]]:
-        """Build barrier segments and transition map for a path.
-
-        Uses ``segment_cache`` (keyed by core_ranges_key) so that paths
-        sharing a segment (e.g. the stem) reuse the same GlobalSemaphore
-        arrive/release addresses for cross-kernel synchronization.
-
-        Returns (segments, transition_map).
-        """
-        segments: List[BarrierSegment] = []
-
-        transition_map: Dict[int, Tuple[int, int]] = {}
-        global_phase_offset = 0
-
-        for seg_path_idx, (core_range, phases) in enumerate(path):
-            num_phases_in_seg = len(phases)
-            if num_phases_in_seg == 0:
-                global_phase_offset += num_phases_in_seg
-                continue
-
-            is_last_segment = seg_path_idx == len(path) - 1
-            num_transitions_within = num_phases_in_seg - 1
-            num_transitions = num_transitions_within
-            if not is_last_segment:
-                num_transitions += 1  # transition to next segment
-
-            if num_transitions > 0:
-                # Look up pre-allocated barrier config from cache
-                key = _core_ranges_key(core_range)
-                barrier_cfg = segment_cache[key]
-                seg = BarrierSegment(
-                    config=barrier_cfg,
-                    arrive_addr=barrier_cfg.global_arrive_addr,
-                    release_addr=barrier_cfg.global_release_addr,
-                )
-                segments.append(seg)
-
-                seg_idx = len(segments) - 1
-                call_idx = 0
-
-                # Map transitions within this segment
-                for t in range(num_transitions_within):
-                    global_transition = global_phase_offset + t
-                    transition_map[global_transition] = (seg_idx, call_idx)
-                    call_idx += 1
-
-                # Map transition to next segment (if any)
-                if not is_last_segment:
-                    global_transition = global_phase_offset + num_phases_in_seg - 1
-                    transition_map[global_transition] = (seg_idx, call_idx)
-
-            global_phase_offset += num_phases_in_seg
-
-        return segments, transition_map
-
 
 # =============================================================================
 # Convenience Functions
@@ -490,6 +524,7 @@ def build_op_graph(
 
 __all__ = [
     "OpNode",
+    "CoreGroup",
     "OpGraphBuilder",
     "build_op_graph",
     "_extract_device_from_tree",
