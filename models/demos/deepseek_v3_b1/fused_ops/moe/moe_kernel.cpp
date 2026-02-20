@@ -712,7 +712,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
                 get_named_compile_time_arg_val("rmsnorm_input_cb"),  // residual_mcast_src_cb
                 get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-                get_named_compile_time_arg_val("rmsnorm_output_cb")>;  // rmsnorm_output_cb>;
+                get_named_compile_time_arg_val("rmsnorm_output_cb")>;  // rmsnorm_output_cb
             deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
                 get_common_arg_val<uint32_t>(0),  // epsilon
                 get_common_arg_val<float>(1),     // scalar (1/sqrt(numel))
