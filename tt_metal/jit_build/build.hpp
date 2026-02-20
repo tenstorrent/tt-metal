@@ -4,6 +4,7 @@
 
 #pragma once
 #include <stdint.h>
+#include <bitset>
 #include <span>
 #include <tt_stl/aligned_allocator.hpp>
 #include <functional>
@@ -125,8 +126,12 @@ protected:
     // Used when JitBuildSettings is not provided
     std::string default_linker_opt_level_;
 
+    // Upper bound for compile objects.
+    // Current max obj count is 2 -- very sufficient for now.
+    static constexpr size_t kMaxBuildBitset = 64;
+
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
-    size_t compile(const std::string& out_dir, const JitBuildSettings* settings) const;
+    std::bitset<kMaxBuildBitset> compile(const std::string& out_dir, const JitBuildSettings* settings) const;
     void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
@@ -137,11 +142,7 @@ protected:
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
 
-    void build(const JitBuildSettings* settings) const;
-
-    // Links object files from a previously compiled processor build to create a binary for this processor.
-    // Used for Quasar when multiple processors share the same kernel code to avoid redundant compilation.
-    void link_to_processor(const JitBuildState& processor_build_state, const JitBuildSettings* settings) const;
+    void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
 
     const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }
@@ -157,13 +158,9 @@ using JitBuildStateSubset = std::span<const JitBuildState>;
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings);
 
-// Takes compiled object files from orig_processor_build_state and links them to produce a binary for
-// additional_processor_build_state.
-// Used for Quasar to share compiled objects across processors.
-void jit_link_additional_processor(
-    const JitBuildState& orig_processor_build_state,
-    const JitBuildState& additional_processor_build_state,
-    const JitBuildSettings* additional_processor_settings);
+// Build for multiple processors that share the same source: the first target compiles,
+// and all targets (including the first) are linked. Writes the success marker once after all succeed.
+void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings);
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 void sync_build_steps(std::vector<std::shared_future<void>>& events);
