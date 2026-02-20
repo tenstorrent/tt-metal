@@ -102,8 +102,24 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
 
     log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(tt::LogOp, "out_cb_id: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
-    log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
-    log_debug(tt::LogOp, "output_tile_size: {}", output_tile_size);
+    log_debug(tt::LogOp, "input_tile_size: {}, output_tile_size: {}", input_tile_size, output_tile_size);
+    log_debug(
+        tt::LogOp,
+        "input_dtype: {}, output_dtype: {}",
+        static_cast<uint32_t>(input_dtype),
+        static_cast<uint32_t>(output_dtype));
+    log_debug(tt::LogOp, "act_df: {}, out_df: {}", static_cast<uint32_t>(act_df), static_cast<uint32_t>(out_df));
+    log_debug(
+        tt::LogOp,
+        "num_tile_per_core: {}, shard_shape: [{}, {}]",
+        num_tile_per_core,
+        shard_spec.shape[0],
+        shard_spec.shape[1]);
+    log_debug(
+        tt::LogOp,
+        "preserve_fp32_precision: {}, fp32_dest_acc_en: {}",
+        args.preserve_fp32_precision,
+        args.fp32_dest_acc_en);
 
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
