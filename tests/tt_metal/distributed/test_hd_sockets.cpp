@@ -50,7 +50,8 @@ const std::vector<std::size_t> kTotalDataSizes = {
     1024UL * 1024 * 1024  // 1GB
 };
 
-const std::vector<std::size_t> kPageSizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
+const std::vector<std::size_t> kPageSizes = {
+    64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
 
 const std::vector<std::size_t> kD2HThroughputFifoSizes = {
     1024,
@@ -77,7 +78,7 @@ const std::vector<std::size_t> kD2HThroughputFifoSizes = {
 
 const std::vector<std::size_t> kD2HLatencyFifoSizes = {1024, 4096, 16384, 65536, 512UL * 1024 * 1024};
 const std::vector<std::size_t> kH2DThroughputFifoSizes = {
-    1024, 2048, 4096, 8192, 16384, 32768, 65536, 128 * 1024, 256 * 1024, 512 * 1024};
+    1024, 2048, 4096, 8192, 16384, 32768, 65536, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024};
 const std::vector<std::size_t> kH2DLatencyFifoSizes = {1024, 4096, 16384, 65536, 262144, 524288};
 
 std::size_t compute_iteration_data_size_bytes(std::size_t page_size) {
@@ -544,6 +545,81 @@ TEST_F(HDSocketFixture, D2HSocketThroughputBenchmark) {
                     sender_coord);
                 std::cout.flush();
             }
+        }
+    }
+}
+
+TEST_F(HDSocketFixture, D2HSocketMultiChipMaxThroughputBenchmark) {
+    // Iterates over every MMIO-mapped chip on the system and measures D2H throughput
+    // at 64KB page size (max-throughput configuration) across a range of FIFO sizes
+    // that quadruple each step: 1MB → 4MB → 16MB → 64MB → 256MB.
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    constexpr std::size_t kBenchPageSize = 65536;               // 64KB – max throughput
+    constexpr std::size_t kBenchTotalData = 1024UL * 1024 * 1024;  // 1GB
+    const std::vector<std::size_t> kBenchFifoSizes = {
+        1UL * 1024 * 1024,    //   1MB
+        4UL * 1024 * 1024,    //   4MB
+        16UL * 1024 * 1024,   //  16MB
+        64UL * 1024 * 1024,   //  64MB
+        256UL * 1024 * 1024,  // 256MB
+    };
+
+    // Collect all MMIO-mapped chips with their tray/ASIC metadata.
+    auto physical_system_descriptor = PhysicalSystemDescriptor(
+        MetalContext::instance().get_cluster().get_driver(),
+        MetalContext::instance().get_distributed_context_ptr(),
+        &MetalContext::instance().hal(),
+        MetalContext::instance().rtoptions(),
+        true);
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+
+    struct ChipInfo {
+        MeshCoordinate coord;
+        uint32_t tray_id;
+        uint32_t asic_location;
+    };
+    std::vector<ChipInfo> mmio_chips;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (!is_device_coord_mmio_mapped(mesh_device_, coord)) {
+            continue;
+        }
+        auto fabric_node_id = mesh_device_->get_fabric_node_id(coord);
+        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
+        mmio_chips.push_back({coord, *asic_desc.tray_id, *asic_desc.asic_location});
+    }
+
+    std::size_t data_size = compute_iteration_data_size_bytes(kBenchPageSize);
+    std::size_t pages_per_iter = data_size / kBenchPageSize;
+    uint32_t num_iterations = kBenchTotalData / data_size;
+    uint64_t total_pages = static_cast<uint64_t>(pages_per_iter) * num_iterations;
+
+    std::cout << "# D2HSocketMultiChipMaxThroughputBenchmark" << std::endl;
+    std::cout << "# page_size=64KB  total_data=1GB  chips=" << mmio_chips.size() << std::endl;
+    std::cout << std::endl;
+    std::cout << "tray_id,asic_location,mesh_coord,socket_fifo_size,total_data,data_size,"
+              << "pages_per_iter,num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
+              << "throughput_gbps" << std::endl;
+
+    for (const auto& chip : mmio_chips) {
+        std::cout << "# chip: tray_id=" << chip.tray_id << " asic_location=" << chip.asic_location
+                  << " mesh_coord=" << chip.coord << std::endl;
+
+        MeshCoreCoord sender_core{chip.coord, CoreCoord(0, 0)};
+
+        for (auto fifo_size : kBenchFifoSizes) {
+            auto [us, cycles] =
+                benchmark_d2h_socket(mesh_device_, fifo_size, kBenchPageSize, data_size, num_iterations, sender_core);
+
+            const double throughput_gbps = static_cast<double>(kBenchPageSize) / (us * 1e3);
+            std::cout << chip.tray_id << "," << chip.asic_location << "," << chip.coord << ","
+                      << fifo_size << "," << kBenchTotalData << "," << data_size << ","
+                      << pages_per_iter << "," << num_iterations << "," << total_pages << ","
+                      << us << "," << cycles << "," << throughput_gbps << std::endl;
+            std::cout.flush();
         }
     }
 }
