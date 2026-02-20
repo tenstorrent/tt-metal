@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
@@ -161,12 +161,16 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
     const auto& v_shape = gathered_input_tensor_v.logical_shape();
+    log_info(tt::LogOp, "q_shape: {}", q_shape);
+    log_info(tt::LogOp, "k_shape (gathered): {}", k_shape);
+    log_info(tt::LogOp, "v_shape (gathered): {}", v_shape);
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
     const uint32_t B = q_shape[0], NH = q_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
     const uint32_t padded_N = k_shape[2];
     const uint32_t vDH = v_shape[3];
     const uint32_t L = joint_q_shape[2];
 
+    // this is something regarding q
     const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles

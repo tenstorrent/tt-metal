@@ -118,8 +118,8 @@ void kernel_main() {
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
     const auto lse_writer = TensorAccessor(lse_args, lse_addr, lse_tile_bytes);
 
-    const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
-    const auto joint_tile_logical = TensorTileShape(B, NH, Lt, DHt);
+    const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
+    const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
     const auto lse_tile_logical = TensorTileShape(B, NH, local_padded_Nt + Lt, 1);
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
@@ -212,11 +212,11 @@ void kernel_main() {
             uint32_t end_seq_tile;
             if (is_joint_q) {
                 const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+                out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, vDHt);
                 end_seq_tile = Lt;
             } else {
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-                out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, vDHt);
                 end_seq_tile = local_padded_Nt * (ring_id + 1);
             }
 

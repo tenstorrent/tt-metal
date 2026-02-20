@@ -102,7 +102,7 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     // fix this
-    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
 
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto local_k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -113,16 +113,18 @@ void kernel_main() {
     const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr, k_tile_bytes);
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr, v_tile_bytes);
 
-    const auto input_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
-    // fix this for vDHt
-    const auto gathered_kv_input_tile_logical = TensorTileShape(B, NH, padded_Nt, DHt);
+    const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
+    const auto input_k_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
+    const auto input_v_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
+    const auto gathered_k_input_tile_logical = TensorTileShape(B, NH, padded_Nt, DHt);
+    const auto gathered_v_input_tile_logical = TensorTileShape(B, NH, padded_Nt, vDHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
 
-    const auto q_generator = PaddedAddrGenerator(q_reader, input_tile_logical);
-    const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_tile_logical);
-    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_tile_logical);
-    const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_kv_input_tile_logical);
-    const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_kv_input_tile_logical);
+    const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
+    const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
+    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
+    const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
+    const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
     const auto joint_q_generator = PaddedAddrGenerator(joint_q_reader, joint_input_tile_logical);
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
@@ -214,14 +216,16 @@ void kernel_main() {
                 }
                 KV_chunks_processed_in_iter++;
 
-                Slice kv_slice;
+                Slice k_slice;
+                Slice v_slice;
                 uint32_t
                     end_seq_tile;  // further information to `read_block` to determine whether it should pad with zeros.
 
                 if (kv_chunk_is_joint) {
                     const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
                     const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
-                    kv_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                    k_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                    v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
                     end_seq_tile = Lt;
                 } else {
                     if (ring_iter == 0) {
@@ -230,13 +234,15 @@ void kernel_main() {
                         // DPRINT << "Q CHUNK: " << q_chunk << " K: [" << nb << ", " << nq << ", "
                         //        << local_k_row_start_tile << ", " << local_k_row_start_tile + Sk_chunk_t << "]"
                         //        << ENDL();
-                        kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        k_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
                         // Gathered KV
                         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                        kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                        k_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                        v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
                     }
                 }
@@ -251,7 +257,7 @@ void kernel_main() {
                     read_block(
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        kv_slice,
+                        k_slice,
                         end_seq_tile,
                         cb_k_in,
                         k_tile_bytes,
@@ -283,7 +289,7 @@ void kernel_main() {
                     read_block(
                         kv_chunk_is_joint ? joint_v_generator
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        kv_slice,
+                        v_slice,
                         end_seq_tile,
                         cb_v_in,
                         v_tile_bytes,

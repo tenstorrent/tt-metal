@@ -2086,6 +2086,7 @@ template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t DHt,
+    uint32_t vDHt,
     uint32_t scale_fp32>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
@@ -2146,7 +2147,7 @@ void sdpa_ring(
         Sq_chunk_t,
         Sk_chunk_t,
         DHt,
-        DHt,    // vDHt = DHt
+        vDHt,
         false,  // use_attention_sink (not used)
         false,  // use_provided_mask (not used)
         false,  // use_padded_mask (not used)

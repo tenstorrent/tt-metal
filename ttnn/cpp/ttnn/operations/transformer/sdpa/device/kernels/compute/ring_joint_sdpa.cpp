@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -121,7 +121,7 @@ void kernel_main() {
 
         bool causality = (ring_iter == 0 ? is_causal : false);
 
-        sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
+        sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, vDHt, scale_fp32>(
             qk_in0_block_w,
             qk_subblock_w,
             qk_subblock_h,
