@@ -245,6 +245,40 @@ run_quad_demo_stress_test() {
 }
 
 ###############################################################################
+# Cache generation
+###############################################################################
+
+run_quad_cache_gen() {
+    fail=0
+    setup_quad_galaxy_env
+
+    local model_path="${DEEPSEEK_V3_HF_MODEL}"
+    local cache_dir="${_DEEPSEEK_V3_CACHE_DIR}"
+    local temp_cache_dir="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/temp"
+    local archive_dir="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-Archive"
+    local num_layers="${_DEEPSEEK_V3_OVERRIDE_NUM_LAYERS:-}"
+
+    if [[ -z "$cache_dir" ]]; then
+        echo "Error: _DEEPSEEK_V3_CACHE_DIR must be set" >&2
+        exit 1
+    fi
+
+    local cmd="python models/demos/deepseek_v3/scripts/generate_ds_cache.py \
+        --model-path ${model_path} \
+        --cache-dir ${cache_dir} \
+        --temp-cache-dir ${temp_cache_dir} \
+        --archive-dir ${archive_dir}"
+
+    [[ -n "$num_layers" ]] && cmd="$cmd --override-num-layers ${num_layers}"
+
+    _run_deepseekv3_tt bash -c "$cmd" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+###############################################################################
 # Composite runners
 ###############################################################################
 
@@ -341,12 +375,15 @@ main() {
         "quad_deepseekv3_integration_tests")
             run_quad_deepseekv3_integration_tests
             ;;
+        "quad_cache_gen")
+            run_quad_cache_gen
+            ;;
         "all")
             run_quad_galaxy_tests
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
+            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, quad_cache_gen, all" 1>&2
             exit 1
             ;;
     esac

@@ -1,0 +1,106 @@
+name: DeepSeek V3 Cache Generation
+on:
+  # schedule:
+    # - cron: '0 13 * * 6'  # Every Saturday at 13:00 UTC
+  workflow_dispatch:
+    inputs:
+      cache-dir:
+        description: 'Destination cache directory'
+        required: true
+        type: string
+      override-num-layers:
+        description: 'Optional: override the number of layers in the model'
+        required: false
+        type: string
+        default: ''
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+run-name: "DeepSeek V3 Cache Generation - quad"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      build-wheel: true
+
+  deepseek-cache-generation:
+    runs-on:
+      - multi-host-glx-4x
+      - arch-wormhole_b0
+      - bare-metal
+      - in-service
+    needs: build-artifact
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      - name: Extract files
+        run: tar --zstd -xvf ttm_any.tar.zst
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Capture runner's home directory
+        id: capture-home
+        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+
+      - name: Generate quad DeepSeek V3 TT-NN cache
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 480
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e _DEEPSEEK_V3_CACHE_DIR=${{ inputs.cache-dir }}
+            -e _DEEPSEEK_V3_OVERRIDE_NUM_LAYERS=${{ inputs.override-num-layers }}
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            # -v /mnt/MLPerf:/mnt/MLPerf
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_cache_gen
