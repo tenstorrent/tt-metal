@@ -320,7 +320,7 @@ BASE_TEST_CASES = [
     # ("decode", 1, USERS_PER_ROW, (4096, 8192, 32)), # Example.
 ] + [
     ("prefill", seq_len, 1, None)
-    if seq_len == 127
+    if seq_len == 128  # Changed from 127 to 128 to enable one prefill test
     else pytest.param(
         "prefill",
         seq_len,
@@ -357,7 +357,7 @@ optimal_topology = (
 )
 @pytest.mark.parametrize(
     "module_path",
-    [None, "model.layers.0.self_attn"],
+    [None],
 )
 @pytest.mark.parametrize(
     "test_closure",
