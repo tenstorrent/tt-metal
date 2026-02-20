@@ -73,7 +73,7 @@ def test_sdpa_op(
 
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
-    # Create core grid for minimal_matmul config
+    # Create core grid for SDPA config
     core_grid = ttnn.CoreCoord(compute_with_storage_grid_size[0], compute_with_storage_grid_size[1])
 
     full_grid = mesh_device.compute_with_storage_grid_size()
@@ -93,7 +93,7 @@ def test_sdpa_op(
 
     shape = (1, 10, 9472, 128)
 
-    minimalMatmulTest = SdpaOpTest(
+    sdpa_test = SdpaOpTest(
         mesh_device,
         OpParameter(shape, dtype, ttnn.TILE_LAYOUT, mem_config),  # activations
         [
@@ -109,4 +109,4 @@ def test_sdpa_op(
         determinism_check_interval=determinism_check_interval,
     )
 
-    minimalMatmulTest.run_op_test()
+    sdpa_test.run_op_test()
