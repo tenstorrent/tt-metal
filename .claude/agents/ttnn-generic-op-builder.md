@@ -3,6 +3,7 @@ name: ttnn-generic-op-builder
 description: "Use this agent when implementing a new TTNN operation using the Python-based generic_op infrastructure. This agent creates custom AI kernels using ProgramDescriptor APIs. It produces Python orchestration code, program descriptors, and stub kernel files. Invoke this agent when:\\n- Creating a new custom operation\\n- Implementing operations using ttnn.generic_op() and ProgramDescriptor\\n- Prototyping operations quickly\\n- The operation requirements are well-defined (math definition, tensor shapes, memory layout)\\n\\nExamples:\\n<example>\\nContext: User wants to create a custom element-wise operation.\\nuser: \"Create a custom pointwise sigmoid operation using generic_op\"\\nassistant: \"I'll use the ttnn-generic-op-builder agent to implement this sigmoid operation using the Python-based generic_op infrastructure.\"\\n<commentary>\\nSince the user is requesting a new TTNN operation using generic_op, use the Task tool to launch the ttnn-generic-op-builder agent to create the Python orchestration, program descriptor, and stub kernels.\\n</commentary>\\n</example>\\n\\n<example>\\nContext: User needs a custom reduction operation.\\nuser: \"I need a custom row-wise sum reduction using the generic_op API\"\\nassistant: \"Let me invoke the ttnn-generic-op-builder agent to create this reduction operation with the appropriate program descriptor and kernel stubs.\"\\n<commentary>\\nThe user explicitly wants to use generic_op API for a custom operation. Use the Task tool to launch the ttnn-generic-op-builder agent which specializes in Python-based TTNN operations.\\n</commentary>\\n</example>\\n\\n<example>\\nContext: User is prototyping a new operation and wants quick iteration.\\nuser: \"Create a prototype for a custom attention mask operation\"\\nassistant: \"The ttnn-generic-op-builder agent is perfect for rapid prototyping. I'll use it to create the operation structure with stub kernels that you can fill in incrementally.\"\\n<commentary>\\nUse the Task tool to launch the ttnn-generic-op-builder agent which creates Python-based operations with stub kernels.\\n</commentary>\\n</example>"
 model: sonnet
 color: pink
+tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
 hooks:
   Stop:
     - hooks:
@@ -459,8 +460,42 @@ If you encounter issues:
 3. **Runtime errors**: Verify runtime args are set for all cores
 4. **Shape mismatches**: Verify output tensor allocation matches expected shape
 
-## Logging (If Enabled)
+---
 
-If orchestrator enables logging ("with execution logging"), see:
-- `.claude/references/agent-execution-logging.md` - General logging instructions
-- `.claude/references/logging/generic-op-builder.md` - Agent-specific events and log sections
+## Git Commits (ALWAYS REQUIRED)
+
+Git commits are **MANDATORY** regardless of logging settings. Read `.claude/references/agent-execution-logging.md` Part 1.
+
+### When to Commit
+- **MUST**: After all files are created and tests pass
+- **MUST**: Before handoff to kernel-writer
+
+### Commit Message Format
+```
+[ttnn-generic-op-builder] stubs: {operation_name}
+
+- Created entry point, program descriptor, stub kernels
+- Tests: {PASSED|FAILED} (stub validation)
+
+operation: {operation_name}
+build: N/A
+tests: {status}
+```
+
+---
+
+## Breadcrumbs (Conditional)
+
+If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, enable breadcrumbs. Otherwise skip breadcrumb steps (git commits still required).
+
+**If ENABLED**: Read `.claude/references/agent-execution-logging.md` Part 2 and `.claude/references/logging/generic-op-builder.md` for the full protocol.
+
+**Initialize breadcrumbs:**
+```bash
+.claude/scripts/logging/init_breadcrumbs.sh \
+  "ttnn/ttnn/operations/{operation_name}" \
+  "ttnn-generic-op-builder" \
+  "{operation_name}" \
+  "ttnn-kernel-designer" \
+  "{spec_file_path}"
+```
