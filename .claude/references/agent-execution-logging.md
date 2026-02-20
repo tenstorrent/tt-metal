@@ -177,6 +177,8 @@ mkdir -p {operation_path}/agent_logs
   "{input_file_path}"
 ```
 
+**Append-mode**: `init_breadcrumbs.sh` **appends** a `start` event to the existing breadcrumb file. In TDD pipelines where the kernel-writer is invoked multiple times (once per stage), all stages' breadcrumbs accumulate in the same file. Each `"event":"start"` entry acts as a natural stage boundary. Do NOT delete or truncate the breadcrumb file between invocations.
+
 **Parameters:**
 - `operation_path`: The operation directory. Path depends on workflow:
   - `ttnn/ttnn/operations/{operation_name}` (see `ttnn-generic-op-workflow.md`)

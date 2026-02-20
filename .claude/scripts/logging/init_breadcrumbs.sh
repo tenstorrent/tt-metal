@@ -50,7 +50,7 @@ else
     START_EVENT="{\"ts\":\"${TIMESTAMP}\",\"event\":\"start\",\"agent\":\"${AGENT_NAME}\",\"operation\":\"${OPERATION_NAME}\",\"input_files\":${INPUT_FILES_JSON}}"
 fi
 
-# Write to breadcrumb file (overwrite if exists from previous run)
-echo "$START_EVENT" > "$BREADCRUMB_FILE"
+# Append to breadcrumb file (preserves breadcrumbs from previous stages/runs)
+echo "$START_EVENT" >> "$BREADCRUMB_FILE"
 
 echo "Initialized breadcrumbs at $BREADCRUMB_FILE"

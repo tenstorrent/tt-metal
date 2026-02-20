@@ -27,6 +27,10 @@ The kernel-writer agent often encounters the most challenging debugging scenario
 3. Provides handoff context if interrupted
 4. Improves instructions based on common failures
 
+### Append-Mode in TDD Pipelines
+
+In TDD pipelines, the kernel-writer is invoked **multiple times** (once per stage). Breadcrumbs from all stages accumulate in the same `ttnn-kernel-writer_breadcrumbs.jsonl` file. Each invocation's `init_breadcrumbs.sh` call appends a new `"event":"start"` entry that serves as a stage boundary. When writing the execution log, include a summary of ALL stages present in the breadcrumb file, not just the current stage.
+
 ---
 
 ## Mandatory Events (MUST Log These)
