@@ -177,6 +177,9 @@ def filter_params_with_constraints(all_params):
         if transpose_of_faces != within_face_16x16_transpose:
             continue
 
+        if transpose_of_faces == Transpose.Yes and num_faces == 2:
+            continue
+
         # Block transpose operations for face_r_dim < 16
         if transpose_of_faces == Transpose.Yes and face_r_dim < 16:
             continue
@@ -190,7 +193,9 @@ def filter_params_with_constraints(all_params):
         broadcast_none = broadcast_type == BroadcastType.None_
 
         # COL broadcast requires 4 faces
-        if broadcast_type == BroadcastType.Column and num_faces != 4:
+        if broadcast_type == BroadcastType.Column and (
+            num_faces != 4 or face_r_dim < 16
+        ):
             continue
 
         # ROW broadcast constraint: Requires 4 faces for proper row broadcast
