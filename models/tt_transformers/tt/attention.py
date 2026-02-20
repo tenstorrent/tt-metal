@@ -446,34 +446,6 @@ class Attention(LightweightModule):
         return ttnn.reshape(x5, (*tuple(x.shape)[:-1], d))
     
 
-    def _sample_rotary_prefix_torch(self, x_md, R, shard_idx=0, pos=31):
-        x_shard = ttnn.get_device_tensors(x_md)[shard_idx]
-    
-        # Slice rotary prefix
-        x_rot = ttnn.slice(
-            x_shard,
-            (0, 0, 0, 0),
-            (x_shard.shape[0], x_shard.shape[1], x_shard.shape[2], R),
-        )
-    
-        idx2_max = x_rot.shape[2]
-        p = min(pos, idx2_max - 1)
-    
-        x_one = ttnn.slice(x_rot, (0, 0, p, 0), (1, 1, p + 1, R))
-        return ttnn.to_torch(x_one).reshape(-1)
-
-
-    def _norm_check_rope(self, before_vec, after_vec, tag="", tol=5e-2):
-            # RoPE is a rotation → norm should be preserved (within bf16/quant noise).
-            nb = before_vec.float().norm().item()
-            na = after_vec.float().norm().item()
-            diff = abs(nb - na)
-            print(f"[RoPE norm]{tag} before={nb:.6f} after={na:.6f} diff={diff:.6e}")
-            if diff > tol:
-                print(f"[RoPE norm]{tag} WARNING diff>{tol} (possible pairing/layout mismatch or wrong cos/sin)")    
-
-
-
     def _apply_partial_rope(
         self,
         x,
@@ -604,7 +576,6 @@ class Attention(LightweightModule):
             y = ttnn.interleaved_to_sharded(y, restore_memcfg)
     
         return y
-    
 
 
 
@@ -975,103 +946,19 @@ class Attention(LightweightModule):
         ###
         # Rotary embeddings
         ###
-        
-        def quick_rope_style_check(rot_mats, shard_idx=0, pos=0, tol=1e-5):
-            cos_md, sin_md = rot_mats[0], rot_mats[1]
-        
-            # Take one shard
-            cos = ttnn.get_device_tensors(cos_md)[shard_idx]
-            sin = ttnn.get_device_tensors(sin_md)[shard_idx]
-        
-            # Expect something like [1,1,S,R] or [1,1,max_seq,R]
-            # Slice to a tiny tensor: [1,1,1,R] at sequence index = pos
-            R = cos.shape[-1]
-            cos_small = ttnn.slice(cos, (0, 0, pos, 0), (1, 1, pos + 1, R))
-            sin_small = ttnn.slice(sin, (0, 0, pos, 0), (1, 1, pos + 1, R))
-        
-            # Now transfer only the tiny slice
-            cos_t = ttnn.to_torch(cos_small).reshape(-1)  # length R
-            sin_t = ttnn.to_torch(sin_small).reshape(-1)
-        
-            half = R // 2
-            hf_cos = (cos_t[:half] - cos_t[half:]).abs().max().item()
-            hf_sin = (sin_t[:half] - sin_t[half:]).abs().max().item()
-            neox_cos = (cos_t[0::2] - cos_t[1::2]).abs().max().item()
-            neox_sin = (sin_t[0::2] - sin_t[1::2]).abs().max().item()
-        
-            print(f"[RoPE] HF-half err  cos/sin = {hf_cos:.3e}, {hf_sin:.3e}")
-            print(f"[RoPE] NeoX e/o err cos/sin = {neox_cos:.3e}, {neox_sin:.3e}")
-        
-            if hf_cos < tol and hf_sin < tol:
-                print("=> HF Phi style ([c,c] across halves)")
-            elif neox_cos < tol and neox_sin < tol:
-                print("=> NeoX style ([c0,c0,c1,c1] even/odd)")
-            else:
-                print("=> Neither clean (maybe not duplicated or different layout)")
-                
-
-        #quick_rope_style_check(rot_mats, shard_idx=0, pos=31)
-        #quick_rope_style_check(rot_mats, shard_idx=0, pos=127)
-        
-        def debug_x_slice(x_md, shard_idx=0, flat_index=0, take_dims=16):
-            # take one shard
-            x_shard = ttnn.get_device_tensors(x_md)[shard_idx]
-        
-            D = x_shard.shape[-1]
-        
-            # reshape to [N, D] and pick one row (flat_index)
-            # (This avoids needing to know whether it's [B,H,S,D] or [1,H,B,D])
-            x_small = ttnn.reshape(x_shard, (x_shard.volume() // D, D))
-        
-            # slice out just one row: [1, D]
-            row = ttnn.slice(x_small, (flat_index, 0), (flat_index + 1, D))
-        
-            # also slice to only first take_dims for faster print
-            row = ttnn.slice(row, (0, 0), (1, min(take_dims, D)))
-        
-            xt = ttnn.to_torch(row).reshape(-1)
-            print("x sample:", xt.tolist())
-            return xt
-
-    
-        def pairing_debug(vec):
-            # vec is 1D torch tensor length D (or R)
-            D = vec.numel()
-            assert D % 2 == 0
-            half = D // 2
-        
-            # how different are the two halves (grouped split)?
-            half_diff = (vec[:half] - vec[half:]).abs().mean().item()
-        
-            # how different are even/odd neighbors (interleaved pairs)?
-            eo_diff = (vec[0::2] - vec[1::2]).abs().mean().item()
-        
-            print(f"mean |half0-half1| = {half_diff:.6f}")
-            print(f"mean |even-odd|    = {eo_diff:.6f}")
-                 
-            
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-
-        #v = debug_x_slice(q_heads_1QSD_pre_rot, shard_idx=0, flat_index=0, take_dims=64)
-        #pairing_debug(v)
-    
-
         if self.is_phi1:
             #with open("self_prefill.txt", "a") as f:
                 #f.write(f"self prefill q_heads_1QSD block: {self.__dict__}\n")
-            #R = self.rotary_dim
-            #before = self._sample_rotary_prefix_torch(q_heads_1QSD_pre_rot, R, shard_idx=0, pos=31)
             q_heads_1QSD = self._apply_partial_rope(
                 q_heads_1QSD_pre_rot,
                 rot_mats,
                 self.transformation_mats["prefill"],
                 is_decode_mode=False,
             )
-            #after = self._sample_rotary_prefix_torch(q_heads_1QSD, R, shard_idx=0, pos=31)
-            #self._norm_check_rope(before, after, tag=" prefill Q", tol=5e-2)
         else:
             q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
                 q_heads_1QSD_pre_rot,
@@ -1089,16 +976,12 @@ class Attention(LightweightModule):
         if self.is_phi1:
             #with open("self_prefill.txt", "a") as f:
                 #f.write(f"self prefill k_heads_1KSD block: {self.__dict__}\n")
-            #R = self.rotary_dim
-            #before = self._sample_rotary_prefix_torch(k_heads_1KSD_pre_rot, R, shard_idx=0, pos=31)
             k_heads_1KSD = self._apply_partial_rope(
                 k_heads_1KSD_pre_rot,
                 rot_mats,
                 self.transformation_mats["prefill"],
                 is_decode_mode=False,
             )
-            #after = self._sample_rotary_prefix_torch(k_heads_1KSD, R, shard_idx=0, pos=31)
-            #self._norm_check_rope(before, after, tag=" prefill K", tol=5e-2)
         else:
             k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
                 k_heads_1KSD_pre_rot,
