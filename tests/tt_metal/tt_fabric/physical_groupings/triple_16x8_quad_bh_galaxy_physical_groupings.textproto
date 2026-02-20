@@ -265,6 +265,18 @@ groupings {
   }
 }
 
+groupings {
+  name: "2x8_Mesh BH"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_1 } },
+    { id: 1 grouping_ref { preset_type: TRAY_2 } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
 # MESH: 1 host (32 ASICs) - for single galaxy (8x4)
 # Note: Single instance grouping, no row_major_mesh needed (only applies to multi-instance groupings)
 groupings {
