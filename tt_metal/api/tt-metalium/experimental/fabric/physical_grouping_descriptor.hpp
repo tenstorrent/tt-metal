@@ -151,13 +151,14 @@ public:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Validate a single grouping from PhysicalSystemDescriptor, making sure that it matches
+    // Find any valid mapping of a grouping to a physical system descriptor
+    // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
+    // Returns empty set if no valid mapping exists
     // errors_out can be provided to get detailed error messages (optional, can be nullptr)
-    static bool validate_grouping_with_psd(
-        const PhysicalGroupingDescriptor& pgd,
+    std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::vector<std::string>* errors_out = nullptr);
+        std::vector<std::string>* errors_out = nullptr) const;
 
     // Node metadata for flattened mesh nodes
     // Generic enough to be used throughout the flattened mesh representation
