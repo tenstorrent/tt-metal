@@ -14,12 +14,12 @@
 // Post-SDPA Phases:
 // - Matmul1: [1, 512] x [512, 128] -> [1, 128] on 64 cores (8x8) - waits for scatter data
 // - Gather1: Collect [1, 128] from 64 cores to [1, 8192] on gather core
-// - Mcast: Broadcast [1, 8192] to 120 cores (12x10 grid, rectangular)
+// - Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular)
 // - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (rows 0-8 full 12 + row 9 cols 0-3)
 // - Gather2: Collect [1, 64] from 112 active cores to [1, 7168] on gather core
 // - CCL All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 //
-// Note: Mcast grid (12x10=120) includes 8 inactive cores (row 9 cols 4-11)
+// Note: Mcast grid (13x10=130) includes 18 inactive cores (col 12 rows 0-8 + row 9 cols 4-11)
 // which receive mcast data but skip matmul2 via is_matmul2_core=false
 //
 // SDPA Core Layout:
@@ -28,8 +28,8 @@
 // Note: Some SDPA cores overlap with matmul2 grid - they run SDPA first, then matmul2
 //
 // CCL Core Layout:
-// - CCL Receiver = Gather core (11, 9): already has local data after Gather2
-// - CCL Sender = Adjacent core (10, 9): reads from gather core, sends via fabric
+// - CCL Receiver = Gather core (12, 9): already has local data after Gather2
+// - CCL Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
@@ -86,15 +86,15 @@ struct Core {
     // Post-SDPA cores
     // First matmul on 8x8 grid - receives scatter data from SDPA workers
     static constexpr bool is_matmul1_core = get_named_compile_time_arg_val("is_matmul1_core") == 1;
-    // Gather core (11, 9) - receives gather1, sends mcast, receives gather2, CCL receiver
+    // Gather core (12, 9) - receives gather1, sends mcast, receives gather2, CCL receiver
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
-    // Mcast receiver grid (12x10 = 120 cores) - receives mcast data
+    // Mcast receiver grid (13x10 = 130 cores) - receives mcast data
     static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
     // Active matmul2 cores (112 cores: rows 0-8 full 12 + row 9 cols 0-3)
     static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
-    // CCL sender core (10, 9) - reads from gather core, sends via fabric
+    // CCL sender core (11, 9) - reads from gather core, sends via fabric
     static constexpr bool is_ccl_sender_core = get_named_compile_time_arg_val("is_ccl_sender_core") == 1;
-    // CCL receiver core = gather core (11, 9) - receives remote data, performs reduction
+    // CCL receiver core = gather core (12, 9) - receives remote data, performs reduction
     static constexpr bool is_ccl_receiver_core = get_named_compile_time_arg_val("is_ccl_receiver_core") == 1;
 };
 
@@ -107,11 +107,11 @@ void kernel_main() {
 // Post-SDPA Phase:
 // - Matmul1 reader (8x8 grid): setup sharded buffers (after scatter arrival)
 // - Gather1 sender (8x8 grid): send matmul1 output to gather core
-// - Mcast receiver (12x10 grid = 120 cores): receive mcast data
+// - Mcast receiver (13x10 grid = 130 cores): receive mcast data
 // - Matmul2 reader (112 active cores): setup weights buffer
 // - Gather2 sender (112 active cores): send matmul2 output to gather core
-// - CCL sender (10, 9): read gather2 output from gather core
-// - CCL receiver (11, 9): wait for remote data, push to compute
+// - CCL sender (11, 9): read gather2 output from gather core
+// - CCL receiver (12, 9): wait for remote data, push to compute
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
 #ifndef SKIP_SDPA
@@ -206,9 +206,9 @@ void kernel_main() {
 // ============================================================================
 // BRISC (Writer)
 // - Gather1 receiver (gather core): receive from 8x8 grid
-// - Mcast sender (gather core): broadcast to 12x10 grid (120 cores)
+// - Mcast sender (gather core): broadcast to 13x10 grid (130 cores)
 // - Gather2 receiver (gather core): receive from 112 active matmul2 cores
-// - CCL sender (10, 9): send gather2 output via fabric
+// - CCL sender (11, 9): send gather2 output via fabric
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
     // Matmul1/2 CTArgs (BRISC is no-op for matmul)
@@ -231,7 +231,7 @@ void kernel_main() {
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
-        false>;  // loopback = false (gather core not in mcast grid)
+        false>;  // loopback = false
 
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
@@ -860,7 +860,7 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // Gather1: 8x8 matmul cores -> gather core (11, 9)
+    // Gather1: 8x8 matmul cores -> gather core (12, 9)
     // Collects [1, 128] * 64 = [1, 8192]
     // ========================================================================
     {
@@ -870,10 +870,10 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // Mcast: gather core -> 12x10 mcast grid (120 cores)
+    // Mcast: gather core -> 13x10 mcast grid (130 cores)
     // Broadcasts [1, 8192] to each core in mcast grid
     // Source: gather1_dst_cb (CB 3), Destination: mcast_dst_cb = matmul2_in0 (CB 4)
-    // Note: is_mcast_receiver_core (120 cores) includes 8 inactive cores that receive but skip matmul
+    // Note: is_mcast_receiver_core (130 cores) includes 18 inactive cores that receive but skip matmul
     // ========================================================================
     constexpr bool is_mcast_receiver = Core::is_mcast_receiver_core && !Core::is_gather_receiver_core;
     deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_gather_receiver_core, is_mcast_receiver, is_mcast_receiver, true>
@@ -898,7 +898,7 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // Gather2: 112 active matmul2 cores -> gather core (11, 9)
+    // Gather2: 112 active matmul2 cores -> gather core (12, 9)
     // Collects [1, 64] * 112 = [1, 7168]
     // ========================================================================
     {
@@ -923,8 +923,8 @@ void kernel_main() {
 
     // ========================================================================
     // CCL All-Reduce: Exchange [1, 7168] between devices
-    // - CCL Sender (10, 9): Reads gather2 output from gather core, sends via fabric
-    // - CCL Receiver (11, 9): Receives remote data, performs reduction
+    // - CCL Sender (11, 9): Reads gather2 output from gather core, sends via fabric
+    // - CCL Receiver (12, 9): Receives remote data, performs reduction
     //
     // Note: skip_local_push=1 is set for CCLReceiverReaderCTArgs because
     // gather2 already pushed to CB7 (gather2_dst_cb). The receiver just

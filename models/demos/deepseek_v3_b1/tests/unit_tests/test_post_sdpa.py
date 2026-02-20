@@ -14,20 +14,20 @@ When SDPA is enabled:
 
 Post-SDPA phases:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
-- Gather1: Collect to [1, 8192] on gather core (11, 9)
-- Mcast: Broadcast [1, 8192] to 120 cores (12x10 rectangular grid)
+- Gather1: Collect to [1, 8192] on gather core (12, 9)
+- Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
-- Gather2: Collect to [1, 7168] on gather core (11, 9)
+- Gather2: Collect to [1, 7168] on gather core (12, 9)
 - TP All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 
-The mcast grid (12x10=120 cores) includes 8 inactive cores (row 9 cols 4-11)
-that receive mcast data but skip matmul2 via is_matmul2_core=false.
+The mcast grid (13x10=130 cores) includes 18 inactive cores that receive mcast data
+but skip matmul2 via is_matmul2_core=false (col 12 rows 0-8 + row 9 cols 4-11).
 
 Core Layout:
 - SDPA Workers: (2,8)-(5,8), (2,9)-(5,9) = 8 cores
 - SDPA Forwarders: (6,9), (7,9) = 2 cores
-- TP All-Reduce Receiver = Gather core (11, 9): already has local data after Gather2
-- TP All-Reduce Sender = Adjacent core (10, 9): reads from gather core, sends via fabric
+- TP All-Reduce Receiver = Gather core (12, 9): already has local data after Gather2
+- TP All-Reduce Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
 
 Full operation: [1, 512] @ [512, 8192] @ [8192, 7168] -> [1, 7168] per device,
 then all-reduce across devices with optional residual add.
@@ -168,10 +168,10 @@ def test_post_sdpa(
     MATMUL1_GRID_Y = 8
     num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
 
-    # Mcast grid: 12x10 = 120 cores (rectangular for efficient mcast)
-    MCAST_GRID_X = 12
+    # Mcast grid: 13x10 = 130 cores (rectangular for efficient mcast)
+    MCAST_GRID_X = 13
     MCAST_GRID_Y = 10
-    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 120
+    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
 
     # Active Matmul2 cores: 112 (rows 0-8 full 12 cols + row 9 cols 0-3)
     # Non-rectangular grid: 12*9 + 4 = 108 + 4 = 112
@@ -183,7 +183,7 @@ def test_post_sdpa(
 
     logger.info(f"Testing full post_sdpa fused op with TP All-Reduce:")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
-    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (12x10 grid)")
+    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (13x10 grid)")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
     logger.info(f"  TP All-Reduce: [{M}, {output_size}] across {num_devices} devices")
     logger.info(f"  Output: [{M}, {output_size}] (fuse_residual_add={fuse_residual_add})")
@@ -201,7 +201,7 @@ def test_post_sdpa(
             ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(3, 9)),  # 4x1 = 4 cores
         ]
     )
-    gather_core = ttnn.CoreCoord(11, 9)
+    gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
     # ========================================================================
@@ -620,18 +620,8 @@ def test_post_sdpa_with_sdpa_phase(
     # Create submesh - fabric requires opening full system mesh first
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
-    # Set up sub-device
+    # Set up sub-device (not supported in slow dispatch mode)
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
-
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
     b_tile = ttnn.Tile([32, 32])  # 32x32 tiles for weights
@@ -645,10 +635,10 @@ def test_post_sdpa_with_sdpa_phase(
     MATMUL1_GRID_Y = 8
     num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
 
-    # Mcast grid: 12x10 = 120 cores (rectangular for efficient mcast)
-    MCAST_GRID_X = 12
+    # Mcast grid: 13x10 = 130 cores (rectangular for efficient mcast)
+    MCAST_GRID_X = 13
     MCAST_GRID_Y = 10
-    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 120
+    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
 
     # Active Matmul2 cores: 112 (rows 0-8 full 12 cols + row 9 cols 0-3)
     num_matmul2_cores = 112
@@ -666,7 +656,7 @@ def test_post_sdpa_with_sdpa_phase(
     logger.info(f"Testing post_sdpa fused op with SDPA reduce-to-all phase:")
     logger.info(f"  SDPA: [{SDPA_L_HEIGHT}, {SDPA_L_WIDTH}] L tensor, [{SDPA_L_HEIGHT}, {SDPA_MS_WIDTH}] MS tensor")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
-    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (12x10 grid)")
+    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (13x10 grid)")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
     logger.info(f"  TP All-Reduce: [{M}, {output_size}] across {num_devices} devices")
 
@@ -680,7 +670,7 @@ def test_post_sdpa_with_sdpa_phase(
             ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(3, 9)),  # 4x1 = 4 cores
         ]
     )
-    gather_core = ttnn.CoreCoord(11, 9)
+    gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
     # SDPA worker grid: 8 cores at (2,8)-(5,8), (2,9)-(5,9)
@@ -1155,10 +1145,6 @@ def test_post_sdpa_with_sdpa_phase(
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED - {pcc_message}")
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices have the correct output"
     logger.info("✓ Post SDPA fused op with SDPA phase test passed!")
