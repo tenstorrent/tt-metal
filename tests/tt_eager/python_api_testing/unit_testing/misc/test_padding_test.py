@@ -130,23 +130,16 @@ def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input
     b_dev = b_pad.to(ttnn.TILE_LAYOUT).to(device)
     out_dev = ttnn.add(a_dev, b_dev)
     out_pad = out_dev.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    print("out pad: ", out_pad)
 
     # Unpad out to get result
     out = out_pad.unpad(output_tensor_start, output_tensor_end)
-    # print("out shape:", out) # seeing 0s here
     out_pt = out.to_torch().to(torch.float32)
-    print("out_pt shape:", out_pt.shape)  # shape is correct
 
     out_ref = inp + ones
 
     torch.set_printoptions(sci_mode=False)
     # print("\n", out_pt)
     # print("\n", out_ref)
-    print("\nOutput from ttnn:", out_pt)
-    print("\nExpected (PyTorch):", out_ref)
-    print("\nDifference:", (out_pt - out_ref).abs())
-    print("\nMax difference:", (out_pt - out_ref).abs().max())
 
     passing = torch.allclose(out_pt, out_ref, rtol=1e-2)
     assert passing
