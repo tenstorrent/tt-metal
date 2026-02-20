@@ -352,9 +352,14 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
  * incorrectly used pack_tile<true> to overwrite already-pushed CB data.
  */
 template <uint32_t SBH>
-void mul_bcast_cols_l1_acc(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock) {
+void mul_bcast_cols_l1_acc(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock = 0xFFFFFFFF) {
+    if (write_q_subblock == 0xFFFFFFFF) {
+        write_q_subblock = q_subblock;
+    }
     constexpr uint32_t tiles_per_row = SBH;
-    const uint32_t global_row_base = q_subblock * tiles_per_row;
+    const uint32_t read_row_base = q_subblock * tiles_per_row;
+    const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
@@ -363,25 +368,30 @@ void mul_bcast_cols_l1_acc(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, ui
     PACK((llk_pack_reconfig_l1_acc(1)));
     tile_regs_acquire();
     for (uint32_t i = 0; i < tiles_per_row; i++) {
-        uint32_t src_tile_index = global_row_base + i;
+        uint32_t src_tile_index = read_row_base + i;
         mul_tiles_bcast_cols(in0_cb, in1_cb, src_tile_index, src_tile_index, i /*dst_index*/);
     }
     tile_regs_commit();
 
     tile_regs_wait();
     for (uint32_t i = 0; i < tiles_per_row; i++) {
-        pack_tile<true>(i, out_cb, global_row_base + i);  // L1 accumulate into reserved out_cb
+        pack_tile<true>(i, out_cb, write_row_base + i);  // L1 accumulate into reserved out_cb
     }
     tile_regs_release();
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 template <uint32_t SBH, uint32_t SBW>
-void mul_block_bcast_cols_acc(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock) {
+void mul_block_bcast_cols_acc(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock = 0xFFFFFFFF) {
+    if (write_q_subblock == 0xFFFFFFFF) {
+        write_q_subblock = q_subblock;
+    }
     constexpr uint32_t tiles_per_row = SBH;
     constexpr uint32_t tiles_per_column = SBW;
     static_assert(tiles_per_row * tiles_per_column <= 8, "SBH * SBW must fit in DST (max 8 tiles)");
-    const uint32_t global_row_base = q_subblock * tiles_per_row;
+    const uint32_t read_row_base = q_subblock * tiles_per_row;
+    const uint32_t write_row_base = write_q_subblock * tiles_per_row;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
 
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
@@ -392,8 +402,8 @@ void mul_block_bcast_cols_acc(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     uint32_t dst_index = 0;
     for (uint32_t i = 0; i < tiles_per_row; i++) {
         for (uint32_t j = 0; j < tiles_per_column; j++) {
-            uint32_t in0_tile_index = (global_row_base + i) * tiles_per_column + j;  // Absolute tile index for in0_cb
-            mul_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
+            uint32_t in0_tile_index = (read_row_base + i) * tiles_per_column + j;
+            mul_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, read_row_base + i, dst_index++);
         }
     }
     tile_regs_commit();
@@ -401,8 +411,8 @@ void mul_block_bcast_cols_acc(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     dst_index = 0;
     for (uint32_t i = 0; i < tiles_per_row; i++) {
         for (uint32_t j = 0; j < tiles_per_column; j++) {
-            uint32_t out_tile_index = (global_row_base + i) * tiles_per_column + j;  // Absolute tile index for in0_cb
-            pack_tile<true>(dst_index++, out_cb, out_tile_index);  // Pack to original position in out_cb
+            uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + j;
+            pack_tile<true>(dst_index++, out_cb, out_tile_index);
         }
     }
     tile_regs_release();
@@ -711,44 +721,6 @@ void recip_tile_first_column(uint32_t idst) {
 #endif
 
 /**
- * Multiplies each tile in out_cb by the col_identity tile to collapse partial row sums
- * into a single value per row in column 0. In-place: pop -> matmul -> pack -> push per subblock.
- */
-template <uint32_t M>
-void matmul_reduce_inplace(uint32_t col_identity_cb, uint32_t out_cb) {
-    constexpr uint32_t N = 1;
-    constexpr uint32_t in0_block_w = N;
-    constexpr uint32_t subblock_w = N;
-    constexpr uint32_t subblock_h = 1;
-    constexpr uint32_t in0_num_subblocks = M;
-
-    mm_block_init_short(out_cb, col_identity_cb, 0, subblock_w, subblock_h, in0_block_w);
-
-    reconfig_data_format(col_identity_cb, out_cb);
-    cb_wait_front(col_identity_cb, N);
-    cb_wait_front(out_cb, M);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        tile_regs_acquire();
-
-        uint32_t dst_index = 0;
-        uint32_t in0_index = 0;
-        uint32_t in1_index = 0;
-        matmul_block(out_cb, col_identity_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
-
-        tile_regs_commit();
-        cb_pop_front(out_cb, subblock_h);
-
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_h; i++) {
-            pack_tile(i, out_cb);
-        }
-        tile_regs_release();
-        cb_push_back(out_cb, subblock_h);
-    }
-}
-
-/**
  * in_cb = 1 / in_cb (column 0 only)
  */
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
@@ -771,34 +743,68 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 }
 
 /**
- * Multiplies each output tile by the corresponding 1/sum value (broadcast from column 0).
- * Consumes final_out and final_sum, produces to normalized_out tile-by-tile (streaming).
- * The 1-tile streaming pattern allows the writer to drain concurrently with minimal L1.
+ * Per-row streaming normalization for one subblock row (SBH tiles of sum, SBH*head_dim_t tiles of output).
+ * For each sub-row tile:
+ *   1. matmul_reduce: sum_tile × col_identity → scratch (collapses partial row sums to column 0)
+ *   2. recip in-place: scratch = 1/sum
+ *   3. normalize: out_tiles × bcast_cols(1/sum) → normalized_out (streaming, 1 tile at a time)
+ * Consumes (pops) sum and output tiles from cur_sum_cb / cur_out_cb.
+ * scratch_cb must be a 1-tile CB.
  */
-template <uint32_t rows, uint32_t cols>
-void normalize_output(uint32_t final_out_cb, uint32_t final_sum_cb, uint32_t normalized_out_cb) {
-    constexpr uint32_t num_tiles = rows * cols;
+template <uint32_t SBH, uint32_t head_dim_t_>
+void normalize_row_streaming(
+    uint32_t cur_sum_cb,
+    uint32_t cur_out_cb,
+    uint32_t col_identity_cb,
+    uint32_t scratch_cb,
+    uint32_t normalized_out_cb) {
+    for (uint32_t s = 0; s < SBH; s++) {
+        // 1. matmul_reduce: read 1 sum tile from front, matmul with col_identity, pack to scratch
+        {
+            constexpr uint32_t N = 1;
+            mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
+            reconfig_data_format(col_identity_cb, cur_sum_cb);
 
-    mul_bcast_cols_init_short(final_out_cb, final_sum_cb);
-    cb_wait_front(final_out_cb, num_tiles);
-    cb_wait_front(final_sum_cb, rows);
+            cb_wait_front(col_identity_cb, N);
+            cb_wait_front(cur_sum_cb, 1);
 
-    uint32_t in0_index = 0;
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t j = 0; j < cols; ++j) {
-            cb_reserve_back(normalized_out_cb, 1);
+            cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
-            mul_tiles_bcast_cols(final_out_cb, final_sum_cb, in0_index, i, 0);
-            in0_index++;
+            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
             tile_regs_commit();
+
             tile_regs_wait();
-            pack_tile(0, normalized_out_cb);
+            pack_tile(0, scratch_cb);
             tile_regs_release();
-            cb_push_back(normalized_out_cb, 1);
+            cb_push_back(scratch_cb, 1);
+
+            cb_pop_front(cur_sum_cb, 1);
+        }
+
+        // 2. recip in-place on the 1-tile scratch CB
+        recip_block_inplace(scratch_cb, 1);
+
+        // 3. normalize: multiply each output tile by bcast_cols(1/sum), stream to normalized_out
+        {
+            mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
+            cb_wait_front(cur_out_cb, head_dim_t_);
+            cb_wait_front(scratch_cb, 1);
+
+            for (uint32_t j = 0; j < head_dim_t_; ++j) {
+                cb_reserve_back(normalized_out_cb, 1);
+                tile_regs_acquire();
+                mul_tiles_bcast_cols(cur_out_cb, scratch_cb, j, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, normalized_out_cb);
+                tile_regs_release();
+                cb_push_back(normalized_out_cb, 1);
+            }
+
+            cb_pop_front(scratch_cb, 1);
+            cb_pop_front(cur_out_cb, head_dim_t_);
         }
     }
-    cb_pop_front(final_sum_cb, rows);
-    cb_pop_front(final_out_cb, num_tiles);
 }
 
 // ==================================================================
@@ -817,7 +823,10 @@ template <
     uint32_t scale_fp32,
     uint32_t subblock_h,
     uint32_t cb_qkt_row_A,
-    uint32_t cb_qkt_row_B>
+    uint32_t cb_qkt_row_B,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch,
+    uint32_t cb_normalized_out>
 void sdpa_inner_loop(
     const uint32_t cb_max_A,
     const uint32_t cb_max_B,
@@ -851,6 +860,9 @@ void sdpa_inner_loop(
                << " q_num_subblocks=" << q_num_subblocks << " kt_num_subblocks=" << kt_num_subblocks << ENDL());
 
     for (uint32_t iter = 0; iter < num_iter; iter++) {
+        const bool is_last_iter = (iter == num_iter - 1);
+        uint32_t pushed_rows = 0;
+
         MATH(DPRINT << "******************ITERATION " << iter << " ******************" << ENDL());
         DeviceZoneScopedN("sdpa_inner_loop");
         uint32_t q_wait_tiles = q_subblock_num_tiles;
@@ -1088,9 +1100,38 @@ void sdpa_inner_loop(
                 qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
             }
 
+            // SALAD correction for one completed row: sum/out L1-accumulate, then
+            // optionally push + normalize on the last K iteration.
+            auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
+                {
+                    MATH(DPRINT << "SALAD sum correction for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_2("S_SUM_CORR");
+                    mul_bcast_cols_l1_acc<sbh>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum, salad_row, w_salad);
+                }
+                {
+                    MATH(DPRINT << "SALAD out correction for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_2("S_OUT_CORR");
+                    mul_block_bcast_cols_acc<sbh, head_dim_t>(
+                        alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row, w_salad);
+                }
+                if (last_iter) {
+                    cb_push_back(alias_cur_sum, sbh);
+                    cb_push_back(alias_cur_out, sbh * head_dim_t);
+                    normalize_row_streaming<sbh, head_dim_t>(
+                        alias_cur_sum, alias_cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
+                    pushed++;
+                }
+            };
+
             // ===== q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur) =====
             for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
                 uint32_t salad_row = q_subblock - 1;
+                // Adjusted write offsets: after pushing rows, wr_ptr advances,
+                // so pack_tile<true> offsets must be relative to the new wr_ptr.
+                // On non-last iterations pushed_rows=0, so these equal the originals.
+                uint32_t w_salad = salad_row - pushed_rows;
+                uint32_t w_q = q_subblock - pushed_rows;
+
                 MATH(
                     DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ", SALAD for row " << salad_row
                            << ENDL());
@@ -1107,6 +1148,7 @@ void sdpa_inner_loop(
                 }
 
                 // 2. Full matmul for CURRENT row — FPU overlaps with SFPU EXP above
+                // Uses w_q for the output row offset (adjusted for pushed rows)
                 {
                     uint32_t v_index_offset = 0;
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1123,30 +1165,14 @@ void sdpa_inner_loop(
                             alias_cur_out,
                             qktv_in0_index_offset,
                             v_index_offset,
-                            q_subblock,
+                            w_q,
                             v_subblock * qktv_subblock_w);
                         v_index_offset += qktv_subblock_w;
                     }
                 }
 
-                // 3. Rest of SALAD for PREVIOUS row
-                // cur_sum[row] += prev_sum[row] * bcast_cols(exp_max_diff[row])
-                // L1 accumulate onto cur_sum which is still in RESERVED state.
-                {
-                    MATH(DPRINT << "SALAD sum correction for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_SUM_CORR");
-                    mul_bcast_cols_l1_acc<sbh>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum, salad_row);
-                }
-                // cur_out[row] += prev_out[row] * bcast_cols(exp_max_diff[row])
-                // L1 accumulate onto cur_out which is also in RESERVED state.
-                {
-                    MATH(DPRINT << "SALAD out correction for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_OUT_CORR");
-                    mul_block_bcast_cols_acc<sbh, head_dim_t>(
-                        alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
-                }
-
-                // NO incremental push of alias_cur_out — deferred to end
+                // 3. SALAD corrections + optional per-row normalization for PREVIOUS row
+                salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
 
                 qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
                 qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
@@ -1155,6 +1181,7 @@ void sdpa_inner_loop(
             // ===== Pipeline drain: SALAD for last row =====
             {
                 constexpr uint32_t salad_row = qktv_q_num_subblocks - 1;
+                uint32_t w_salad = salad_row - pushed_rows;
                 MATH(DPRINT << "Pipeline drain: SALAD for row " << salad_row << ENDL());
                 DeviceZoneScopedN("SALAD drain");
 
@@ -1162,15 +1189,14 @@ void sdpa_inner_loop(
                 sub_exp_first_col_blocks<scale_fp32, sbh>(alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
                 cb_push_back(cb_exp_max_diff, sbh);
 
-                mul_bcast_cols_l1_acc<sbh>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum, salad_row);
-                mul_block_bcast_cols_acc<sbh, head_dim_t>(alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
+                salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
             }
 
-            // Push cur_sum (was in RESERVED state throughout SALAD corrections)
-            cb_push_back(alias_cur_sum, Sq_chunk_t);
-
-            // Single full push of alias_cur_out — wr_ptr wraps to base
-            cb_push_back(alias_cur_out, qktv_output_num_tiles);
+            // Bulk push — skip on last iteration (all rows already consumed by per-row normalization)
+            if (!is_last_iter) {
+                cb_push_back(alias_cur_sum, Sq_chunk_t);
+                cb_push_back(alias_cur_out, qktv_output_num_tiles);
+            }
 
             cb_pop_front(cb_v_in, Sv_chunk_t * head_dim_t);
             cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
@@ -1183,12 +1209,15 @@ void sdpa_inner_loop(
         cb_pop_front(alias_prev_sum, Sq_chunk_t);
         cb_pop_front(alias_prev_out, Sq_chunk_t * head_dim_t);
 
-        if (iter < num_iter - 1) {
+        if (is_last_iter) {
+            // cur_sum and cur_out are already empty (consumed by per-row normalization).
+            // Pop cur_max — no longer needed (kernel_main won't normalize).
+            cb_pop_front(alias_cur_max, Sq_chunk_t);
+        } else {
             std::swap(alias_prev_max, alias_cur_max);
             std::swap(alias_prev_sum, alias_cur_sum);
             std::swap(alias_prev_out, alias_cur_out);
         }
-        // Last iteration: cur_sum, cur_out, cur_max left alive for caller
         MATH(DPRINT << "Finished iteration " << iter << ENDL());
     }  // end for (iter)
 }
@@ -1222,26 +1251,21 @@ void kernel_main() {
     constexpr uint32_t cb_neginf = tt::CBIndex::c_7;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_normalized_out = tt::CBIndex::c_9;
+    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_10;
 
     mm_init(cb_q_in, cb_kt_in, cb_qkt_im);
 
-    // Determine which CBs hold final state based on num_k_chunks parity.
-    // sdpa_inner_loop starts with cur=B, prev=A, and does (num_k_chunks - 1) swaps.
-    // num_k_chunks even → cur = {sum_A, out_A, max_A}
-    // num_k_chunks odd  → cur = {sum_B, out_B, max_B}
-    constexpr uint32_t cb_final_sum = (num_k_chunks % 2 == 0) ? cb_sum_A : cb_sum_B;
-    constexpr uint32_t cb_final_out = (num_k_chunks % 2 == 0) ? cb_out_A : cb_out_B;
-    constexpr uint32_t cb_final_max = (num_k_chunks % 2 == 0) ? cb_max_A : cb_max_B;
-
     for (uint32_t q = 0; q < num_q_chunks; q++) {
         // Initialize prev buffers (sum=0, out=0, max=-inf) for this Q chunk.
-        // Always writes to A-variant CBs since normalization of the previous Q chunk
+        // Always writes to A-variant CBs since the previous Q chunk's per-row normalization
         // consumed the A-variants (or they were never written for q=0).
         {
             DeviceZoneScopedN("DUMMY:InitPrevBuffers");
             InitPrevBuffers<Sq_chunk_t, head_dim_t>(cb_sum_A, cb_out_A, cb_max_A, cb_neginf);
         }
 
+        // sdpa_inner_loop now handles per-row normalization on the last K iteration,
+        // streaming normalized tiles to cb_normalized_out. No post-loop normalization needed.
         sdpa_inner_loop<
             Sq_chunk_t,
             Sk_chunk_t,
@@ -1256,23 +1280,13 @@ void kernel_main() {
             scale_fp32,
             subblock_h,
             cb_qkt_row_A,
-            cb_qkt_row_B>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B, cb_out_A, cb_out_B, num_k_chunks);
+            cb_qkt_row_B,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_normalized_out>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B, cb_out_A, cb_out_B, num_k_chunks);
 
         // Pop Q after all K chunks are processed for this Q chunk
         cb_pop_front(cb_q_in, Sq_chunk_t * head_dim_t);
-
-        // Pop max (no longer needed)
-        cb_pop_front(cb_final_max, Sq_chunk_t);
-
-        {
-            DeviceZoneScopedN("Final output normalization");
-            // Normalize: out = out / sum
-            matmul_reduce_inplace<Sq_chunk_t>(cb_col_identity, cb_final_sum);
-
-            recip_block_inplace(cb_final_sum, Sq_chunk_t);
-            normalize_output<Sq_chunk_t, head_dim_t>(cb_final_out, cb_final_sum, cb_normalized_out);
-            // cb_normalized_out has the final normalized output for the writer to drain.
-        }
     }
 
     // Pop the permanent -inf tile now that all Q chunks are done
