@@ -475,24 +475,33 @@ bool find_pair_for_direction(
 class Fabric1DChannelTrimmingFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            should_skip_ = true;
+            return;
+        }
+        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+            should_skip_ = true;
+            return;
+        }
         tt::tt_metal::MetalContext::instance().rtoptions().set_enable_channel_trimming_capture(true);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
 
     static void TearDownTestSuite() {
-        BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_enable_channel_trimming_capture(false);
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_channel_trimming_capture(false);
+        }
     }
 
     void SetUp() override {
-        if (arch_ != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Channel trimming tests require Blackhole architecture";
-        }
-        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
-            GTEST_SKIP() << "Channel trimming tests require at least 4 devices";
+        if (should_skip_) {
+            GTEST_SKIP() << "Channel trimming tests require Blackhole architecture with at least 4 devices";
         }
         BaseFabricFixture::SetUp();
     }
+
+    inline static bool should_skip_ = false;
 };
 
 // ============================================================================
@@ -616,24 +625,33 @@ TEST_F(Fabric1DFixture, ChannelTrimmingCapture_ConfigNoAllocWhenDisabled) {
 class Fabric2DChannelTrimmingFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            should_skip_ = true;
+            return;
+        }
+        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+            should_skip_ = true;
+            return;
+        }
         tt::tt_metal::MetalContext::instance().rtoptions().set_enable_channel_trimming_capture(true);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
     static void TearDownTestSuite() {
-        BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_enable_channel_trimming_capture(false);
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_channel_trimming_capture(false);
+        }
     }
 
     void SetUp() override {
-        if (arch_ != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Channel trimming tests require Blackhole architecture";
-        }
-        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
-            GTEST_SKIP() << "Channel trimming tests require at least 4 devices";
+        if (should_skip_) {
+            GTEST_SKIP() << "Channel trimming tests require Blackhole architecture with at least 4 devices";
         }
         BaseFabricFixture::SetUp();
     }
+
+    inline static bool should_skip_ = false;
 };
 
 // ============================================================================
