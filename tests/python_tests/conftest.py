@@ -10,6 +10,7 @@ import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException, _send_arc_message
 from helpers.format_config import InputOutputFormat
+from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
 from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 from helpers.test_config import TestConfig, TestMode, process_coverage_run_artefacts
@@ -96,6 +97,17 @@ def regenerate_cpp(request):
 
 
 def pytest_configure(config):
+    # Configure loguru log level from CLI option or environment variable.
+    log_level = config.getoption("--loguru-level", default=None)
+    configure_logger(level=log_level)
+
+    # Enable pytest's live logging when --loguru-level is set.
+    # Loguru propagates to stdlib logging, and pytest's log_cli displays
+    # those messages in the terminal - integrating cleanly with pytest-sugar.
+    if log_level is not None:
+        config.option.log_cli_level = log_level
+        config.option.log_cli = True
+
     compile_producer = config.getoption("--compile-producer", default=False)
     compile_consumer = config.getoption("--compile-consumer", default=False)
     TestConfig.setup_mode(compile_consumer, compile_producer)
@@ -263,7 +275,7 @@ def perf_report(request, worker_id):
     try:
         yield temp_report
     except Exception as e:
-        print("Perf: Unexpected error, Saving report anyway", e)
+        logger.warning("Perf: Unexpected error, saving report anyway: {}", e)
 
     if TestConfig.MODE == TestMode.PRODUCE:
         return
@@ -348,6 +360,14 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Compile without debug symbols (-g flag) to save disk space",
+    )
+
+    parser.addoption(
+        "--loguru-level",
+        action="store",
+        default=None,
+        help="Set loguru log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL). "
+        "Overrides LOGURU_LEVEL env var. Default: INFO",
     )
 
 

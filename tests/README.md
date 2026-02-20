@@ -50,3 +50,23 @@ Replace <test_file_name> with the specific test script you want to execute, e.g.
 ```bash
 pytest
 ```
+
+---
+
+## Logging
+
+Tests use [loguru](https://github.com/Delgan/loguru) for structured, leveled
+logging. Import the shared logger and use `{}` placeholders:
+
+```python
+from helpers.logger import logger
+
+logger.info("Running op={} on {}", op_name, arch)
+```
+
+Control verbosity with `--loguru-level=DEBUG` on the CLI or by setting the
+`LOGURU_LEVEL` environment variable. Logs are written to `test_run.log` (session)
+and `test_errors.log` (persistent, ERROR+ only).
+
+See [LOGGING.md](LOGGING.md) for the
+full guide including log levels, output destinations, and pytest-xdist behaviour.

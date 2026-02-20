@@ -40,6 +40,11 @@ on:
         required: false
         default: true
         type: boolean
+      log_level:
+        description: "Loguru log level for test output (TRACE, DEBUG, INFO, WARNING, ERROR)"
+        required: false
+        default: "WARNING"
+        type: string
 
 permissions:
   checks: write
@@ -102,6 +107,7 @@ jobs:
         shell: bash
         env:
           TEST_SPLITS: ${{ inputs.test_splits }}
+          LOGURU_LEVEL: ${{ inputs.log_level }}
         run: |
           CHIP_ARCH=unknown
           if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
@@ -180,6 +186,15 @@ jobs:
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: |
+            tests/python_tests/test_run*.log
+            tests/python_tests/test_errors*.log
 
       - name: Upload JUnit report
         uses: actions/upload-artifact@v4

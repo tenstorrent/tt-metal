@@ -7,6 +7,7 @@ import torch
 from .fused_operation import FusedOperation
 from .fuser_config import FuserConfig
 from .llk_params import format_dict
+from .logger import logger
 from .utils import passed_test
 
 
@@ -19,7 +20,7 @@ class FusedGolden:
         output = operation.output
 
         if self.verbose:
-            print(operation)
+            logger.info("{}", operation)
 
         res_tensor = torch.tensor(
             output.raw_data, dtype=format_dict[output.data_format]
@@ -35,11 +36,11 @@ class FusedGolden:
         l1_golden = l1_golden.flatten()
         master_golden = master_golden.flatten()
 
-        print("L1 golden check:")
+        logger.info("L1 golden check:")
         l1_passed = passed_test(
             l1_golden, res_tensor, output.data_format, print_pcc=True
         )
-        print("Master golden check:")
+        logger.info("Master golden check:")
         master_passed = passed_test(
             master_golden, res_tensor, output.data_format, print_pcc=True
         )
@@ -47,7 +48,10 @@ class FusedGolden:
         passed = l1_passed and master_passed
 
         if self.verbose:
-            print("✓ PASS") if passed else print("✗ FAIL")
+            if passed:
+                logger.success("PASS")
+            else:
+                logger.error("FAIL")
 
         return passed
 

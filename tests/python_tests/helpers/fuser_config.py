@@ -20,6 +20,7 @@ from .format_config import DataFormat, FormatConfig
 from .fused_fpu import MatmulFpu
 from .fused_operation import FusedOperation
 from .llk_params import DestAccumulation, DestSync, PerfRunType
+from .logger import logger
 from .perf import PerfReport
 from .profiler import Profiler, ProfilerData
 from .test_config import BootMode, ProfilerBuild, TestConfig, TestMode
@@ -197,7 +198,7 @@ class FuserConfig:
             results["test_name"] = self.global_config.test_name
             results["loop_factor"] = self.global_config.loop_factor
             perf_report.append(results)
-            print(results)
+            logger.info("Perf results:\n{}", results)
 
             csv_prefix = f"{self.global_config.test_name}_fused_test"
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.csv")

@@ -3,7 +3,6 @@
 
 import os
 import subprocess
-import sys
 from collections import namedtuple
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from filelock import FileLock
 
 from .format_config import DataFormat, FormatConfig
 from .llk_params import format_dict
+from .logger import logger
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
 
@@ -23,25 +23,26 @@ def print_faces(operand1):
     f2 = operand1[512:768].view(16, 16)
     f3 = operand1[768:].view(16, 16)
 
+    lines = []
     # Print the first set with proper alignment
     for i in range(16):
-        print(
-            " ".join(f"{x:6.2f}" for x in f0[i].tolist()),
-            " | ",
-            " ".join(f"{x:6.2f}" for x in f1[i].tolist()),
+        lines.append(
+            " ".join(f"{x:6.2f}" for x in f0[i].tolist())
+            + "  |  "
+            + " ".join(f"{x:6.2f}" for x in f1[i].tolist())
         )
 
-    print("-" * 250)
+    lines.append("-" * 250)
 
     # Print the second set with proper alignment
     for i in range(16):
-        print(
-            " ".join(f"{x:6.2f}" for x in f2[i].tolist()),
-            " | ",
-            " ".join(f"{x:6.2f}" for x in f3[i].tolist()),
+        lines.append(
+            " ".join(f"{x:6.2f}" for x in f2[i].tolist())
+            + "  |  "
+            + " ".join(f"{x:6.2f}" for x in f3[i].tolist())
         )
 
-    print("\n" * 3)
+    logger.debug("Tile faces:\n{}", "\n".join(lines))
 
 
 def run_shell_command(
@@ -251,23 +252,27 @@ def passed_test(
                         format_tile(golden_tile, error_tile, tile_no, True)
                     )
 
-                print("\n".join(formatted_error), file=sys.stderr)
+                logger.error("\n{}", "\n".join(formatted_error))
 
         except RuntimeError:
-            print(
-                f"Could not reshape to 32x32 matrix, showing linear indices: {res_tensor.size()[0]}",
-                file=sys.stderr,
+            logger.error(
+                "Could not reshape to 32x32 matrix, showing linear indices: {}",
+                res_tensor.size()[0],
             )
             for idx in diff_indices[:10]:
-                print(
-                    f"Failed at index {idx} with result={res_tensor[idx]}, golden={golden_tensor[idx]}",
-                    file=sys.stderr,
+                logger.error(
+                    "Failed at index {} with result={}, golden={}",
+                    idx,
+                    res_tensor[idx],
+                    golden_tensor[idx],
                 )
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
 
     if print_pcc:
-        print("PCC:", pcc)
+        logger.info("PCC: {:.6f} | format={}", pcc, output_data_format.name)
+    else:
+        logger.debug("PCC: {:.6f} | format={}", pcc, output_data_format.name)
 
     target_pcc = 0.99
     # Once we iterate L1-L1 more than once the loss in precision is accumulated because the result from the first run is transferred as input to the next run
