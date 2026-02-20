@@ -224,7 +224,9 @@ def run(
     input_a_tensor_placement=None,
     memory_config=None,  # output memory_config
     persistent_output_buffer=None,
-    barrier_semaphore=None,
+    multi_device_global_semaphore=None,  # From traced config (ignored, we create fresh)
+    barrier_semaphore=None,  # From traced config (ignored, we create fresh)
+    mesh_device=None,  # From traced config (ignored, we use device param)
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -246,7 +248,32 @@ def run(
         input_dtype = input_a_dtype
         layout = input_a_layout
         input_memory_config = input_a_memory_config
-        output_memory_config = memory_config  # V2 uses 'memory_config' for output
+
+        # Parse output memory_config if it's a dict (from JSON vectors)
+        if isinstance(memory_config, dict):
+            # Convert dict to ttnn.MemoryConfig
+            mem_layout_str = memory_config.get("memory_layout", "")
+            buffer_type_str = memory_config.get("buffer_type", "")
+            shard_spec = memory_config.get("shard_spec")
+
+            # Map buffer_type string to enum
+            if buffer_type_str == "BufferType.DRAM" or buffer_type_str == "DRAM":
+                buffer_type_enum = ttnn.BufferType.DRAM
+            elif buffer_type_str == "BufferType.L1" or buffer_type_str == "L1":
+                buffer_type_enum = ttnn.BufferType.L1
+            else:
+                buffer_type_enum = ttnn.BufferType.DRAM  # default
+
+            # Map memory_layout string to layout enum
+            if "SHARDED" in str(mem_layout_str):
+                # For sharded, we'd need to create a proper ShardSpec, but for now just use DRAM
+                output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            elif "INTERLEAVED" in str(mem_layout_str):
+                output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_enum)
+            else:
+                output_memory_config = ttnn.DRAM_MEMORY_CONFIG  # default
+        else:
+            output_memory_config = memory_config  # Already parsed
 
         # Use defaults if not provided in traced config
         if num_links is None:
@@ -339,29 +366,84 @@ def run(
                 device,
             )
 
+        # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
         compute_grid_size = device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [worker_sub_device_id]
+
+        # Set sub-device stall group
+        device.set_sub_device_stall_group(sub_device_stall_group)
+
+        # Create semaphores for CCL operations - one set per iteration
+        ccl_semaphore_handles = [
+            [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)] for _ in range(num_iters)
+        ]
+
+        # Create barrier semaphore if needed
+        barrier_semaphore_handles = []
+        if barrier_semaphore is not None:
+            barrier_semaphore_handles = [
+                ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+            ]
 
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
-                # Use exact same signature as test_all_gather_config.py which works correctly
-                tt_out_tensor = ttnn.experimental.all_gather_async(
-                    tt_input,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=device,
-                    topology=topology,
-                    multi_device_global_semaphore=semaphores,  # List of semaphores
-                    num_links=num_links,
-                    memory_config=output_memory_config,
-                )
+
+                # Match test_minimal_all_gather_async.py line 240-255
+                # When chunks_per_sync is not None, use signature 2 with persistent_output_buffer
+                # Otherwise use signature 1
+
+                if (
+                    chunks_per_sync is not None
+                    or num_workers_per_link is not None
+                    or num_buffers_per_channel is not None
+                ):
+                    # Signature 2: (input, persistent_output_buffer, dim, semaphore, ...)
+                    # test_minimal_all_gather_async.py line 240-255
+                    tt_out_tensor = ttnn.experimental.all_gather_async(
+                        tt_input,
+                        persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
+                        dim=dim,
+                        multi_device_global_semaphore=ccl_semaphore_handles[i],
+                        num_links=num_links,
+                        memory_config=output_memory_config,
+                        topology=topology,
+                        subdevice_id=worker_sub_device_id,
+                        barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
+                        cluster_axis=cluster_axis if cluster_axis is not None else None,
+                        chunks_per_sync=chunks_per_sync if chunks_per_sync is not None else None,
+                        num_workers_per_link=num_workers_per_link if num_workers_per_link is not None else None,
+                        num_buffers_per_channel=num_buffers_per_channel
+                        if num_buffers_per_channel is not None
+                        else None,
+                    )
+                else:
+                    # Signature 1: (input, dim, semaphore, ...)
+                    # test_minimals.py line 55-64
+                    tt_out_tensor = ttnn.experimental.all_gather_async(
+                        tt_input,
+                        dim,
+                        multi_device_global_semaphore=ccl_semaphore_handles[i],
+                        num_links=num_links,
+                        memory_config=output_memory_config,
+                        topology=topology,
+                        subdevice_id=worker_sub_device_id,
+                        barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
+                    )
+
+                # CRITICAL: Synchronize with sub_device_stall_group (like line 286)
+                ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
                 e2e_perf = stop_measuring_time(start_time)
             except Exception as e:
                 raise RuntimeError(f"Execution failed: {e}")
+
+        # Cleanup: reset sub-device stall group
+        device.reset_sub_device_stall_group()
 
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
             tt_output_tensor = ttnn.to_torch(t)
