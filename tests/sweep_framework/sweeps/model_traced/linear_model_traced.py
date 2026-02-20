@@ -111,6 +111,7 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
+    output_memory_config = kwargs.get("output_memory_config", None)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -146,7 +147,7 @@ def run(
                     device,
                     bias_dtype if bias_dtype else input_a_dtype,
                     bias_layout if bias_layout else input_a_layout,
-                    input_a_memory_config,
+                    bias_memory_config if bias_memory_config else ttnn.DRAM_MEMORY_CONFIG,
                     bias_tensor_placement,
                 )
             else:
@@ -155,6 +156,7 @@ def run(
                     dtype=bias_dtype if bias_dtype else input_a_dtype,
                     layout=bias_layout if bias_layout else input_a_layout,
                     device=device,
+                    memory_config=bias_memory_config if bias_memory_config else ttnn.DRAM_MEMORY_CONFIG,
                 )
         else:
             ttnn_bias = ttnn.from_torch(
@@ -208,6 +210,9 @@ def run(
         ttnn_a = ttnn.from_torch(torch_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # Create weight tensor B
+    # Use the traced memory config as-is - with program_config, sharded weights may be supported
+    weight_memory_config = input_b_memory_config
+
     if not is_host:
         if is_mesh_device and input_b_tensor_placement:
             # Use mesh with placement
@@ -216,7 +221,7 @@ def run(
                 device,
                 input_b_dtype,
                 input_b_layout,
-                input_b_memory_config,
+                weight_memory_config,
                 input_b_tensor_placement,
             )
         else:
@@ -226,7 +231,7 @@ def run(
                 dtype=input_b_dtype,
                 layout=input_b_layout,
                 device=device,
-                memory_config=input_b_memory_config,
+                memory_config=weight_memory_config,
             )
     else:
         # Host storage
@@ -234,7 +239,36 @@ def run(
 
     # Run TTNN linear
     start_time = start_measuring_time()
-    output_tensor = ttnn.linear(ttnn_a, ttnn_b, bias=ttnn_bias, transpose_a=transpose_a, transpose_b=transpose_b)
+
+    # Prepare linear kwargs
+    linear_kwargs = {
+        "bias": ttnn_bias,
+        "transpose_a": transpose_a,
+        "transpose_b": transpose_b,
+    }
+
+    # Add optional parameters from traced config
+    if memory_config is not None:
+        linear_kwargs["memory_config"] = memory_config
+    elif output_memory_config is not None:
+        linear_kwargs["memory_config"] = output_memory_config
+
+    if dtype is not None:
+        linear_kwargs["dtype"] = dtype
+
+    if program_config is not None:
+        linear_kwargs["program_config"] = program_config
+
+    if compute_kernel_config is not None:
+        linear_kwargs["compute_kernel_config"] = compute_kernel_config
+
+    if core_grid is not None:
+        linear_kwargs["core_grid"] = core_grid
+
+    if activation is not None:
+        linear_kwargs["activation"] = activation
+
+    output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

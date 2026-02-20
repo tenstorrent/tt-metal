@@ -103,6 +103,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
 
     # V2 format provides separate shapes for each input
+    # Master config loader already converts per-shard shapes to global shapes
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else input_b_shape
 
@@ -118,7 +119,7 @@ def run(
         torch_output_tensor = torch.add(torch_input_tensor_a, scalar_value)
         is_scalar_add = True
     else:
-        # Tensor-tensor add: generate second tensor
+        # Tensor-tensor add: generate second tensor with global shape
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)

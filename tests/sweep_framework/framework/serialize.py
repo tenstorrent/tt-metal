@@ -293,6 +293,13 @@ def convert_enum_strings_to_values(data):
     except (ImportError, AttributeError) as e:
         logger.warning(f"Could not load TensorMemoryLayout enum for reverse mapping: {e}")
 
+    shard_orientation_reverse_map = {}
+    try:
+        ShardOrientation = ttnn.ShardOrientation
+        shard_orientation_reverse_map = {name: member.value for name, member in ShardOrientation.__members__.items()}
+    except (ImportError, AttributeError) as e:
+        logger.warning(f"Could not load ShardOrientation enum for reverse mapping: {e}")
+
     # Convert buffer_type back to integer if it's a string and mapping is available
     if "buffer_type" in result and isinstance(result["buffer_type"], str) and buffer_type_reverse_map:
         if result["buffer_type"] in buffer_type_reverse_map:
@@ -306,6 +313,13 @@ def convert_enum_strings_to_values(data):
             result["memory_layout"] = memory_layout_reverse_map[result["memory_layout"]]
         else:
             logger.warning(f"Unknown memory_layout string: {result['memory_layout']}")
+
+    # Convert orientation back to integer if it's a string and mapping is available
+    if "orientation" in result and isinstance(result["orientation"], str) and shard_orientation_reverse_map:
+        if result["orientation"] in shard_orientation_reverse_map:
+            result["orientation"] = shard_orientation_reverse_map[result["orientation"]]
+        else:
+            logger.warning(f"Unknown orientation string: {result['orientation']}")
 
     # Recursively process nested objects
     for key, value in result.items():

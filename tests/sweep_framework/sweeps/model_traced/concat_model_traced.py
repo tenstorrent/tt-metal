@@ -116,6 +116,8 @@ def run(
         dtype_str = tensor_spec.get("dtype", "ttnn.bfloat16")
         layout_str = tensor_spec.get("layout", "ttnn.TILE_LAYOUT")
         tensor_placement = tensor_spec.get("tensor_placement", None)
+        # Use per-tensor memory_config if available, otherwise fall back to output mem_config
+        tensor_mem_config = tensor_spec.get("memory_config", mem_config)
 
         # Convert strings to actual ttnn objects if needed
         if isinstance(dtype_str, str):
@@ -143,7 +145,7 @@ def run(
                     device,
                     dtype,
                     layout,
-                    mem_config,
+                    tensor_mem_config,
                     tensor_placement,
                 )
             else:
@@ -153,7 +155,7 @@ def run(
                     dtype=dtype,
                     layout=layout,
                     device=device,
-                    memory_config=mem_config,
+                    memory_config=tensor_mem_config,
                 )
         else:
             # Host storage
@@ -165,6 +167,9 @@ def run(
     torch_output_tensor = torch.cat(torch_tensors, dim=dim_value)
 
     start_time = start_measuring_time()
+    # print(f"ttnn_tensors: {ttnn_tensors}")
+    # print(f"dim_value: {dim_value}")
+    # print(f"mem_config: {mem_config}")
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, memory_config=mem_config)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

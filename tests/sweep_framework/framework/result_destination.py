@@ -37,6 +37,48 @@ try:
 except ImportError:
     np = None
 
+# Optional ttnn import for type checking
+try:
+    import ttnn
+
+    HAS_TTNN = True
+except ImportError:
+    ttnn = None
+    HAS_TTNN = False
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively sanitize objects for JSON serialization.
+
+    Converts ttnn types (MemoryConfig, enums, etc.) to serializable formats.
+    """
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+
+    if HAS_TTNN and hasattr(ttnn, "_ttnn") and hasattr(ttnn._ttnn, "tensor"):
+        # Handle ttnn.MemoryConfig
+        if isinstance(obj, ttnn._ttnn.tensor.MemoryConfig):
+            return str(obj)  # Convert to string representation
+
+        # Handle ttnn enums
+        if hasattr(obj, "__class__") and hasattr(obj.__class__, "__module__"):
+            module = obj.__class__.__module__
+            if module and ("ttnn" in module or "_ttnn" in module):
+                # Check if it's an enum-like object with a value attribute
+                if hasattr(obj, "value"):
+                    return obj.value
+                # Otherwise convert to string
+                return str(obj)
+
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(item) for item in obj]
+
+    # Fallback: convert to string
+    return str(obj)
+
 
 # --- Metric extraction helpers (module-private) ---
 def _to_float(value: Any) -> float | None:
@@ -334,7 +376,10 @@ class FileResultDestination(ResultDestination):
             # Convert original vector data into a JSON-friendly dict suitable for JSONB/file storage
             normalized_vector = _normalize_original_vector_data(raw.get("original_vector_data")) or {}
             # Flatten nested structure into a single-level dict with dotted keys
-            flattened_vector = _flatten_any_to_dotted(normalized_vector)
+            # Sanitize ttnn objects before flattening
+            sanitized_vector = _sanitize_for_json(normalized_vector)
+
+            flattened_vector = _flatten_any_to_dotted(sanitized_vector)
             op_param_list: list[OpParam] = []
             for k, v in flattened_vector.items():
                 # Coerce to JSON-friendly primitives when needed, but preserve dict/list for JSON column

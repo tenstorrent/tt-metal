@@ -48,22 +48,6 @@ parameters = {
 }
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    # For embedding, check the input_a_layout (indices) and input_b_layout (weights)
-    if test_vector.get("input_a_layout") == ttnn.TILE_LAYOUT:
-        return True, "Input indices must be in row major layout"
-    if test_vector.get("input_b_layout") == ttnn.TILE_LAYOUT:
-        return True, "Weights must be in row major layout"
-    if test_vector.get("dtype") == ttnn.bfloat8_b:
-        return True, "bfloat8_b is not supported for output tensor"
-    if (
-        test_vector.get("input_b_layout") == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector.get("input_b_dtype") == ttnn.bfloat8_b
-    ):
-        return True, "bfloat8_b is only supported on tiled layout"
-    return False, None
-
-
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
@@ -132,17 +116,45 @@ def run(
 
     # V2 format provides separate shapes
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
-    weight_shape = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
 
-    num_embeddings = weight_shape[0]
+    # Weight shape can come from either input_b_shape or weight_shape parameter
+    if input_b_shape is not None:
+        weight_shape_actual = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
+    elif weight_shape is not None:
+        weight_shape_actual = tuple(weight_shape) if isinstance(weight_shape, (list, tuple)) else weight_shape
+    else:
+        raise ValueError("Either input_b_shape or weight_shape must be provided")
+
+    # Squeeze leading dimensions of 1 from weight shape to make it 2D
+    # E.g., (1, 1, 128256, 2048) -> (128256, 2048)
+    if isinstance(weight_shape_actual, (list, tuple)) and len(weight_shape_actual) > 2:
+        # Remove leading 1s
+        squeezed_shape = weight_shape_actual
+        while len(squeezed_shape) > 2 and squeezed_shape[0] == 1:
+            squeezed_shape = squeezed_shape[1:]
+
+        # If still not 2D, there are non-1 leading dims - this is truly invalid
+        if len(squeezed_shape) != 2:
+            raise ValueError(f"Cannot convert weight shape {weight_shape_actual} to 2D - has non-1 leading dimensions")
+
+        weight_shape_actual = squeezed_shape
+
+    num_embeddings = weight_shape_actual[0]
 
     # Generate input indices tensor (random integers in range [0, num_embeddings))
     torch_input_tensor = torch_random(input_shape, 0, num_embeddings, torch.int64)
 
+    # Determine weight dtype, layout, and memory_config
+    # Use weight_* parameters if provided, otherwise fall back to input_b_*
+    weight_dtype_actual = weight_dtype if weight_dtype is not None else input_b_dtype
+    weight_layout_actual = weight_layout if weight_layout is not None else input_b_layout
+    weight_memory_config_actual = weight_memory_config if weight_memory_config is not None else input_b_memory_config
+    weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
+
     # Generate weight tensor
     torch_weight_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(weight_shape)
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), weight_dtype_actual
+    )(weight_shape_actual)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
@@ -177,28 +189,28 @@ def run(
 
     # Create weight tensor
     if not is_host:
-        if is_mesh_device and input_b_tensor_placement:
+        if is_mesh_device and weight_tensor_placement:
             # Use mesh with placement
             weight_tensor = create_tensor_on_mesh(
                 torch_weight_tensor,
                 device,
-                input_b_dtype,
-                input_b_layout,
-                input_b_memory_config,
-                input_b_tensor_placement,
+                weight_dtype_actual,
+                weight_layout_actual,
+                weight_memory_config_actual,
+                weight_tensor_placement,
             )
         else:
             # Regular single-device tensor
             weight_tensor = ttnn.from_torch(
                 torch_weight_tensor,
-                dtype=input_b_dtype,
-                layout=input_b_layout,
+                dtype=weight_dtype_actual,
+                layout=weight_layout_actual,
                 device=device,
-                memory_config=input_b_memory_config,
+                memory_config=weight_memory_config_actual,
             )
     else:
         # Host storage
-        weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=input_b_dtype, layout=input_b_layout)
+        weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config)
