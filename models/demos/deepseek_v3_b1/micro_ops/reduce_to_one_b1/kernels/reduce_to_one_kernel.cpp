@@ -42,6 +42,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("local_cb"),
         get_named_compile_time_arg_val("scratch_cb"),
         get_named_compile_time_arg_val("packet_cb"),
+        get_named_compile_time_arg_val("packet_header_cb"),
         get_named_compile_time_arg_val("num_hops"),
         get_named_compile_time_arg_val("dst_fabric_node_chip_id"),
         get_named_compile_time_arg_val("dst_fabric_node_mesh_id"),
@@ -51,18 +52,22 @@ void kernel_main() {
         get_named_compile_time_arg_val("slot_size_bytes"),
         get_named_compile_time_arg_val("is_fabric_core")>;
 
-    // Writer runtime args for worker cores (from per-core args)
-    ReduceToOne::WorkerWriterArgs rt_args{
-        get_arg_val<uint32_t>(0),  // fabric_core_noc_x
-        get_arg_val<uint32_t>(1),  // fabric_core_noc_y
-        get_arg_val<uint32_t>(2),  // my_slot_idx
-        get_arg_val<uint32_t>(3),  // worker_sem_id
-        get_arg_val<uint32_t>(4),  // dst_l1_addr
-        get_arg_val<uint32_t>(5),  // dst_sem_addr
-        get_arg_val<uint32_t>(6),  // output_base_addr
-        get_arg_val<uint32_t>(7),  // shard_idx
-        get_arg_val<uint32_t>(8),  // socket_config_addr
-    };
+    // Writer runtime args for worker cores only (from per-core args)
+    // Fabric cores have different args (sem IDs + fabric connection) read inside the op
+    ReduceToOne::WorkerWriterArgs rt_args{};
+    if constexpr (CTArgs::is_fabric_core == 0) {
+        rt_args = {
+            get_arg_val<uint32_t>(0),  // fabric_core_noc_x
+            get_arg_val<uint32_t>(1),  // fabric_core_noc_y
+            get_arg_val<uint32_t>(2),  // my_slot_idx
+            get_arg_val<uint32_t>(3),  // worker_sem_id
+            get_arg_val<uint32_t>(4),  // dst_l1_addr
+            get_arg_val<uint32_t>(5),  // dst_sem_addr
+            get_arg_val<uint32_t>(6),  // output_base_addr
+            get_arg_val<uint32_t>(7),  // shard_idx
+            get_arg_val<uint32_t>(8),  // socket_config_addr
+        };
+    }
 
 #elif defined(COMPILE_FOR_TRISC)
     // Compute CTArgs
@@ -83,8 +88,15 @@ void kernel_main() {
     compute_kernel_hw_startup(0, 0, 0);
 #endif
 
-    // Execute the op
+    // Execute the op (looped for testing iteration correctness)
     // IsWorkerCore = true (compile-time) since fabric core logic is handled inside the op
+    constexpr uint32_t num_loop_iters = get_named_compile_time_arg_val("num_loop_iters");
     ReduceToOne::Op<CTArgs, true> op;
-    op(rt_args);
+    for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
+        op(rt_args);
+    }
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+#endif
 }
