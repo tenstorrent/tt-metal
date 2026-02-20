@@ -9,8 +9,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include "ttnn-nanobind/bind_function.hpp"
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "selective_reduce_combine.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -54,7 +54,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
 
                 Active tokens are distributed evenly among the height shards, earlier shards get remainders.
 
-                Example. E0: 6 active tokens, E1: 3 active tokens
+                Example. E0: 6 active tokens, E1: 3 active tokens. num_token_parallel_dim=2. Showing only 1 data parallel column.
                 ---------------------------------
                 Shard 0,0:     E0T0S0
                                E0T1S0
@@ -93,7 +93,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             batch_size (int): B*D[A]
             seq_size (int): S
             select_experts_k (int): K
-            experts (int) E*D[A]
+            experts (int) E*D, total experts across all devices
             axis (int): A
             topology (ttnn.Topology): Line or Ring supported
             num_links (int): Number of fabric links to utilize
@@ -112,53 +112,11 @@ void bind_selective_reduce_combine(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::selective_reduce_combine);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"experimental.selective_reduce_combine">(
         mod,
-        ttnn::selective_reduce_combine,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& dense_input_tensor,
-               const ttnn::Tensor& dense_metadata_tensor,
-               const ttnn::Tensor& dense_token_maps_tensor,
-               const ttnn::Tensor& dense_token_counts_tensor,
-               const uint32_t hidden_size,
-               const uint32_t batch_size,
-               const uint32_t seq_size,
-               const uint32_t select_experts_k,
-               const uint32_t experts,
-               const std::optional<uint32_t>& axis,
-               tt::tt_fabric::Topology topology,
-               const uint32_t num_links,
-               const uint32_t token_parallel_core_dim,
-               const uint32_t data_parallel_core_dim,
-               const CoreRangeSet& worker_core_range_set,
-               const CoreRangeSet& mux_core_range_set,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
-                return self(
-                    dense_input_tensor,
-                    dense_metadata_tensor,
-                    dense_token_maps_tensor,
-                    dense_token_counts_tensor,
-                    hidden_size,
-                    batch_size,
-                    seq_size,
-                    select_experts_k,
-                    experts,
-                    axis,
-                    topology,
-                    num_links,
-                    token_parallel_core_dim,
-                    data_parallel_core_dim,
-                    worker_core_range_set,
-                    mux_core_range_set,
-                    memory_config,
-                    optional_output_tensor,
-                    optional_cross_device_semaphore);
-            },
+        ttnn::overload_t(
+            &ttnn::experimental::selective_reduce_combine,
             nb::arg("dense_input_tensor").noconvert(),
             nb::arg("dense_metadata_tensor").noconvert(),
             nb::arg("dense_token_maps_tensor").noconvert(),
@@ -173,12 +131,12 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             nb::arg("num_links"),
             nb::arg("token_parallel_core_dim"),
             nb::arg("data_parallel_core_dim"),
-            nb::arg("worker_core_range_set").noconvert(),
+            nb::arg("worker_cores").noconvert(),
             nb::arg("mux_core_range_set").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("optional_cross_device_semaphore") = nb::none()});
+            nb::arg("optional_cross_device_semaphore") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::ccl::moe

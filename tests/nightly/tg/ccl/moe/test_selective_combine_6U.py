@@ -90,7 +90,20 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     return dense_metadata_buffer, dense_metadata_len, dense_token_maps, active_token_counts
 
 
-def _active_token_core_split_counts(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
+# this is the algorithm currently used by MoE compute
+def _active_token_core_split_counts_simple(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
+    split_token_end_indexes = []
+    for act in active_token_counts.tolist():
+        end_index = [math.ceil(act / token_parallel_core_dim) for _ in range(token_parallel_core_dim - 1)]
+        end_index + [act - (token_parallel_core_dim - 1) * math.ceil(act / token_parallel_core_dim)]
+
+        split_token_end_indexes.append(list(reversed(end_index)))
+
+    return split_token_end_indexes
+
+
+# this is the algorithm currently used by MoE compute
+def _active_token_core_split_counts_even(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
     split_token_end_indexes = []
     for act in active_token_counts.tolist():
         end_index = [act // token_parallel_core_dim for _ in range(token_parallel_core_dim)]
@@ -123,10 +136,9 @@ def gen_dense_input_contribs(
 
     dense_input_contribs_tensor = torch.zeros([experts, batch * seq, hidden_size]).bfloat16()
     token_parallel_block_size = batch // token_parallel_core_dim
-    block_counts = _active_token_core_split_counts(
+    block_counts = _active_token_core_split_counts_simple(
         token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
-
     assert len(block_counts) == experts
 
     dense_contribs = 0
@@ -177,17 +189,17 @@ def gen_output_ref(
     token_parallel_core_dim,
     mesh_shape,
     cluster_axis,
-    local_reduce=False,
 ):
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
 
     num_local_experts = experts // devices
+    num_cluster_experts = experts // cluster_factor
     hidden_size = dense_input_contribs_tensor.shape[-1]
-    output_ref_tensor = torch.zeros(batch * seq * cluster_factor, experts, hidden_size).bfloat16()
+    output_ref_tensor = torch.zeros(num_cluster_experts, batch * seq * cluster_factor, hidden_size).bfloat16()
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
 
     token_parallel_block_size = batch // token_parallel_core_dim
-    block_counts = _active_token_core_split_counts(
+    block_counts = _active_token_core_split_counts_simple(
         token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
 
@@ -201,20 +213,17 @@ def gen_output_ref(
             k_entries, b, s = _unpack_dense_metadata_entry(dense_metadata_entry, num_local_experts, seq)
             global_batch = batch_rep_idxr(m0, m1, b)
 
-            reduction_buffer = torch.zeros([hidden_size]).bfloat16() if local_reduce else None
             for local_e_idx, k in enumerate(k_entries):
                 if k == select_experts_k + 1:
                     continue
 
                 global_e_idx = rec_d * num_local_experts + local_e_idx
+                cluster_e_idx = (m1 if cluster_axis == 1 else m0) * num_local_experts + local_e_idx
 
-                if local_reduce:
-                    reduction_buffer += dense_input_contribs_tensor[global_e_idx, device_dense_idxs[local_e_idx]]
-                else:
-                    output_ref_tensor[global_batch * seq + s, global_e_idx] = dense_input_contribs_tensor[
-                        global_e_idx, device_dense_idxs[local_e_idx]
-                    ]
-                    output_data_map[global_batch * seq + s, global_e_idx] = 1
+                output_ref_tensor[cluster_e_idx, global_batch * seq + s] = dense_input_contribs_tensor[
+                    global_e_idx, device_dense_idxs[local_e_idx]
+                ]
+                output_data_map[cluster_e_idx, global_batch * seq + s] = 1
 
                 if device_blocked_dense_counts[local_e_idx] == block_counts[global_e_idx][-1] - 1:
                     use_idx = device_dense_idxs[local_e_idx] or 1
@@ -227,13 +236,6 @@ def gen_output_ref(
                 else:
                     device_dense_idxs[local_e_idx] += 1
                     device_blocked_dense_counts[local_e_idx] += 1
-
-            if local_reduce:
-                local_reduction_k = next(
-                    filter(lambda x: x != select_experts_k + 1, k_entries)
-                )  # somewhat arbitrary placement
-                output_ref_tensor[global_batch * seq + s, 0] = reduction_buffer
-                output_data_map[global_batch * seq + s, 0] = 1
 
     return output_ref_tensor, output_data_map
 
@@ -249,7 +251,6 @@ def gen_tensors(
     devices,
     token_parallel_core_dim,
     scheme="random",
-    local_reduce=False,
 ):
     _, input_sparse_contribs_tensor, expert_mapping, metadata_tensor, _, _ = gen_tensors_combine(
         batch,
@@ -261,7 +262,6 @@ def gen_tensors(
         cluster_axis,
         devices,
         scheme,
-        local_reduce=False,
     )
 
     dense_metadata_tensor, dense_metadata_len, dense_token_maps, active_token_counts = gen_dense_metadata(
@@ -294,7 +294,6 @@ def gen_tensors(
         token_parallel_core_dim,
         mesh_shape,
         cluster_axis,
-        local_reduce,
     )
 
     return (
@@ -467,10 +466,10 @@ def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
         for ir in range(mesh_shape[1]):
             for ic in range(mesh_shape[0]):
                 ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
-        tt_out_agg = torch.cat(ordered_shards, dim=0)
+        tt_out_agg = torch.cat(ordered_shards, dim=1)
 
     else:
-        tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
     assert tt_out_agg.shape == output_ref.shape
     for t in range(tt_out_agg.shape[0]):
@@ -546,6 +545,7 @@ def _run_test(
 ):
     mesh_shape = tuple(mesh_device.shape)
     devices = math.prod(mesh_shape)
+    cluster_experts = experts // mesh_shape[1 - cluster_axis]
     assert experts % devices == 0
 
     (
@@ -587,16 +587,18 @@ def _run_test(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    output_tensor = torch.zeros([batch * seq, experts, hidden_size], dtype=torch.bfloat16)
+    output_tensor = torch.zeros([cluster_experts, batch * seq, hidden_size], dtype=torch.bfloat16)
     tt_output_tensor = ttnn.from_torch(
         output_tensor,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
 
     barrier_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
+
+    core_list = list(ttnn.corerange_to_cores(worker_cores))
 
     def _run_op(num_iters):
         for _ in range(num_iters):
@@ -615,7 +617,7 @@ def _run_test(
                 num_links=num_links,
                 token_parallel_core_dim=token_parallel_core_dim,
                 data_parallel_core_dim=data_parallel_core_dim,
-                worker_core_range_set=worker_cores,
+                worker_cores=core_list,
                 mux_core_range_set=mux_cores,
                 output_tensor=tt_output_tensor,
                 optional_cross_device_semaphore=barrier_semaphore,

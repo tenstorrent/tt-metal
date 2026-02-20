@@ -127,7 +127,6 @@ target_sources(
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
-        moe/selective_reduce_combine/selective_reduce_combine.cpp
         moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
         moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
         moe_compute/moe_compute.cpp
