@@ -10,6 +10,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "full_program_factory_nd_sharded.hpp"
+#include "full_program_factory_common.hpp"
 
 namespace ttnn::operations::full {
 
@@ -53,29 +54,8 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
     auto cb_value_config = tt::tt_metal::CircularBufferConfig(page_size, {{cb_fill_value_id, data_format}})
                                .set_page_size(cb_fill_value_id, page_size);
     CreateCircularBuffer(program, compute_core_range, cb_value_config);
-    std::map<std::string, std::string> writer_defines;
-
-    switch (dtype) {
-        case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
-        case DataType::INT32: writer_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
-        case DataType::FLOAT32: writer_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
-        default: break;
-    }
-
-    union datatype {
-        uint32_t u32;
-        float f32;
-    } u;
-    if (std::holds_alternative<int>(fill_value)) {
-        u.u32 = std::get<int>(fill_value);
-    } else if (std::holds_alternative<float>(fill_value)) {
-        auto float_fill_value = std::get<float>(fill_value);
-        if (dtype == DataType::BFLOAT16) {
-            u.u32 = static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(float_fill_value))) << 16;
-        } else {
-            u.f32 = float_fill_value;
-        }
-    }
+    auto writer_defines = get_writer_defines(dtype);
+    auto u = encode_fill_value(fill_value, dtype);
 
     uint32_t elems_per_page = page_size / datum_size(data_format);
     std::vector<uint32_t> writer_compile_time_args = {

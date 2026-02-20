@@ -7,6 +7,7 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "full_program_factory_interleaved.hpp"
+#include "full_program_factory_common.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -35,28 +36,8 @@ FullInterleavedProgramFactory::cached_program_t FullInterleavedProgramFactory::c
     auto cb_index = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(cb_index, program, all_cores, page_size, 1, data_format);
 
-    std::map<std::string, std::string> reader_defines;
-    switch (dtype) {
-        case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
-        case DataType::INT32: reader_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
-        case DataType::FLOAT32: reader_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
-        default: break;
-    }
-
-    union datatype {
-        uint32_t u32;
-        float f32;
-    } u;
-    if (std::holds_alternative<int>(fill_value)) {
-        u.u32 = std::get<int>(fill_value);
-    } else if (std::holds_alternative<float>(fill_value)) {
-        auto float_fill_value = std::get<float>(fill_value);
-        if (dtype == DataType::BFLOAT16) {
-            u.u32 = static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(float_fill_value))) << 16;
-        } else {
-            u.f32 = float_fill_value;
-        }
-    }
+    auto writer_defines = get_writer_defines(dtype);
+    auto u = encode_fill_value(fill_value, dtype);
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index, elems_per_page, page_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
@@ -66,7 +47,7 @@ FullInterleavedProgramFactory::cached_program_t FullInterleavedProgramFactory::c
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
         writer_compile_time_args,
-        reader_defines);
+        writer_defines);
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
@@ -83,7 +64,7 @@ FullInterleavedProgramFactory::cached_program_t FullInterleavedProgramFactory::c
             "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
             all_cores,
             reader_compile_time_args,
-            reader_defines);
+            writer_defines);
     }
 
     uint32_t page_offset = 0;
