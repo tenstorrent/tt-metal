@@ -690,6 +690,17 @@ run_t3000_tttv2_fast_unit_tests() {
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 
+  # Run LMHead1D tests
+  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
+  pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --durations=10 \
+    --cov=models.common.modules.lm_head.lm_head_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
   # Run Attention1D tests
   TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
   pytest models/common/tests/modules/attention/test_attention_1d.py \
