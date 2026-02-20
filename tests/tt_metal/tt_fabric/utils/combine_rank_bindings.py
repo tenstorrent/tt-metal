@@ -406,18 +406,50 @@ def _find_ring_ordering(all_instances, all_connections):
     )
 
 
-def _remap_to_ring(all_instances, all_connections, combined_bindings):
+def _remap_to_ring(all_instances, all_connections, combined_bindings, meshes_per_host):
     """
     Remap mesh IDs so that the combined graph's Hamiltonian cycle aligns with
-    the natural integer sequence 0 → 1 → 2 → … → n-1 → 0.
+    the natural integer sequence 0 → 1 → 2 → … → n-1 → 0, with the additional
+    constraint that ring positions [i*meshes_per_host .. (i+1)*meshes_per_host)
+    all belong to the i-th host.  This ensures MPI rank N is always on the same
+    host as before the remap (ranks 0..meshes_per_host-1 on hostname[0], etc.).
 
-    The node that currently holds mesh_id 0 keeps id 0; subsequent nodes along
-    the cycle receive ids 1, 2, … in traversal order.
+    The cycle found by _find_ring_ordering is rotated (and if necessary reversed)
+    until a rotation satisfying the host-block constraint is found.  Raises
+    ValueError if no such rotation exists, which indicates the hostnames were not
+    supplied in physical ring order.
 
     Returns (new_instances, new_connections, new_combined_bindings).
     """
     ring_order = _find_ring_ordering(all_instances, all_connections)
-    remap = {old_id: new_id for new_id, old_id in enumerate(ring_order)}
+    n = len(ring_order)
+
+    def _host_idx(mesh_id):
+        return mesh_id // meshes_per_host
+
+    def _is_host_grouped(order):
+        """True iff block k//meshes_per_host of *order* is entirely from host k//meshes_per_host."""
+        return all(_host_idx(mid) == k // meshes_per_host for k, mid in enumerate(order))
+
+    # Try every rotation of the forward ring then of the reversed ring.
+    valid_order = None
+    for candidate in (ring_order, ring_order[::-1]):
+        for start in range(n):
+            rotated = candidate[start:] + candidate[:start]
+            if _is_host_grouped(rotated):
+                valid_order = rotated
+                break
+        if valid_order is not None:
+            break
+
+    if valid_order is None:
+        raise ValueError(
+            "No rotation of the Hamiltonian cycle maps consecutive rank blocks "
+            "to the expected hostnames.  Verify that hostnames are supplied in "
+            "physical ring order."
+        )
+
+    remap = {old_id: new_id for new_id, old_id in enumerate(valid_order)}
     print(f"ring remapping (old -> new): { {k: v for k, v in sorted(remap.items())} }")
 
     new_instances = sorted(
@@ -525,7 +557,7 @@ def combine(hostnames, binding_filename, output_dir, cluster_config_path=None, r
     # Optionally remap mesh_ids so the combined graph forms a Hamiltonian ring.
     if remap_to_ring:
         all_instances, all_connections, combined_bindings = _remap_to_ring(
-            all_instances, all_connections, combined_bindings
+            all_instances, all_connections, combined_bindings, meshes_per_host
         )
 
     # Write combined textproto
