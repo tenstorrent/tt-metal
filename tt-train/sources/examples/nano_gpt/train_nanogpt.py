@@ -52,16 +52,6 @@ Model = Union[NanoGPT, Llama]
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
-_autograd_ctx = None
-
-
-def get_autograd_ctx():
-    """Get cached AutoContext singleton instance."""
-    global _autograd_ctx
-    if _autograd_ctx is None:
-        _autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    return _autograd_ctx
-
 
 class TrainingConfig(BaseTrainingConfig):
     """Extended training config with NanoGPT-specific fields.
@@ -216,48 +206,70 @@ def read_file_to_str(file_path: str) -> str:
 
 
 def create_warmup_linear_scheduler(optimizer, total_steps: int):
-    """Create warmup + linear decay scheduler matching C++ implementation."""
+    """Create warmup + linear decay scheduler matching C++ SequentialScheduler."""
     warmup_factor = 0.1
     warmup_steps = int(total_steps * warmup_factor)
     linear_decay_steps = total_steps - warmup_steps
+    base_lr = optimizer.get_lr()
 
-    def scheduler_fn(step: int) -> float:
-        if step < warmup_steps:
-            # Warmup: linear from 0.0 to 1.0
-            return float(step) / float(warmup_steps)
+    def compute_lr(step: int) -> float:
+        # +1 matches C++ LinearScheduler: m_last_step increments before computing factor
+        adjusted = step + 1
+        if adjusted <= warmup_steps:
+            factor = float(adjusted) / float(warmup_steps)
         else:
-            # Linear decay: from 1.0 to 0.01
-            decay_step = step - warmup_steps
-            return 1.0 - (0.99 * float(decay_step) / float(linear_decay_steps))
+            decay_step = adjusted - warmup_steps
+            factor = max(
+                0.0, 1.0 - (0.99 * float(decay_step) / float(linear_decay_steps))
+            )
+        return base_lr * factor
 
-    return scheduler_fn, warmup_steps, linear_decay_steps
+    return compute_lr, warmup_steps, linear_decay_steps
+
+
+class InMemoryTokenDataset:
+    """Lazy token dataset matching C++ InMemoryTokenDataset.
+
+    Stores tokens once and generates (input, target) pairs on the fly
+    using a sliding window with stride=1, matching the C++ implementation.
+    Size = len(tokens) - seq_length (every token offset is a valid sample).
+    """
+
+    def __init__(self, tokens: np.ndarray, seq_length: int):
+        self.tokens = tokens
+        self.seq_length = seq_length
+
+    def __len__(self) -> int:
+        if len(self.tokens) <= self.seq_length:
+            return 0
+        return len(self.tokens) - self.seq_length
+
+    def __getitem__(self, index: int):
+        return (
+            self.tokens[index : index + self.seq_length],
+            self.tokens[index + 1 : index + self.seq_length + 1],
+        )
 
 
 def create_dataset_from_text(
     text: str,
     sequence_length: int,
-) -> Tuple[list, CharTokenizer]:
+) -> Tuple["InMemoryTokenDataset", CharTokenizer]:
     """Create dataset from text using CharTokenizer from ttml.common.data.
+
+    Matches C++ InMemoryTokenDataset: stores tokens once and uses a sliding
+    window with stride=1 so every token offset is a valid sample.
 
     Args:
         text: Text corpus to create dataset from.
         sequence_length: Length of each sequence.
 
     Returns:
-        Tuple of (dataset, tokenizer) where dataset is list of (seq, target) tuples.
+        Tuple of (dataset, tokenizer).
     """
     tokenizer = CharTokenizer(text)
-    tokens = tokenizer.encode(text)
-
-    # Create sequences
-    dataset = []
-    for i in range(0, len(tokens) - sequence_length, sequence_length):
-        seq = tokens[i : i + sequence_length]
-        target = tokens[i + 1 : i + sequence_length + 1]
-        if len(seq) == sequence_length and len(target) == sequence_length:
-            dataset.append((seq, target))
-
-    return dataset, tokenizer
+    tokens = np.array(tokenizer.encode(text), dtype=np.uint32)
+    return InMemoryTokenDataset(tokens, sequence_length), tokenizer
 
 
 def collate_fn(
@@ -312,7 +324,7 @@ def get_loss_value(loss: ttml.autograd.Tensor) -> float:
 def train_step(
     model: Model,
     optimizer: ttml.optimizers.OptimizerBase,
-    scheduler_fn: Optional[callable],
+    compute_lr: Optional[callable],
     scheduler_step: int,
     input_tokens: ttml.autograd.Tensor,
     target_tokens: ttml.autograd.Tensor,
@@ -364,7 +376,7 @@ def train_step(
         memory_snapshot_fn("BACKWARD_PASS")
 
     # Reset computation graph after backward (matching C++: ttml::autograd::ctx().reset_graph())
-    get_autograd_ctx().reset_graph()
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
     # Get number of samples for accumulator update
     # Use cached batch_size if provided to avoid shape() call
@@ -391,8 +403,8 @@ def train_step(
         optimizer.step()
 
         # Apply learning rate scheduler if provided (matching C++: scheduler->step())
-        if scheduler_fn is not None:
-            scheduler_fn(scheduler_step)
+        if compute_lr is not None:
+            optimizer.set_lr(compute_lr(scheduler_step))
 
     step_time = (time.time() - start_time) * 1000  # Convert to ms
     return loss_float, step_time, should_step
@@ -434,29 +446,34 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
             "positional_embedding_type", config.positional_embedding_type
         )
 
-        exp_config = transformer_config.get("experimental")
-        if isinstance(exp_config, dict):
-            config.experimental.use_composite_layernorm = exp_config.get(
+        if "experimental" in transformer_config:
+            experimental = transformer_config["experimental"]
+            config.experimental.use_composite_layernorm = experimental.get(
                 "use_composite_layernorm", config.experimental.use_composite_layernorm
             )
     elif config.model_type == "llama":
         # Llama-specific fields (matching C++ read_config in llama.cpp)
         config.num_groups = transformer_config.get("num_groups", config.num_groups)
         config.theta = transformer_config.get("theta", config.theta)
-        if "intermediate_dim" in transformer_config:
-            config.intermediate_dim = transformer_config["intermediate_dim"]
+        config.intermediate_dim = transformer_config.get(
+            "intermediate_dim", config.intermediate_dim
+        )
 
         # RoPE NTK-aware scaling parameters (nested under rope_scaling in YAML)
         if "rope_scaling" in transformer_config:
             rope_scaling = transformer_config["rope_scaling"]
-            if "scaling_factor" in rope_scaling:
-                config.scaling_factor = rope_scaling["scaling_factor"]
-            if "high_freq_factor" in rope_scaling:
-                config.high_freq_factor = rope_scaling["high_freq_factor"]
-            if "low_freq_factor" in rope_scaling:
-                config.low_freq_factor = rope_scaling["low_freq_factor"]
-            if "original_context_length" in rope_scaling:
-                config.original_context_length = rope_scaling["original_context_length"]
+            config.scaling_factor = rope_scaling.get(
+                "scaling_factor", config.scaling_factor
+            )
+            config.high_freq_factor = rope_scaling.get(
+                "high_freq_factor", config.high_freq_factor
+            )
+            config.low_freq_factor = rope_scaling.get(
+                "low_freq_factor", config.low_freq_factor
+            )
+            config.original_context_length = rope_scaling.get(
+                "original_context_length", config.original_context_length
+            )
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -492,10 +509,10 @@ def sample_greedy(
     model.eval()
 
     # Reset graph before inference to ensure clean state
-    get_autograd_ctx().reset_graph()
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
     # Cache device to avoid repeated lookups
-    device = get_autograd_ctx().get_device()
+    device = ttml.autograd.AutoContext.get_instance().get_device()
 
     # Encode prompt
     if len(prompt) == 0:
@@ -711,7 +728,7 @@ def sample_greedy(
         ttnn.deallocate(new_token_tensor)
 
         # Reset graph for next iteration
-        get_autograd_ctx().reset_graph()
+        ttml.autograd.AutoContext.get_instance().reset_graph()
 
         # Print progress every 50 tokens
         if (step + 1) % 50 == 0:
@@ -1153,34 +1170,21 @@ def main():
         training_config.clip_grad_norm_max_norm = args.clip_grad_norm
     if args.sequence_length is not None:
         model_config.max_sequence_length = args.sequence_length
-    # Set checkpoint save path (separate from model_config YAML path)
-    # If --model_save_path is provided, use it; otherwise use a default based on project name
-    if args.model_save_path:
-        checkpoint_save_path = args.model_save_path
-    elif training_config.model_config:
-        # Use model_config path as base (but this is the YAML path, so we'll extract a base name)
-        # For now, use a default checkpoint directory
-        checkpoint_save_path = f"checkpoints/{training_config.project_name}"
-    else:
-        checkpoint_save_path = f"checkpoints/{training_config.project_name}"
+    # Only checkpoint when explicitly requested via --model_save_path.
+    # Matches C++ behaviour: no model_path in YAML → no checkpointing.
+    checkpoint_save_path = args.model_save_path
 
-    # Create checkpoint directory if it doesn't exist
     if checkpoint_save_path:
-        checkpoint_dir = (
-            os.path.dirname(checkpoint_save_path)
-            if os.path.dirname(checkpoint_save_path)
-            else "checkpoints"
-        )
+        checkpoint_dir = os.path.dirname(checkpoint_save_path)
         os.makedirs(checkpoint_dir, exist_ok=True)
         print(f"Checkpoints will be saved to: {checkpoint_save_path}_step_*.pkl")
 
-    # Check if we're in inference-only mode (prompt + model_path)
-    inference_only = args.prompt and (args.model_path or checkpoint_save_path)
+    # Check if we're in inference-only mode (prompt + explicit model_path).
+    inference_only = args.prompt and args.model_path
 
     # Initialize device early (needed for both training and inference)
-    instance = get_autograd_ctx()
-    instance.open_device()
-    instance.get_device()
+    ttml.autograd.AutoContext.get_instance().open_device()
+    ttml.autograd.AutoContext.get_instance().get_device()
 
     # Start memory tracking if enabled
     # Pass RunMode.NO_DISPATCH to measure memory usage of models that don't fit in device memory
@@ -1194,7 +1198,7 @@ def main():
 
     # Handle inference-only mode: load model from checkpoint
     if inference_only:
-        model_path = args.model_path if args.model_path else checkpoint_save_path
+        model_path = args.model_path
         print("1. Loading model from checkpoint...")
         print(f"   - Model path: {model_path}")
 
@@ -1275,8 +1279,9 @@ def main():
             # Auto-detect or use specified checkpoint
             if args.resume:
                 resume_path = args.resume
-            else:
-                # Try to find the latest checkpoint
+            elif checkpoint_save_path:
+                # Only auto-detect if a save path is configured — otherwise there's
+                # nowhere to look and find_latest_checkpoint("") would be a no-op anyway.
                 resume_path = find_latest_checkpoint(checkpoint_save_path)
                 if resume_path:
                     print(f"\n   Found existing checkpoint: {resume_path}")
@@ -1330,7 +1335,7 @@ def main():
     if args.prompt:
         # Inference mode: skip optimizer setup
         optimizer = None
-        scheduler_fn = None
+        compute_lr = None
         print("\n3. Inference mode - skipping optimizer setup")
     else:
         print("\n3. Setting up optimizer...")
@@ -1380,9 +1385,9 @@ def main():
             MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
         print("\n4. Setting up learning rate scheduler...")
-        scheduler_fn = None
+        compute_lr = None
         if training_config.scheduler_type == "warmup_linear":
-            scheduler_fn, warmup_steps, decay_steps = create_warmup_linear_scheduler(
+            compute_lr, warmup_steps, decay_steps = create_warmup_linear_scheduler(
                 optimizer, training_config.max_steps
             )
             print(f"   - Scheduler: warmup_linear")
@@ -1453,14 +1458,17 @@ def main():
                 MemoryUsageTracker.snapshot(name)
 
         for epoch in range(training_config.num_epochs):
-            np.random.shuffle(dataset)
+            # Shuffle indices (matching C++ DataLoader shuffle=true),
+            # avoids copying token data unlike shuffling a list of tuples.
+            indices = np.arange(dataset_len, dtype=np.int64)
+            np.random.shuffle(indices)
 
             for batch_start in range(0, dataset_len, batch_size):
                 batch_end = batch_start + batch_size
                 if batch_end > dataset_len:
                     continue  # Skip incomplete batches
 
-                batch_samples = dataset[batch_start:batch_end]
+                batch_samples = [dataset[i] for i in indices[batch_start:batch_end]]
                 input_tokens, target_tokens = collate_fn(
                     batch_samples, batch_size, sequence_length
                 )
@@ -1468,7 +1476,7 @@ def main():
                 loss_float, step_time, should_step = train_step(
                     model,
                     optimizer,
-                    scheduler_fn,
+                    compute_lr,
                     global_step,
                     input_tokens,
                     target_tokens,
