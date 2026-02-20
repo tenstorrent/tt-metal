@@ -45,32 +45,15 @@ void kernel_main() {
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
-    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(11);
-    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(16);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(19);
     constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(20);
     constexpr bool is_output_tiled = get_compile_time_arg_val(21);  // 1 = TILED, 0 = ROW_MAJOR
     constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(22);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(23);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(24);
-    constexpr uint32_t in_h_padded = get_compile_time_arg_val(25);
-    constexpr uint32_t in_w_padded = get_compile_time_arg_val(26);
-    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(27);
-    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(28);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(29);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(33);
 
     constexpr bool use_split_reader = split_reader;
 
-    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;

@@ -330,7 +330,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
 void kernel_main() {
-    constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
     constexpr uint32_t kernel_h = get_compile_time_arg_val(1);
     constexpr uint32_t kernel_w = get_compile_time_arg_val(2);
 
@@ -344,7 +343,6 @@ void kernel_main() {
 
     constexpr uint32_t in_c = get_compile_time_arg_val(6);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
 
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
@@ -359,7 +357,6 @@ void kernel_main() {
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
     constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(21);
     constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(22);
     constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(23);
@@ -367,11 +364,8 @@ void kernel_main() {
     constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(25);
     constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(26);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(27);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(29);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(30);
     constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(31);
     constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(32);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(33);
     constexpr uint32_t stride_w = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(35);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(36);
@@ -402,8 +396,6 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id = in_scalar_cb_id_0;
 
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
-    constexpr uint32_t face_r_dim = FACE_HEIGHT;
-    constexpr uint32_t num_faces_in_input_tile = 4;
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
     constexpr bool wide_reduction = in_nblocks_c > 1;
@@ -472,17 +464,7 @@ void kernel_main() {
     uint32_t segments_counter = 1;
     constexpr uint32_t total_elems_to_reduce = kernel_h * kernel_w;
 
-    volatile tt_l1_ptr uint16_t* config_ptr;
-    uint32_t scalar_index = 0;
-    uint32_t scalar_start;
-    uint32_t scalar_value;
-    uint32_t scalar_end;
-    uint32_t counter = reader_id;
-
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
-    bool first_row_value = true;
-
-    uint32_t reader_indices_on_core = reader_nindices;
 
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
@@ -491,7 +473,6 @@ void kernel_main() {
 
         constexpr uint32_t stride_multiple = 1;
         for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
-            reader_indices_on_core--;
             read_kernel_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,

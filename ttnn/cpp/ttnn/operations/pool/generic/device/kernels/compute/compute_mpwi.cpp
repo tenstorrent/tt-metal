@@ -36,17 +36,13 @@ void kernel_main() {
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(2);
-
     constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
     constexpr uint32_t in_c = get_compile_time_arg_val(4);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
     constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
-    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
     constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(11);
     constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(12);
     constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(13);
@@ -55,10 +51,8 @@ void kernel_main() {
     constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(16);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(18);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(19);
     constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(20);
     constexpr bool is_output_tiled = get_compile_time_arg_val(21);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(22);
     constexpr uint32_t stride_h = get_compile_time_arg_val(23);
     constexpr uint32_t stride_w = get_compile_time_arg_val(24);
     constexpr uint32_t in_h_padded = get_compile_time_arg_val(25);

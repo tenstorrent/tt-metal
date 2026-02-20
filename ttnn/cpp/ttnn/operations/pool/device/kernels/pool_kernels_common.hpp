@@ -20,14 +20,19 @@
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-// WARNING: This function assumes n is even
 ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
-    // simplest impl:
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     uint32_t value = val | (val << 16);
     if (ptr[0] != value || unconditionally) {
-        for (uint32_t i = 0; i < n / 2; ++i) {
-            ptr[i] = (value);
+        // Process pairs of uint16_t as uint32_t for performance
+        uint32_t num_pairs = n / 2;
+        for (uint32_t i = 0; i < num_pairs; ++i) {
+            ptr[i] = value;
+        }
+        // Handle odd case: write the final uint16_t
+        if (n & 1) {
+            volatile tt_l1_ptr uint16_t* ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
+            ptr16[n - 1] = val;
         }
     }
 

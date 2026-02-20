@@ -164,12 +164,6 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
-    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(22);
-    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(23);
-    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(25);
-    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(26);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(27);
     constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(28);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(29);
@@ -180,8 +174,6 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(35);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(36);
-    constexpr uint32_t pad_t = get_compile_time_arg_val(37);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(38);
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(39);
     constexpr uint32_t config_in_dram = get_compile_time_arg_val(50);
     constexpr uint32_t config_dram_addr = get_compile_time_arg_val(51);
