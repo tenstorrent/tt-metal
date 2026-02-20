@@ -37,14 +37,7 @@ inline void calculate_typecast_fp32_to_int32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_fp16b() {
-// _calculate_typecast_fp32_to_fp16b_<APPROXIMATION_MODE, ITERATIONS>();
-#pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(0, 0, 3, 0);
-        TTI_SFP_STOCH_RND(0, 0, 2, 0, 1, 1);
-        TTI_SFPSTORE(1, 0, 3, 0);
-        sfpi::dst_reg++;
-    }
+    _calculate_typecast_fp32_to_fp16b_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -89,7 +82,7 @@ inline void calculate_typecast_int32_to_uint16() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_fp16b() {
-    // _init_typecast_fp32_to_fp16b_<APPROXIMATION_MODE>();
+    _init_typecast_fp32_to_fp16b_<APPROXIMATION_MODE>();
 }
 
 template <bool APPROXIMATION_MODE>

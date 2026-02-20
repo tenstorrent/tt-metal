@@ -88,8 +88,8 @@ def test_typecast_sharded_fp32_bf16(
     assert tt_output.dtype == output_dtype, f"Expected dtype {output_dtype}, got {tt_output.dtype}"
 
     # Verify values match: device typecast must exactly match PyTorch's float32 <-> bfloat16 conversion
-    # assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
-    assert_with_ulp(expected_output, tt_output_torch, 1)
+    assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
+    assert_with_ulp(expected_output, tt_output_torch, 0)
 
 
 @pytest.mark.parametrize(
@@ -149,8 +149,8 @@ def test_typecast_interleaved(shape, input_dtype, output_dtype, memory_config, d
     assert not tt_output.is_sharded(), "Output should be interleaved (not sharded)"
 
     # Verify TTNN matches PyTorch's bfloat16 <-> float32 conversion
-    # assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
-    assert_with_ulp(expected_output, tt_output_torch, 1)
+    assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
+    assert_with_ulp(expected_output, tt_output_torch, 0)
 
 
 @pytest.mark.parametrize(
