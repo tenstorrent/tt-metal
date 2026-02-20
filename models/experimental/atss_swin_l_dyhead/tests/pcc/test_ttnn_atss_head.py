@@ -68,11 +68,14 @@ def test_ttnn_atss_head_vs_reference(device, atss_ckpt_path, atss_ref_model):
     ttnn_inputs = []
     for feat in dy_feats:
         t = ttnn.from_torch(
-            feat,
+            # feat,
+            feat.permute(0, 2, 3, 1),
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            # layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn_inputs.append(t)
 
@@ -84,6 +87,9 @@ def test_ttnn_atss_head_vs_reference(device, atss_ckpt_path, atss_ref_model):
     for i in range(5):
         # Classification
         cls_out = ttnn.to_torch(ttnn.from_device(ttnn_cls[i]))
+        N, C, H, W = ref_cls[i].shape
+        cls_out = torch.reshape(cls_out, (N, H, W, C))  # Reshape into NHWC based on torch
+        cls_out = torch.permute(cls_out, (0, 3, 1, 2))  # Convert cls_out to NCHW
         assert cls_out.shape == ref_cls[i].shape
         passing, pcc_val = comp_pcc(ref_cls[i], cls_out, pcc_threshold)
         logger.info(f"Head level {i} cls: PCC={pcc_val:.6f}, pass={passing}")
@@ -91,6 +97,9 @@ def test_ttnn_atss_head_vs_reference(device, atss_ckpt_path, atss_ref_model):
 
         # Regression
         reg_out = ttnn.to_torch(ttnn.from_device(ttnn_reg[i]))
+        N, C, H, W = ref_reg[i].shape
+        reg_out = torch.reshape(reg_out, (N, H, W, C))  # Reshape into NHWC based on torch
+        reg_out = torch.permute(reg_out, (0, 3, 1, 2))  # Convert cls_out to NCHW
         assert reg_out.shape == ref_reg[i].shape
         passing, pcc_val = comp_pcc(ref_reg[i], reg_out, pcc_threshold)
         logger.info(f"Head level {i} reg: PCC={pcc_val:.6f}, pass={passing}")
@@ -98,6 +107,9 @@ def test_ttnn_atss_head_vs_reference(device, atss_ckpt_path, atss_ref_model):
 
         # Centerness
         cent_out = ttnn.to_torch(ttnn.from_device(ttnn_cent[i]))
+        N, C, H, W = ref_cent[i].shape
+        cent_out = torch.reshape(cent_out, (N, H, W, C))  # Reshape into NHWC based on torch
+        cent_out = torch.permute(cent_out, (0, 3, 1, 2))  # Convert cls_out to NCHW
         assert cent_out.shape == ref_cent[i].shape
         passing, pcc_val = comp_pcc(ref_cent[i], cent_out, pcc_threshold)
         logger.info(f"Head level {i} cent: PCC={pcc_val:.6f}, pass={passing}")
