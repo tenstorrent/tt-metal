@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "api/debug/dprint.h"
-
 // Memory type
 constexpr uint32_t MEMORY_TYPE_L1 = 0;
 constexpr uint32_t MEMORY_TYPE_DRAM = 1;

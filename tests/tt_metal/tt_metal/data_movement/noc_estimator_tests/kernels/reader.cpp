@@ -9,7 +9,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/endpoints.h"
-#include "api/debug/dprint.h"
 #include "log_helpers.hpp"
 
 void kernel_main() {

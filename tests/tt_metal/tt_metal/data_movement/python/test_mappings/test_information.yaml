@@ -752,3 +752,10 @@ tests:
 
   810:
     name: "Noc Estimator - L1 Column to Column"
+
+  811:
+    name: "Noc Estimator - DRAM One from All"
+
+  812:
+    name: "Noc Estimator - DRAM All from All"
+    bandwidth_mode: "combined"
