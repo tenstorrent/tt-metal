@@ -274,10 +274,14 @@ def from_torch(
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
-        col_tilize (bool, optional): If True, transpose the last two dimensions before BFP tilization so that
-            exponents are shared along columns instead of rows. Requires BFP dtype (bfloat8_b or bfloat4_b),
-            tensor.ndim >= 2, and spec must be None. The returned tensor has the last two dims swapped.
-            Use with ``transpose_b=True`` in matmul. Defaults to `False`.
+        col_tilize (bool, optional): If True, transpose the last two dimensions of the tensor in host
+            memory (float32) before BFP tile encoding.  In BFP format one exponent byte is shared
+            across 16 consecutive datums within a tile face row; transposing before packing redirects
+            that sharing onto the column dimension of the original tensor.  The returned tensor has
+            shape (..., N, K) instead of (..., K, N).  This transpose is applied to the raw float32
+            host data and is unrelated to Tile-level transpose flags (transpose_within_face /
+            transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
+            Defaults to `False`.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
