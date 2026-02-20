@@ -4,6 +4,7 @@
 
 #include "moe_compute_device_operation.hpp"
 
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::experimental::prim {

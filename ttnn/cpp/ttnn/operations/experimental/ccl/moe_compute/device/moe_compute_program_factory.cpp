@@ -16,16 +16,11 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/program.hpp>
-
-// #include "impl/buffers/circular_buffer.hpp"
-// #include "impl/program/program_impl.hpp"
 
 namespace {
 
@@ -601,7 +596,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Store physical NOC coordinates of all tilize cores for cross-core communication
     // Used by drain core to read from non-drain cores, and non-drain to write to drain
-    std::vector<CoreCoord> tilize_cores_physical;
+    std::vector<CoreCoord> tilize_cores_physical(tilize_num_cores);
     for (uint32_t i = 0; i < tilize_num_cores; i++) {
         tilize_cores_physical.push_back(mesh_device->worker_core_from_logical_core(tilize_cores.at(i)));
     }
