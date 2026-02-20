@@ -33,22 +33,28 @@ static bool check_32_chips() {
 class GalaxyRingSDPATest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
+        if (check_32_chips()) {
+            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            ttml::ttnn_fixed::distributed::enable_fabric(32);
+            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
+            ttml::autograd::ctx().set_seed(42);
+            ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+
+            // Configure parallelism context for CP (CP axis will be 0)
+            ttml::autograd::ctx().initialize_parallelism_context(
+                {.enable_ddp = false, .enable_tp = true, .enable_cp = true});
+        }
+    }
+    static void TearDownTestSuite() {
+        if (check_32_chips()) {
+            ttml::autograd::ctx().close_device();
+        }
+    }
+
+    void SetUp() override {
         if (!check_32_chips()) {
             GTEST_SKIP() << "Skipping Galaxy specific tests";
         }
-        ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-        ttml::ttnn_fixed::distributed::enable_fabric(32);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
-        ttml::autograd::ctx().set_seed(42);
-        ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
-
-        // Configure parallelism context for CP (CP axis will be 0)
-        ttml::autograd::ctx().initialize_parallelism_context(
-            {.enable_ddp = false, .enable_tp = true, .enable_cp = true});
-    }
-
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
     }
 };
 
