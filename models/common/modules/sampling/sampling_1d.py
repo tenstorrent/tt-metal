@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.utils import LogProbsCalculator
 
 # ---------------------------------------------------------------------------
@@ -456,13 +457,7 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
     multi_step_reduction = list(cluster_shape) == [1, 1]
 
     if num_devices > 1 and config.tt_ccl is None:
-        # Try to import tt_ccl utilities
-        try:
-            from models.common.modules.tt_ccl import get_tt_ccl
-
-            to_set["tt_ccl"] = get_tt_ccl(mesh_device)
-        except ImportError:
-            pass  # Caller must provide tt_ccl for multi-device
+        to_set["tt_ccl"] = get_tt_ccl(mesh_device)
 
     # Phase 2: Scalar config defaults
     if config.start_core is None:

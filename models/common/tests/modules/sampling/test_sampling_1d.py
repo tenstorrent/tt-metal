@@ -10,17 +10,6 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig, _resolve_sampling1d_config
 
-
-# todo)) this is not the TTTv2 way! look at mlp_1d.py for the correct way.
-def _get_tt_ccl_if_multi_device(mesh_device):
-    """Get TT_CCL for multi-device meshes, None for single device."""
-    if mesh_device.get_num_devices() <= 1:
-        return None
-    from models.common.modules.tt_ccl import get_tt_ccl
-
-    return get_tt_ccl(mesh_device)
-
-
 # ==============================================================================
 # Unit tests: Config (no device)
 # ==============================================================================
@@ -445,8 +434,7 @@ def test_sampling1d_topk1_vs_argmax(ttnn_mesh_device, vocab_size):
     torch.manual_seed(42)
     B = 32
 
-    tt_ccl = _get_tt_ccl_if_multi_device(ttnn_mesh_device)
-    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
 
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
 
@@ -539,8 +527,7 @@ def test_sampling1d_topk32_in_range(ttnn_mesh_device):
     B = 32
     vocab_size = 1024
 
-    tt_ccl = _get_tt_ccl_if_multi_device(ttnn_mesh_device)
-    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
 
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
     logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
@@ -624,8 +611,7 @@ def test_sampling1d_token_in_valid_set(ttnn_mesh_device, k, p, temp, max_boundar
     B = 32
     vocab_size = 1024
 
-    tt_ccl = _get_tt_ccl_if_multi_device(ttnn_mesh_device)
-    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
 
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
     logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
@@ -663,8 +649,7 @@ def test_sampling1d_deterministic_with_same_seed(ttnn_mesh_device):
     B = 32
     vocab_size = 1024
 
-    tt_ccl = _get_tt_ccl_if_multi_device(ttnn_mesh_device)
-    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
 
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
     cluster_shape = tuple(ttnn_mesh_device.shape)
