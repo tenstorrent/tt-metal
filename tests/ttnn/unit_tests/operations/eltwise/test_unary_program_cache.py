@@ -33,6 +33,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def is_simulator():
+    return os.environ.get("TT_METAL_SIMULATOR") != None
+
+
 @pytest.fixture
 def isolate_program_cache(device):
     """Ensure each test starts with an empty program cache and cleans up after."""
@@ -62,6 +66,7 @@ def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM
 # =============================================================================
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_reuse_same_config(device, isolate_program_cache):
     """Same op, same shape, same dtype run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]
@@ -78,6 +83,7 @@ def test_unary_cache_reuse_same_config(device, isolate_program_cache):
     assert not torch.equal(tt_out1, tt_out2)
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_reuse_same_volume_different_shapes(device, isolate_program_cache):
     """TILE layout: same volume, different shapes -> 1 cache entry.
     [1,1,32,64] and [1,1,64,32] have same volume (2048), so same num_pages."""
@@ -90,6 +96,7 @@ def test_unary_cache_reuse_same_volume_different_shapes(device, isolate_program_
     assert device.num_program_cache_entries() == 1
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_volumes(device, isolate_program_cache):
     """TILE layout: different volumes -> different cache entries.
     [1,1,32,32] (vol=1024) vs [1,1,64,64] (vol=4096) differ in num_pages."""
@@ -107,6 +114,7 @@ def test_unary_cache_miss_different_volumes(device, isolate_program_cache):
 # =============================================================================
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_op_types(device, isolate_program_cache):
     """Different unary op types -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -120,6 +128,7 @@ def test_unary_cache_miss_different_op_types(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -133,6 +142,7 @@ def test_unary_cache_miss_different_input_dtypes(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -150,6 +160,7 @@ def test_unary_cache_miss_different_memory_configs(device, isolate_program_cache
     assert device.num_program_cache_entries() == 2
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is part of UnaryParams (hashed via args) and also hashed explicitly.
@@ -173,6 +184,7 @@ def test_unary_cache_miss_different_sub_core_grids(device, isolate_program_cache
     assert device.num_program_cache_entries() == 2
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_miss_different_factories(device, isolate_program_cache):
     """Interleaved vs sub_core_grids factory -> different cache entries.
     factory_index is included in the hash.
@@ -199,6 +211,7 @@ def test_unary_cache_miss_different_factories(device, isolate_program_cache):
 # =============================================================================
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_correctness_repeated_runs(device, isolate_program_cache):
     """Run same op 5 times with different data -> all results correct."""
     shape = [1, 1, 32, 64]
@@ -209,6 +222,7 @@ def test_unary_cache_correctness_repeated_runs(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 1
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_correctness_same_volume_different_shapes(device, isolate_program_cache):
     """Same volume, different shapes all produce correct results via cache reuse."""
     # All have volume 2048: 32*64, 64*32
@@ -224,6 +238,7 @@ def test_unary_cache_correctness_same_volume_different_shapes(device, isolate_pr
 # =============================================================================
 
 
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_sharded_cache_correctness_different_grids(device, isolate_program_cache):
     """Sharded ttnn.abs with different grid configs must produce correct results.
     Reproduces GitHub issue #33910: ttnn.abs ProgramCache data corruption.
