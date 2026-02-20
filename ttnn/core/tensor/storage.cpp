@@ -25,8 +25,10 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
 }
 
 DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
-    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+    std::vector<distributed::MeshCoordinate> coords_,
+    std::shared_ptr<distributed::MeshBuffer> root_buffer_) :
+    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)), root_mesh_buffer(std::move(root_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer != nullptr) {
@@ -38,6 +40,26 @@ Buffer* DeviceStorage::get_buffer() const {
 std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const {
     TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
     return mesh_buffer;
+}
+
+const std::shared_ptr<distributed::MeshBuffer>& DeviceStorage::get_root_mesh_buffer() const {
+    return root_mesh_buffer ? root_mesh_buffer : mesh_buffer;
+}
+
+void DeviceStorage::deallocate_root_mesh_buffer() {
+    if (root_mesh_buffer) {
+        root_mesh_buffer->deallocate();
+    } else {
+        mesh_buffer->deallocate();
+    }
+}
+
+void DeviceStorage::reset_root_mesh_buffer() {
+    if (root_mesh_buffer) {
+        root_mesh_buffer.reset();
+    } else {
+        mesh_buffer.reset();
+    }
 }
 
 bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }
