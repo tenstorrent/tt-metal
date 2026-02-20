@@ -55,7 +55,17 @@ try:
 except ImportError:
     # Fallback: define inline if generic_ops_tracer not found
     def get_base_dir():
-        """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+        """Get the tt-metal base directory from script location, PYTHONPATH, or current working directory"""
+        # First try to get base dir from this script's location
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if "tt-metal" in script_dir:
+            parts = script_dir.split("tt-metal")
+            base = parts[0] + "tt-metal"
+            # Verify model_tracer exists there
+            if os.path.exists(os.path.join(base, "model_tracer")):
+                return base
+
+        # Try PYTHONPATH
         pythonpath = os.environ.get("PYTHONPATH", "")
         if pythonpath:
             paths = pythonpath.split(":")
@@ -66,10 +76,13 @@ except ImportError:
                     parts = path.split("tt-metal")
                     if parts:
                         return parts[0] + "tt-metal"
+
+        # Try current working directory
         current_dir = os.getcwd()
         if "tt-metal" in current_dir:
             parts = current_dir.split("tt-metal")
             return parts[0] + "tt-metal"
+
         return current_dir
 
 
