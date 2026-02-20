@@ -26,6 +26,7 @@ work distribution, so different shapes with same volume correctly share a
 cache entry.
 """
 
+import os
 import pytest
 import torch
 
