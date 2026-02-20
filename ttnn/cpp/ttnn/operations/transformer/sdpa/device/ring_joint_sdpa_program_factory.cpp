@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
@@ -9,6 +9,7 @@
 #include <cmath>
 #include <string>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -160,16 +161,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
+    const auto& v_shape = gathered_input_tensor_v.logical_shape();
+    log_info(tt::LogOp, "q_shape: {}", q_shape);
+    log_info(tt::LogOp, "k_shape (gathered): {}", k_shape);
+    log_info(tt::LogOp, "v_shape (gathered): {}", v_shape);
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const uint32_t B = q_shape[0], NH = q_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
     const uint32_t padded_N = k_shape[2];
+    const uint32_t vDH = v_shape[3];
     const uint32_t L = joint_q_shape[2];
 
+    // this is something regarding q
     const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
+    const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
 
     /*
@@ -189,9 +197,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
 
     log_debug(tt::LogOp, "B: {}", B);
-    log_debug(tt::LogOp, "NH: {}", NH);
+    log_info(tt::LogOp, "NH: {}", NH);
+    log_info(tt::LogOp, "NHK: {}", NHK);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
+    log_debug(tt::LogOp, "vDH: {}", vDH);
 
     // Log padded dimensions
     log_debug(tt::LogOp, "local_padded_N: {}", local_padded_N);
@@ -200,6 +210,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Log tile dimensions
     log_debug(tt::LogOp, "DHt: {}", DHt);
+    log_debug(tt::LogOp, "vDHt: {}", vDHt);
     log_debug(tt::LogOp, "local_padded_Nt: {}", local_padded_Nt);
     log_debug(tt::LogOp, "padded_Nt: {}", padded_Nt);
     log_debug(tt::LogOp, "Lt: {}", Lt);
@@ -259,11 +270,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t out_im_tiles = Sq_chunk_t * DHt;
-    uint32_t out0_t = Sq_chunk_t * DHt;
+    uint32_t out_im_tiles = Sq_chunk_t * vDHt;
+    uint32_t out0_t = Sq_chunk_t * vDHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
@@ -290,10 +301,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
+    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // log all values
@@ -316,7 +327,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
     const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
+    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
+    // so the granularity must evenly divide both to avoid dropping tiles.
+    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
+    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
+        dht_granularity--;
+    }
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
@@ -342,7 +358,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
+        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -384,7 +402,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
+        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -411,7 +431,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> compute_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
+        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -597,6 +619,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
+    // probably gonna need some help here :)
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
     uint32_t v_addr = input_tensor_v.buffer()->address();

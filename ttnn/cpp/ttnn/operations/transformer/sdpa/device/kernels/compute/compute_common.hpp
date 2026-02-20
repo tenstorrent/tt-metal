@@ -1438,6 +1438,7 @@ void sdpa_inner_loop(
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t mask_chunk_0,
@@ -1776,7 +1777,7 @@ void sdpa_inner_loop(
                 sub_block(cb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
                 // alias_sub *= alias_sig
                 reconfig_data_format(alias_sub, alias_sig);
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
                 // cb_out = cb_prev_out - alias_sub
                 reconfig_data_format(cb_prev_out, alias_sub);
                 pack_reconfig_data_format(cb_out);
@@ -1820,9 +1821,9 @@ void sdpa_inner_loop(
     if constexpr (sdpa_type == RING) {
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_wait_front(cb_k_in, k_chunk_tiles);
-            cb_wait_front(cb_v_in, k_chunk_tiles);
+            cb_wait_front(cb_v_in, v_chunk_tiles);
             cb_pop_front(cb_k_in, k_chunk_tiles);
-            cb_pop_front(cb_v_in, k_chunk_tiles);
+            cb_pop_front(cb_v_in, v_chunk_tiles);
         }
     }
 
@@ -2093,6 +2094,7 @@ template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t DHt,
+    uint32_t vDHt,
     uint32_t scale_fp32>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
@@ -2114,6 +2116,7 @@ void sdpa_ring(
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t ring_iter,
@@ -2153,7 +2156,7 @@ void sdpa_ring(
         Sq_chunk_t,
         Sk_chunk_t,
         DHt,
-        DHt,    // vDHt = DHt
+        vDHt,
         false,  // use_attention_sink (not used)
         false,  // use_provided_mask (not used)
         false,  // use_padded_mask (not used)
@@ -2183,6 +2186,7 @@ void sdpa_ring(
         iter_k_chunk_end,
         q_chunk_tiles,
         k_chunk_tiles,
+        v_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
         0,  // mask_chunk_0 (not used)

@@ -91,10 +91,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    const auto NVH = v_shape[1];
     const auto N_local = q_shape[2];
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
-    const auto DH = q_shape[3];
+    // const auto DH = q_shape[3];
 
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
 
@@ -109,20 +110,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_v_shape[0]);
 
     // Validate head dimensions match
-    TT_FATAL(
-        k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
-            joint_v_shape[3] == DH,
-        "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        DH,
-        k_shape[3],
-        v_shape[3],
-        joint_q_shape[3],
-        joint_k_shape[3],
-        joint_v_shape[3]);
+    // TT_FATAL(
+    //     k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
+    //         joint_v_shape[3] == DH,
+    //     "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+    //     DH,
+    //     k_shape[3],
+    //     v_shape[3],
+    //     joint_q_shape[3],
+    //     joint_k_shape[3],
+    //     joint_v_shape[3]);
 
     TT_FATAL(
-        v_shape[1] == NKH && joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
-        "Num heads must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NVH,
+        "Num heads mismatch. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
         NQH,
         NKH,
         v_shape[1],
@@ -179,7 +180,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
-    TT_FATAL(NQH == NKH, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", NQH, NKH);
+    TT_FATAL(NQH == NVH, "Q num_heads must be equal to V num_heads. Got Q: {}, V: {}", NQH, NVH);
+    TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
 
     // Validate chunk sizes if program config is provided
     auto q_chunk_size = args.get_q_chunk_size();
@@ -223,11 +225,14 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     auto lse_shape = input.logical_shape();
     lse_shape[3] = 1;
     lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
+    auto out_shape = input.logical_shape();
+    // head dim as v
+    out_shape[3] = tensor_args.input_v.logical_shape()[3];
 
+    // Needs fixing
     return {
         .output = TensorSpec(
-            input.logical_shape(),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+            out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         .joint_output = TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),

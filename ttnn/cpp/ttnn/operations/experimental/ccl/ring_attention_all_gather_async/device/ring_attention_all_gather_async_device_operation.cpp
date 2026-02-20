@@ -44,10 +44,10 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             "All input tensors must have the same memory config. Input tensor {} has different memory config",
             i);
 
-        TT_FATAL(
-            input_tensor.logical_shape() == input_shape,
-            "All input tensors must have the same shape. Input tensor {} has different shape",
-            i);
+        // TT_FATAL(
+        //     input_tensor.logical_shape() == input_shape,
+        //     "All input tensors must have the same shape. Input tensor {} has different shape",
+        //     i);
     }
 
     TT_FATAL(
@@ -92,12 +92,12 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
                 auto expected_output_shape = input_shape;
                 expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
 
-                TT_FATAL(
-                    output_shape == expected_output_shape,
-                    "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
-                    i,
-                    operation_attributes.dim,
-                    operation_attributes.ring_size);
+                // TT_FATAL(
+                //     output_shape == expected_output_shape,
+                //     "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
+                //     i,
+                //     operation_attributes.dim,
+                //     operation_attributes.ring_size);
             }
         }
     }
@@ -109,10 +109,11 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     const auto& input_tensors = tensor_args.input_tensor;
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
-    shape[operation_attributes.dim] *= operation_attributes.ring_size;
     std::vector<ttnn::TensorSpec> output_specs;
     output_specs.reserve(input_tensors.size());
     for (uint32_t i = 0; i < input_tensors.size(); i++) {
+        auto shape = input_tensors[i].logical_shape();
+        shape[operation_attributes.dim] *= operation_attributes.ring_size;
         output_specs.push_back(TensorSpec(
             shape,
             TensorLayout(
