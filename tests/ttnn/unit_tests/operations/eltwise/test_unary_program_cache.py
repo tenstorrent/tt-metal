@@ -32,6 +32,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_wormhole_b0
 
 
 def is_simulator():
