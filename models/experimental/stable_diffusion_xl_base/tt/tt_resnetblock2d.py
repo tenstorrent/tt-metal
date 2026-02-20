@@ -115,7 +115,7 @@ class TtResnetBlock2D(LightweightModule):
             self.conv2_config.weights_dtype,
         )
         if conv_shortcut:
-            self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
+            self.tt_conv3_weights, self.tt_conv3_bias, _, _ = prepare_linear_params(
                 device, conv_weights_3, conv_bias_3, model_config.ff_weights_dtype
             )
             self.conv3_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.conv_shortcut")
@@ -123,7 +123,7 @@ class TtResnetBlock2D(LightweightModule):
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
-        self.tt_time_emb_weights, self.tt_time_emb_bias = prepare_linear_params(
+        self.tt_time_emb_weights, self.tt_time_emb_bias, _, _ = prepare_linear_params(
             device, time_emb_weights, time_emb_bias, model_config.ff_weights_dtype
         )
 

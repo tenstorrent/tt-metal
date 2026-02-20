@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+import time
 
 
 def to_channel_last_ttnn(torch_tensor, dtype, device, memory_config, layout):
@@ -51,10 +52,41 @@ def prepare_gn_beta_gamma(device, weights, bias, num_cores):
     return tt_gamma, tt_bias
 
 
-def prepare_linear_params(device, weights, bias, dtype):
-    tt_weights = ttnn.from_torch(weights.movedim(-1, -2), dtype, device=device, layout=ttnn.TILE_LAYOUT)
+def prepare_linear_params(device, weights, bias, dtype, is_lora_impacted=False):
+    host_creation_time_ms = None
+    host_to_device_time_ms = None
+
+    if is_lora_impacted:
+        # TIMING: Host tensor creation for weights (LoRA-impacted only)
+        weights_bf16 = weights.to(torch.bfloat16)
+        weights_bf16 = weights_bf16.movedim(-1, -2)
+        ttnn.synchronize_device(device)
+        start_time = time.perf_counter()
+        tt_weights_host = ttnn.from_torch(weights_bf16, dtype)
+        # tt_weights_host = ttnn.from_torch(weights.movedim(-1, -2), dtype, layout=ttnn.TILE_LAYOUT)
+        ttnn.synchronize_device(device)
+        host_creation_time_ms = (time.perf_counter() - start_time) * 1000
+
+        tt_weights_host = ttnn.to_layout(tt_weights_host, ttnn.TILE_LAYOUT)
+
+        tt_weights_device = ttnn.allocate_tensor_on_device(tt_weights_host.spec, device)
+
+        # TIMING: Host-to-device copy for weights (LoRA-impacted only)
+        ttnn.synchronize_device(device)
+        start_time = time.perf_counter()
+        ttnn.copy_host_to_device_tensor(tt_weights_host, tt_weights_device)
+        ttnn.synchronize_device(device)
+        host_to_device_time_ms = (time.perf_counter() - start_time) * 1000
+    else:
+        # No timing for non-LoRA operations
+        tt_weights_host = ttnn.from_torch(weights.movedim(-1, -2), dtype, layout=ttnn.TILE_LAYOUT)
+        tt_weights_device = ttnn.allocate_tensor_on_device(tt_weights_host.spec, device)
+        ttnn.copy_host_to_device_tensor(tt_weights_host, tt_weights_device)
+
+    # Handle bias (not LoRA-impacted - no timing needed)
     tt_bias = ttnn.from_torch(bias, dtype, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
-    return tt_weights, tt_bias
+
+    return tt_weights_device, tt_bias, host_creation_time_ms, host_to_device_time_ms
 
 
 def prepare_conv_params(

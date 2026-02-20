@@ -47,14 +47,14 @@ class TtAutoencoderKL(LightweightModule):
         quant_conv_weights = state_dict[f"quant_conv.weight"].squeeze()
         quant_conv_bias = state_dict[f"quant_conv.bias"]
 
-        self.tt_quant_conv_weights, self.tt_quant_conv_bias = prepare_linear_params(
+        self.tt_quant_conv_weights, self.tt_quant_conv_bias, _, _ = prepare_linear_params(
             device, quant_conv_weights, quant_conv_bias, model_config.conv_w_dtype
         )
 
         post_quant_conv_weights = state_dict[f"post_quant_conv.weight"].squeeze()
         post_quant_conv_bias = state_dict[f"post_quant_conv.bias"]
 
-        self.tt_post_quant_conv_weights, self.tt_post_quant_conv_bias = prepare_linear_params(
+        self.tt_post_quant_conv_weights, self.tt_post_quant_conv_bias, _, _ = prepare_linear_params(
             device, post_quant_conv_weights, post_quant_conv_bias, model_config.conv_w_dtype
         )
 

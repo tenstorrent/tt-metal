@@ -78,6 +78,10 @@ def run_demo_inference(
         use_safetensors=True,
         local_files_only=is_ci_env,
     )
+    # lora_path = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
+    # pipeline.load_lora_weights(lora_path)
+    # pipeline.fuse_lora(lora_scale=1.0)
+    # pipeline.unload_lora_weights()
     profiler.end("diffusion_pipeline_from_pretrained")
 
     assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
@@ -233,7 +237,7 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "prompt",
-    (("An astronaut riding a green horse"),),
+    (("Coloring Book of an astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
     "negative_prompt",

@@ -131,7 +131,7 @@ class TtResnetBlock2D(LightweightModule):
         self.conv2_slice_config = None  # auto slicing
 
         if conv_shortcut:
-            self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
+            self.tt_conv3_weights, self.tt_conv3_bias, _, _ = prepare_linear_params(
                 device, conv_weights_3, conv_bias_3, model_config.conv_w_dtype
             )
         else:

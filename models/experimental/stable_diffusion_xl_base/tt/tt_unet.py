@@ -19,6 +19,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlo
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
 )
+from models.experimental.stable_diffusion_xl_base.tt.lora_weights_logger import lora_logger
 
 
 class TtUNet2DConditionModel(LightweightModule):
@@ -36,6 +37,9 @@ class TtUNet2DConditionModel(LightweightModule):
 
         self.device = device
         self.model_config = model_config
+
+        # Log module initialization start
+        lora_logger.log_module_start("UNet", "TtUNet2DConditionModel")
 
         self.stride = (1, 1)
         self.padding = (1, 1)
@@ -210,12 +214,14 @@ class TtUNet2DConditionModel(LightweightModule):
             )
             self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2", model_config, debug_mode=debug_mode))
 
+        # LORA WEIGHT: Input convolution weights - less commonly targeted but some LoRA variants adapt conv layers
         conv_weights_in = state_dict["conv_in.weight"]
         conv_bias_in = state_dict["conv_in.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         norm_weights_out = state_dict["conv_norm_out.weight"]
         norm_bias_out = state_dict["conv_norm_out.bias"]
 
+        # LORA WEIGHT: Output convolution weights - less commonly targeted but some LoRA variants adapt conv layers
         conv_weights_out = state_dict["conv_out.weight"]
         conv_bias_out = state_dict["conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
@@ -231,6 +237,7 @@ class TtUNet2DConditionModel(LightweightModule):
             conv_bias_in,
             self.conv1_config.weights_dtype,
         )
+        # Note: conv_in is a convolutional layer - NOT impacted by LoRA, so no logging needed
 
         self.conv2_config = model_config.get_conv_config(conv_path="conv_out")
         self.compute2_config = model_config.get_conv_compute_config(module_path="conv_out")
@@ -243,6 +250,7 @@ class TtUNet2DConditionModel(LightweightModule):
             conv_bias_out,
             self.conv2_config.weights_dtype,
         )
+        # Note: conv_out is a convolutional layer - NOT impacted by LoRA, so no logging needed
 
         self.norm_groups = 32
         self.norm_eps = 1e-5
@@ -261,6 +269,9 @@ class TtUNet2DConditionModel(LightweightModule):
             self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
             or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
         ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
+
+        # Log module initialization end
+        lora_logger.log_module_end("UNet", "TtUNet2DConditionModel")
 
     def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
         B, C, H, W = input_shape

@@ -10,6 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_linear_params,
 )
+from models.experimental.stable_diffusion_xl_base.tt.lora_weights_logger import lora_logger
 
 
 class TtTransformer2DModel(LightweightModule):
@@ -17,6 +18,9 @@ class TtTransformer2DModel(LightweightModule):
         super().__init__()
 
         self.device = device
+
+        # Log module initialization start
+        lora_logger.log_module_start(module_path, "TtTransformer2DModel")
 
         self.norm_groups = 32
         self.norm_eps = 1e-6
@@ -57,13 +61,43 @@ class TtTransformer2DModel(LightweightModule):
         proj_weights_dtype = (
             model_config.attention_weights_dtype
         )  # keep this same as attention weights dtype at the moment
+        # LORA WEIGHT: proj_in weights are commonly targeted by LoRA for input projection adaptation
         weights = state_dict[f"{module_path}.proj_in.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_in.bias"]
-        self.tt_weights_in, self.tt_bias_in = prepare_linear_params(device, weights, bias, proj_weights_dtype)
+        self.tt_weights_in, self.tt_bias_in, host_creation_ms, host_to_device_ms = prepare_linear_params(
+            device, weights, bias, proj_weights_dtype, is_lora_impacted=True
+        )
+        # LORA WEIGHT LOG: Input projection weights
+        lora_logger.log_weight_creation(
+            module_path,
+            "tt_weights_in",
+            self.tt_weights_in.shape,
+            proj_weights_dtype,
+            device,
+            "Input projection weights for transformer",
+            tensor_obj=self.tt_weights_in,
+            host_creation_time_ms=host_creation_ms,
+            host_to_device_time_ms=host_to_device_ms,
+        )
 
+        # LORA WEIGHT: proj_out weights are commonly targeted by LoRA for output projection adaptation
         weights = state_dict[f"{module_path}.proj_out.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_out.bias"]
-        self.tt_weights_out, self.tt_bias_out = prepare_linear_params(device, weights, bias, proj_weights_dtype)
+        self.tt_weights_out, self.tt_bias_out, host_creation_ms, host_to_device_ms = prepare_linear_params(
+            device, weights, bias, proj_weights_dtype, is_lora_impacted=True
+        )
+        # LORA WEIGHT LOG: Output projection weights
+        lora_logger.log_weight_creation(
+            module_path,
+            "tt_weights_out",
+            self.tt_weights_out.shape,
+            proj_weights_dtype,
+            device,
+            "Output projection weights for transformer",
+            tensor_obj=self.tt_weights_out,
+            host_creation_time_ms=host_creation_ms,
+            host_to_device_time_ms=host_to_device_ms,
+        )
 
         self.program_config_in = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_in")
         self.compute_config_in = model_config.get_mm_compute_config(f"{module_path}.proj_in")
@@ -71,6 +105,9 @@ class TtTransformer2DModel(LightweightModule):
         self.program_config_out = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_out")
         self.compute_config_out = model_config.get_mm_compute_config(f"{module_path}.proj_out")
         self.memory_config_out = model_config.get_mm_output_memory_config(f"{module_path}.proj_out")
+
+        # Log module initialization end
+        lora_logger.log_module_end(module_path, "TtTransformer2DModel")
 
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape

@@ -25,6 +25,7 @@ class TtBasicTransformerBlock(LightweightModule):
         self.module_path = module_path
         self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
+        # LORA WEIGHT: attn1 (self-attention) weights are primary targets for LoRA fine-tuning
         self.attn1 = TtAttention(
             device,
             state_dict,
@@ -34,6 +35,7 @@ class TtBasicTransformerBlock(LightweightModule):
             num_attn_heads,
             out_dim,
         )
+        # LORA WEIGHT: attn2 (cross-attention) weights are highly targeted for LoRA text-to-image adaptation
         self.attn2 = TtAttention(
             device,
             state_dict,
@@ -44,6 +46,7 @@ class TtBasicTransformerBlock(LightweightModule):
             out_dim,
         )
 
+        # LORA WEIGHT: ff (feedforward/MLP) weights are commonly targeted for LoRA adaptation
         self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", model_config)
 
         norm1_weights = state_dict[f"{module_path}.norm1.weight"]

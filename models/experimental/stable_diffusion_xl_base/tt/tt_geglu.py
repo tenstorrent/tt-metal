@@ -7,6 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.lora_weights_logger import lora_logger
 
 
 class TtGEGLU(LightweightModule):
@@ -19,6 +20,10 @@ class TtGEGLU(LightweightModule):
 
         self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
+        # Log module initialization start
+        lora_logger.log_module_start(module_path, "TtGEGLU")
+
+        # LORA WEIGHT: GEGLU projection weights - commonly targeted by LoRA for feedforward adaptation
         weights = state_dict[f"{module_path}.proj.weight"]
         bias = state_dict[f"{module_path}.proj.bias"]
         w1, w2 = weights.chunk(2, dim=0)  # Each: [out_dim // 2, in_dim]
@@ -28,8 +33,37 @@ class TtGEGLU(LightweightModule):
         w2 = w2.unsqueeze(0).unsqueeze(0)  # same
 
         ff_weights_dtype = model_config.ff_weights_dtype
-        self.tt_weights_1, self.tt_bias_1 = prepare_linear_params(device, w1, b1, ff_weights_dtype)
-        self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, w2, b2, ff_weights_dtype)
+        self.tt_weights_1, self.tt_bias_1, host_creation_ms, host_to_device_ms = prepare_linear_params(
+            device, w1, b1, ff_weights_dtype, is_lora_impacted=True
+        )
+        # LORA WEIGHT LOG: GEGLU first projection weights
+        lora_logger.log_weight_creation(
+            module_path,
+            "tt_weights_1",
+            self.tt_weights_1.shape,
+            ff_weights_dtype,
+            device,
+            "GEGLU first projection weights (w1)",
+            tensor_obj=self.tt_weights_1,
+            host_creation_time_ms=host_creation_ms,
+            host_to_device_time_ms=host_to_device_ms,
+        )
+
+        self.tt_weights_2, self.tt_bias_2, host_creation_ms, host_to_device_ms = prepare_linear_params(
+            device, w2, b2, ff_weights_dtype, is_lora_impacted=True
+        )
+        # LORA WEIGHT LOG: GEGLU second projection weights
+        lora_logger.log_weight_creation(
+            module_path,
+            "tt_weights_2",
+            self.tt_weights_2.shape,
+            ff_weights_dtype,
+            device,
+            "GEGLU second projection weights (w2, with GELU)",
+            tensor_obj=self.tt_weights_2,
+            host_creation_time_ms=host_creation_ms,
+            host_to_device_time_ms=host_to_device_ms,
+        )
 
         self.program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split")
         self.program_config_gelu = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split.gelu")
@@ -41,6 +75,9 @@ class TtGEGLU(LightweightModule):
         self.compute_config = model_config.get_mm_compute_config(f"{module_path}.proj")
         self.output_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.proj.split")
         self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
+
+        # Log module initialization end
+        lora_logger.log_module_end(module_path, "TtGEGLU")
 
     def forward(self, input_tensor):
         hidden_states = ttnn.linear(

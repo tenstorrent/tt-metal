@@ -93,7 +93,9 @@ class TtAttention(LightweightModule):
         out_weights = state_dict[f"{module_path}.to_out.0.weight"].unsqueeze(0).unsqueeze(0)
         out_bias = state_dict[f"{module_path}.to_out.0.bias"]
 
-        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat16)
+        self.tt_out_weights, self.tt_out_bias, _, _ = prepare_linear_params(
+            device, out_weights, out_bias, ttnn.bfloat16
+        )
 
     def forward(self, input_tensor, input_shape, encoder_hidden_states=None):
         B, C, H, W = input_shape
