@@ -28,22 +28,31 @@ def tt_to_torch_dtype(tt_dtype):
         raise ValueError(f"Invalid dtype: {tt_dtype}")
 
 
-def create_torch_w0(L, E_D, H, N):
-    torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    torch_w0 = torch_w0.repeat(1, E_D, 1, 1)
-    return torch_w0
+def create_torch_w0_tensors(L, E, H, N):
+    torch_w0_tensors = []
+    for e in range(E):
+        torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+        torch_w0_tensors.append(torch_w0)
+
+    return torch_w0_tensors
 
 
-def create_torch_w1(L, E_D, H, N):
-    torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    torch_w1 = torch_w1.repeat(1, E_D, 1, 1)
-    return torch_w1
+def create_torch_w1_tensors(L, E, H, N):
+    torch_w1_tensors = []
+    for e in range(E):
+        torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+        torch_w1_tensors.append(torch_w1)
+
+    return torch_w1_tensors
 
 
-def create_torch_w2(L, E_D, N, H):
-    torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
-    torch_w2 = torch_w2.repeat(1, E_D, 1, 1)
-    return torch_w2
+def create_torch_w2_tensors(L, E, N, H):
+    torch_w2_tensors
+    for e in range(E):
+        torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
+        torch_w2_tensors.append(torch_w2)
+
+    return torch_w2_tensors
 
 
 def gen_torch_expert_mapping_tensor(scheme, devices, experts, experts_per_device, dtype):
@@ -295,15 +304,15 @@ def gen_compute_matmul_cores(mesh_device):
 
 
 def gen_torch_compute_matmul_weight_tensors(num_layers, experts_per_device, hidden_size, N):
-    torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
-    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
-    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    torch_w0_tensors = create_torch_w0_tensors(num_layers, experts_per_device, hidden_size, N)
+    torch_w1_tensors = create_torch_w1_tensors(num_layers, experts_per_device, hidden_size, N)
+    torch_w2_tensors = create_torch_w2_tensors(num_layers, experts_per_device, N, hidden_size)
 
-    return torch_w0, torch_w1, torch_w2
+    return torch_w0_tensors, torch_w1_tensors, torch_w2_tensors
 
 
 def gen_torch_prepared_compute_matmul_weight_tensors(
-    torch_w0, torch_w1, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+    torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
 ):
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
     torch_w0_w1_reordered = prepare_w0_w1_tensor(
@@ -360,13 +369,14 @@ def gen_output_reference(
         # loop over each selected expert
         for k in range(num_selected_experts):
             # determine which expert to use
-            # expert = torch_dispatch_input_expert_indices[token, :, :, k]
+            expert = torch_dispatch_input_expert_indices[token, :, :, k]
 
-            # TODO: (GR)
             # get the output
-            # matmul_golden = gen_matmul_golden(torch_dispatch_input_tensor[token, :, :, :], torch_w0_tensors[expert], torch_w1_tensors[expert], torch_w2_tensors[expert])
             matmul_golden = gen_matmul_golden(
-                torch_dispatch_input_tensor[token, :, :, :], torch_w0_tensors, torch_w1_tensors, torch_w2_tensors
+                torch_dispatch_input_tensor[token, :, :, :],
+                torch_w0_tensors[expert],
+                torch_w1_tensors[expert],
+                torch_w2_tensors[expert],
             )
             output_reference[token, :, :, :] = (
                 output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden
@@ -518,12 +528,25 @@ def test_optimized_moe_decode_block(
     # Matmul weights
     # ------------------------------------------------------------------------
     ring2cores, compute_matmul_dram_core_range_set = gen_compute_matmul_cores(mesh_device)
-    torch_w0, torch_w1, torch_w2 = gen_torch_compute_matmul_weight_tensors(
+    torch_w0_tensors, torch_w1_tensors, torch_w2_tensors = gen_torch_compute_matmul_weight_tensors(
         num_layers, experts_per_device, hidden_size, matmul_N
     )
-    torch_w0_w1_reordered, torch_w2_reordered = gen_torch_prepared_compute_matmul_weight_tensors(
-        torch_w0, torch_w1, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
-    )
+
+    # Merge the weight tensors that belong to different experts on the same device
+    # Then reorder the merged weights into their sharded format
+    torch_w0_w1_reordered_tensors = []
+    torch_w2_reordered_tensors = []
+    for i in range(0, len(devices), 2):
+        torch_w0 = torch.cat([torch_w0_tensors[i], torch_w0_tensors[i + 1]], dim=1)  # (L, 1, H, N) -> (L, E/D, H, N)
+        torch_w1 = torch.cat([torch_w1_tensors[i], torch_w1_tensors[i + 1]], dim=1)  # (L, 1, H, N) -> (L, E/D, H, N)
+        torch_w2 = torch.cat([torch_w2_tensors[i], torch_w2_tensors[i + 1]], dim=1)  # (L, 1, N, H) -> (L, E/D, N, H)
+
+        torch_w0_w1_reordered, torch_w2_reordered = gen_torch_prepared_compute_matmul_weight_tensors(
+            torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
+        )
+
+        torch_w0_w1_reordered_tensors.append(torch_w0_w1_reordered)
+        torch_w2_reordered_tensors.append(torch_w2_reordered)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w0_w1
@@ -538,13 +561,12 @@ def test_optimized_moe_decode_block(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
     )
     w0_w1_dtype = ttnn.bfloat4_b
-    tt_w0_w1 = ttnn.from_torch(
-        torch_w0_w1_reordered,
+    tt_w0_w1 = ttnn.from_host_shards(
+        shards=torch_w0_w1_reordered_tensors,
         dtype=w0_w1_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
     )
 
     # ------------------------------------------------------------------------
@@ -558,13 +580,12 @@ def test_optimized_moe_decode_block(
     )
     w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
     w2_dtype = ttnn.bfloat4_b
-    tt_w2 = ttnn.from_torch(
-        torch_w2_reordered,
+    tt_w2 = ttnn.from_host_shards(
+        shards=torch_w2_reordered_tensors,
         dtype=w2_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
     )
 
     logger.info(f"Done creating constant input tensors")
@@ -675,14 +696,13 @@ def test_optimized_moe_decode_block(
         )
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
 
-        # TODO: (GR)
         output_reference_tensor = gen_output_reference(
             torch_dispatch_input_tensor,
             torch_dispatch_input_expert_indices_tensor,
             torch_dispatch_input_expert_scores_tensor,
-            torch_w0,
-            torch_w1,
-            torch_w2,
+            torch_w0_tensors,
+            torch_w1_tensors,
+            torch_w2_tensors,
         )
         output_reference_tensors.append(output_reference_tensor)
 
