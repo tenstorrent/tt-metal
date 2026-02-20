@@ -61,6 +61,7 @@ void kernel_main() {
         get_arg_val<uint32_t>(5),  // dst_sem_addr
         get_arg_val<uint32_t>(6),  // output_base_addr
         get_arg_val<uint32_t>(7),  // shard_idx
+        get_arg_val<uint32_t>(8),  // socket_config_addr
     };
 
 #elif defined(COMPILE_FOR_TRISC)
