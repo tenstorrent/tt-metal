@@ -24,7 +24,9 @@ from models.experimental.tt_symbiote.core.run_config import TracedRun
 from models.experimental.tt_symbiote.modules.moe import TTNNMoE
 from models.experimental.tt_symbiote.modules.attention import TTNNGlm4MoeLiteAttention
 
-assert transformers.__version__.startswith("5."), "This test requires transformers version 5.0.0.dev0"
+assert transformers.__version__.startswith(
+    "5."
+), "This test requires transformers version 5.0.0.dev0. Try: `pip install git+https://github.com/huggingface/transformers.git`"
 
 
 @pytest.mark.parametrize(
