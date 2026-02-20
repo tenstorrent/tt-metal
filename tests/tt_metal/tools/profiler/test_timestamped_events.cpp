@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ void RunFillUpAllBuffers(
 
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events.cpp",
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -45,7 +45,7 @@ void RunFillUpAllBuffers(
             .defines = kernel_defines});
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events.cpp",
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -54,14 +54,14 @@ void RunFillUpAllBuffers(
     std::vector<uint32_t> trisc_kernel_args = {};
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events_compute.cpp",
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events_compute.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     for (auto core : eth_cores) {
         tt_metal::CreateKernel(
             program,
-            "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events.cpp",
+            "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
             (CoreCoord){core.x, core.y},
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
     }

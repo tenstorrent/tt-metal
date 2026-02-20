@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,7 +40,7 @@ void RunFillUpAllBuffers(
 
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
+        "tests/tt_metal/tools/profiler/kernels/full_buffer.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -48,7 +48,7 @@ void RunFillUpAllBuffers(
             .defines = kernel_defines});
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
+        "tests/tt_metal/tools/profiler/kernels/full_buffer.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -57,7 +57,7 @@ void RunFillUpAllBuffers(
     std::vector<uint32_t> trisc_kernel_args = {};
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_compute.cpp",
+        "tests/tt_metal/tools/profiler/kernels/full_buffer_compute.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
