@@ -243,7 +243,6 @@ def prefill_forward(
     ep, sp, tp = mode_config.ep, mode_config.sp, mode_config.tp
 
     # Reshard for sequence parallelism if needed
-    breakpoint()
     if sp > 1:
         hidden_states, routing_weights = _reshard_for_sequence_parallel(
             hidden_states, routing_weights, mesh_config, ccl_manager
