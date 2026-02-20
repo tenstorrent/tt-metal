@@ -136,7 +136,8 @@ void kernel_main() {
             out_num_blocks,
             global_q_start,
             global_q_end,
-            0,
+            num_local_q_chunks,
+            NH,  // hack to pass NH, iter_k_chunk_start is always 0
             num_kv_chunks,
             q_chunk_tiles,
             k_chunk_tiles,
