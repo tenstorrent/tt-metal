@@ -2,6 +2,8 @@ from typing import Dict, Optional
 
 import ttnn
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+from models.experimental.tt_symbiote.core.module import deallocate_weights_after
 
 
 class SmartTTNNLinear(TTNNLinear):
@@ -74,6 +76,31 @@ class SmartTTNNLinear(TTNNLinear):
             bias=self.tt_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+
+class SmartTTNNLinearLLama(SmartTTNNLinear):
+    """SmartTTNN Linear layer optimized for LLaMA models using bfloat8."""
+
+    def preprocess_weights_impl(self):
+        """Preprocess linear weights with bfloat8 precision."""
+        self.tt_weight_host = preprocess_linear_weight(self.weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        self.tt_bias_host = None
+        if self.bias is not None:
+            self.tt_bias_host = preprocess_linear_bias(self.bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+
+    @deallocate_weights_after
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Forward pass with automatic weight deallocation."""
+        return super().forward(input_tensor)
+
+
+class SmartTTNNLinearLLamaBFloat16(SmartTTNNLinear):
+    """TTNN Linear layer optimized for LLaMA models using bfloat16."""
+
+    @deallocate_weights_after
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Forward pass with automatic weight deallocation."""
+        return super().forward(input_tensor)
 
 
 ########################################################################################
