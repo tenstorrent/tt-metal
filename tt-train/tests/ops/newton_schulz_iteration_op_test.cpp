@@ -156,3 +156,55 @@ TEST_F(NewtonSchulzIterationTest, Rectangular_128x256) {
 TEST_F(NewtonSchulzIterationTest, Large2048x5632) {
     run_newton_schulz_iteration_test(1, 1, 2048, 5632, 0.9F, 0.5F, 0.3F);
 }
+
+// Test 7: Traced vs non-traced multi-iteration (5 iterations)
+// Uses its own device with trace_region_size > 0.
+TEST(NewtonSchulzTracedTest, TracedVsNonTraced_128) {
+    using namespace ttml;
+    auto device = ttnn::device::open_mesh_device(0, /*l1_small_size=*/200000, /*trace_region_size=*/4 * 1048576);
+    device->enable_program_cache();
+
+    auto& rng = autograd::ctx().get_generator();
+    uint32_t seed = rng();
+    xt::xarray<float> data = xt::empty<float>({(uint32_t)1, (uint32_t)1, (uint32_t)128, (uint32_t)256});
+    core::parallel_generate(
+        std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed);
+    auto x = core::from_xtensor(data, device.get());
+
+    // Scale X down to prevent explosion over 4 iterations
+    auto x_small = ttnn::multiply(x, 0.01F);
+    x.deallocate();
+
+    // Use a=1 (identity), b=0, c=0 so each iteration just copies X
+    // This way we can verify traced == non-traced exactly regardless of iteration count.
+    const float ta = 1.0F, tb = 0.0F, tc = 0.0F;
+    constexpr int n_iters = 4;
+
+    // Non-traced loop
+    auto result_no_trace = metal::newton_schulz(x_small, ta, tb, tc, n_iters, /*use_trace=*/false);
+    tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+    auto no_trace_xt = core::to_xtensor(result_no_trace);
+    std::cout << "  Non-traced " << n_iters << "-iter mean: " << xt::mean(xt::abs(no_trace_xt))() << "\n";
+
+    // Traced loop
+    auto result_traced = metal::newton_schulz(x_small, ta, tb, tc, n_iters, /*use_trace=*/true);
+    tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+    auto traced_xt = core::to_xtensor(result_traced);
+    std::cout << "  Traced " << n_iters << "-iter mean: " << xt::mean(xt::abs(traced_xt))() << "\n";
+
+    ASSERT_EQ(no_trace_xt.shape(), traced_xt.shape());
+
+    float pcc = compute_pcc(no_trace_xt, traced_xt);
+    std::cout << "  Traced vs non-traced PCC: " << pcc << "\n";
+
+    xt::xarray<float> abs_diff = xt::abs(no_trace_xt - traced_xt);
+    float max_abs_error = xt::amax(abs_diff)();
+    std::cout << "  Max abs error: " << max_abs_error << "\n";
+
+    EXPECT_GT(pcc, 0.999F) << "Traced and non-traced should produce matching results";
+
+    result_no_trace.deallocate();
+    result_traced.deallocate();
+    x_small.deallocate();
+    device->close();
+}

@@ -840,6 +840,12 @@ void BM_NewtonSchulzNIters(benchmark::State& state) {
         ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/4 * 1048576);
     device->enable_program_cache();
 
+    auto grid_size = device->compute_with_storage_grid_size();
+    int num_cores = grid_size.x * grid_size.y;
+    int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+    std::cout << "\n  Device info: " << grid_size.x << "x" << grid_size.y << " = " << num_cores
+              << " cores, AICLK = " << freq_mhz << " MHz\n";
+
     const float a = 0.9F, b = 0.5F, c = 0.3F;
     constexpr int N_ITERS = 5;
 

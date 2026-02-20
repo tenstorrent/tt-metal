@@ -64,6 +64,7 @@ set(SOURCES
     ops/gram_matmul_op_test.cpp
     ops/gram_polynomial_op_test.cpp
     ops/newton_schulz_iteration_op_test.cpp
+    ops/frobenius_norm_test.cpp
     utils/memory_utils_test.cpp
 )
 

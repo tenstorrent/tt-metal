@@ -6,6 +6,7 @@
 
 #include "device/gram_polynomial_device_operation.hpp"
 #include "metal/ops/gram_matmul/gram_matmul.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/trace.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -121,42 +122,39 @@ ttnn::Tensor newton_schulz(
         return X[src];
     }
 
-    // Traced path: capture two traces for ping-pong, then replay
+    // Traced path: single trace with copy feedback
+    // Trace captures: run_iteration(X[0] -> X[1]) + copy(X[1] -> X[0])
+    // Each replay computes one iteration and copies result back to input buffer.
     auto* device = x_tensor.device();
     const std::optional<ttnn::QueueId> cq_id = std::nullopt;
 
-    // Capture trace_a: X[1] -> X[0]
-    auto trace_a = ttnn::operations::trace::begin_trace_capture(device, cq_id);
-    run_iteration(X[1], G, H, X[0], a, b, c, config, memory_config, dtype, compute_kernel_config);
-    ttnn::operations::trace::end_trace_capture(device, trace_a, cq_id);
-    // trace_a capture executed iteration 1, result in X[0]
+    // Copy iteration 0 result into X[0] for the trace's input buffer
+    ttnn::copy(X[1], X[0]);
 
-    // Capture trace_b: X[0] -> X[1]
-    auto trace_b = ttnn::operations::trace::begin_trace_capture(device, cq_id);
+    // Warm up the copy program (so trace captures a cache hit)
     run_iteration(X[0], G, H, X[1], a, b, c, config, memory_config, dtype, compute_kernel_config);
-    ttnn::operations::trace::end_trace_capture(device, trace_b, cq_id);
-    // trace_b capture executed iteration 2, result in X[1]
+    ttnn::copy(X[1], X[0]);
+    // Now X[0] has iteration 1 result, programs are cached
 
-    // Iterations 1 and 2 already executed during capture. Replay for iterations 3..N-1.
-    // After capture: iteration 2 result is in X[1]. Next needs trace_a (X[1]->X[0]).
-    int src = 1;
+    // Capture trace: iteration + copy feedback
+    auto tid = ttnn::operations::trace::begin_trace_capture(device, cq_id);
+    run_iteration(X[0], G, H, X[1], a, b, c, config, memory_config, dtype, compute_kernel_config);
+    ttnn::copy(X[1], X[0]);
+    ttnn::operations::trace::end_trace_capture(device, tid, cq_id);
+    // Capture executed iteration 2, result in X[0]
+
+    // Replay for remaining iterations (iterations 3..N-1)
     for (int i = 3; i < num_iterations; i++) {
-        if (src == 1) {
-            ttnn::operations::trace::execute_trace(device, trace_a, cq_id, false);
-            src = 0;
-        } else {
-            ttnn::operations::trace::execute_trace(device, trace_b, cq_id, false);
-            src = 1;
-        }
+        ttnn::operations::trace::execute_trace(device, tid, cq_id, false);
     }
 
-    ttnn::operations::trace::release_trace(device, trace_a);
-    ttnn::operations::trace::release_trace(device, trace_b);
+    ttnn::operations::trace::release_trace(device, tid);
 
-    X[1 - src].deallocate();
+    // Result is in X[0] (after the last copy)
+    X[1].deallocate();
     G.deallocate();
     H.deallocate();
-    return X[src];
+    return X[0];
 }
 
 }  // namespace ttml::metal
