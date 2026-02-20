@@ -30,6 +30,12 @@ def prepare_llasa_generator(mesh_device, optimizations, batch_size=1, max_seq_le
 
     paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
 
+    def setup_llasa_args(args):
+        # Isolated Llasa-3B performance optimizations
+        args.lm_head_math_fidelity = ttnn.MathFidelity.LoFi
+        args.skip_lm_head_all_reduce = True
+        args.skip_lm_head_all_gather = True
+
     model_args, model, tt_kv_cache, state_dict = create_tt_model(
         mesh_device,
         instruct=False,  # Llasa is not an instruct model
@@ -38,12 +44,8 @@ def prepare_llasa_generator(mesh_device, optimizations, batch_size=1, max_seq_le
         max_seq_len=max_seq_len,
         paged_attention_config=paged_attention_config,
         dtype=ttnn.bfloat8_b,
+        setup_args_cb=setup_llasa_args,
     )
-
-    # Isolated Llasa-3B performance optimizations
-    model_args.lm_head_math_fidelity = ttnn.MathFidelity.LoFi
-    model_args.skip_lm_head_all_reduce = True
-    model_args.skip_lm_head_all_gather = True
 
     tokenizer = model_args.tokenizer
     generator = Generator([model], [model_args], mesh_device, tokenizer=tokenizer)
@@ -155,7 +157,7 @@ def run_llasa_tts(
     # ── Autoregressive Decode ─────────────────────────────────
     logger.info(f"Starting decode (max {effective_max_tokens} tokens)...")
     t_decode_start = time.time()
-    iteration = 0
+    iteration = 1
     compile_time = 0
 
     while iteration < effective_max_tokens:
@@ -164,16 +166,16 @@ def run_llasa_tts(
         logits, _ = generator.decode_forward_text(
             out_tok,
             current_pos,
-            enable_trace=(iteration > 0),  # Skip trace on first iteration (compile)
+            enable_trace=(iteration > 1),  # Skip trace on first decode iteration (compile)
             page_table=page_table,
             kv_cache=kv_cache_list,
-            reset_batch=(iteration == 0),
+            reset_batch=(iteration == 1),
         )
 
         _, out_tok = sample_host(logits, temperature=0.7, top_p=1.0, on_host=True)
         iter_time = time.time() - t_iter_start
 
-        if iteration == 0:
+        if iteration == 1:
             compile_time = iter_time
             logger.info(f"Decode compile: {compile_time:.3f}s")
 

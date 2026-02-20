@@ -96,18 +96,20 @@ The prompt audio is automatically truncated to 1000 tokens (~20 seconds) to ensu
 ```
 models/demos/llasa3b/
 ├── README.md                       # This file
-├── demo/
-│   ├── input_data.json             # Sample text prompts
-│   └── llasa_demo.py               # Main TTNN demo (pytest entry point)
 ├── model_params/
 │   └── config.json                 # Model configuration (vocab_size=193800)
+├── tt/
+│   ├── __init__.py
+│   ├── llasa_pipeline.py           # Core decoding loop and text token generation
+│   └── llasa_utils.py              # Speech token utils, chat template, XCodec2 encode/decode
+├── demo/
+│   ├── llasa_demo.py               # Main TTNN demo (pytest entry point)
+│   ├── input_data.json             # Sample text prompts
+│   ├── prompts/                    # Downloaded prompt audio for voice cloning
+│   └── output/                     # Generated audio files
 ├── reference/
 │   └── llasa_reference.py          # PyTorch reference (zero-shot + prompted TTS)
-├── tests/
-│   ├── test_llasa_lm_head.py       # Isolated PCC test for LM Head performance and correctness
-│   └── test_llasa_model.py         # Full model instantiation test
-└── tt/
-    ├── __init__.py
-    ├── llasa_pipeline.py           # Core TTNN text-to-speech autoregressive execution loop
-    └── llasa_utils.py              # XCodec2 encode/decode, audio handling, and chat formatting
+└── tests/
+    ├── test_llasa_lm_head.py       # Isolated tests for LM head specifically
+    └── test_llasa_model.py         # Transformer building tests
 ```

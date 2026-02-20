@@ -808,6 +808,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
+    setup_args_cb=None,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -830,6 +831,9 @@ def create_tt_model(
 
     if prefetcher is not None:
         prefetcher.num_layers = tt_model_args.n_layers
+
+    if setup_args_cb is not None:
+        setup_args_cb(tt_model_args)
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
