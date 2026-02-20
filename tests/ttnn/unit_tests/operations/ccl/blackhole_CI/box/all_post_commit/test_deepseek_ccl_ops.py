@@ -33,10 +33,29 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_reduce_to_one_b1 import (
     test_reduce_to_one_2d,
 )
 
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import (
+    test_pre_sdpa,
+)
+
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import (
+    test_post_sdpa,
+)
+
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all import (
+    test_sdpa_reduce_to_all,
+)
+
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling import (
+    test_lm_head_sampling,
+)
 
 # Re-export for pytest discovery
 __all__ = [
     "test_ccl_broadcast_dual_axis",
     "test_ccl_all_reduce",
     "test_reduce_to_one_2d",
+    "test_pre_sdpa",
+    "test_post_sdpa",
+    "test_sdpa_reduce_to_all",
+    "test_lm_head_sampling",
 ]

@@ -18,7 +18,7 @@
 #include <cstdint>
 
 // Include SDPA LLK APIs for srcB reuse pattern and sdpa_tail reduction
-#include "models/demos/deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
 
 // =============================================================================
 // Compile-time arguments
