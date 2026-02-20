@@ -175,24 +175,16 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     rope_tile = ttnn.Tile((rope_num_heads, ttnn.TILE_SIZE))
     trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
 
-    # Full cos/sin cache in DRAM WIDTH_SHARDED: [1, 1, max_seq_len * rope_num_heads, rope_head_dim]
+    # Full cos/sin cache in DRAM INTERLEAVED: [1, 1, max_seq_len * rope_num_heads, rope_head_dim]
     # Each position's cos/sin row is repeated rope_num_heads times to match tile height.
-    # Kernel indexes by position_id at runtime.
+    # Kernel indexes by position_id at runtime via TensorAccessor.
     num_rope_cores = rope_crs.num_cores()
     cos_repeated = torch_cos.unsqueeze(1).expand(-1, rope_num_heads, -1).reshape(-1, rope_head_dim)
     sin_repeated = torch_sin.unsqueeze(1).expand(-1, rope_num_heads, -1).reshape(-1, rope_head_dim)
     cos_full = cos_repeated.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len * rope_num_heads, rope_head_dim]
     sin_full = sin_repeated.unsqueeze(0).unsqueeze(0)
 
-    dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_rope_cores - 1, 0))})
-    cos_sin_shard_spec = ttnn.ShardSpec(
-        dram_shard_grid,
-        (max_seq_len * rope_num_heads, rope_head_dim // num_rope_cores),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, cos_sin_shard_spec
-    )
+    cos_sin_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     tt_cos = ttnn.from_torch(
         cos_full,

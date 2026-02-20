@@ -509,23 +509,12 @@ def test_pre_sdpa(
         ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
     )
 
-    # QRoPE cos/sin: WIDTH_SHARDED DRAM on 1 bank (all qrope cores read full head_dim)
+    # QRoPE cos/sin: DRAM INTERLEAVED (all qrope cores read full head_dim)
     # Shape: [1, 1, max_seq_len, qrope_head_dim]
     qrope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
     qrope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
 
-    qrope_dram_num_banks = 1
-    qrope_dram_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(qrope_dram_num_banks - 1, 0))}
-    )
-    qrope_dram_shard_spec = ttnn.ShardSpec(
-        qrope_dram_shard_grid,
-        (max_seq_len, QROPE_HEAD_DIM // qrope_dram_num_banks),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    qrope_dram_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, qrope_dram_shard_spec
-    )
+    qrope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     ttnn_qrope_cos = ttnn.from_torch(
         qrope_cos_full,
@@ -622,22 +611,12 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # KRoPE cos/sin: WIDTH_SHARDED DRAM on 2 banks (matching 2 krope cores)
+    # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()
     krope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
     krope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
 
-    krope_dram_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(krope_num_cores - 1, 0))}
-    )
-    krope_dram_shard_spec = ttnn.ShardSpec(
-        krope_dram_shard_grid,
-        (max_seq_len, KROPE_DIM // krope_num_cores),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    krope_dram_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, krope_dram_shard_spec
-    )
+    krope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     ttnn_krope_cos = ttnn.from_torch(
         krope_cos_full,

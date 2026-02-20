@@ -93,24 +93,15 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
         tile=tiny_tile,
     )
 
-    # Full cos/sin cache in DRAM WIDTH_SHARDED: [1, 1, max_seq_len * num_heads, head_dim]
+    # Full cos/sin cache in DRAM INTERLEAVED: [1, 1, max_seq_len * num_heads, head_dim]
     # Each position's cos/sin row is repeated num_heads times to match the input tile height.
-    # Kernel indexes by position_id at runtime.
+    # Kernel indexes by position_id at runtime via TensorAccessor.
     cos_repeated = cos.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
     sin_repeated = sin.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
     cos_full = cos_repeated.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len * num_heads, head_dim]
     sin_full = sin_repeated.unsqueeze(0).unsqueeze(0)
 
-    num_cores = core_grid.num_cores()
-    dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
-    cos_sin_shard_spec = ttnn.ShardSpec(
-        dram_shard_grid,
-        (max_seq_len * num_heads, head_dim // num_cores),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, cos_sin_shard_spec
-    )
+    cos_sin_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     tt_cos = ttnn.from_torch(
         cos_full,
@@ -283,22 +274,13 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         tile=tiny_tile,
     )
 
-    # Full cos/sin cache in DRAM WIDTH_SHARDED: [1, batch, max_seq_len * num_heads, head_dim]
+    # Full cos/sin cache in DRAM INTERLEAVED: [1, batch, max_seq_len * num_heads, head_dim]
     cos_repeated = cos.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
     sin_repeated = sin.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
     cos_full = cos_repeated.unsqueeze(0).unsqueeze(0)
     sin_full = sin_repeated.unsqueeze(0).unsqueeze(0)
 
-    num_cores = core_grid.num_cores()
-    dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
-    cos_sin_shard_spec = ttnn.ShardSpec(
-        dram_shard_grid,
-        (max_seq_len * num_heads, head_dim // num_cores),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, cos_sin_shard_spec
-    )
+    cos_sin_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     tt_cos = ttnn.from_torch(
         cos_full,

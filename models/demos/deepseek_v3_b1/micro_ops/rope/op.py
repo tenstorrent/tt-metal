@@ -221,6 +221,9 @@ class RopeSingleCore:
         # ========================================================================
 
         # Named compile-time args for NCRISC
+        num_cores = core_grid.num_cores()
+        total_Wt = head_dim_per_core_t * num_cores
+
         ncrisc_named_compile_time_args = [
             ("in_cb", input_cb),
             ("cos_tensor_address", cos_tensor.buffer_address()),
@@ -232,11 +235,12 @@ class RopeSingleCore:
             ("cos_sin_page_size", tile_size),
             ("Wt", head_dim_per_core_t),
             ("Ht", 1),
+            ("total_Wt", total_Wt),
         ]
 
-        # Per-core bank_id: each compute core reads from its assigned DRAM bank
+        # Per-core start_tile_offset: each core reads its width slice from DRAM
         all_cores = ttnn.corerange_to_cores(core_grid)
-        bank_id_core_values = [(core, idx) for idx, core in enumerate(all_cores)]
+        start_tile_offset_core_values = [(core, idx * head_dim_per_core_t) for idx, core in enumerate(all_cores)]
 
         # Named compile-time args for BRISC (empty - no-op)
         brisc_named_compile_time_args = []
@@ -278,8 +282,8 @@ class RopeSingleCore:
             ],
             per_core_compile_time_descriptors=[
                 PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="bank_id",
-                    core_values=bank_id_core_values,
+                    named_compile_time_arg="start_tile_offset",
+                    core_values=start_tile_offset_core_values,
                     other_value=0,
                 ),
             ],

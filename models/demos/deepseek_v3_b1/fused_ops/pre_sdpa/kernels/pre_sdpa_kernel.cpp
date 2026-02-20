@@ -167,7 +167,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("qrope_Wt"),
         get_named_compile_time_arg_val("qrope_Ht"),
         get_named_compile_time_arg_val("qrope_cos_sin_page_size"),
-        get_named_compile_time_arg_val("qrope_bank_id")>;
+        get_named_compile_time_arg_val("qrope_total_Wt"),
+        get_named_compile_time_arg_val("qrope_start_tile_offset")>;
 
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{
         .in_cb = get_named_compile_time_arg_val("qrope_in_cb"),
@@ -241,7 +242,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("krope_Wt"),
         get_named_compile_time_arg_val("krope_Ht"),
         get_named_compile_time_arg_val("krope_cos_sin_page_size"),
-        get_named_compile_time_arg_val("krope_bank_id")>;
+        get_named_compile_time_arg_val("krope_total_Wt"),
+        get_named_compile_time_arg_val("krope_start_tile_offset")>;
 
     deepseek_b1_ops::Rope::ReaderArgs krope_args{
         .in_cb = get_named_compile_time_arg_val("krope_in_cb"),

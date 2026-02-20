@@ -64,7 +64,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("Wt"),
         get_named_compile_time_arg_val("Ht"),
         get_named_compile_time_arg_val("cos_sin_page_size"),
-        get_named_compile_time_arg_val("bank_id")>;
+        get_named_compile_time_arg_val("total_Wt"),
+        get_named_compile_time_arg_val("start_tile_offset")>;
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");

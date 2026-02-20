@@ -707,6 +707,7 @@ class PreSDPA:
 
         # RoPE compile-time args (only on Qrope cores)
         qrope_rope_tile_size = TILE_1x32.get_tile_size(data_format)
+        qrope_total_Wt = qrope_head_dim_per_core_t  # all cores read full head_dim, so total_Wt = Wt
         qrope_ncrisc_named_compile_time_args = [
             ("qrope_in_cb", matmul2_output_cb),
             ("qrope_cos_cb", qrope_cos_cb),
@@ -715,6 +716,7 @@ class PreSDPA:
             ("qrope_Wt", qrope_head_dim_per_core_t),
             ("qrope_Ht", qrope_num_heads_per_core),
             ("qrope_cos_sin_page_size", qrope_rope_tile_size),
+            ("qrope_total_Wt", qrope_total_Wt),
         ]
         # BRISC: no-op (empty args)
         qrope_brisc_named_compile_time_args = []
@@ -1001,15 +1003,20 @@ class PreSDPA:
 
         # KV Cache Branch: RoPE
         krope_rope_tile_size = TILE_1x32.get_tile_size(data_format)
+        krope_Wt = 1
+        krope_Ht = 1
+        num_krope_cores = krope_grid.num_cores()
+        krope_total_Wt = krope_Wt * num_krope_cores
         krope_ncrisc_named_compile_time_args = [
             ("krope_output_cb", krope_output_cb),
             ("krope_in_cb", dkv_matmul_output_cb),
             ("krope_cos_cb", krope_cos_cb),
             ("krope_sin_cb", krope_sin_cb),
             ("krope_trans_mat_cb", qrope_trans_mat_cb),
-            ("krope_Wt", 1),
-            ("krope_Ht", 1),
+            ("krope_Wt", krope_Wt),
+            ("krope_Ht", krope_Ht),
             ("krope_cos_sin_page_size", krope_rope_tile_size),
+            ("krope_total_Wt", krope_total_Wt),
         ]
         krope_trisc_named_compile_time_args = [
             ("krope_in_cb", dkv_matmul_output_cb),
@@ -1020,8 +1027,8 @@ class PreSDPA:
             ("krope_cos_interm_cb", qrope_cos_interm_cb),
             ("krope_sin_interm_cb", qrope_sin_interm_cb),
             ("krope_output_cb", krope_output_cb),
-            ("krope_Wt", 1),
-            ("krope_Ht", 1),
+            ("krope_Wt", krope_Wt),
+            ("krope_Ht", krope_Ht),
         ]
 
         # KVCacheUpdate CB indices and krope_Wt passed as runtime args (ReaderArgs/WriterArgs/ComputeArgs)
@@ -1603,7 +1610,7 @@ class PreSDPA:
                     tile=krope_rope_tile_descriptor,
                 )
                 krope_cos_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=1 * krope_rope_tile_size,
+                    total_size=krope_Wt * krope_rope_tile_size,
                     core_ranges=krope_grid,
                     format_descriptors=[krope_cos_cb_format],
                 )
@@ -1615,7 +1622,7 @@ class PreSDPA:
                     tile=krope_rope_tile_descriptor,
                 )
                 krope_sin_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=1 * krope_rope_tile_size,
+                    total_size=krope_Wt * krope_rope_tile_size,
                     core_ranges=krope_grid,
                     format_descriptors=[krope_sin_cb_format],
                 )
@@ -1805,13 +1812,13 @@ class PreSDPA:
                     ("krope_position_ids_tensor_address", position_ids_tensor_addr),
                 ]
 
-                # Per-core bank_id for QRoPE (all cores use bank 0 since DRAM has 1 bank)
+                # Per-core start_tile_offset for QRoPE (all cores read full head_dim, offset=0)
                 qrope_cores = ttnn.corerange_to_cores(qrope_grid)
-                qrope_bank_id_core_values = [(core, 0) for core in qrope_cores]
+                qrope_start_tile_offset_core_values = [(core, 0) for core in qrope_cores]
 
-                # Per-core bank_id for KRoPE (2 cores, each maps to a DRAM bank)
+                # Per-core start_tile_offset for KRoPE (2 cores, each reads its width slice)
                 krope_cores = ttnn.corerange_to_cores(krope_grid)
-                krope_bank_id_core_values = [(core, idx) for idx, core in enumerate(krope_cores)]
+                krope_start_tile_offset_core_values = [(core, idx * krope_Wt) for idx, core in enumerate(krope_cores)]
 
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
@@ -1944,13 +1951,13 @@ class PreSDPA:
                     ],
                     per_core_compile_time_descriptors=[
                         PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="qrope_bank_id",
-                            core_values=qrope_bank_id_core_values,
+                            named_compile_time_arg="qrope_start_tile_offset",
+                            core_values=qrope_start_tile_offset_core_values,
                             other_value=0,
                         ),
                         PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="krope_bank_id",
-                            core_values=krope_bank_id_core_values,
+                            named_compile_time_arg="krope_start_tile_offset",
+                            core_values=krope_start_tile_offset_core_values,
                             other_value=0,
                         ),
                     ],

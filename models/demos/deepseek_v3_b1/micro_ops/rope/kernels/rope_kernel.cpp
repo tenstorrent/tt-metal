@@ -28,8 +28,9 @@ void kernel_main() {
     constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
     constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
     constexpr uint32_t cos_sin_page_size = get_named_compile_time_arg_val("cos_sin_page_size");
-    constexpr uint32_t bank_id = get_named_compile_time_arg_val("bank_id");
-    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht, cos_sin_page_size, bank_id>;
+    constexpr uint32_t total_Wt = get_named_compile_time_arg_val("total_Wt");
+    constexpr uint32_t start_tile_offset = get_named_compile_time_arg_val("start_tile_offset");
+    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht, cos_sin_page_size, total_Wt, start_tile_offset>;
 
     constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");

@@ -263,13 +263,17 @@ class KVCacheBranch:
         cos_tensor_address = cos_tensor.buffer_address()
         sin_tensor_address = sin_tensor.buffer_address()
 
+        krope_Wt = 1
+        krope_Ht = 1
+        num_rope_cores = krope_core_grid.num_cores()
+        total_Wt = krope_Wt * num_rope_cores
         rope_cores = ttnn.corerange_to_cores(krope_core_grid)
-        bank_id_core_values = [(core, idx) for idx, core in enumerate(rope_cores)]
+        start_tile_offset_core_values = [(core, idx * krope_Wt) for idx, core in enumerate(rope_cores)]
 
         krope_brisc_named_compile_time_args = [
             ("k_rope_output_cb", k_rope_output_cb),
-            ("Wt", 1),  # Needed for KV Cache update
-            ("Ht", 1),  # Needed for KV Cache update
+            ("Wt", krope_Wt),
+            ("Ht", krope_Ht),
         ]
         krope_ncrisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
@@ -279,9 +283,10 @@ class KVCacheBranch:
             ("sin_tensor_address", sin_tensor_address),
             ("position_ids_tensor_address", position_ids_tensor_addr),
             ("trans_mat_cb", trans_mat_cb),
-            ("Wt", 1),
-            ("Ht", 1),
+            ("Wt", krope_Wt),
+            ("Ht", krope_Ht),
             ("cos_sin_page_size", rope_tile_size),
+            ("total_Wt", total_Wt),
         ]
         krope_trisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
@@ -292,8 +297,8 @@ class KVCacheBranch:
             ("cos_interm_cb", cos_interm_cb),
             ("sin_interm_cb", sin_interm_cb),
             ("out_cb", k_rope_output_cb),
-            ("Wt", 1),
-            ("Ht", 1),
+            ("Wt", krope_Wt),
+            ("Ht", krope_Ht),
         ]
 
         # Create tile descriptor for proper tile dimensions
@@ -520,8 +525,8 @@ class KVCacheBranch:
             ],
             per_core_compile_time_descriptors=[
                 PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="bank_id",
-                    core_values=bank_id_core_values,
+                    named_compile_time_arg="start_tile_offset",
+                    core_values=start_tile_offset_core_values,
                     other_value=0,
                 ),
             ],
