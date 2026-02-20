@@ -3,7 +3,7 @@ name: ttnn-operation-analyzer
 description: Use this agent when you need to deeply understand how a TTNN operation is implemented, including its kernels, data flow, memory patterns, and core distribution. This agent is specifically designed for analyzing TTNN operation program factories and their associated kernels.\n\n**Usage Patterns**:\n\n1. **Full pipeline usage**: Run before ttnn-operation-planner to provide reference analyses that inform the design of a new operation. The planner reads these analyses to make architectural decisions.\n\n2. **Standalone usage**: Run independently to understand an existing operation, debug issues, or document implementation details without creating a new operation.\n\n3. **Multiple analyses**: Run multiple analyzers in parallel on different reference operations when the new operation combines patterns from several sources.\n\nExamples:\n\n<example>\nContext: User wants to understand how a TTNN operation works internally.\nuser: "Can you analyze how the matmul operation works? Here's the path: ttnn/cpp/ttnn/operations/matmul/device/matmul_program_factory.cpp"\nassistant: "I'll use the ttnn-operation-analyzer agent to perform a comprehensive analysis of the matmul operation."\n<Task tool call to ttnn-operation-analyzer with the program factory path>\n</example>\n\n<example>\nContext: User is debugging an operation and needs to understand its implementation details.\nuser: "I'm seeing unexpected behavior in the concat operation. Can you help me understand how it's implemented? The factory is at ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.cpp"\nassistant: "Let me analyze the concat operation implementation to help identify the issue."\n<Task tool call to ttnn-operation-analyzer with the program factory path>\n</example>\n\n<example>\nContext: User has just written a new TTNN operation and wants to document it.\nuser: "I just finished implementing a new reduce operation at ttnn/cpp/ttnn/operations/reduction/reduce/device/reduce_program_factory.cpp. Can you analyze it and create documentation?"\nassistant: "I'll analyze your new reduce operation implementation and generate comprehensive documentation."\n<Task tool call to ttnn-operation-analyzer with the program factory path>\n</example>
 model: opus
 color: blue
-tools: Read, Write, Glob, Grep, Bash, WebFetch, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
+tools: Read, Write, Glob, Grep, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
 hooks:
   Stop:
     - hooks:
@@ -213,76 +213,40 @@ The output (`{op}_analysis.md`) is consumed by downstream agents (`ttnn-operatio
 
 ---
 
-## Execution Logging (Optional)
+## Git Commits (ALWAYS REQUIRED)
 
-If the caller includes **"enable detailed logging"** or **"with execution log"** in the prompt, you MUST create a detailed execution log file alongside your analysis output.
+Git commits are **MANDATORY** regardless of logging settings. Read `.claude/references/agent-execution-logging.md` Part 1.
 
-### Log File Location
-`{operation_name}_analyzer_execution_log.md` in the same directory as the analysis output.
+### When to Commit
+- **MUST**: After `{operation_name}_analysis.md` is complete
+- **MUST**: Before handoff to downstream agents
 
-### Log Format
-```markdown
-# Execution Log: {Operation Name} Analysis
-
-## Session Info
-- **Started**: {timestamp or "session start"}
-- **Operation**: {operation_name}
-- **Program Factory Path**: {path}
-
-## Execution Timeline
-
-### Step 1: {Description}
-**Action**: {What you did - e.g., "Read program factory file"}
-**Command/Tool**: {Tool used and parameters}
-**Result**:
+### Commit Message Format
 ```
-{Full output or summary if very long}
-```
-**Decision**: {What you decided based on this result}
+[ttnn-operation-analyzer] analysis: {operation_name}
 
-### Step 2: {Description}
-...
+- Analyzed program factory and {N} kernel files
+- Documented: {key aspects covered}
 
-## Files Read
-| File | Purpose | Key Findings |
-|------|---------|--------------|
-| {path} | {why read} | {what learned} |
-
-## DeepWiki Queries
-| Query | Response Summary | How Used |
-|-------|------------------|----------|
-| {question} | {answer summary} | {how it informed analysis} |
-
-## Errors Encountered
-| Error | Context | Resolution |
-|-------|---------|------------|
-| {error message} | {what caused it} | {how resolved} |
-
-## Key Decisions
-| Decision Point | Options Considered | Choice Made | Rationale |
-|----------------|-------------------|-------------|-----------|
-| {topic} | {options} | {choice} | {why} |
-
-## Files Created/Modified
-| File | Action | Description |
-|------|--------|-------------|
-| {path} | Created/Modified | {what was done} |
-
-## Final Status
-- **Completed**: Yes/No
-- **Output File**: {path to analysis.md}
-- **Issues**: {any unresolved issues}
+operation: {operation_name}
+build: N/A
+tests: N/A
 ```
 
-### What to Log
-1. **Every file read** - path, why, key findings
-2. **Every DeepWiki query** - question, response summary, how it was used
-3. **Every decision point** - what options existed, what was chosen, why
-4. **Any errors or unexpected situations** - what happened, how resolved
-5. **All files created or modified** - path and description
+---
 
-### Logging Guidelines
-- Log in real-time as you work, not retrospectively
-- Include enough detail that someone could reproduce your analysis
-- If output is very long (>50 lines), summarize but note "full output available in {file}"
-- Be honest about uncertainty or areas where you made assumptions
+## Breadcrumbs (Conditional)
+
+If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, enable breadcrumbs. Otherwise skip breadcrumb steps (git commits still required).
+
+**If ENABLED**: Read `.claude/references/agent-execution-logging.md` Part 2 for the full breadcrumb protocol.
+
+**Initialize breadcrumbs:**
+```bash
+.claude/scripts/logging/init_breadcrumbs.sh \
+  "{directory_containing_program_factory}" \
+  "ttnn-operation-analyzer" \
+  "{operation_name}" \
+  "" \
+  "{program_factory_path}"
+```
