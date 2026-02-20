@@ -92,8 +92,8 @@ jobs:
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
 
-  install-and-run-qwen25-72b-t3k:
-    name: TT-Installer and run T3K Qwen2.5-72B Demo
+  install-and-run-llama70b-t3k:
+    name: TT-Installer and run T3K Llama 70B Demo
     runs-on: ${{ format('tt-ubuntu-2204-{0}-llmbox-viommu-stable', 'n300') }}
     timeout-minutes: 180
     steps:
@@ -117,16 +117,16 @@ jobs:
             --reboot-option=never \
             --mode-non-interactive
 
-      - name: Download Qwen2.5-72B weights from LFC
+      - name: Download Llama 70B weights from LFC
         shell: bash
         timeout-minutes: 90
         run: |
           set -euo pipefail
           # Download under huggingface/tt_cache so when workspace is mounted at /mnt/MLPerf,
-          # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct is found
+          # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct is found
           mkdir -p huggingface/tt_cache
           LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P huggingface/tt_cache "${LFC_BASE}/Qwen/Qwen2.5-72B-Instruct/"
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P huggingface/tt_cache "${LFC_BASE}/meta-llama/Llama-3.1-70B-Instruct/"
 
       - name: Patch tt-metalium-models to mount workspace volume
         shell: bash
@@ -136,11 +136,11 @@ jobs:
           SCRIPT=$(which tt-metalium-models)
           sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
 
-      - name: Run T3K Qwen2.5-72B Demo via tt-metalium-models
+      - name: Run T3K Llama 70B Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 30
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           tt-metalium-models \
-            -c "export HF_MODEL=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py -k 'not performance-ci-stress-1'"
+            -c "export HF_MODEL=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py -k 'not performance-ci-stress-1'"
