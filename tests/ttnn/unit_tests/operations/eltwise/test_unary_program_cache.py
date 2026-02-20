@@ -33,7 +33,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.fixture()
+@pytest.fixture
 def isolate_program_cache(device):
     """Ensure each test starts with an empty program cache and cleans up after."""
     device.disable_and_clear_program_cache()
