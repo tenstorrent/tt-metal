@@ -129,10 +129,11 @@ def state_dict(model_path):
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
-        ("decode", 1),  # Current test configuration
+        ("decode", 1),  # Current test configuration (batch_size=128, seq_len=1)
+        ("decode", 128),  # Match reference test configuration (batch_size=1, seq_len=128)
         ("prefill", 128),  # Add prefill mode with seq_len=128
     ],
-    ids=["mode_decode_seq_1", "mode_prefill_seq_128"],  # Clear test IDs
+    ids=["mode_decode_seq_1", "mode_decode_seq_128", "mode_prefill_seq_128"],  # Clear test IDs
 )
 def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict, mode, seq_len):
     """Test DeepSeek MoE Block against reference implementation with PCC checking."""
@@ -151,14 +152,19 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict,
     MODE = mode
     SEQ_LEN = seq_len
 
-    # Adjust batch size based on mode (following reference test pattern)
+    # Adjust batch size based on mode and sequence length (following reference test pattern)
     # Note: DeepSeek reference tests use different batch sizes for different modes:
-    # - Decode: batch_size=32 per row (total 128 for 4 rows) with seq_len=1
+    # - Decode with seq_len=1: batch_size=32 per row (total 128 for 4 rows)
+    # - Decode with seq_len=128: batch_size=1 (matches reference test_moe.py)
     # - Prefill: batch_size=1 per row (total 4 for 4 rows) with seq_len=128
     # This is due to memory constraints and computational efficiency considerations
-    if MODE == "decode":
+    if MODE == "decode" and SEQ_LEN == 1:
         BATCH_SIZE_PER_ROW = 32  # USERS_PER_ROW
         BATCH_SIZE = BATCH_SIZE_PER_ROW * mesh_device.shape[0]  # 32 * 4 = 128 for decode mode
+    elif MODE == "decode" and SEQ_LEN == 128:
+        # Match reference test configuration exactly: batch_size=1 with seq_len=128
+        BATCH_SIZE_PER_ROW = 1  # Set for consistency
+        BATCH_SIZE = 1
     else:  # prefill mode
         BATCH_SIZE_PER_ROW = 1  # Use batch_size=1 for prefill to manage memory usage
         BATCH_SIZE = BATCH_SIZE_PER_ROW * mesh_device.shape[0]  # 1 * 4 = 4 for prefill mode
@@ -321,9 +327,19 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict,
             layout=ttnn.TILE_LAYOUT,
         )
     else:
-        # For decode, reshape [batch, 1, hidden] -> [1, 1, batch, hidden] (like reference)
-        # Reference does: torch_input.permute(1, 0, 2).unsqueeze(0) for decode
-        torch_input_reshaped = torch_input.permute(1, 0, 2).unsqueeze(0)  # Shape: (1, 1, batch, 7168)
+        # For decode mode, we need to match the reference exactly
+        # Reference creates (1, num_tokens, hidden_size) then does unsqueeze(1) -> (1, 1, num_tokens, hidden_size)
+        # Our torch_input is already (BATCH_SIZE, SEQ_LEN, HIDDEN_SIZE)
+        # For seq_len=128: (1, 128, 7168) -> unsqueeze(1) -> (1, 1, 128, 7168)
+        # For seq_len=1: (128, 1, 7168) -> needs different handling
+
+        if SEQ_LEN == 128:
+            # Match reference exactly: (1, 128, 7168) -> (1, 1, 128, 7168)
+            torch_input_reshaped = torch_input.unsqueeze(1)  # Shape: (1, 1, 128, 7168)
+        else:
+            # Original logic for seq_len=1: (128, 1, 7168) -> (1, 1, 128, 7168)
+            torch_input_reshaped = torch_input.permute(1, 0, 2).unsqueeze(0)  # Shape: (1, 1, 128, 7168)
+
         # Use ShardTensor2dMesh with dims=(-2, -1) like the reference test
         tt_input = ttnn.from_torch(
             torch_input_reshaped,
@@ -382,8 +398,15 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict,
         # Remove batch dimension added for TTNN: (1, batch, seq_len, hidden) -> (batch, seq_len, hidden)
         tt_output_torch = tt_output_torch.squeeze(0)
     else:
-        # Reshape back from [1, 1, batch, hidden] to [batch, 1, hidden]
-        tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)
+        # Decode mode: handle different seq_len cases
+        if SEQ_LEN == 128:
+            # For seq_len=128: output is [1, 1, 128, 7168], reference expects [1, 128, 7168]
+            # The 128 represents sequence length, not batch, so just squeeze the second dim
+            tt_output_torch = tt_output_torch.squeeze(1)  # [1, 1, 128, 7168] -> [1, 128, 7168]
+        else:
+            # For seq_len=1: output is [1, 1, 128, 7168], reference expects [128, 1, 7168]
+            # The 128 represents batch size, so permute is needed
+            tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)  # [1, 1, 128, 7168] -> [128, 1, 7168]
 
     logger.info(f"TT output shape: {tt_output_torch.shape}")
 

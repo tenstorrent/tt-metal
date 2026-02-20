@@ -239,10 +239,17 @@ class DistributedExpert:
 
             if weight_list:
                 stacked_weights = torch.stack(weight_list)
-                logger.info(
-                    f"[DEBUG] {hf_name} weights stacked: shape {stacked_weights.shape}, "
-                    + f"range [{stacked_weights.min():.4f}, {stacked_weights.max():.4f}]"
-                )
+                # Float8 tensors don't support min/max operations
+                if stacked_weights.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+                    logger.info(
+                        f"[DEBUG] {hf_name} weights stacked: shape {stacked_weights.shape}, "
+                        + f"dtype {stacked_weights.dtype} (Float8 - range not available)"
+                    )
+                else:
+                    logger.info(
+                        f"[DEBUG] {hf_name} weights stacked: shape {stacked_weights.shape}, "
+                        + f"range [{stacked_weights.min():.4f}, {stacked_weights.max():.4f}]"
+                    )
 
                 # Apply dequantization if needed
                 if use_quantized and scale_list:
@@ -768,7 +775,12 @@ class DistributedExpert:
             ttnn.deallocate(expert_output_sparse)
             experts_output = ttnn.reshape(
                 experts_output,
-                shape=(num_experts_per_device, 1, total_tokens, hidden_size),
+                shape=(
+                    1,
+                    num_experts_per_device,
+                    total_tokens,
+                    hidden_size,
+                ),  # Swapped dimensions 0 and 1 to match reference
             )
 
         else:
@@ -795,7 +807,9 @@ class DistributedExpert:
         # ==========================================================================
         # Convert to ROW_MAJOR for all_to_all_combine
         experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-        # Reshape from [1, num_experts_per_device, total_tokens, H] to [num_experts_per_device, 1, total_tokens, H]
+        # all_to_all_combine expects [num_experts_per_device, 1, total_tokens, H]
+        # Expert computation outputs [1, num_experts_per_device, total_tokens, H]
+        # So we need to reshape for all_to_all_combine
         experts_output = ttnn.reshape(experts_output, shape=(num_experts_per_device, 1, total_tokens, hidden_size))
 
         # Reshape dispatch_metadata for combine
@@ -834,6 +848,66 @@ class DistributedExpert:
 
         # Final shape: [1, 1, tokens_per_device, H]
         return output
+
+    @classmethod
+    def forward_compute_only(
+        cls,
+        dispatch_output: ttnn.Tensor,
+        cfg: Dict,
+        num_tokens: Optional[int] = None,
+        matmul_type: str = "dense",
+    ) -> ttnn.Tensor:
+        """
+        Expert computation ONLY - without all-to-all operations.
+
+        This method performs only the expert MLP computation on already-dispatched tokens.
+        It does not include all_to_all_dispatch at the beginning or all_to_all_combine at the end.
+
+        Args:
+            dispatch_output: Already dispatched tokens from all_to_all_dispatch
+                           Shape: [1, 1, total_tokens_on_device, hidden_size]
+            cfg: Configuration dictionary with expert weights and settings
+            num_tokens: Optional number of tokens (if None, inferred from input shape)
+            matmul_type: Type of matmul to use ("dense" or "sparse")
+
+        Returns:
+            Expert output tensor ready for all_to_all_combine
+            Shape: [num_experts_per_device, 1, total_tokens_on_device, hidden_size]
+        """
+        debug_experts = os.environ.get("DEEPSEEK_V3_DEBUG_EXPERTS", "") == "1"
+
+        # Get dimensions
+        hidden_size = cfg["hidden_size"]
+        num_experts_per_device = cfg["num_experts_per_device"]
+
+        if num_tokens is None:
+            # Infer from input shape
+            num_tokens = dispatch_output.shape[-2]
+
+        if debug_experts:
+            logger.info(f"[DEBUG] forward_compute_only: dispatch_output shape={dispatch_output.shape}")
+            logger.info(f"[DEBUG] num_tokens={num_tokens}, hidden_size={hidden_size}")
+            logger.info(f"[DEBUG] num_experts_per_device={num_experts_per_device}")
+            logger.info(f"[DEBUG] matmul_type={matmul_type}")
+
+        # STEP 1: Reshape for expert computation
+        # From [1, 1, total_tokens, H] to [num_experts_per_device, tokens_per_expert, H]
+        dispatch_reshaped = ttnn.reshape(
+            dispatch_output, shape=(num_experts_per_device, num_tokens // num_experts_per_device, 1, hidden_size)
+        )
+
+        # STEP 2: Expert computation (Gate, Up, Activation, Down projections)
+        experts_output = cls._forward(dispatch_reshaped, cfg)
+
+        # STEP 3: Prepare output for all_to_all_combine
+        # Output shape should be [num_experts_per_device, 1, total_tokens, H]
+        # The _forward method already returns in the correct shape
+
+        if debug_experts:
+            logger.info(f"[DEBUG] experts_output shape={experts_output.shape}")
+            _log_expert_stats("experts_output", experts_output)
+
+        return experts_output
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:

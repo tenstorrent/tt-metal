@@ -449,6 +449,7 @@ class MoEBlock:
         Returns:
             MoE output tensor with same shape as input
         """
+        logger.debug(f"MoE forward: input shape={x.shape}, mode={mode}")
         # Handle chunking for large prefill sequences
         if mode == "prefill" and self._should_chunk_prefill(x):
             return self._forward_chunked_prefill(x)
@@ -468,9 +469,6 @@ class MoEBlock:
 
         # Debug capture for router outputs
         if os.environ.get("GPT_OSS_DEBUG", "") == "1":
-            import logging
-
-            logger = logging.getLogger(__name__)
             logger.info(f"[DEBUG] Router outputs - weights shape: {weights.shape}, indices shape: {indices.shape}")
             if hasattr(self, "debug_state"):
                 self.debug_state["router_weights_tt"] = weights
@@ -513,10 +511,7 @@ class MoEBlock:
     def _prepare_expert_weights(self, weights: ttnn.Tensor) -> ttnn.Tensor:
         """Simplified weight preparation."""
         # Debug: Check input type and shape
-        import logging
-
-        logger = logging.getLogger(__name__)
-        logger.info(f"[DEBUG] _prepare_expert_weights input - shape: {weights.shape}, dtype: {weights.dtype}")
+        # logger.info(f"[DEBUG] _prepare_expert_weights input - shape: {weights.shape}, dtype: {weights.dtype}")
 
         # Convert to ROW_MAJOR for operations
         weights_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
@@ -530,7 +525,7 @@ class MoEBlock:
 
         # Ensure correct data type (must be bfloat16 for reshape)
         if weights_rm.dtype != ttnn.bfloat16:
-            logger.info(f"[DEBUG] Converting weights from {weights_rm.dtype} to bfloat16")
+            # logger.info(f"[DEBUG] Converting weights from {weights_rm.dtype} to bfloat16")
             weights_rm = ttnn.typecast(weights_rm, dtype=ttnn.bfloat16)
 
         # Transpose to [1, 1, K, tokens]
@@ -559,12 +554,15 @@ class MoEBlock:
         seq_len = 1  # For compatibility
         hidden_size = x.shape[-1]
 
+        logger.debug(f"MoE forward_moe: batch_size_per_device={batch_size_per_device}, hidden_size={hidden_size}")
+
         # Reshape inputs
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
 
-        # Keep indices as-is to preserve uint16 dtype from router
-        indices_rm = indices  # Don't convert layout or reshape yet
+        # Reshape indices immediately like reference (before chunking)
+        indices_rm = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+        indices_rm = ttnn.reshape(indices_rm, shape=(batch_size_per_device, 1, seq_len, self.num_experts_per_tok))
 
         # Get chunk size
         chunk_config = self.config.get("chunking", {})
@@ -573,34 +571,19 @@ class MoEBlock:
 
         output_chunks = []
 
+        # Always loop, don't skip even if chunk_size >= batch_size_per_device (match reference)
         for batch_start in range(0, batch_size_per_device, chunk_size):
             batch_end = min(batch_start + chunk_size, batch_size_per_device)
 
-            # Slice inputs
+            # Slice x
             x_chunk = ttnn.slice(x_rm, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, hidden_size])
 
-            # For indices: only convert/slice if we're actually chunking
-            if chunk_size < batch_size_per_device:
-                # Need to convert to ROW_MAJOR for slicing
-                if indices_rm.dtype == ttnn.uint16:
-                    # Already have the original uint16 indices
-                    indices_rm_temp = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-                    indices_rm_temp = ttnn.reshape(
-                        indices_rm_temp, shape=(batch_size_per_device, 1, seq_len, self.num_experts_per_tok)
-                    )
-                    indices_chunk = ttnn.slice(
-                        indices_rm_temp, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, self.num_experts_per_tok]
-                    )
-                else:
-                    # Already converted
-                    indices_chunk = ttnn.slice(
-                        indices_rm, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, self.num_experts_per_tok]
-                    )
-            else:
-                # No chunking needed, pass indices directly
-                indices_chunk = indices_rm  # This is still the original uint16 tensor
+            # Slice indices (already reshaped, just slice)
+            indices_chunk = ttnn.slice(
+                indices_rm, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, self.num_experts_per_tok]
+            )
 
-            # Prepare weights for experts
+            # Slice weights using token calculation like reference
             token_start = batch_start * seq_len
             token_end = batch_end * seq_len
             weights_chunk = ttnn.slice(
