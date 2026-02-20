@@ -1232,17 +1232,11 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
         const auto* mesh_grouping = find_mesh_by_name("8x16_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "8x16_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-        bool valid = PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, *mesh_grouping, psd, &errors);
+        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_FALSE(valid) << "Expected validation to fail: 8x16_Mesh grouping cannot be mapped to single-galaxy PSD "
-                               "(tray orientations differ)";
-        ASSERT_FALSE(errors.empty()) << "Expected at least one validation error";
-
-        for (const auto& err : errors) {
-            EXPECT_TRUE(err.find("8x16_Mesh") != std::string::npos)
-                << "Expected only 8x16_Mesh to fail; got error for other grouping: " << err;
-        }
+        EXPECT_TRUE(asic_ids.empty())
+            << "Expected validation to fail: 8x16_Mesh grouping cannot be mapped to single-galaxy PSD "
+               "(tray orientations differ)";
     }
 
     // Test 2x4_Mesh - should pass (fits in single galaxy)
@@ -1250,11 +1244,10 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
         const auto* mesh_grouping = find_mesh_by_name("2x4_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "2x4_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-        bool valid = PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, *mesh_grouping, psd, &errors);
+        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_TRUE(valid) << "Expected validation to pass: 2x4_Mesh grouping should map to single-galaxy PSD";
-        EXPECT_TRUE(errors.empty()) << "Expected no validation errors for 2x4_Mesh, got: " << errors.size();
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: 2x4_Mesh grouping should map to single-galaxy PSD";
     }
 
     // Test 4x4_Mesh - should pass (fits in single galaxy)
@@ -1262,11 +1255,10 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
         const auto* mesh_grouping = find_mesh_by_name("4x4_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x4_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-        bool valid = PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, *mesh_grouping, psd, &errors);
+        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_TRUE(valid) << "Expected validation to pass: 4x4_Mesh grouping should map to single-galaxy PSD";
-        EXPECT_TRUE(errors.empty()) << "Expected no validation errors for 4x4_Mesh, got: " << errors.size();
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: 4x4_Mesh grouping should map to single-galaxy PSD";
     }
 
     // Test 2x8_Mesh - should pass (fits in single galaxy)
@@ -1274,11 +1266,10 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
         const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-        bool valid = PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, *mesh_grouping, psd, &errors);
+        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_TRUE(valid) << "Expected validation to pass: 2x8_Mesh grouping should map to single-galaxy PSD";
-        EXPECT_TRUE(errors.empty()) << "Expected no validation errors for 2x8_Mesh, got: " << errors.size();
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: 2x8_Mesh grouping should map to single-galaxy PSD";
     }
 
     // Test 4x8_Mesh - should pass (fits in single galaxy)
@@ -1286,11 +1277,10 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
         const auto* mesh_grouping = find_mesh_by_name("4x8_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x8_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-        bool valid = PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, *mesh_grouping, psd, &errors);
+        auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
-        EXPECT_TRUE(valid) << "Expected validation to pass: 4x8_Mesh grouping should map to single-galaxy PSD";
-        EXPECT_TRUE(errors.empty()) << "Expected no validation errors for 4x8_Mesh, got: " << errors.size();
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: 4x8_Mesh grouping should map to single-galaxy PSD";
     }
 
     // Test HOSTS type grouping - should pass (can be flattened, represents a single galaxy)
@@ -1299,11 +1289,9 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
         ASSERT_FALSE(hosts_groupings.empty()) << "HOSTS grouping not found";
         const auto& hosts_grouping = hosts_groupings[0];
 
-        std::vector<std::string> errors;
-        bool valid = PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, hosts_grouping, psd, &errors);
+        auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
 
-        EXPECT_TRUE(valid) << "Expected validation to pass: HOSTS grouping should map to single-galaxy PSD";
-        EXPECT_TRUE(errors.empty()) << "Expected no validation errors for HOSTS grouping, got: " << errors.size();
+        EXPECT_FALSE(asic_ids.empty()) << "Expected validation to pass: HOSTS grouping should map to single-galaxy PSD";
     }
 }
 
@@ -1323,18 +1311,12 @@ TEST(PhysicalGroupingDescriptorTests, ValidateGroupingWithPsd_PodAndSuperpodLeve
     ASSERT_FALSE(pod_groupings.empty()) << "pods grouping not found";
     const auto& pod_grouping = pod_groupings[0];
 
-    std::vector<std::string> pod_errors;
     // POD groupings reference meshes, but should flatten properly and match the PSD structure
-    bool pod_valid = PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, pod_grouping, psd, &pod_errors);
+    auto pod_asic_ids = pgd.find_any_in_psd(pod_grouping, psd);
 
     // Expect it to pass - POD level grouping should validate successfully
-    EXPECT_TRUE(pod_valid)
+    EXPECT_FALSE(pod_asic_ids.empty())
         << "Expected validation to pass: POD level grouping should validate against single-galaxy PSD";
-    if (!pod_errors.empty()) {
-        for (const auto& err : pod_errors) {
-            log_info(tt::LogTest, "POD validation error: {}", err);
-        }
-    }
 
     // Test SUPERPOD level grouping - should fail during mesh building (all_to_all connection type)
     auto superpod_groupings = pgd.get_groupings_by_name("superpods");
@@ -1344,11 +1326,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidateGroupingWithPsd_PodAndSuperpodLeve
     // This should throw during build_flattened_adjacency_mesh because SUPERPOD uses all_to_all connection type
     // which cannot be flattened into a mesh (no row_major_mesh structure)
     EXPECT_THROW(
-        {
-            std::vector<std::string> superpod_errors;
-            PhysicalGroupingDescriptor::validate_grouping_with_psd(pgd, superpod_grouping, psd, &superpod_errors);
-        },
-        std::exception)
+        { pgd.find_any_in_psd(superpod_grouping, psd); }, std::exception)
         << "Expected exception during mesh building: SUPERPOD with all_to_all connection cannot be flattened";
 }
 

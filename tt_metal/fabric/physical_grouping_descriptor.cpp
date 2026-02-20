@@ -199,11 +199,12 @@ AdjacencyGraph<uint32_t> build_all_to_all_graph(const std::vector<uint32_t>& ins
 }
 
 // Helper function to build adjacency graph from row-major mesh connection
-// Always uses LINE connectivity (no wrap-around) and 1 connection per edge
+// Always uses LINE connectivity (no wrap-around) with configurable connections per edge
 AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     const std::vector<uint32_t>& instance_ids,
     const std::vector<int32_t>& dims,
-    const std::string& grouping_name = "") {
+    const std::string& grouping_name = "",
+    uint32_t connections_per_edge = 1) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
     if (instance_ids.empty() || dims.empty()) {
@@ -287,9 +288,11 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
                 // Process edge only once (undirected)
                 auto edge_pair = std::minmax(instance_ids[idx], instance_ids[neighbor_idx]);
                 if (processed_edges.insert(edge_pair).second) {
-                    // Always uses 1 connection per edge
-                    adj_map[instance_ids[idx]].push_back(instance_ids[neighbor_idx]);
-                    adj_map[instance_ids[neighbor_idx]].push_back(instance_ids[idx]);
+                    // Add multiple connections per edge if specified
+                    for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
+                        adj_map[instance_ids[idx]].push_back(instance_ids[neighbor_idx]);
+                        adj_map[instance_ids[neighbor_idx]].push_back(instance_ids[idx]);
+                    }
                 }
             }
         }
@@ -2252,12 +2255,15 @@ std::string build_pgd_mapping_failure_message(
     return msg;
 }
 
-bool validate(
-    const std::string& grouping_name,
+}  // namespace
+
+namespace {
+
+// Helper function to solve the topology mapping with trait constraints
+MappingResult<FlattenedMeshNodeInfo, AsicID> solve_for_one_grouping_to_psd(
     const AdjacencyGraph<FlattenedMeshNodeInfo>& flat_mesh,
     const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& psd,
-    std::vector<std::string>& errors) {
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     MappingConstraints<FlattenedMeshNodeInfo, AsicID> constraints;
 
     // Build trait maps for target nodes (from flattened mesh)
@@ -2277,16 +2283,10 @@ bool validate(
     std::map<AsicID, uint32_t> global_location_traits;
 
     for (const auto& asic_id : physical_graph.get_nodes()) {
-        try {
-            TrayID tray_id = psd.get_tray_id(asic_id);
-            ASICLocation asic_location = psd.get_asic_location(asic_id);
-            global_tray_traits[asic_id] = *tray_id;
-            global_location_traits[asic_id] = *asic_location;
-        } catch (...) {
-            errors.push_back(fmt::format(
-                "PGD grouping '{}': failed to get tray_id/asic_location for asic_id {}", grouping_name, *asic_id));
-            return false;
-        }
+        TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
+        ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
+        global_tray_traits[asic_id] = *tray_id;
+        global_location_traits[asic_id] = *asic_location;
     }
 
     // Add trait constraints for tray_id and asic_location
@@ -2297,44 +2297,37 @@ bool validate(
         constraints.add_required_trait_constraint<uint32_t>(target_location_traits, global_location_traits),
         "Internal error: Failed to add required trait constraint for asic_location");
 
-    auto result =
-        solve_topology_mapping(flat_mesh, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
-
-    if (!result.success) {
-        errors.push_back(build_pgd_mapping_failure_message(grouping_name, flat_mesh, result));
-        return false;
-    }
-    return true;
+    return solve_topology_mapping(flat_mesh, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
 }
 
 }  // namespace
 
-bool PhysicalGroupingDescriptor::validate_grouping_with_psd(
-    const PhysicalGroupingDescriptor& pgd,
+std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    std::vector<std::string>* errors_out) {
-    std::vector<std::string> errors;
+    std::vector<std::string>* errors_out) const {
     auto physical_graph = build_physical_adjacency_graph_for_cluster(physical_system_descriptor);
-
-    auto flat_mesh = pgd.build_flattened_adjacency_mesh(grouping);
+    auto flat_mesh = build_flattened_adjacency_mesh(grouping);
 
     if (flat_mesh.get_nodes().empty()) {
         TT_THROW("Internal error: grouping produced empty graph");
     }
 
-    validate(grouping.name, flat_mesh, physical_graph, physical_system_descriptor, errors);
+    auto result = solve_for_one_grouping_to_psd(flat_mesh, physical_graph, physical_system_descriptor);
 
-    // log the validation errors
-    for (const auto& err : errors) {
-        log_critical(tt::LogFabric, "Validation error: {}", err);
+    std::unordered_set<tt::tt_metal::AsicID> asic_ids;
+    if (result.success) {
+        // Extract ASIC IDs from the mapping
+        for (const auto& [target_node, asic_id] : result.target_to_global) {
+            asic_ids.insert(asic_id);
+        }
+    } else {
+        if (errors_out != nullptr) {
+            errors_out->push_back(build_pgd_mapping_failure_message(grouping.name, flat_mesh, result));
+        }
     }
 
-    if (errors_out != nullptr) {
-        *errors_out = errors;
-    }
-
-    return errors.empty();
+    return asic_ids;
 }
 
 // Stream operator for FlattenedMeshNodeInfo (required by topology solver)
