@@ -17,6 +17,7 @@ static_assert(
     "super_speedy_mode is incompatible with deadlock avoidance (bubble flow control)");
 static_assert(!super_speedy_mode || NUM_SENDER_CHANNELS == 1, "super_speedy_mode requires exactly 1 sender channel");
 
+static size_t completion_count = 0;
 // ---------------------------------------------------------------------------
 // Sender channel speedy step
 // ---------------------------------------------------------------------------
@@ -63,43 +64,51 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
 
-        send_next_data<sender_channel_index, to_receiver_pkts_sent_id, true /*SKIP_CONNECTION_LIVENESS_CHECK*/>(
+        send_next_data<sender_channel_index, to_receiver_pkts_sent_id, false /*SKIP_CONNECTION_LIVENESS_CHECK*/>(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
+        sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
 
-    // --- Always check for new completions from receiver (cheap read) ---
-    int32_t completions = sender_channel_from_receiver_credits
-                              .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-    if (completions) {
-        outbound_to_receiver_channel_pointers.num_free_slots += completions;
-        sender_channel_from_receiver_credits.increment_num_processed_completions(completions);
-        sender_amort_counter += completions;
+    if (sender_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
+        // --- Always check for new completions from receiver (cheap read) ---
+        int32_t completions = sender_channel_from_receiver_credits
+                                  .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        if (completions) {
+            outbound_to_receiver_channel_pointers.num_free_slots += completions;
+            sender_channel_from_receiver_credits.increment_num_processed_completions(completions);
 
-        // send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
-        //     local_sender_channel_worker_interface, sender_amort_counter, channel_connection_established);
-        // sender_amort_counter = 0;
+            completion_count += completions;
+
+            // send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
+            //     local_sender_channel_worker_interface, sender_amort_counter, channel_connection_established);
+            // sender_amort_counter = 0;
+        }
     }
 
     // --- Amortized: only send credits to upstream workers every N completions/acks ---
-    if (sender_amort_counter >= SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
+    if (completion_count >= SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
+        // likely we are seeing an issue due to L1
         send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
-            local_sender_channel_worker_interface, sender_amort_counter, channel_connection_established);
-
-        sender_amort_counter = 0;
+            local_sender_channel_worker_interface, completion_count, channel_connection_established);
+        sender_amort_counter -= completion_count;
+        completion_count = 0;
     }
-    auto check_connection_status =
-        !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
-    if (check_connection_status) {
-        check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-            local_sender_channel_worker_interface, channel_connection_established, sender_channel_free_slots_stream_id);
-    }
+    // if (!channel_connection_established) {
+    //     auto check_connection_status =
+    //         !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+    //     if (check_connection_status) {
+    //         check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+    //             local_sender_channel_worker_interface, channel_connection_established,
+    //             sender_channel_free_slots_stream_id);
+    //     }
+    // }
 
     // NO connection liveness check in inner loop (checked in outer loop between context switches)
     return progress;
@@ -114,6 +123,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 //   - Leverages skip_src_ch_id_update (single sender channel) to cache src_ch_id
 //   - Fused flush + completion model (static_assert ensures fuse_receiver_flush_and_completion_ptr)
 //   - After inner loop, batch-flushes all outstanding completions
+static uint32_t unacked_sends = 0;
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -156,6 +166,10 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
 
+        // Single 4B aligned load at offset 40 to get payload_size_bytes + noc_send_type
+        // instead of two separate uncached L1 reads
+        auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
+
         did_something = true;
         progress = true;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -163,27 +177,37 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         }
         channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
 
-        execute_chip_unicast_to_local_chip(
-            packet_header, packet_header->payload_size_bytes, receiver_buffer_index, receiver_channel);
+        execute_chip_unicast_to_local_chip_impl(
+            packet_header, packed.payload_size_bytes, packed.noc_send_type, receiver_buffer_index, receiver_channel);
         wr_sent_counter.increment();
         if constexpr (!enable_first_level_ack) {
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         }
+        unacked_sends++;
     }  // end inner loop
 
     // --- Batched completion: flush all outstanding completions ---
     // Uses the fused flush+completion model (fuse_receiver_flush_and_completion_ptr == true)
-    auto& completion_counter = receiver_channel_pointers.completion_counter;
-    while (!completion_counter.is_caught_up_to(wr_sent_counter)) {
-        auto buf_idx = completion_counter.get_buffer_index();
-        bool flushed = receiver_channel_trid_tracker.transaction_flushed(buf_idx);
-        if (!flushed) {
-            break;
+    if (unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) {
+        auto& completion_counter = receiver_channel_pointers.completion_counter;
+        uint32_t num_completions = 0;
+        // note that short-circuiting this loop does not result in any speedup.
+        // the bottlneck is likely on sender side.
+        while (!completion_counter.is_caught_up_to(wr_sent_counter)) {
+            auto buf_idx = completion_counter.get_buffer_index();
+            bool flushed = receiver_channel_trid_tracker.transaction_flushed(buf_idx);
+            if (!flushed) {
+                break;
+            }
+            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(buf_idx);
+            completion_counter.increment();
+            num_completions++;
         }
-        receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-            receiver_channel_response_credit_sender, src_ch_id);
-        receiver_channel_trid_tracker.clear_trid_at_buffer_slot(buf_idx);
-        completion_counter.increment();
+        if (num_completions > 0) {
+            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                receiver_channel_response_credit_sender, src_ch_id, num_completions);
+            unacked_sends -= num_completions;
+        }
     }
 
     return progress;

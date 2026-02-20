@@ -592,6 +592,7 @@ FORCE_INLINE void send_next_data(
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
 
+    bool busy = internal_::eth_txq_is_busy(sender_txq_id);
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
         channel_trimming_usage_recorder.update_sender_channel_packet_size(
@@ -605,7 +606,8 @@ FORCE_INLINE void send_next_data(
     }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        while (busy) {
+            busy = internal_::eth_txq_is_busy(sender_txq_id);
         };
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
@@ -1578,12 +1580,12 @@ FORCE_INLINE void update_bw_counters(
     if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 0)) {
         size_t packet_bytes = packet_header->get_payload_size_including_header();
         local_fabric_telemetry.dynamic_info.tx_bandwidth.num_packets_sent++;
-        local_fabric_telemetry.dynamic_info.tx_bandwidth.num_words_sent += (packet_bytes + 3) >> 2;
+        local_fabric_telemetry.dynamic_info.tx_bandwidth.num_words_sent += packet_bytes >> 2;
     }
     if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 1)) {
         size_t packet_bytes = packet_header->get_payload_size_including_header();
         local_fabric_telemetry.dynamic_info.rx_bandwidth.num_packets_sent++;
-        local_fabric_telemetry.dynamic_info.rx_bandwidth.num_words_sent += (packet_bytes + 3) >> 2;
+        local_fabric_telemetry.dynamic_info.rx_bandwidth.num_words_sent += packet_bytes >> 2;
     }
 }
 
@@ -2232,7 +2234,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-
+            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
+                auto check_connection_status =
+                    !channel_connection_established[0] ||
+                    local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
+                if (check_connection_status) {
+                    check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                        local_sender_channel_worker_interfaces.template get<0>(),
+                        channel_connection_established[0],
+                        local_sender_channel_free_slots_stream_ids[0]);
+                }
+            }
             for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
                 if constexpr (super_speedy_mode) {
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();

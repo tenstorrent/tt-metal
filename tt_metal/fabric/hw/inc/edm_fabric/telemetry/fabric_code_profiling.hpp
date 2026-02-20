@@ -36,9 +36,9 @@ public:
     }
 
     FORCE_INLINE void open() {
-        if (should_dump) {
-            start_ts.full = eth_read_wall_clock();
-        }
+        // if (should_dump) {
+        start_ts.full = eth_read_wall_clock();
+        // }
     }
 
     FORCE_INLINE void close() {

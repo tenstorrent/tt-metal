@@ -393,6 +393,23 @@ public:
     // otherwise.
     uint8_t src_ch_id;
 
+    // Packed representation of the 4 bytes at offset 40: payload_size_bytes(2B) + noc_send_type(1B) + src_ch_id(1B).
+    // A single 4B aligned load avoids two separate uncached L1 reads.
+    struct PackedPayloadAndSendType {
+        uint16_t payload_size_bytes;
+        NocSendType noc_send_type;
+
+        static PackedPayloadAndSendType load(const volatile Derived* hdr) {
+            // offset 40 from header start is 4B-aligned (sizeof(NocCommandFields)==40)
+            auto raw = *reinterpret_cast<const volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(hdr) + offsetof(PacketHeaderBase, payload_size_bytes));
+            PackedPayloadAndSendType result;
+            result.payload_size_bytes = static_cast<uint16_t>(raw & 0xFFFF);
+            result.noc_send_type = static_cast<NocSendType>((raw >> 16) & 0xFF);
+            return result;
+        }
+    };
+
     // Returns size of payload in bytes - TODO: convert to words (4B)
     size_t get_payload_size_excluding_header() volatile const { return this->payload_size_bytes; }
 
