@@ -298,6 +298,7 @@ class Generator(WarmupForwardMixin):
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+        prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
             padded_batch = 32
@@ -366,7 +367,16 @@ class Generator(WarmupForwardMixin):
 
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
-            output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
+            output_toks = sampled_tensor[empty_slots]  # Shape: [batch]
+
+            if tt_log_probs is not None:
+                tt_lp = tt_log_probs
+                if isinstance(tt_lp, tuple):
+                    tt_lp = tt_lp[0]
+                if isinstance(tt_lp, list):
+                    tt_lp = tt_lp[0]
+                log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
+                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -377,6 +387,8 @@ class Generator(WarmupForwardMixin):
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        if prefill_log_probs is not None:
+            return output_toks, prefill_log_probs
         return output_toks
 
     def prefill_forward_single_user_text(
