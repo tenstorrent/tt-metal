@@ -274,118 +274,6 @@ void exp_tile_first_column(uint32_t idst) {
 
 #endif
 
-#ifdef TRISC_MATH
-/**
- * No-MOP matmul math: bypasses ckernel_template::run() and replays the matmul
- * instruction sequence directly from the replay buffer. The replay buffer is
- * loaded by the regular mm_block_init_short; only the execution path differs.
- *
- * Uses the replay buffer at ckernel::math::replay_buf_offset (offset 16),
- * length 16 (standard 32x32 tiles). Handles both LoFi and HiFi modes.
- */
-inline void sdpa_matmul_math_no_mop(uint32_t dst_index, uint32_t ct_dim, uint32_t rt_dim) {
-    constexpr int FIDELITY_INT = static_cast<int>(MATH_FIDELITY);
-    constexpr int NUM_FIDELITY_PHASES = (FIDELITY_INT > 0) ? FIDELITY_INT : 0;
-    constexpr bool high_fidelity = NUM_FIDELITY_PHASES > 0;
-    constexpr uint32_t replay_buf_len = 16;
-
-    const bool reuse_a = ct_dim >= rt_dim;
-    const uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
-    const uint32_t rut_dim = reuse_a ? ct_dim : rt_dim;
-
-    for (uint32_t t = 0; t < t_dim; t++) {
-        for (uint32_t rut = 0; rut < rut_dim; rut++) {
-            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(
-                dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
-
-            if constexpr (high_fidelity) {
-                for (uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++) {
-                    lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
-                }
-                if (reuse_a) {
-                    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-                } else {
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-                }
-            } else {
-                lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
-            }
-
-            if (rut == (rut_dim - 1)) {
-                if (reuse_a) {
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-                } else {
-                    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-                }
-            }
-        }
-    }
-}
-
-/**
- * Lightweight addr_mod reinit for matmul after an eltwise binary (sub) operation.
- * Only restores ADDR_MOD_1 and ADDR_MOD_2, which are the two address modifiers
- * disturbed by eltwise binary ops. ADDR_MOD_0, ADDR_MOD_4, ADDR_MOD_5 are
- * preserved across the sub operation and don't need reprogramming.
- * The replay buffer also remains loaded from the initial mm_block_init_short.
- */
-inline void sdpa_matmul_configure_addrmod_reinit(bool transpose) {
-    if (transpose) {
-        addr_mod_t{
-            .srca = {.incr = 32, .clr = 0, .cr = 0},
-            .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_1);
-    } else {
-        addr_mod_t{
-            .srca = {.incr = 16, .clr = 0, .cr = 0},
-            .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_1);
-    }
-
-    addr_mod_t{
-        .srca = {.incr = 0, .clr = 0, .cr = 1},
-        .srcb = {.incr = 32, .clr = 0, .cr = 1},
-        .dest = {.incr = 8, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_2);
-}
-#endif
-
-ALWI void sdpa_matmul_block_no_mop(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_tile_index,
-    uint32_t in1_tile_index,
-    uint32_t idst,
-    const uint32_t transpose,
-    uint32_t ct_dim,
-    uint32_t rt_dim,
-    uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    MATH((sdpa_matmul_math_no_mop(idst, ct_dim, rt_dim)));
-}
-
-/**
- * Lightweight reinit for no-MOP matmul after an eltwise binary (sub_exp) operation.
- * On MATH: restores only ADDR_MOD_1 and ADDR_MOD_2 (the two addr_mods disturbed by sub).
- * On UNPACK: full unpack matmul reinit (sub changed unpack to broadcast COL mode).
- * Skips: replay buffer reload, MOP programming, ADDR_MOD_0/4/5, counter reset.
- */
-ALWI void sdpa_mm_no_mop_reinit_short(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    const uint32_t transpose,
-    uint32_t ct_dim = 1,
-    uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((sdpa_matmul_configure_addrmod_reinit(transpose)));
-}
-
 // High-granularity profiling marker sets for sdpa_inner_loop.
 // Set 1: Q@KT phase (matmul, sub_exp, pack, max reduce)
 // Set 2: QKT@V + SALAD phase (matmul, pack, rescale steps)
@@ -893,7 +781,7 @@ void blocked_1x8_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
-        sdpa_matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -936,7 +824,7 @@ void blocked_1x4_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
-        sdpa_matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -981,7 +869,7 @@ void blocked_1x4_matmul_and_pack_faster(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
-        sdpa_matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -1080,10 +968,8 @@ void sdpa_inner_loop(
                 {
                     SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
                     // SDPA_DeviceZoneScopedN_5("Q@KT MM+Pack");
-                    if (q_subblock == 0 && kt_subblock == 0) {
+                    if (q_subblock > 0 || q_subblock == 0 && kt_subblock == 0) {
                         mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-                    } else if (q_subblock > 0) {
-                        sdpa_mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
                     }
                     blocked_1x8_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                         cb_q_in,
