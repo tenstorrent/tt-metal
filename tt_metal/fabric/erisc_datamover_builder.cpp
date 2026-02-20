@@ -251,8 +251,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // Allocate code profiling buffer (conditionally enabled)
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
-        // Buffer size: max timer types * 16 bytes per result
+    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd() ||
+        rtoptions.get_enable_fabric_code_profiling_speedy_path()) {
+        // Buffer size: max timer types * sizeof(CodeProfilingTimerResult) per result
         constexpr size_t code_profiling_buffer_size =
             get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
         this->code_profiling_buffer_address = next_l1_addr;
@@ -874,18 +875,46 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
 
     // Add code profiling arguments (conditionally enabled)
-    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
-        // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
-        uint32_t code_profiling_enabled_timers =
-            static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
-        ct_args.push_back(code_profiling_enabled_timers);
-
-        // Add code profiling buffer address (16B aligned)
-        ct_args.push_back(static_cast<uint32_t>(config.code_profiling_buffer_address));
-    } else {
-        // Code profiling disabled - add zeros
-        ct_args.push_back(0);  // No timers enabled
-        ct_args.push_back(0);  // No buffer address
+    {
+        uint32_t code_profiling_enabled_timers = 0;
+        if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+            code_profiling_enabled_timers |= static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
+        }
+        if (rtoptions.get_enable_fabric_code_profiling_speedy_path()) {
+            uint32_t mask = rtoptions.get_fabric_code_profiling_speedy_timer_mask();
+            constexpr uint32_t all_speedy_timers =
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_FULL) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_SEND_DATA) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_CHECK_COMPLETIONS) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_CREDITS_UPSTREAM) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FULL) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FORWARD) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_SEND_ETH) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_SEND_ADV) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_SEND_NOTIFY) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FWD_HDR) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FWD_NOC) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FWD_BOOK) |
+                // Spin iteration counters
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_ETH_TXQ_SPIN_1) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_ETH_TXQ_SPIN_2) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_NOC_FLUSH_SPIN) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_SENDER_NOC_CMD_BUF_SPIN) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_NOC_CMD_BUF_SPIN) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH_ETH_TXQ_SPIN) |
+                // Receiver flush sub-timers
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH_TRID) |
+                static_cast<uint32_t>(CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH_SEND);
+            code_profiling_enabled_timers |= (mask != 0) ? (mask & all_speedy_timers) : all_speedy_timers;
+        }
+        if (code_profiling_enabled_timers != 0) {
+            ct_args.push_back(code_profiling_enabled_timers);
+            ct_args.push_back(static_cast<uint32_t>(config.code_profiling_buffer_address));
+        } else {
+            ct_args.push_back(0);  // No timers enabled
+            ct_args.push_back(0);  // No buffer address
+        }
     }
 }
 
@@ -1276,6 +1305,23 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
         named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
     }
+
+    // Credit amortization named compile-time args
+    // Only enabled when there is a single sender channel (common 1D case)
+    uint32_t sender_amort_freq = 0;
+    uint32_t receiver_amort_freq = 0;
+    if (num_sender_channels == 1) {
+        auto* static_alloc =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+        if (static_alloc != nullptr) {
+            uint32_t receiver_slots = static_cast<uint32_t>(static_alloc->get_receiver_channel_number_of_slots(0));
+            uint32_t sender_slots = static_cast<uint32_t>(static_alloc->get_sender_channel_number_of_slots(0));
+            receiver_amort_freq = std::max<uint32_t>(std::min<uint32_t>(4u, receiver_slots / 2), 1);
+            sender_amort_freq = std::max<uint32_t>(std::min<uint32_t>(2u, sender_slots / 2), 1);
+        }
+    }
+    named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"] = sender_amort_freq;
+    named_args["RECEIVER_CREDIT_AMORTIZATION_FREQUENCY"] = receiver_amort_freq;
 
     return {std::move(ct_args), std::move(named_args)};
 }

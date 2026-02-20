@@ -53,11 +53,18 @@ public:
         TestFixture& fixture);
 
     /**
-     * @brief Clear buffer on all active ethernet cores
+     * @brief Clear buffer on all active ethernet cores (writes zeros)
      * @param address The buffer address to clear
      * @param buffer_size The size of the buffer to clear
      */
     void clear_buffer(uint32_t address, size_t buffer_size);
+
+    /**
+     * @brief Write buffer data to all active ethernet cores
+     * @param address The buffer address to write to
+     * @param data The data to write
+     */
+    void write_buffer(uint32_t address, const std::vector<uint8_t>& data);
 
     /**
      * @brief Read buffer from all active ethernet cores

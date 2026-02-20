@@ -86,6 +86,8 @@ enum class EnvVarID {
     TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
+    TT_FABRIC_PROFILE_SPEEDY_PATH,             // Enable fabric speedy path profiling
+    TT_FABRIC_PROFILE_SPEEDY_TIMER_MASK,       // Bitmask of specific speedy timers to enable
     TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
     TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
     TT_METAL_FORCE_REINIT,                     // Force context reinitialization
@@ -544,6 +546,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_FABRIC_PROFILE_RX_CH_FWD=1
         case EnvVarID::TT_FABRIC_PROFILE_RX_CH_FWD: this->fabric_profiling_settings.enable_rx_ch_fwd = true; break;
+
+        // TT_FABRIC_PROFILE_SPEEDY_PATH
+        // Enables speedy sender/receiver path profiling.
+        // Default: false
+        // Usage: export TT_FABRIC_PROFILE_SPEEDY_PATH=1
+        case EnvVarID::TT_FABRIC_PROFILE_SPEEDY_PATH: this->fabric_profiling_settings.enable_speedy_path = true; break;
+
+        // TT_FABRIC_PROFILE_SPEEDY_TIMER_MASK
+        // Bitmask of specific speedy timers (0=all). Bit positions match CodeProfilingTimerType enum.
+        // Usage: export TT_FABRIC_PROFILE_SPEEDY_TIMER_MASK=2  (SPEEDY_SENDER_FULL only)
+        case EnvVarID::TT_FABRIC_PROFILE_SPEEDY_TIMER_MASK:
+            sscanf(value, "%u", &this->fabric_profiling_settings.speedy_timer_mask);
+            break;
 
         // TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE
         // Enables channel trimming resource usage capture on fabric routers.

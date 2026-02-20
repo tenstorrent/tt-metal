@@ -330,7 +330,7 @@ constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 8
 
 // If true, the sender channel will spin inside send_next_data until the eth_txq is not busy, rather than checking
 // eth_txq_is_busy() being false as a prerequisite for sending the next packet
-constexpr bool ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 9) != 0;
+constexpr bool ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA = true;  // get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 9) != 0;
 constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 10) != 0;
 
 constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 11);
@@ -714,3 +714,11 @@ using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
     MAX_NUM_RECEIVER_CHANNELS,
     MAX_NUM_SENDER_CHANNELS>;
 constexpr ChannelTrimmingUsagePtr channel_trimming_usage_recorder{};
+
+//-------------------------------- Credit Amortization --------------------------------//
+constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =
+    get_named_compile_time_arg_val("SENDER_CREDIT_AMORTIZATION_FREQUENCY");
+constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY =
+    get_named_compile_time_arg_val("RECEIVER_CREDIT_AMORTIZATION_FREQUENCY");
+constexpr bool super_speedy_mode =
+    SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0 && RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0;

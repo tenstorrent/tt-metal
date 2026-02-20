@@ -167,6 +167,8 @@ class RunTimeOptions {
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
+        bool enable_speedy_path = false;
+        uint32_t speedy_timer_mask = 0;  // 0 = all speedy timers; nonzero = specific bitmask
     } fabric_profiling_settings;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
@@ -651,6 +653,18 @@ public:
     bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
     void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
         fabric_profiling_settings.enable_rx_ch_fwd = enable;
+    }
+
+    // If true, enables code profiling for speedy sender/receiver paths
+    bool get_enable_fabric_code_profiling_speedy_path() const { return fabric_profiling_settings.enable_speedy_path; }
+    void set_enable_fabric_code_profiling_speedy_path(bool enable) {
+        fabric_profiling_settings.enable_speedy_path = enable;
+    }
+
+    // Specific bitmask of speedy timers to enable (0 = all speedy timers)
+    uint32_t get_fabric_code_profiling_speedy_timer_mask() const { return fabric_profiling_settings.speedy_timer_mask; }
+    void set_fabric_code_profiling_speedy_timer_mask(uint32_t mask) {
+        fabric_profiling_settings.speedy_timer_mask = mask;
     }
 
     // If true, enables channel trimming resource usage capture on fabric routers
