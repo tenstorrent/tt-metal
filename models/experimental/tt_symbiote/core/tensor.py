@@ -10,6 +10,8 @@ import torch
 
 from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, get_tensor_run_implementation
 
+TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
+
 
 class TorchTTNNTensor(torch.Tensor):
     """PyTorch tensor wrapper that can dispatch operations to TTNN backend."""
@@ -20,14 +22,14 @@ class TorchTTNNTensor(torch.Tensor):
 
     @staticmethod
     def __new__(cls, elem, *args, **kwargs):
-        return get_tensor_run_implementation().new_instance(cls, elem, *args, **kwargs)
+        return TENSOR_RUN_IMPLEMENTATION.new_instance(cls, elem, *args, **kwargs)
 
     def __repr__(self):
-        return get_tensor_run_implementation().repr(self)
+        return TENSOR_RUN_IMPLEMENTATION.repr(self)
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
-        return get_tensor_run_implementation().torch_dispatch(cls, func, types, args, kwargs)
+        return TENSOR_RUN_IMPLEMENTATION.torch_dispatch(cls, func, types, args, kwargs)
 
     @property
     def shape(self):
@@ -70,11 +72,11 @@ class TorchTTNNTensor(torch.Tensor):
 
     @property
     def to_ttnn(self):
-        return get_tensor_run_implementation().to_ttnn(self)
+        return TENSOR_RUN_IMPLEMENTATION.to_ttnn(self)
 
     @property
     def to_torch(self):
-        return get_tensor_run_implementation().to_torch(self)
+        return TENSOR_RUN_IMPLEMENTATION.to_torch(self)
 
     def tolist(self):
         return self.to_torch.tolist()
