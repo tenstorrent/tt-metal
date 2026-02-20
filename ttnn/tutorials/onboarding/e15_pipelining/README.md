@@ -1,4 +1,4 @@
-# E14: Pipelining
+# E15: Pipelining
 
 Master double buffering and latency hiding techniques.
 

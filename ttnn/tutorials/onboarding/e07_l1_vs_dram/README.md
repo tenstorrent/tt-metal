@@ -16,7 +16,7 @@ Learn the memory hierarchy and when to use each type:
 ## Key Concepts
 
 ### Memory Hierarchy
-- **L1 (SRAM)**: ~1MB per core, very fast, low latency
+- **L1 (SRAM)**: 1.5MB per core, very fast, low latency
 - **DRAM**: Several GB total, slower, higher latency
 
 ### Memory Banking
