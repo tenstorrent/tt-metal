@@ -348,6 +348,29 @@ Tests:
               device: 1 # Destination is physical chip 1
 
   # ======================================================================================
+  # Test 14: Sequential Latency Test
+  # Unlike neighbor_exchange (all pairs simultaneously), sequential_neighbor_exchange
+  # tests ONE neighbor pair per iteration. This is required for latency tests which
+  # need exactly one sender. Iterations are auto-detected from neighbor pair count.
+  # The same applies for all_to_all vs sequential_all_to_all
+  # ======================================================================================
+  - name: "SequentialNeighborExchangeLatency"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [16, 1024, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      num_packets: 256  # number of latency samples per iteration
+
+    patterns:
+      - type: sequential_neighbor_exchange
+  # ======================================================================================
   # Test 14: NOC ID Selection
   # This demonstrates how to explicitly select which NOC (0 or 1) to use by worker cores.
   # By default, NOC 0 is used. This test uses NOC 1.
@@ -366,3 +389,31 @@ Tests:
             num_packets: 100
             destination:
               device: [0, [0, 1]]
+
+  # ======================================================================================
+  # Test 15: Core Sweep
+  # This test shows the core sweeping feature available. It will generate sequential tests
+  # which sweep across all worker core pairs from src to destination depending on whether
+  # a core coordinate or `all` is specified for the field. To be used with caution as
+  # many tests can be generated
+  # ======================================================================================
+
+  - name: "CoreSweep"
+    fabric_setup:
+      topology: Linear
+
+    benchmark_mode: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1000
+      size: 1024
+
+    senders:
+      - device: [0, [0, 1]]
+
+        patterns:
+          - destination:
+              device: [0, [1, 0]]
+              core: all

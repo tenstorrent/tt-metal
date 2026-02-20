@@ -15,23 +15,17 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn {
 
-Tensor CumsumOperation::invoke(
-    const Tensor& input_tensor,
+Tensor cumsum(
+    const Tensor& input,
     const int32_t& dim,
-    std::optional<ttnn::DataType> dtype,
+    std::optional<DataType> dtype,
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
-    return common::accumulation_invoke(
-        input_tensor,
-        dim,
-        dtype,
-        std::move(optional_out),
-        reverse_order,
-        memory_config,
-        ttnn::prim::AccumulationOp::CUMSUM);
+    return operations::reduction::accumulation::common::accumulation_invoke(
+        input, dim, dtype, std::move(optional_out), reverse_order, memory_config, ttnn::prim::AccumulationOp::CUMSUM);
 }
 
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn

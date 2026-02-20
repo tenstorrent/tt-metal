@@ -202,8 +202,11 @@ void overwrite_compute_kernel_name_and_defines(
     const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
     const ttnn::operations::ternary::TernaryOpType op_type) {
     if (broadcast_type == TernaryBroadcastType::ROW_BCAST) {
-        kernel_name =
-            op_type == TernaryOpType::ADDCMUL ? KernelName::ComputeRowBcastAddcmul : KernelName::ComputeRowBcastTTT;
+        if (op_type == TernaryOpType::ADDCMUL || op_type == TernaryOpType::ADDCDIV) {
+            kernel_name = KernelName::ComputeRowBcastAddcOp;
+        } else {
+            kernel_name = KernelName::ComputeRowBcastTTT;
+        }
     }
 }
 
@@ -799,7 +802,8 @@ void set_or_update_runtime_arguments(
         if (variant == TernaryVariant::TTS) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_b.value(), output.dtype());
         } else if (
-            variant == TernaryVariant::TST || (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+            variant == TernaryVariant::TST || ((operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL ||
+                                                operation_attributes.ternary_op_type == TernaryOpType::ADDCDIV) &&
                                                operation_attributes.scalar_input_a.has_value())) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         }
@@ -1121,7 +1125,8 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     bool is_fpu = false;
 
-    if (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL) {
+    if (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL ||
+        operation_attributes.ternary_op_type == TernaryOpType::ADDCDIV) {
         is_fpu = (predicate_tensor.dtype() == value_true_tensor.value().dtype()) &&
                  (predicate_tensor.dtype() == value_false_tensor.value().dtype()) &&
                  (predicate_tensor.dtype() != DataType::FLOAT32 && predicate_tensor.dtype() != DataType::INT32 &&
@@ -1232,7 +1237,10 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     // Add common fill defines
     kernel_defines["FILL_LLK"] = "fill_tile";
     if (predicate_tensor.dtype() == DataType::INT32) {
-        kernel_defines["FILL_LLK"] = "fill_tile_int";
+        kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
+        kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+    } else if (predicate_tensor.dtype() == DataType::UINT32) {
+        kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
         kernel_defines["FILL_WITH_VALUE_INT"] = "1";
     } else {
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";

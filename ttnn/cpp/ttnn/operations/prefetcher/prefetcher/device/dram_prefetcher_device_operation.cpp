@@ -10,11 +10,6 @@
 
 namespace ttnn::prim {
 
-DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return DramPrefetcherProgramFactory{};
-}
-
 void DramPrefetcherOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.input_tensors;
@@ -72,11 +67,6 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
 
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
-}
-
-void DramPrefetcherOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 TensorSpec DramPrefetcherOperation::compute_output_specs(

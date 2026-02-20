@@ -86,26 +86,33 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Check for benchmark data
-        id: check-benchmark-data
+      - name: Check for benchmark and latency data
+        id: check-data
         if: ${{ !cancelled() && github.ref_name == 'main' }}
-        shell: bash
-        run: |
-          if [ -d "generated/fabric" ]; then
-            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-            echo "Benchmark files found, will upload to database"
-          else
-            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-            echo "Benchmark files not found, database upload will be skipped"
-          fi
+        uses: tenstorrent/tt-metal/.github/actions/check-latency-bw-results@main
+        with:
+          path: /work
+          arch: wormhole_b0
+          check_bw: ${{ github.ref_name == 'main' }}
+          check_latency: ${{ github.ref_name == 'main' }}
       - name: Upload benchmark data
         ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-benchmark-data.outputs.has_benchmark_data == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - name: Upload latency data
+        ## Only upload fabric latency data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
@@ -123,7 +130,8 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         TT_METAL_ENABLE_ERISC_IRAM: 1
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
@@ -152,18 +160,17 @@ jobs:
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
           ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-          # pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
 
-          # https://github.com/tenstorrent/tt-metal/issues/34990
-          # Disabling hanging decode and prefill for now while team works on other issues
-          # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
-          # pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          # Running only decode and prefill-128 tests with HF weights for moe and mlp layer
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.3 and (mode_decode or mode_prefill_seq_128)" --timeout 180 --durations=0;
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.0 and (mode_decode or mode_prefill_seq_128)" --timeout 60 --durations=0;
+
           # CCL smoke tests - exactly one representative test from each op category
-
           pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300;
 
-          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-2-20-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-8-2-2-fabric_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-1-1-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-2-1-1-fabric_ring-mem_config_input0-mem_config_rs0-batch_8-perf-4links]" --timeout=300;
           pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_1d_line]" --timeout=300;
 
           pytest "tests/nightly/tg/ccl/test_all_broadcast.py::test_all_broadcast_trace[wormhole_b0-mesh_device0-device_params0-3-mem_config0-deepseek_1]" --timeout=300;
@@ -195,7 +202,6 @@ jobs:
         if: ${{ failure() }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
   quick-bh-glx-health:
     if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
     runs-on:
@@ -246,5 +252,34 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Check for benchmark and latency data
+        id: check-data
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        uses: tenstorrent/tt-metal/.github/actions/check-latency-bw-results@main
+        with:
+          path: /work
+          arch: blackhole
+          check_bw: ${{ github.ref_name == 'main' }}
+          check_latency: ${{ github.ref_name == 'main' }}
+      - name: Upload benchmark data
+        ## Only upload fabric benchmark data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - name: Upload latency data
+        ## Only upload fabric latency data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

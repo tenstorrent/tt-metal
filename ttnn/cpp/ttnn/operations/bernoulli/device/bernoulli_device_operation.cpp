@@ -8,11 +8,6 @@
 
 namespace ttnn::operations::bernoulli {
 
-BernoulliDeviceOperation::program_factory_t BernoulliDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void BernoulliDeviceOperation::validate_inputs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -40,11 +35,6 @@ void BernoulliDeviceOperation::validate_inputs(
 }
 
 void BernoulliDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
-void BernoulliDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
@@ -89,6 +79,8 @@ ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t ber
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::bernoulli::BernoulliDeviceOperation;
+    TT_FATAL(input.device() != nullptr, "Bernoulli: Input tensor needs to be on device");
+
     auto operation_attributes = OperationType::operation_attributes_t{
         seed,
         dtype.value_or(DataType::FLOAT32),

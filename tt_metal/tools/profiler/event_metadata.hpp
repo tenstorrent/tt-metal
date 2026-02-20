@@ -46,19 +46,22 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         SEMAPHORE_INC = 27,
         SEMAPHORE_WAIT = 28,
         SEMAPHORE_SET = 29,
+        SEMAPHORE_SET_REMOTE = 30,
+        SEMAPHORE_SET_MULTICAST = 31,
+        SEMAPHORE_INC_MULTICAST = 32,
 
         // NOTE: fabric events should be contiguous to allow quick range check!
-        FABRIC_UNICAST_WRITE = 30,
-        FABRIC_UNICAST_INLINE_WRITE = 31,
-        FABRIC_UNICAST_ATOMIC_INC = 32,
-        FABRIC_FUSED_UNICAST_ATOMIC_INC = 33,
-        FABRIC_MULTICAST_WRITE = 34,
-        FABRIC_MULTICAST_ATOMIC_INC = 35,
-        FABRIC_UNICAST_SCATTER_WRITE = 36,
-        FABRIC_ROUTING_FIELDS_1D = 37,
-        FABRIC_ROUTING_FIELDS_2D = 38,
+        FABRIC_UNICAST_WRITE = 33,
+        FABRIC_UNICAST_INLINE_WRITE = 34,
+        FABRIC_UNICAST_ATOMIC_INC = 35,
+        FABRIC_FUSED_UNICAST_ATOMIC_INC = 36,
+        FABRIC_MULTICAST_WRITE = 37,
+        FABRIC_MULTICAST_ATOMIC_INC = 38,
+        FABRIC_UNICAST_SCATTER_WRITE = 39,
+        FABRIC_ROUTING_FIELDS_1D = 40,
+        FABRIC_ROUTING_FIELDS_2D = 41,
 
-        UNSUPPORTED = 39,
+        UNSUPPORTED = 42,
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };

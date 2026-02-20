@@ -4,12 +4,13 @@
 
 #pragma once
 
+#include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::sdpa_bw::device::q {
 
 struct operation_attributes_t {
-    bool fp32_dest_acc_en{true};
+    AttentionMaskType mask_type{AttentionMaskType::Arbitrary};
     float dropout_probability{0.0F};
 };
 
@@ -19,7 +20,7 @@ struct tensor_args_t {
     const ttnn::Tensor& query;                     // Input Q (needed for gradients)
     const ttnn::Tensor& key;                       // Input K (needed for gradients)
     const ttnn::Tensor& value;                     // Input V (needed for gradients)
-    const std::optional<ttnn::Tensor>& attn_mask;  // attention mask
+    const std::optional<ttnn::Tensor>& attn_mask;  // attention mask (only for Arbitrary)
     const ttnn::Tensor& intermediates;             // From forward pass (max_val,1/sum_exp values)
 
     // Preallocated gradient tensor (optional)

@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/transpose_wh.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_BLACKHOLE
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_moe_gate_topk_single_face.h"

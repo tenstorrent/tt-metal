@@ -35,11 +35,6 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
 }
 
-void SplitDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 SplitDeviceOperation::spec_return_value_t SplitDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -63,11 +58,6 @@ SplitDeviceOperation::tensor_return_value_t SplitDeviceOperation::create_output_
         output_tensors.push_back(create_device_tensor(spec, input_tensor.device()));
     }
     return output_tensors;
-}
-
-SplitDeviceOperation::program_factory_t SplitDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return SplitProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SplitDeviceOperation::tensor_return_value_t>

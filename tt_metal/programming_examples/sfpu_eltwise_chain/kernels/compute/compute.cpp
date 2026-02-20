@@ -2,15 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     constexpr uint32_t src_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t ones_cb_index = get_compile_time_arg_val(1);
@@ -71,4 +70,3 @@ void MAIN {
     // Mark the tile as ready for the writer kernel to write to DRAM
     cb_push_back(result_cb_index, one_tile);
 }
-}  // namespace NAMESPACE

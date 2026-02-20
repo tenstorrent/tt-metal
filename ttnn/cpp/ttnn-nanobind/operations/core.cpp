@@ -40,21 +40,12 @@ void py_module_types(nb::module_& mod) {
         Used to prevent di/dt (power supply current) issues on large core counts.
     )doc");
 
-    // variant of (Grayskull|Wormhole)ComputeKernelConfig
+    // Unified ComputeKernelConfig - all architecture-specific names are now aliases
     nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig");
 
-    nb::class_<GrayskullComputeKernelConfig>(mod, "GrayskullComputeKernelConfig")
-        .def(
-            nb::init<MathFidelity, bool, bool>(),
-            nb::kw_only(),
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
-            nb::arg("math_approx_mode") = true,
-            nb::arg("dst_full_sync_en") = false)
-        .def_rw("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
-        .def_rw("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode)
-        .def_rw("dst_full_sync_en", &GrayskullComputeKernelConfig::dst_full_sync_en);
-
-    nb::class_<WormholeComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
+    // Primary config class (ComputeKernelConfig is the canonical name, but we expose as WormholeComputeKernelConfig
+    // for backward compatibility)
+    nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
         .def(
             nb::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             nb::kw_only(),
@@ -64,12 +55,12 @@ void py_module_types(nb::module_& mod) {
             nb::arg("packer_l1_acc") = false,
             nb::arg("dst_full_sync_en") = false,
             nb::arg("throttle_level") = compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .def_rw("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
-        .def_rw("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
-        .def_rw("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
-        .def_rw("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc)
-        .def_rw("dst_full_sync_en", &WormholeComputeKernelConfig::dst_full_sync_en)
-        .def_rw("throttle_level", &WormholeComputeKernelConfig::throttle_level);
+        .def_rw("math_fidelity", &ComputeKernelConfig::math_fidelity)
+        .def_rw("math_approx_mode", &ComputeKernelConfig::math_approx_mode)
+        .def_rw("fp32_dest_acc_en", &ComputeKernelConfig::fp32_dest_acc_en)
+        .def_rw("packer_l1_acc", &ComputeKernelConfig::packer_l1_acc)
+        .def_rw("dst_full_sync_en", &ComputeKernelConfig::dst_full_sync_en)
+        .def_rw("throttle_level", &ComputeKernelConfig::throttle_level);
 }
 
 void py_module(nb::module_& mod) {
@@ -196,16 +187,31 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::to_dtype,
         R"doc(
-            Converts a tensor to the desired dtype
+        Converts a host tensor to the desired dtype.
 
+        Args:
+            tensor (ttnn.Tensor): the tensor to be converted to the desired dtype.
+            dtype (ttnn.DataType): the desired data type.
 
-            Args:
-                * :attr:`tensor`: the ttnn.Tensor
-                * :attr:`dtype`: `ttnn` data type.
+        Note:
+            This operations supports tensors according to the following data types and layout:
 
-            Example:
-                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
-                >>> tensor = ttnn.to_dtype(tensor, dtype=ttnn.uint16)
+            .. list-table:: tensor
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - TILE
+                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Height, Width, Block, and ND Sharded: DRAM and L1
+
+            Limitations:
+                -  tensor must be on the host.
         )doc",
         ttnn::nanobind_arguments_t{nb::arg("tensor"), nb::arg("dtype")});
 
@@ -270,7 +276,35 @@ void py_module(nb::module_& mod) {
         },
         nb::arg("host_tensor"),
         nb::arg("device_tensor"),
-        nb::arg("cq_id") = nb::none());
+        nb::arg("cq_id") = nb::none(),
+        R"doc(
+        Copies a tensor from host to device.
+
+        Args:
+            host_tensor (ttnn.Tensor): the tensor to be copied from host to device.
+            device_tensor (ttnn.Tensor): the tensor to be copied to.
+            cq_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
+
+        Note:
+            This operations supports tensors according to the following data types and layout:
+
+            .. list-table:: host/device tensor
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - TILE
+                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Height, Width, Block, and ND Sharded: DRAM and L1
+
+            Limitations:
+                -  Host and Device tensors must be the same shape, have the same datatype, and have the same data layout (ROW_MAJOR or TILE).
+        )doc");
 
     mod.def(
         "copy_device_to_host_tensor",
@@ -283,7 +317,36 @@ void py_module(nb::module_& mod) {
         nb::arg("device_tensor"),
         nb::arg("host_tensor"),
         nb::arg("blocking") = true,
-        nb::arg("cq_id") = nb::none());
+        nb::arg("cq_id") = nb::none(),
+        R"doc(
+        Copies a tensor from device to host.
+
+        Args:
+            device_tensor (ttnn.Tensor): the tensor to be copied from device to host.
+            host_tensor (ttnn.Tensor): the tensor to be copied to.
+            blocking (bool, optional): whether the operation should be blocked until the copy is complete. Defaults to `True`.
+            cq_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
+
+        Note:
+            This operations supports tensors according to the following data types and layout:
+
+            .. list-table:: device/host tensor
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - TILE
+                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Height, Width, Block, and ND Sharded: DRAM and L1
+
+            Limitations:
+                -  Host and Device tensors must be the same shape, have the same datatype, and have the same data layout (ROW_MAJOR or TILE).
+        )doc");
 
     bind_registered_operation(
         mod,

@@ -344,8 +344,13 @@ def format_sampling_params(sampling_params, max_batch_size):
         else:
             sampling_params.temperature[i] = 1 / temp
 
+        # `top_k` contract: TT sampling supports up to 32 today.
+        # - k < 1 means "no restriction" so set it to max (32)
+        # - k > 32 is re-mapped to 32 until we support it
         if sampling_params.top_k[i] < 1:
-            sampling_params.top_k[i] = 32  # k<1 means no restriction so set it to max k (32)
+            sampling_params.top_k[i] = 32
+        if sampling_params.top_k[i] > 32:
+            sampling_params.top_k[i] = 32
 
         if sampling_params.repetition_penalty[i] == 0:
             sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]

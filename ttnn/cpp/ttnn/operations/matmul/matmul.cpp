@@ -272,7 +272,7 @@ static ttnn::Tensor bound_matmul(
     return output_tensor;
 }
 
-Tensor MatmulOperation::invoke(
+Tensor matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const bool transpose_a,
@@ -321,7 +321,7 @@ Tensor MatmulOperation::invoke(
         optional_output_tensor);
 }
 
-Tensor LinearOperation::invoke(
+Tensor linear(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
@@ -362,7 +362,7 @@ Tensor LinearOperation::invoke(
     return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 
-std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
+std::vector<Tensor> matmul_batched_weights(
     const Tensor& input_tensor_a,
     const std::vector<Tensor>& input_tensors_b,
     const bool transpose_a,
@@ -413,7 +413,7 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
         ttnn::prim::create_matmul_attributes(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}));
 }
 
-void AddmmOperation::validate(
+void addmm_validate(
     const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta) {
     TT_FATAL(alpha != 0.0, "alpha parameter cannot be 0");
 
@@ -443,7 +443,7 @@ void AddmmOperation::validate(
         "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported for mat2_tensor");
 }
 
-Tensor AddmmOperation::invoke(
+Tensor addmm(
     const Tensor& input_tensor,
     const Tensor& mat1_tensor,
     const Tensor& mat2_tensor,
@@ -463,7 +463,7 @@ Tensor AddmmOperation::invoke(
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
-    validate(input_tensor, mat1_tensor, mat2_tensor, alpha, beta);
+    addmm_validate(input_tensor, mat1_tensor, mat2_tensor, alpha, beta);
 
     auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
@@ -494,16 +494,16 @@ Tensor AddmmOperation::invoke(
     return out_tensor;
 }
 
-Tensor SparseMatmulOperation::invoke(
+Tensor sparse_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
+    const MatmulProgramConfig& program_config,
     const std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
     bool is_input_b_sparse,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
-    const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,

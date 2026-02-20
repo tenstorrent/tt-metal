@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
     [
         (
             7168,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
@@ -31,23 +31,23 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
             ),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # q_a_proj input + kv_a_proj input, 96 cores + 18 cores (120 cores total)
         (
             1536,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # q_b_proj input, 96 cores (120 cores total)
         (
             8192,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
@@ -56,17 +56,17 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
             ),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # o_proj input (TP 2), 112 cores (120 cores total)
         (
             1536,
-            ttnn.CoreCoord(11, 9),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))}),
+            ttnn.CoreCoord(12, 9),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 9))}),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # loopback test for testing, not used in model
@@ -76,9 +76,28 @@ def test_mcast(device, width, mcast_core, mcast_receivers, mcast_grid, noc):
     """Test TTNN mcast operation from single core to multiple cores"""
     # Truncate number of columns to 11 for P100 for testing
     if mcast_core.x >= device.compute_with_storage_grid_size().x:
+        logger.warning(
+            f"Truncating mcast_core.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
+        )
         mcast_core = ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, mcast_core.y)
+    if mcast_grid.end.x >= device.compute_with_storage_grid_size().x:
+        logger.warning(
+            f"Truncating mcast_grid.end.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
+        )
         mcast_grid = ttnn.CoreRange(
             mcast_grid.start, ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, mcast_grid.end.y)
+        )
+        mcast_receivers = ttnn.CoreRangeSet(
+            {
+                (
+                    cr
+                    if cr.end.x < device.compute_with_storage_grid_size().x
+                    else ttnn.CoreRange(
+                        cr.start, ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, cr.end.y)
+                    )
+                )
+                for cr in mcast_receivers.ranges()
+            }
         )
 
     # Tensor dimensions

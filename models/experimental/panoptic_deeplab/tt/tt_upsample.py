@@ -25,9 +25,13 @@ class BilinearUpsampleTorch(LightweightModule):
         self.H_out = self.H * self.scale
         self.W_out = self.W * self.scale
 
-        # Pre-compute interpolation coordinates
-        row_coords = torch.linspace(0, self.H - 1, self.H_out)
-        col_coords = torch.linspace(0, self.W - 1, self.W_out)
+        # Pre-compute interpolation coordinates (align_corners=False behavior to match PyTorch F.interpolate)
+        # For align_corners=False: coord = (idx + 0.5) * in_size / out_size - 0.5
+        row_coords = (torch.arange(self.H_out).float() + 0.5) * self.H / self.H_out - 0.5
+        col_coords = (torch.arange(self.W_out).float() + 0.5) * self.W / self.W_out - 0.5
+        # Clamp to valid range [0, size-1] for interpolation
+        row_coords = torch.clamp(row_coords, 0, self.H - 1)
+        col_coords = torch.clamp(col_coords, 0, self.W - 1)
 
         # Pre-compute interpolation matrices
         self.Mh = self._interp_matrix(row_coords, self.H)
@@ -118,9 +122,13 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
         self.H_out = self.H * self.scale
         self.W_out = self.W * self.scale
 
-        # Pre-compute interpolation coordinates (align_corners=True behavior)
-        row_coords = torch.linspace(0, self.H - 1, self.H_out)
-        col_coords = torch.linspace(0, self.W - 1, self.W_out)
+        # Pre-compute interpolation coordinates (align_corners=False behavior to match PyTorch F.interpolate)
+        # For align_corners=False: coord = (idx + 0.5) * in_size / out_size - 0.5
+        row_coords = (torch.arange(self.H_out).float() + 0.5) * self.H / self.H_out - 0.5
+        col_coords = (torch.arange(self.W_out).float() + 0.5) * self.W / self.W_out - 0.5
+        # Clamp to valid range [0, size-1] for interpolation
+        row_coords = torch.clamp(row_coords, 0, self.H - 1)
+        col_coords = torch.clamp(col_coords, 0, self.W - 1)
 
         # Pre-compute interpolation matrices
         Mh = self._interp_matrix(row_coords, self.H)

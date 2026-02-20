@@ -50,10 +50,9 @@ def _process_prefill_chunk(
     program_config: ProgramConfig,
     ep,
     tp,
-    batch_size,
-    seq_len,
 ):
     """Process a single chunk of the sequence in prefill mode."""
+    _, batch_size, seq_len, hidden_size = hidden_states.shape
     activation_dtype = ttnn.bfloat8_b
     TILE_SIZE = 32
 
@@ -231,9 +230,6 @@ def prefill_forward(
     # Reshard for sequence parallelism if needed
     if sp > 1:
         hidden_states, routing_weights = _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device)
-        local_seq_len = hidden_states.shape[seq_dim]
-    else:
-        local_seq_len = seq_len_global
 
     # Chunk processing for very long sequences
     chunk_size = program_config.sequence_chunk_size
@@ -258,8 +254,6 @@ def prefill_forward(
             program_config,
             ep,
             tp,
-            batch_size,
-            local_seq_len,
         )
         next_states_list.append(next_states)
         hidden_chunk.deallocate(True)

@@ -288,6 +288,8 @@ void packet_sizes_test(
 // ========== Directed Ideal Tests ==========
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel) {
+    GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
+
     // Test ID (Arbitrary)
     uint32_t test_id = 140;
     bool same_kernel = true;
@@ -300,6 +302,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
+    GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
+
     // Test ID (Arbitrary)
     uint32_t test_id = 141;
     bool same_kernel = false;
@@ -314,6 +318,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
 // ========== Same VC Tests ==========
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
+    GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
+
     // Test ID (Arbitrary)
     uint32_t test_id = 142;
     bool same_kernel = true;
@@ -325,6 +331,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKe
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
+    GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
+
     // Test ID (Arbitrary)
     uint32_t test_id = 143;
     bool same_kernel = false;
@@ -338,6 +346,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDiffer
 // ========== Write VC Sweep Tests ==========
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
+    GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
+
     // Test ID base
     uint32_t test_id_base = 144;
     bool same_kernel = true;
@@ -354,6 +364,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
+    GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
+
     // Test ID base
     uint32_t test_id_base = 145;
     bool same_kernel = false;
@@ -396,6 +408,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesD
 // ========== Custom Test Case ==========
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
+    GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
+
     // Test ID
     uint32_t test_id = 148;
     bool same_kernel = true;

@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Define all compile-time arguments at the beginning
     constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(1);
@@ -58,4 +57,3 @@ void MAIN {
     cb_pop_front(fabric_receiver_cb_id, total_pages);
     cb_push_back(accumulator_cb_id, num_pages_per_packet);
 }
-}  // namespace NAMESPACE

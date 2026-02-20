@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
+#include "ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
 #define PRINT_AND_PROFILE 0

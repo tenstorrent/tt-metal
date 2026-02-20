@@ -36,6 +36,20 @@ private:
     spdlog::level::level_enum saved_level_;
 };
 
+// Helper to invoke an operation with arguments, allowing implicit conversions.
+// This differs from std::apply by not using perfect forwarding, which enables
+// implicit conversions (e.g., T -> std::optional<T>).
+template <typename Op, typename Tuple, std::size_t... Is>
+auto invoke_op_impl(Op&& op, Tuple& args, std::index_sequence<Is...>) {
+    return std::forward<Op>(op)(std::get<Is>(args)...);
+}
+
+template <typename Op, typename Tuple>
+auto invoke_op(Op&& op, Tuple& args) {
+    return invoke_op_impl(
+        std::forward<Op>(op), args, std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>{});
+}
+
 // These overloaded extract_output_tensor functions abstract the return type of an arbitrary op from the rest of the
 // constraints query function. An overload resolution failure means the return type for the op in that query is not yet
 // supported and a new overload should be added
@@ -125,7 +139,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         // inner graph capture is to capture the actual op graph trace
         try {
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
-            outputs = detail::extract_output_tensors(std::apply(op, transformed_args));
+            outputs = detail::extract_output_tensors(detail::invoke_op(op, transformed_args));
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());

@@ -59,9 +59,10 @@ class MLP:
                 state_dict=experts_state_dict,
                 weight_dtype=ttnn.bfloat4_b,
                 dispatch_cluster_axis=0,
-                # decode_memory_config=ttnn.L1_MEMORY_CONFIG,
-                decode_memory_config=ttnn.DRAM_MEMORY_CONFIG,  ## Change this back to L1 when test runs
+                decode_memory_config=ttnn.L1_MEMORY_CONFIG,  # L1 for better decode throughput
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
             )
         else:
             # Create expert config from HF config

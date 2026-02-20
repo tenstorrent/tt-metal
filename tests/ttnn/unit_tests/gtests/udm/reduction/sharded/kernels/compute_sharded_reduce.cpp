@@ -6,8 +6,8 @@
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 #define FLOAT32_REDUCTION true
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/reduce.h"
+#include "api/compute/eltwise_binary.h"
 
 /**
  * @brief Compute kernel for distributed SUM reduction
@@ -18,8 +18,7 @@
  *
  * @note Based on LayerNorm compute kernel but simplified for SUM reduction only
  */
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // ============================================================================
     // Compile-time arguments
     // ============================================================================
@@ -116,5 +115,3 @@ void MAIN {
     // Dataflow kernel (sender) will gather all cores' reduced results
     // directly to cb_out, so compute kernel is done after Phase 2.
 }
-
-}  // namespace NAMESPACE

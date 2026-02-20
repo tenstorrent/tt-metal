@@ -1,7 +1,7 @@
 add_library(ttnn_op_moreh ${LIB_TYPE})
 add_library(TTNN::Ops::Moreh ALIAS ttnn_op_moreh)
 
-target_precompile_headers(ttnn_op_moreh REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_moreh REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_moreh)
 set_target_properties(
     ttnn_op_moreh
@@ -13,13 +13,45 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    moreh_abs_pow/device/kernels/*
+    moreh_adam/device/kernels/*
+    moreh_adamw/device/kernels/*
+    moreh_arange/device/kernels/*
+    moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/*
+    moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/*
+    moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/*
     moreh_dot/device/kernels/*
+    moreh_dot_backward/device/kernels/*
+    moreh_fold/device/kernels/*
     moreh_getitem/device/moreh_getitem_kernels/*
     moreh_getitem/device/moreh_getitem_tilized_kernels/*
+    moreh_group_norm/device/kernels/*
     moreh_group_norm_backward/device/gamma_beta_grad/kernels/*
     moreh_group_norm_backward/device/input_grad/kernels/*
-    moreh_group_norm/device/kernels/*
+    moreh_layer_norm/device/kernels/*
+    moreh_layer_norm_backward/device/kernels/*
+    moreh_linear_backward/device/kernels/*
     moreh_matmul/device/kernels/*
+    moreh_mean/device/kernels/*
+    moreh_mean_backward/device/kernels/*
+    moreh_nll_loss/moreh_nll_loss_step1/device/kernels/*
+    moreh_nll_loss/moreh_nll_loss_step2/device/kernels/*
+    moreh_nll_loss_backward/device/kernels/*
+    moreh_nll_loss_unreduced_backward/device/kernels/*
+    moreh_norm/device/moreh_norm_h/kernels/*
+    moreh_norm/device/moreh_norm_other/kernels/*
+    moreh_norm/device/moreh_norm_w/kernels/*
+    moreh_norm/device/ord_other/moreh_norm_h/kernels/*
+    moreh_norm/device/ord_other/moreh_norm_nc/kernels/*
+    moreh_norm/device/ord_other/moreh_norm_w/kernels/*
+    moreh_norm_backward/device/kernels/*
+    moreh_sgd/device/kernels/*
+    moreh_softmax/device/kernels/*
+    moreh_softmax_backward/device/kernels/*
+    moreh_sum/device/moreh_sum_h_impl_kernels/*
+    moreh_sum/device/moreh_sum_nc_impl_kernels/*
+    moreh_sum/device/moreh_sum_w_impl_kernels/*
+    moreh_sum_backward/device/kernels/*
 )
 target_sources(
     ttnn_op_moreh
@@ -50,9 +82,138 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             ${kernels}
-            moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
-            moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
-            moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
+            # moreh common
+            moreh_helper_functions.hpp
+            moreh_nanobind.hpp
+            # moreh_abs_pow/
+            moreh_abs_pow/moreh_abs_pow.hpp
+            moreh_abs_pow/moreh_abs_pow_nanobind.hpp
+            moreh_abs_pow/device/moreh_abs_pow_device_operation.hpp
+            # moreh_adam/
+            moreh_adam/moreh_adam.hpp
+            moreh_adam/moreh_adam_nanobind.hpp
+            moreh_adam/device/moreh_adam_device_operation.hpp
+            # moreh_adamw/
+            moreh_adamw/moreh_adamw.hpp
+            moreh_adamw/moreh_adamw_nanobind.hpp
+            moreh_adamw/device/moreh_adamw_device_operation.hpp
+            # moreh_arange/
+            moreh_arange/moreh_arange.hpp
+            moreh_arange/moreh_arange_nanobind.hpp
+            moreh_arange/device/moreh_arange_device_operation.hpp
+            # moreh_bmm/
+            moreh_bmm/moreh_bmm.hpp
+            moreh_bmm/moreh_bmm_nanobind.hpp
+            # moreh_bmm_backward/
+            moreh_bmm_backward/moreh_bmm_backward.hpp
+            moreh_bmm_backward/moreh_bmm_backward_nanobind.hpp
+            # moreh_clip_grad_norm/
+            moreh_clip_grad_norm/moreh_clip_grad_norm.hpp
+            moreh_clip_grad_norm/moreh_clip_grad_norm_nanobind.hpp
+            moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp
+            moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp
+            moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp
+            # moreh_cumsum/
+            moreh_cumsum/moreh_cumsum.hpp
+            moreh_cumsum/moreh_cumsum_nanobind.hpp
+            # moreh_dot/
+            moreh_dot/moreh_dot.hpp
+            moreh_dot/moreh_dot_nanobind.hpp
+            moreh_dot/device/moreh_dot_device_operation.hpp
+            # moreh_dot_backward/
+            moreh_dot_backward/moreh_dot_backward.hpp
+            moreh_dot_backward/moreh_dot_backward_nanobind.hpp
+            moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp
+            # moreh_fold/
+            moreh_fold/fold.hpp
+            moreh_fold/fold_nanobind.hpp
+            moreh_fold/device/fold_device_operation.hpp
+            # moreh_getitem/
+            moreh_getitem/moreh_getitem.hpp
+            moreh_getitem/moreh_getitem_nanobind.hpp
+            moreh_getitem/device/moreh_getitem_device_operation.hpp
+            # moreh_group_norm/
+            moreh_group_norm/moreh_group_norm.hpp
+            moreh_group_norm/moreh_group_norm_nanobind.hpp
+            moreh_group_norm/device/moreh_group_norm_device_operation.hpp
+            # moreh_group_norm_backward/
+            moreh_group_norm_backward/moreh_group_norm_backward.hpp
+            moreh_group_norm_backward/moreh_group_norm_backward_nanobind.hpp
+            moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp
+            moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp
+            # moreh_layer_norm/
+            moreh_layer_norm/moreh_layer_norm.hpp
+            moreh_layer_norm/moreh_layer_norm_nanobind.hpp
+            moreh_layer_norm/device/moreh_layer_norm_device_operation.hpp
+            # moreh_layer_norm_backward/
+            moreh_layer_norm_backward/moreh_layer_norm_backward.hpp
+            moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.hpp
+            moreh_layer_norm_backward/device/moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp
+            moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_device_operation.hpp
+            # moreh_linear/
+            moreh_linear/moreh_linear.hpp
+            moreh_linear/moreh_linear_nanobind.hpp
+            # moreh_linear_backward/
+            moreh_linear_backward/moreh_linear_backward.hpp
+            moreh_linear_backward/moreh_linear_backward_nanobind.hpp
+            moreh_linear_backward/device/moreh_linear_backward_device_operation.hpp
+            # moreh_matmul/
+            moreh_matmul/moreh_matmul.hpp
+            moreh_matmul/moreh_matmul_nanobind.hpp
+            moreh_matmul/device/moreh_matmul_device_operation.hpp
+            # moreh_matmul_backward/
+            moreh_matmul_backward/moreh_matmul_backward.hpp
+            moreh_matmul_backward/moreh_matmul_backward_nanobind.hpp
+            # moreh_mean/
+            moreh_mean/moreh_mean.hpp
+            moreh_mean/moreh_mean_nanobind.hpp
+            moreh_mean/device/moreh_mean_device_operation.hpp
+            # moreh_mean_backward/
+            moreh_mean_backward/moreh_mean_backward.hpp
+            moreh_mean_backward/moreh_mean_backward_nanobind.hpp
+            moreh_mean_backward/device/moreh_mean_backward_device_operation.hpp
+            # moreh_nll_loss/
+            moreh_nll_loss/moreh_nll_loss.hpp
+            moreh_nll_loss/moreh_nll_loss_nanobind.hpp
+            moreh_nll_loss/moreh_nll_loss_helper.hpp
+            moreh_nll_loss/moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp
+            moreh_nll_loss/moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp
+            # moreh_nll_loss_backward/
+            moreh_nll_loss_backward/moreh_nll_loss_backward.hpp
+            moreh_nll_loss_backward/moreh_nll_loss_backward_nanobind.hpp
+            moreh_nll_loss_backward/device/moreh_nll_loss_backward_device_operation.hpp
+            # moreh_nll_loss_unreduced_backward/
+            moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward.hpp
+            moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_nanobind.hpp
+            moreh_nll_loss_unreduced_backward/device/moreh_nll_loss_unreduced_backward_device_operation.hpp
+            # moreh_norm/
+            moreh_norm/moreh_norm.hpp
+            moreh_norm/moreh_norm_nanobind.hpp
+            moreh_norm/device/moreh_norm_device_operation.hpp
+            # moreh_norm_backward/
+            moreh_norm_backward/moreh_norm_backward.hpp
+            moreh_norm_backward/moreh_norm_backward_nanobind.hpp
+            moreh_norm_backward/device/moreh_norm_backward_device_operation.hpp
+            # moreh_sgd/
+            moreh_sgd/moreh_sgd.hpp
+            moreh_sgd/moreh_sgd_nanobind.hpp
+            moreh_sgd/device/moreh_sgd_device_operation.hpp
+            # moreh_softmax/
+            moreh_softmax/moreh_softmax.hpp
+            moreh_softmax/moreh_softmax_nanobind.hpp
+            moreh_softmax/device/moreh_softmax_device_operation.hpp
+            # moreh_softmax_backward/
+            moreh_softmax_backward/moreh_softmax_backward.hpp
+            moreh_softmax_backward/moreh_softmax_backward_nanobind.hpp
+            moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
+            # moreh_sum/
+            moreh_sum/moreh_sum.hpp
+            moreh_sum/moreh_sum_nanobind.hpp
+            moreh_sum/device/moreh_sum_device_operation.hpp
+            # moreh_sum_backward/
+            moreh_sum_backward/moreh_sum_backward.hpp
+            moreh_sum_backward/moreh_sum_backward_nanobind.hpp
+            moreh_sum_backward/device/moreh_sum_backward_device_operation.hpp
     PRIVATE
         moreh_abs_pow/device/moreh_abs_pow_device_operation.cpp
         moreh_abs_pow/device/moreh_abs_pow_program_factory.cpp

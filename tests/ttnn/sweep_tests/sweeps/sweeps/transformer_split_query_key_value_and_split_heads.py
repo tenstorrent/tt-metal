@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.common.utility_functions import is_wormhole_b0, is_grayskull
+from models.common.utility_functions import is_wormhole_b0
 
 # use combinations of batch_size/core height and q_heads/kv_heads/core width to keep permutations under control
 # some failures are known (e.g. batch_size > cores_h, seq_q > seq_kv, num_kv_heads != num_q_heads when transpose = true) though they shouldn't be failures
@@ -60,10 +60,6 @@ def skip(
     if is_wormhole_b0():
         if cores_h > 7 or cores_w > 8:
             return True, "Wormhole B0 does not support more than 7 cores in height and 8 cores in width"
-
-    if is_grayskull():
-        if input_dtype == ttnn.float32:
-            return True, "Grayskull does not support FP32 data type"
 
     if input_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
         if batch_size % cores_h != 0:

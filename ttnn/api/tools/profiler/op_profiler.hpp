@@ -412,6 +412,10 @@ inline json get_base_json(
 
     auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
     std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
+    if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
+        opName = device_operation_t::get_type_name(operation_attributes);
+    }
+
     std::replace(opName.begin(), opName.end(), ',', ';');
     j["op_code"] = opName;
 
