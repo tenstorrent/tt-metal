@@ -181,7 +181,241 @@ Pipeline parallelism (layers split across devices) and further tensor parallelis
 
 ---
 
-## 11. Future Work / Open Points
+## 11. Serialization and Deserialization
+
+### 11.1 Motivation
+
+`prepare_weights` is expensive: it transposes, splits, fuses, and shards every layer through blitz. For production we want to run it **once offline** and serialize the result so that at model runtime we can load pre-prepared weights directly onto the device(s) without re-doing the fusion. The runtime path should be: **load manifest → load fused tensors → reconstruct `DeepSeekV3Weights` → run model**.
+
+### 11.2 Serialization primitives
+
+- **`ttnn.dump_tensor(file_name, tensor)`** — saves a `ttnn.Tensor` to `.tensorbin` (FlatBuffer metadata + binary data). Works for host and device tensors.
+- **`ttnn.load_tensor(file_name, device=device)`** — loads a `.tensorbin` and optionally places on device/mesh.
+
+### 11.3 Key insight: fused tensors are shared
+
+Each fusion group (q_ab+kv_a, o_proj+gate_mm+norms, kv_b12, gate_up) produces **one fused `ttnn.Tensor`** in L1 that multiple `OverlappedTensor` views reference via `byte_offset`. For example, q_a_proj, q_b_proj, and kv_a_proj all point to the same fused buffer with different `byte_offset`, `tensor_shape`, `shard_shape`, etc.
+
+So we serialize **one `.tensorbin` per fusion group per layer**, not one per OverlappedTensor field. For 61 layers this gives:
+
+| Layer type | Fusion groups | Files per layer |
+|-----------|---------------|-----------------|
+| Dense (0–2) | q_ab_kv_a, o_proj_gate_mm_norms, kv_b12 | 3 |
+| MoE (3–60) | q_ab_kv_a, o_proj_gate_mm_norms, kv_b12, gate_up | 4 |
+
+Total: 3×3 + 58×4 = **241 `.tensorbin` files** + 241 sidecar `.json` files.
+
+### 11.4 Directory layout
+
+There is **no top-level manifest**. Each layer directory is fully independent and can be prepared, regenerated, or loaded in isolation. Each layer has a `manifest.json` with layer-level metadata and all fusion group field metadata, plus one `.tensorbin` per fusion group.
+
+```
+<weights_dir>/
+  layer_000/                            # dense layer — independently loadable
+    manifest.json                       # layer metadata + all field metadata
+    q_ab_kv_a.tensorbin
+    o_proj_gate_mm_norms.tensorbin
+    kv_b12.tensorbin
+  layer_001/
+    manifest.json
+    ...
+  layer_003/                            # MoE layer
+    manifest.json
+    q_ab_kv_a.tensorbin
+    o_proj_gate_mm_norms.tensorbin
+    kv_b12.tensorbin
+    gate_up.tensorbin                   # MoE only
+  ...
+  layer_060/
+    manifest.json
+    ...
+```
+
+**Why no top-level manifest:**
+- Each layer is fully independent — can be regenerated without touching other layers.
+- Parallel writes: different processes prepare different layers with no coordination.
+- Per-layer loading: pipeline parallelism loads only its layers by directory name.
+- No single point of failure; adding or replacing a layer is just replacing its directory.
+
+### 11.5 Per-layer manifest (`layer_NNN/manifest.json`)
+
+Each layer's manifest contains both global metadata (for validation and self-description) and all fusion group field metadata (for reconstructing OverlappedTensors).
+
+```json
+{
+  "version": 1,
+  "created_time": "2026-02-20T15:30:00Z",
+  "hf_model_name": "deepseek-ai/DeepSeek-V3",
+  "hf_state_dict_name": "model-00001-of-000XX.safetensors",
+  "device_mesh_shape": [4, 2],
+  "layer_idx": 0,
+  "layer_type": "dense",
+  "fusion_groups": {
+    "q_ab_kv_a": {
+      "tensorbin": "q_ab_kv_a.tensorbin",
+      "fields": {
+        "q_a_proj": {
+          "tensor_shape": [7168, 1536],
+          "shard_shape": [7168, 16],
+          "core_range_set": [[[0, 0], [11, 7]]],
+          "dtype": "BFLOAT8_B",
+          "tile_shape": [32, 32],
+          "byte_offset": 0
+        },
+        "q_b_proj": {
+          "tensor_shape": [1536, 24576],
+          "shard_shape": [1536, 256],
+          "core_range_set": [[[0, 0], [11, 7]]],
+          "dtype": "BFLOAT8_B",
+          "tile_shape": [32, 32],
+          "byte_offset": 57344
+        },
+        "kv_a_proj": {
+          "tensor_shape": [7168, 576],
+          "shard_shape": [7168, 72],
+          "core_range_set": [[[0, 0], [0, 7]]],
+          "dtype": "BFLOAT8_B",
+          "tile_shape": [32, 32],
+          "byte_offset": 0
+        }
+      }
+    },
+    "o_proj_gate_mm_norms": {
+      "tensorbin": "o_proj_gate_mm_norms.tensorbin",
+      "fields": {
+        "o_proj": { "..." : "..." },
+        "gate_mm": { "..." : "..." },
+        "attn_norm": { "..." : "..." },
+        "q_norm": { "..." : "..." },
+        "kv_norm": { "..." : "..." },
+        "ffn_norm": { "..." : "..." }
+      }
+    },
+    "kv_b12": {
+      "tensorbin": "kv_b12.tensorbin",
+      "fields": {
+        "kv_b1_proj": { "..." : "..." },
+        "kv_b2_proj": { "..." : "..." }
+      }
+    }
+  }
+}
+```
+
+MoE layers include an additional `"gate_up"` fusion group with `shared_gate_proj` and `shared_up_proj`.
+
+**Manifest fields:**
+
+| Field | Purpose |
+|-------|---------|
+| `version` | Schema version for forward compatibility. |
+| `created_time` | ISO-8601 timestamp of when this layer was prepared. |
+| `hf_model_name` | HF model identifier (e.g. `deepseek-ai/DeepSeek-V3`). |
+| `hf_state_dict_name` | Name/pattern of the HF checkpoint files used as input. |
+| `device_mesh_shape` | Mesh shape weights were prepared for (e.g. `[4, 2]`). |
+| `layer_idx` | Layer index in the model. |
+| `layer_type` | `"dense"` or `"moe"`. |
+| Per-field: `tensor_shape`, `shard_shape`, `core_range_set`, `dtype`, `tile_shape`, `byte_offset` | Everything needed to reconstruct an `OverlappedTensor` from its fused tensor. |
+
+### 11.6 API
+
+**Per-layer (primary):** Serialization is defined per layer. Use these for single-layer save/load, incremental or parallel preparation, and replacing one layer.
+
+```python
+def save_layer(
+    layer: DeepSeekV3LayerWeights,
+    path: str | Path,
+    layer_idx: int,
+    *,
+    hf_model_name: str,
+    hf_state_dict_name: str,
+    device_mesh_shape: tuple[int, int] = (1, 1),
+) -> None:
+    """Serialize one layer to <path>/layer_{layer_idx:03d}/."""
+
+def load_layer(
+    path: str | Path,
+    device,
+    layer_idx: int,
+) -> DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights:
+    """Deserialize one layer from <path>/layer_{layer_idx:03d}/."""
+```
+
+**Full-model (convenience):** Thin wrappers for “save/load all layers”.
+
+```python
+def save_weights(weights, path, *, hf_model_name, hf_state_dict_name, device_mesh_shape=(1,1)) -> None:
+    """Loop over weights.layers and call save_layer for each."""
+
+def load_weights(path, device, num_layers: int = 61) -> DeepSeekV3Weights:
+    """Load layer_000/ .. layer_{num_layers-1}/ via load_layer; return DeepSeekV3Weights(layers=...)."""
+```
+
+Layer type (dense vs MoE) comes from each layer’s manifest; `load_weights` does not take `first_k_dense_replace`.
+
+### 11.7 Serialization algorithm (`save_layer`)
+
+1. Create `path` and `path/layer_{layer_idx:03d}/`.
+2. Collect all `OverlappedTensor` fields from the layer; group by `id(field.fused_tensor)`.
+3. For each unique fused tensor: determine group name, call `ttnn.dump_tensor(layer_dir / f"{group_name}.tensorbin", fused_tensor)`, record per-field metadata.
+4. Write `layer_dir / manifest.json` with layer metadata + all fusion group field metadata.
+
+`save_weights` is a loop: `for i, layer in enumerate(weights.layers): save_layer(layer, path, i, ...)`.
+
+### 11.8 Deserialization algorithm (`load_layer`)
+
+1. Read `{path}/layer_{layer_idx:03d}/manifest.json`. Validate version.
+2. For each fusion group: load fused tensor with `ttnn.load_tensor(..., device=device)`, reconstruct each field’s `OverlappedTensor` from metadata.
+3. Build and return one `DeepSeekV3DenseLayerWeights` or `DeepSeekV3MoELayerWeights` (from manifest `layer_type`).
+
+`load_weights` is: `layers = [load_layer(path, device, i) for i in range(num_layers)]`; return `DeepSeekV3Weights(layers=layers)`.
+
+### 11.9 core_range_set serialization
+
+`ttnn.CoreRangeSet` is serialized as a list of `[[start_x, start_y], [end_x, end_y]]` pairs. On deserialization, reconstruct via `ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(ex, ey)) for (sx, sy), (ex, ey) in ...])`.
+
+### 11.10 Compatibility and validation
+
+- **Mesh shape mismatch:** Each layer manifest contains `device_mesh_shape`. If it doesn't match the runtime device, the loader can raise an error.
+- **Version check:** Loader rejects manifests with `version` > supported.
+- **Independent regeneration:** To re-prepare a single layer, delete its `layer_NNN/` directory and call `save_layer(layer, path, idx, ...)` for that layer only.
+- **Per-layer loading:** Pipeline parallelism calls `load_layer(path, device, i)` only for its assigned layer indices.
+
+### 11.11 Testing
+
+**test_save_load_dense_layer_single_layer(device, tmp_path):**
+
+1. Build one dense layer with `prepare_weights` (synthetic state dict, per-device shapes).
+2. Call `save_layer(weights.layers[0], tmp_path, 0, hf_model_name=..., hf_state_dict_name=...)`.
+3. Verify on disk: `tmp_path/layer_000/manifest.json` and 3 `.tensorbin` files.
+4. Call `deallocate_weights(weights)` then `layer = load_layer(tmp_path, device, 0)`.
+5. Assert `isinstance(layer, DeepSeekV3DenseLayerWeights)` and that every OverlappedTensor field matches original (tensor_shape, shard_shape, dtype, tile_shape, byte_offset, core_range_set); same fusion group must share `id(fused_tensor)`.
+
+**test_save_load_moe_layer_single_layer(device, tmp_path):**
+
+Same pattern for one MoE layer: `save_layer` then `load_layer`; verify 4 tensorbins and `DeepSeekV3MoELayerWeights` with gate_mm, shared_gate_proj, shared_up_proj.
+
+Both tests use `tmp_path` and skip unless slow dispatch + grid >= 12×10 (MoE also requires ≥128 cores).
+
+### 11.12 End-to-end flow
+
+```
+[Offline / one-time]
+  HF checkpoint --> prepare_weights(state_dict, device) --> DeepSeekV3Weights
+                                                                  |
+                                                          save_weights(weights, path)
+                                                                  |
+                                                                  v
+                                              <weights_dir>/layer_NNN/manifest.json
+                                              <weights_dir>/layer_NNN/{group}.tensorbin
+
+[Runtime / every startup]
+  load_weights(path, device) --> DeepSeekV3Weights --> model forward pass
+```
+
+---
+
+## 12. Future Work / Open Points
 
 - **Integrate with DeepSeekV3:** Pass `DeepSeekV3Weights` into the model and wire OverlappedTensors to Pre-SDPA, Post-SDPA, MoE, shared expert ops.
 - **Real checkpoint test:** Implement `test_prepare_real_weights` with a real HF checkpoint; validate shapes and optionally numerical consistency.
@@ -190,8 +424,10 @@ Pipeline parallelism (layers split across devices) and further tensor parallelis
 
 ---
 
-## 12. Changelog
+## 13. Changelog
 
 - **Initial:** prepare_weights API, DeepSeekV3Weights / Dense / MoE types, state dict mapping, kv_b split, unit tests, placeholder for real weights.
 - **Multi-device / blitz sharding:** Documented flow: full HF tensors → prepare_weights (transform only) → blitz (shard to device/mesh). Removed TP expansion from prepare_weights; blitz does all sharding. Tests: single-device use per-device slice, 4×2 use full logical.
 - **Design doc refactor:** Cleaned stale “current blitz assumes” and “expand for TP” wording; centered doc on full HF → prepare_weights → blitz sharding; simplified §5 (one table for full logical, one for per-device after sharding), §6 (kv_b supports both 16384 and 32768), §8 (test descriptions), §9–§10 (sharding model and integration).
+
+- **Serialization / deserialization plan (§11):** Added design for `save_weights` / `load_weights`: one `.tensorbin` per fusion group per layer + `manifest.json` with OverlappedTensor metadata, enabling offline weight preparation and fast runtime loading.

@@ -8,15 +8,48 @@ Prepare DeepSeek V3 fused (blitz decode) weights from a state dict.
 Takes full HuggingFace state dict tensors (or per-device slice for single-device
 tests), applies key mapping, transpose, and kv_b split, then passes to
 BlitzDecodeWeights which fuses and shards onto the device or mesh.
+
+Supports save_weights / load_weights for offline preparation and runtime load.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, fields
+from datetime import datetime, timezone
+from pathlib import Path
 
 import torch
 
+import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+
+# Serialization: manifest version and dtype name mapping
+_MANIFEST_VERSION = 1
+_DTYPE_TO_STR = {
+    ttnn.DataType.BFLOAT4_B: "BFLOAT4_B",
+    ttnn.DataType.BFLOAT8_B: "BFLOAT8_B",
+    ttnn.DataType.UINT32: "UINT32",
+    ttnn.DataType.BFLOAT16: "BFLOAT16",
+}
+_STR_TO_DTYPE = {v: k for k, v in _DTYPE_TO_STR.items()}
+
+# Fusion group name per field (for grouping by fused_tensor)
+_FIELD_TO_FUSION_GROUP: dict[str, str] = {
+    "q_a_proj": "q_ab_kv_a",
+    "q_b_proj": "q_ab_kv_a",
+    "kv_a_proj": "q_ab_kv_a",
+    "o_proj": "o_proj_gate_mm_norms",
+    "gate_mm": "o_proj_gate_mm_norms",
+    "attn_norm": "o_proj_gate_mm_norms",
+    "q_norm": "o_proj_gate_mm_norms",
+    "kv_norm": "o_proj_gate_mm_norms",
+    "ffn_norm": "o_proj_gate_mm_norms",
+    "kv_b1_proj": "kv_b12",
+    "kv_b2_proj": "kv_b12",
+    "shared_gate_proj": "gate_up",
+    "shared_up_proj": "gate_up",
+}
 
 
 @dataclass
@@ -262,4 +295,276 @@ def prepare_weights(
         else:
             layers.append(prepare_dense_decoder_layer_weights(bdw, state_dict, i))
 
+    return DeepSeekV3Weights(layers=layers)
+
+
+def deallocate_weights(weights: DeepSeekV3Weights) -> None:
+    """Release device memory for all fused tensors in prepared weights.
+
+    Call this before loading a new set of weights onto the same device to avoid
+    OOM (the original and loaded weights would otherwise both reside on device).
+    """
+    seen: set[int] = set()
+    for layer in weights.layers:
+        for _name, ot in _layer_overlapped_tensor_fields(layer):
+            fid = id(ot.fused_tensor)
+            if fid not in seen:
+                seen.add(fid)
+                ttnn.deallocate(ot.fused_tensor, force=True)
+
+
+# ---------------------------------------------------------------------------
+# Serialization (save_weights / load_weights)
+# ---------------------------------------------------------------------------
+
+
+def _core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:
+    """Serialize CoreRangeSet to JSON-serializable list of [[sx, sy], [ex, ey]]."""
+    result = []
+    for r in crs.ranges():
+        start, end = r.start, r.end
+        result.append([[start.x, start.y], [end.x, end.y]])
+    return result
+
+
+def _core_range_set_from_list(lst: list[list[list[int]]]) -> ttnn.CoreRangeSet:
+    """Deserialize list of [[sx, sy], [ex, ey]] to CoreRangeSet."""
+    ranges = [
+        ttnn.CoreRange(
+            ttnn.CoreCoord(pair[0][0], pair[0][1]),
+            ttnn.CoreCoord(pair[1][0], pair[1][1]),
+        )
+        for pair in lst
+    ]
+    return ttnn.CoreRangeSet(ranges)
+
+
+def _overlapped_tensor_to_json(ot: OverlappedTensor) -> dict:
+    """Serialize one OverlappedTensor's metadata to a JSON-serializable dict."""
+    dtype_str = _DTYPE_TO_STR.get(ot.dtype)
+    if dtype_str is None:
+        dtype_str = str(ot.dtype)
+    return {
+        "tensor_shape": list(ot.tensor_shape),
+        "shard_shape": list(ot.shard_shape),
+        "core_range_set": _core_range_set_to_list(ot.core_range_set),
+        "dtype": dtype_str,
+        "tile_shape": list(ot.tile_shape),
+        "byte_offset": ot.byte_offset,
+    }
+
+
+def _overlapped_tensor_from_dict(
+    fused_tensor: ttnn.Tensor,
+    d: dict,
+) -> OverlappedTensor:
+    """Reconstruct one OverlappedTensor from loaded fused tensor and manifest dict."""
+    dtype = _STR_TO_DTYPE.get(d["dtype"])
+    if dtype is None:
+        raise ValueError(f"Unknown dtype in manifest: {d['dtype']}")
+    return OverlappedTensor(
+        fused_tensor=fused_tensor,
+        tensor_shape=tuple(d["tensor_shape"]),
+        shard_shape=tuple(d["shard_shape"]),
+        core_range_set=_core_range_set_from_list(d["core_range_set"]),
+        dtype=dtype,
+        tile_shape=tuple(d["tile_shape"]),
+        byte_offset=d["byte_offset"],
+    )
+
+
+def _layer_overlapped_tensor_fields(
+    layer: DeepSeekV3LayerWeights,
+) -> list[tuple[str, OverlappedTensor]]:
+    """Return (field_name, OverlappedTensor) for every OverlappedTensor field on the layer."""
+    out = []
+    for f in fields(layer):
+        val = getattr(layer, f.name)
+        if isinstance(val, OverlappedTensor):
+            out.append((f.name, val))
+    return out
+
+
+def save_layer(
+    layer: DeepSeekV3LayerWeights,
+    path: str | Path,
+    layer_idx: int,
+    *,
+    hf_model_name: str,
+    hf_state_dict_name: str,
+    device_mesh_shape: tuple[int, int] = (1, 1),
+) -> None:
+    """Serialize a single layer to <path>/layer_{layer_idx:03d}/.
+
+    Creates one directory with manifest.json and per-fusion-group .tensorbin files.
+    Caller must provide hf_model_name and hf_state_dict_name for the manifest.
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    layer_dir = path / f"layer_{layer_idx:03d}"
+    layer_dir.mkdir(parents=True, exist_ok=True)
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    fields_list = _layer_overlapped_tensor_fields(layer)
+    by_fused: dict[int, list[tuple[str, OverlappedTensor]]] = {}
+    for name, ot in fields_list:
+        fid = id(ot.fused_tensor)
+        if fid not in by_fused:
+            by_fused[fid] = []
+        by_fused[fid].append((name, ot))
+
+    fusion_groups: dict[str, dict] = {}
+    for fid, group_fields in by_fused.items():
+        group_name = _FIELD_TO_FUSION_GROUP.get(group_fields[0][0])
+        if group_name is None:
+            raise KeyError(f"Unknown field for fusion group: {group_fields[0][0]}")
+        tensorbin_name = f"{group_name}.tensorbin"
+        ttnn.dump_tensor(layer_dir / tensorbin_name, group_fields[0][1].fused_tensor)
+        fusion_groups[group_name] = {
+            "tensorbin": tensorbin_name,
+            "fields": {name: _overlapped_tensor_to_json(ot) for name, ot in group_fields},
+        }
+
+    is_moe = isinstance(layer, DeepSeekV3MoELayerWeights)
+    manifest = {
+        "version": _MANIFEST_VERSION,
+        "created_time": created,
+        "hf_model_name": hf_model_name,
+        "hf_state_dict_name": hf_state_dict_name,
+        "device_mesh_shape": list(device_mesh_shape),
+        "layer_idx": layer_idx,
+        "layer_type": "moe" if is_moe else "dense",
+        "fusion_groups": fusion_groups,
+    }
+    with open(layer_dir / "manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def load_layer(
+    path: str | Path,
+    device,
+    layer_idx: int,
+) -> DeepSeekV3LayerWeights:
+    """Deserialize a single layer from <path>/layer_{layer_idx:03d}/."""
+    path = Path(path)
+    layer_dir = path / f"layer_{layer_idx:03d}"
+    manifest_path = layer_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Missing manifest: {manifest_path}")
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    if manifest.get("version", 0) > _MANIFEST_VERSION:
+        raise ValueError(f"Unsupported manifest version: {manifest.get('version')}")
+
+    layer_type = manifest["layer_type"]
+    fusion_groups = manifest["fusion_groups"]
+
+    if layer_type == "dense":
+        q_ab = fusion_groups["q_ab_kv_a"]
+        fused_q = ttnn.load_tensor(layer_dir / q_ab["tensorbin"], device=device)
+        q_a_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["q_a_proj"])
+        q_b_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["q_b_proj"])
+        kv_a_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["kv_a_proj"])
+
+        o_grp = fusion_groups["o_proj_gate_mm_norms"]
+        fused_o = ttnn.load_tensor(layer_dir / o_grp["tensorbin"], device=device)
+        o_proj = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["o_proj"])
+        attn_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["attn_norm"])
+        q_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["q_norm"])
+        kv_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["kv_norm"])
+        ffn_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["ffn_norm"])
+
+        kv_grp = fusion_groups["kv_b12"]
+        fused_kv = ttnn.load_tensor(layer_dir / kv_grp["tensorbin"], device=device)
+        kv_b1_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b1_proj"])
+        kv_b2_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b2_proj"])
+
+        return DeepSeekV3DenseLayerWeights(
+            q_a_proj=q_a_proj,
+            q_b_proj=q_b_proj,
+            kv_a_proj=kv_a_proj,
+            o_proj=o_proj,
+            attn_norm=attn_norm,
+            q_norm=q_norm,
+            kv_norm=kv_norm,
+            ffn_norm=ffn_norm,
+            kv_b1_proj=kv_b1_proj,
+            kv_b2_proj=kv_b2_proj,
+        )
+    else:
+        q_ab = fusion_groups["q_ab_kv_a"]
+        fused_q = ttnn.load_tensor(layer_dir / q_ab["tensorbin"], device=device)
+        q_a_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["q_a_proj"])
+        q_b_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["q_b_proj"])
+        kv_a_proj = _overlapped_tensor_from_dict(fused_q, q_ab["fields"]["kv_a_proj"])
+
+        o_grp = fusion_groups["o_proj_gate_mm_norms"]
+        fused_o = ttnn.load_tensor(layer_dir / o_grp["tensorbin"], device=device)
+        o_proj = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["o_proj"])
+        gate_mm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["gate_mm"])
+        attn_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["attn_norm"])
+        q_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["q_norm"])
+        kv_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["kv_norm"])
+        ffn_norm = _overlapped_tensor_from_dict(fused_o, o_grp["fields"]["ffn_norm"])
+
+        kv_grp = fusion_groups["kv_b12"]
+        fused_kv = ttnn.load_tensor(layer_dir / kv_grp["tensorbin"], device=device)
+        kv_b1_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b1_proj"])
+        kv_b2_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b2_proj"])
+
+        gu_grp = fusion_groups["gate_up"]
+        fused_gu = ttnn.load_tensor(layer_dir / gu_grp["tensorbin"], device=device)
+        shared_gate_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_gate_proj"])
+        shared_up_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_up_proj"])
+
+        return DeepSeekV3MoELayerWeights(
+            q_a_proj=q_a_proj,
+            q_b_proj=q_b_proj,
+            kv_a_proj=kv_a_proj,
+            o_proj=o_proj,
+            gate_mm=gate_mm,
+            attn_norm=attn_norm,
+            q_norm=q_norm,
+            kv_norm=kv_norm,
+            ffn_norm=ffn_norm,
+            kv_b1_proj=kv_b1_proj,
+            kv_b2_proj=kv_b2_proj,
+            shared_gate_proj=shared_gate_proj,
+            shared_up_proj=shared_up_proj,
+        )
+
+
+def save_weights(
+    weights: DeepSeekV3Weights,
+    path: str | Path,
+    *,
+    hf_model_name: str,
+    hf_state_dict_name: str,
+    device_mesh_shape: tuple[int, int] = (1, 1),
+) -> None:
+    """Serialize all layers to disk. Convenience wrapper around save_layer."""
+    path = Path(path)
+    for layer_idx, layer in enumerate(weights.layers):
+        save_layer(
+            layer,
+            path,
+            layer_idx,
+            hf_model_name=hf_model_name,
+            hf_state_dict_name=hf_state_dict_name,
+            device_mesh_shape=device_mesh_shape,
+        )
+
+
+def load_weights(
+    path: str | Path,
+    device,
+    num_layers: int = 61,
+) -> DeepSeekV3Weights:
+    """Deserialize layers from disk. Convenience wrapper: load_layer for each index."""
+    path = Path(path)
+    if not path.is_dir():
+        raise FileNotFoundError(f"Weights path is not a directory: {path}")
+    layers = [load_layer(path, device, i) for i in range(num_layers)]
     return DeepSeekV3Weights(layers=layers)

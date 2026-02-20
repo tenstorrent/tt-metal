@@ -20,11 +20,31 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3MoELayerWeights,
+    deallocate_weights,
+    load_layer,
     prepare_weights,
+    save_layer,
 )
+
+
+def _core_range_set_to_tuples(crs):
+    """Normalize CoreRangeSet to comparable list of tuples for assertion."""
+    return sorted(((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in crs.ranges())
+
+
+def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -> None:
+    """Assert two OverlappedTensors have matching metadata (not fused_tensor identity)."""
+    assert a.tensor_shape == b.tensor_shape
+    assert a.shard_shape == b.shard_shape
+    assert a.dtype == b.dtype
+    assert a.tile_shape == b.tile_shape
+    assert a.byte_offset == b.byte_offset
+    assert _core_range_set_to_tuples(a.core_range_set) == _core_range_set_to_tuples(b.core_range_set)
+
 
 # HF state dict shapes (out_features, in_features) for linears; see DEEPSEEK_PREPARE_WEIGHTS_DESIGN_DOC.md §5.
 # Per-device = one shard for single-device; blitz expects these when device is single.
@@ -170,9 +190,100 @@ def test_prepare_moe_layer_single_layer(device):
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
 
 
-# ---------------------------------------------------------------------------
-# Multi-device (4x2 grid) tests
-# ---------------------------------------------------------------------------
+def test_save_load_dense_layer_single_layer(device, tmp_path):
+    """Save one dense layer to disk, load it back, assert metadata and fused-tensor sharing."""
+    if not is_slow_dispatch():
+        pytest.skip("prepare_weights tests require slow dispatch mode (TT_METAL_SLOW_DISPATCH_MODE=1)")
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x < 12 or device_grid.y < 10:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for blitz decode (need 12x10+)")
+
+    state = _layer_state_dict(0, is_moe=False)
+    weights = prepare_weights(state, device, num_layers=1, first_k_dense_replace=1)
+    save_layer(
+        weights.layers[0],
+        tmp_path,
+        0,
+        hf_model_name="test-dense-model",
+        hf_state_dict_name="test-dense-state-dict.safetensors",
+    )
+
+    assert (tmp_path / "layer_000" / "manifest.json").exists()
+    layer_dir = tmp_path / "layer_000"
+    assert (layer_dir / "q_ab_kv_a.tensorbin").exists()
+    assert (layer_dir / "o_proj_gate_mm_norms.tensorbin").exists()
+    assert (layer_dir / "kv_b12.tensorbin").exists()
+
+    deallocate_weights(weights)
+    layer = load_layer(tmp_path, device, 0)
+    orig = weights.layers[0]
+    assert isinstance(layer, DeepSeekV3DenseLayerWeights)
+
+    _assert_overlapped_tensors_match(orig.q_a_proj, layer.q_a_proj)
+    _assert_overlapped_tensors_match(orig.q_b_proj, layer.q_b_proj)
+    _assert_overlapped_tensors_match(orig.kv_a_proj, layer.kv_a_proj)
+    _assert_overlapped_tensors_match(orig.o_proj, layer.o_proj)
+    _assert_overlapped_tensors_match(orig.attn_norm, layer.attn_norm)
+    _assert_overlapped_tensors_match(orig.q_norm, layer.q_norm)
+    _assert_overlapped_tensors_match(orig.kv_norm, layer.kv_norm)
+    _assert_overlapped_tensors_match(orig.ffn_norm, layer.ffn_norm)
+    _assert_overlapped_tensors_match(orig.kv_b1_proj, layer.kv_b1_proj)
+    _assert_overlapped_tensors_match(orig.kv_b2_proj, layer.kv_b2_proj)
+
+    # Same fusion group must share fused_tensor
+    assert id(layer.q_a_proj.fused_tensor) == id(layer.q_b_proj.fused_tensor)
+    assert id(layer.q_b_proj.fused_tensor) == id(layer.kv_a_proj.fused_tensor)
+    assert id(layer.o_proj.fused_tensor) == id(layer.attn_norm.fused_tensor)
+    assert id(layer.kv_b1_proj.fused_tensor) == id(layer.kv_b2_proj.fused_tensor)
+
+
+def test_save_load_moe_layer_single_layer(device, tmp_path):
+    """Save one MoE layer to disk, load it back, assert metadata and fused-tensor sharing."""
+    if not is_slow_dispatch():
+        pytest.skip("prepare_weights tests require slow dispatch mode (TT_METAL_SLOW_DISPATCH_MODE=1)")
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x < 12 or device_grid.y < 10:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for blitz decode (need 12x10+)")
+    num_cores = device_grid.x * device_grid.y
+    if num_cores < 128:
+        pytest.skip(f"Device has {num_cores} compute cores; GATE_UP overlap spec requires 128 cores")
+
+    state = _layer_state_dict(0, is_moe=True, seed=43)
+    weights = prepare_weights(state, device, num_layers=1, first_k_dense_replace=0)
+    save_layer(
+        weights.layers[0],
+        tmp_path,
+        0,
+        hf_model_name="test-moe-model",
+        hf_state_dict_name="test-moe-state-dict.safetensors",
+    )
+
+    assert (tmp_path / "layer_000" / "manifest.json").exists()
+    layer_dir = tmp_path / "layer_000"
+    assert (layer_dir / "gate_up.tensorbin").exists()
+
+    deallocate_weights(weights)
+    layer = load_layer(tmp_path, device, 0)
+    orig = weights.layers[0]
+    assert isinstance(layer, DeepSeekV3MoELayerWeights)
+
+    _assert_overlapped_tensors_match(orig.q_a_proj, layer.q_a_proj)
+    _assert_overlapped_tensors_match(orig.q_b_proj, layer.q_b_proj)
+    _assert_overlapped_tensors_match(orig.kv_a_proj, layer.kv_a_proj)
+    _assert_overlapped_tensors_match(orig.o_proj, layer.o_proj)
+    _assert_overlapped_tensors_match(orig.gate_mm, layer.gate_mm)
+    _assert_overlapped_tensors_match(orig.attn_norm, layer.attn_norm)
+    _assert_overlapped_tensors_match(orig.q_norm, layer.q_norm)
+    _assert_overlapped_tensors_match(orig.kv_norm, layer.kv_norm)
+    _assert_overlapped_tensors_match(orig.ffn_norm, layer.ffn_norm)
+    _assert_overlapped_tensors_match(orig.kv_b1_proj, layer.kv_b1_proj)
+    _assert_overlapped_tensors_match(orig.kv_b2_proj, layer.kv_b2_proj)
+    _assert_overlapped_tensors_match(orig.shared_gate_proj, layer.shared_gate_proj)
+    _assert_overlapped_tensors_match(orig.shared_up_proj, layer.shared_up_proj)
+
+    assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
