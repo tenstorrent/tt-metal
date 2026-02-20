@@ -7,7 +7,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_blackhole_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -16,46 +16,11 @@ MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
 MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
-class LMHeadTest(OpTestBase):
-    def __init__(
-        self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        program_config,
-        compute_config,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
-    ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+class LMHeadTest(OpTestBaseMulti):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    def generate_torch_weights(self, shape):
+    def generate_torch_input(self, shape):
         return torch.randn(shape) - 0.95
 
 
@@ -77,10 +42,7 @@ def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Initialize matmul configurations
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-    else:
-        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    compute_grid = get_blackhole_grid_size(mesh_device)
     logger.info(f"Running on {compute_grid} cores")
 
     in1_dtype = ttnn.DataType.BFLOAT8_B
@@ -121,20 +83,16 @@ def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check
 
     lm_head_test = LMHeadTest(
         mesh_device,
-        in0_shape=in0_shape,
-        in1_shape=in1_shape,
-        in0_mem_config=in0_mem_config,
-        in1_mem_config=in1_mem_config,
+        OpParameter(in0_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
+        [
+            OpParameter(in1_shape, in1_dtype, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
+        ],
         out_mem_config=out_mem_config,
-        in0_dtype=ttnn.DataType.BFLOAT8_B,
-        in1_dtype=in1_dtype,
         out_dtype=ttnn.DataType.BFLOAT8_B,
-        in0_layout=ttnn.TILE_LAYOUT,
-        in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
 
