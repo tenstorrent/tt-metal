@@ -120,8 +120,9 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
-        // Got it
+        // COMMENTED OUT FOR CCL PERF TESTING - Comment out waiting for remote semaphore increments
+        // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
+        // Got it - simulate receiving the slice without actually waiting for remote fabric transmission
         slices_received++;
 
         int sender_chip_id;
