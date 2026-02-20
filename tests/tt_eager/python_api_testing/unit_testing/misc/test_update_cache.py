@@ -13,13 +13,13 @@ from models.common.utility_functions import skip_for_blackhole
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("head_dim", [64])
-@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("max_seq_len", [4096])
 @pytest.mark.parametrize("num_users", [8, 16, 32, 64])
-@pytest.mark.parametrize("num_heads", [1, 2])
+@pytest.mark.parametrize("num_heads", [1, 2, 8])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 class TestUpdateCache:
-    @pytest.mark.parametrize("seq_len", [32, 512, 2048])
+    @pytest.mark.parametrize("seq_len", [32, 512, 2048, 4096])
     def test_fill_cache(self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device):
         if not in_sharded and num_heads > 1 and seq_len == 2048:
             pytest.skip(
