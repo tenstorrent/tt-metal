@@ -26,6 +26,8 @@ public:
     static DispatchContext& get();
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);
+    void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
+    void disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
 
 private:
     DispatchContext() = default;
