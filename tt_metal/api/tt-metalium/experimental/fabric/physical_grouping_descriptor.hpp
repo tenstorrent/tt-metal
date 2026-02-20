@@ -99,11 +99,7 @@ public:
     // Main matching algorithm: Find valid groupings for MGD instances
     // Returns a nested map: instance_type -> instance_name -> vector of valid GroupingInfo matches
     // There can be multiple valid groupings for each MGD instance
-    // If physical_system_descriptor is provided, Phase 2 (MESH) results are filtered to only include
-    // groupings that validate successfully against the PSD
-    ValidGroupingsMap get_valid_groupings_for_mgd(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr) const;
+    ValidGroupingsMap get_valid_groupings_for_mgd(const MeshGraphDescriptor& mesh_graph_descriptor) const;
 
     // Validate a single grouping from PhysicalSystemDescriptor, making sure that it matches
     // errors_out can be provided to get detailed error messages (optional, can be nullptr)
