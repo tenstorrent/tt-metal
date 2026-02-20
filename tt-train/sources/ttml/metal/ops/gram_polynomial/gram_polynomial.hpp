@@ -12,41 +12,15 @@
 
 namespace ttml::metal {
 
-// Compute H = b*G + c*G^2 where G = X @ X^T.
-// X must be a BFLOAT16 tensor with cols >= rows in the last two dimensions.
-// Phase 1: G = gram_matmul(X) (existing op, unchanged).
-// Phase 2: H = c*G*G + b*G (new device op on the full grid, no transpose).
-// Output is a square tensor [..., M, M] where M = X.shape[-2].
-ttnn::Tensor gram_polynomial(
-    const ttnn::Tensor& input_tensor,
-    float b,
-    float c,
-    const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config = std::nullopt,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-// One Newton-Schulz iteration: X' = aX + (cG^2 + bG)X where G = XX^T
-// Runs 3 phases: G = gram_matmul(X), H = gram_polynomial_phase2(G, b, c), X' = HX + aX
-ttnn::Tensor newton_schulz_iteration(
-    const ttnn::Tensor& x_tensor,
-    float a,
-    float b,
-    float c,
-    const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config = std::nullopt,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-// Multiple Newton-Schulz iterations: repeatedly apply X' = aX + (cG^2 + bG)X
-// When use_trace=true, captures two traces (ping-pong) and replays them, eliminating
+// Newton-Schulz iteration(s): X' = aX + (cG^2 + bG)X where G = XX^T
+// When use_trace=true, captures a trace and replays it, eliminating
 // per-iteration host overhead. Requires trace_region_size > 0 when opening the device.
 ttnn::Tensor newton_schulz(
     const ttnn::Tensor& x_tensor,
     float a,
     float b,
     float c,
-    int num_iterations,
+    int num_iterations = 1,
     bool use_trace = false,
     const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,

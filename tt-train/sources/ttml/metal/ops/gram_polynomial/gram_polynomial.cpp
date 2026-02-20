@@ -12,69 +12,6 @@
 
 namespace ttml::metal {
 
-ttnn::Tensor gram_polynomial(
-    const ttnn::Tensor& input_tensor,
-    float b,
-    float c,
-    const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    // Phase 1: G = X @ X^T (existing gram_matmul op)
-    auto G = ttml::metal::gram_matmul(input_tensor);
-
-    // Phase 2: H = c*G*G + b*G (new device op)
-    auto H = ttnn::prim::ttml_gram_polynomial_phase2(G, b, c, config, memory_config, dtype, compute_kernel_config);
-
-    G.deallocate();
-    return H;
-}
-
-ttnn::Tensor newton_schulz_iteration(
-    const ttnn::Tensor& x_tensor,
-    float a,
-    float b,
-    float c,
-    const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    std::optional<const tt::tt_metal::DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    // Phase 1: G = X @ X^T
-    auto G = ttml::metal::gram_matmul(x_tensor);
-
-    // Phase 2: H = c*G*G + b*G
-    auto H = ttnn::prim::ttml_gram_polynomial_phase2(G, b, c, config, memory_config, dtype, compute_kernel_config);
-    G.deallocate();
-
-    // Phase 3: X' = H @ X + a*X
-    auto X_prime = ttnn::prim::ttml_hx_plus_ax(H, x_tensor, a, config, memory_config, dtype, compute_kernel_config);
-    H.deallocate();
-
-    return X_prime;
-}
-
-namespace {
-
-// Helper: run one iteration writing to pre-allocated buffers
-void run_iteration(
-    const ttnn::Tensor& X_in,
-    const ttnn::Tensor& G,
-    const ttnn::Tensor& H,
-    const ttnn::Tensor& X_out,
-    float a,
-    float b,
-    float c,
-    const std::optional<const ttml::metal::ops::gram_polynomial::device::GramPolynomialConfig>& config,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    std::optional<const tt::tt_metal::DataType> dtype,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttml::metal::gram_matmul(X_in, std::nullopt, std::nullopt, std::nullopt, std::nullopt, G);
-    ttnn::prim::ttml_gram_polynomial_phase2(G, b, c, config, memory_config, dtype, compute_kernel_config, H);
-    ttnn::prim::ttml_hx_plus_ax(H, X_in, a, config, memory_config, dtype, compute_kernel_config, X_out);
-}
-
-}  // namespace
-
 ttnn::Tensor newton_schulz(
     const ttnn::Tensor& x_tensor,
     float a,
@@ -90,29 +27,31 @@ ttnn::Tensor newton_schulz(
         return x_tensor;
     }
 
-    // First iteration: allocates G, H, and X[1]. These become our reusable buffers.
+    auto* device = x_tensor.device();
+
+    // Iteration 0: allocates G, H, X[0] with correct shapes
     auto G = ttml::metal::gram_matmul(x_tensor);
     auto H = ttnn::prim::ttml_gram_polynomial_phase2(G, b, c, config, memory_config, dtype, compute_kernel_config);
 
-    ttnn::Tensor X[2];
-    X[0] = x_tensor;
-    X[1] = ttnn::prim::ttml_hx_plus_ax(H, X[0], a, config, memory_config, dtype, compute_kernel_config);
-
-    if (num_iterations == 1) {
-        G.deallocate();
-        H.deallocate();
-        return X[1];
-    }
-
-    // Allocate X[0] buffer for ping-pong (same spec as X[1], no computation)
-    X[0] = create_device_tensor(X[1].tensor_spec(), x_tensor.device());
-
     if (!use_trace) {
-        // Non-traced path: ping-pong with pre-allocated buffers
-        int src = 1;
+        // Non-traced path: ping-pong between X[0] and X[1], reuse G and H
+        ttnn::Tensor X[2];
+        X[0] = ttnn::prim::ttml_hx_plus_ax(H, x_tensor, a, config, memory_config, dtype, compute_kernel_config);
+
+        if (num_iterations == 1) {
+            G.deallocate();
+            H.deallocate();
+            return X[0];
+        }
+
+        X[1] = create_device_tensor(X[0].tensor_spec(), device);
+
+        int src = 0;
         for (int i = 1; i < num_iterations; i++) {
             int dst = 1 - src;
-            run_iteration(X[src], G, H, X[dst], a, b, c, config, memory_config, dtype, compute_kernel_config);
+            ttml::metal::gram_matmul(X[src], std::nullopt, std::nullopt, std::nullopt, std::nullopt, G);
+            ttnn::prim::ttml_gram_polynomial_phase2(G, b, c, config, memory_config, dtype, compute_kernel_config, H);
+            ttnn::prim::ttml_hx_plus_ax(H, X[src], a, config, memory_config, dtype, compute_kernel_config, X[dst]);
             src = dst;
         }
 
@@ -122,39 +61,40 @@ ttnn::Tensor newton_schulz(
         return X[src];
     }
 
-    // Traced path: single trace with copy feedback
-    // Trace captures: run_iteration(X[0] -> X[1]) + copy(X[1] -> X[0])
-    // Each replay computes one iteration and copies result back to input buffer.
-    auto* device = x_tensor.device();
+    // Traced path: iteration 0 outside trace compiles programs,
+    // then capture one iteration + copy feedback, replay N-1 times
+    auto X_out = ttnn::prim::ttml_hx_plus_ax(H, x_tensor, a, config, memory_config, dtype, compute_kernel_config);
+
+    if (num_iterations == 1) {
+        G.deallocate();
+        H.deallocate();
+        return X_out;
+    }
+
+    auto X_in = create_device_tensor(X_out.tensor_spec(), device);
     const std::optional<ttnn::QueueId> cq_id = std::nullopt;
 
-    // Copy iteration 0 result into X[0] for the trace's input buffer
-    ttnn::copy(X[1], X[0]);
+    ttnn::copy(X_out, X_in);
 
-    // Warm up the copy program (so trace captures a cache hit)
-    run_iteration(X[0], G, H, X[1], a, b, c, config, memory_config, dtype, compute_kernel_config);
-    ttnn::copy(X[1], X[0]);
-    // Now X[0] has iteration 1 result, programs are cached
-
-    // Capture trace: iteration + copy feedback
     auto tid = ttnn::operations::trace::begin_trace_capture(device, cq_id);
-    run_iteration(X[0], G, H, X[1], a, b, c, config, memory_config, dtype, compute_kernel_config);
-    ttnn::copy(X[1], X[0]);
+    ttml::metal::gram_matmul(X_in, std::nullopt, std::nullopt, std::nullopt, std::nullopt, G);
+    ttnn::prim::ttml_gram_polynomial_phase2(G, b, c, config, memory_config, dtype, compute_kernel_config, H);
+    ttnn::prim::ttml_hx_plus_ax(H, X_in, a, config, memory_config, dtype, compute_kernel_config, X_out);
+    // TODO: This is not optimal; Could capture two traces for both addresses instead, but will be less readable
+    ttnn::copy(X_out, X_in);
     ttnn::operations::trace::end_trace_capture(device, tid, cq_id);
-    // Capture executed iteration 2, result in X[0]
 
-    // Replay for remaining iterations (iterations 3..N-1)
-    for (int i = 3; i < num_iterations; i++) {
+    for (int i = 2; i < num_iterations; i++) {
         ttnn::operations::trace::execute_trace(device, tid, cq_id, false);
     }
 
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
     ttnn::operations::trace::release_trace(device, tid);
 
-    // Result is in X[0] (after the last copy)
-    X[1].deallocate();
+    X_in.deallocate();
     G.deallocate();
     H.deallocate();
-    return X[0];
+    return X_out;
 }
 
 }  // namespace ttml::metal

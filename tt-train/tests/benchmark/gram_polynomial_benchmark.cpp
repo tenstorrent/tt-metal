@@ -261,7 +261,10 @@ BenchResult bench_gram_polynomial(
     auto* dev_ptr = device.get();
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
-        auto out = ttml::metal::gram_polynomial(x, b, c);
+        auto G_tmp = ttml::metal::gram_matmul(x);
+        auto out = ttnn::prim::ttml_gram_polynomial_phase2(
+            G_tmp, b, c, std::nullopt, std::nullopt, std::nullopt, std::nullopt);
+        G_tmp.deallocate();
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         out.deallocate();
     }
@@ -269,7 +272,10 @@ BenchResult bench_gram_polynomial(
     std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
     for (int i = 0; i < test_config.num_measurement_iterations; ++i) {
         auto start = std::chrono::high_resolution_clock::now();
-        auto out = ttml::metal::gram_polynomial(x, b, c);
+        auto G_tmp = ttml::metal::gram_matmul(x);
+        auto out = ttnn::prim::ttml_gram_polynomial_phase2(
+            G_tmp, b, c, std::nullopt, std::nullopt, std::nullopt, std::nullopt);
+        G_tmp.deallocate();
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         auto end = std::chrono::high_resolution_clock::now();
         total_time += end - start;

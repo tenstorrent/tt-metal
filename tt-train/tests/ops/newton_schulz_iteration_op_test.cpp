@@ -87,7 +87,7 @@ void run_newton_schulz_iteration_test(
     auto x = make_random_tensor(batch, channels, rows, cols, device);
 
     // newton_schulz_iteration(X, a, b, c) — fused Phase 1 + Phase 2 + Phase 3
-    auto X_prime = metal::newton_schulz_iteration(x, a, b, c);
+    auto X_prime = metal::newton_schulz(x, a, b, c);
 
     // Reference: compute using standard ops
     // G = X @ X^T
@@ -111,11 +111,11 @@ void run_newton_schulz_iteration_test(
 
     std::cout << "Shape: [" << batch << ", " << channels << ", " << rows << ", " << cols << "], a=" << a << ", b=" << b
               << ", c=" << c << "\n";
-    print_error_stats("newton_schulz_iteration vs reference", result_xt, ref_xt);
+    print_error_stats("newton_schulz vs reference", result_xt, ref_xt);
 
     float pcc = compute_pcc(result_xt, ref_xt);
     std::cout << "    PCC: " << pcc << "\n";
-    EXPECT_GT(pcc, 0.999F) << "PCC too low — structural mismatch between newton_schulz_iteration and reference";
+    EXPECT_GT(pcc, 0.999F) << "PCC too low — structural mismatch between newton_schulz and reference";
 
     xt::xarray<float> abs_diff = xt::abs(result_xt - ref_xt);
     xt::xarray<float> abs_expected = xt::abs(ref_xt) + 1e-8F;

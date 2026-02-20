@@ -10,6 +10,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/gram_polynomial/device/gram_polynomial_device_operation.hpp"
 
 class GramPolynomialTest : public ::testing::Test {
 protected:
@@ -89,8 +90,11 @@ void run_gram_polynomial_test(uint32_t batch, uint32_t channels, uint32_t rows, 
     auto* device = &autograd::ctx().get_device();
     auto x = make_random_tensor(batch, channels, rows, cols, device);
 
-    // gram_polynomial(X, b, c) — fused Phase 1 + Phase 2
-    auto H_fused = metal::gram_polynomial(x, b, c);
+    // Phase 1 + Phase 2: G = XX^T, H = cG^2 + bG
+    auto G_fused = metal::gram_matmul(x);
+    auto H_fused =
+        ttnn::prim::ttml_gram_polynomial_phase2(G_fused, b, c, std::nullopt, std::nullopt, std::nullopt, std::nullopt);
+    G_fused.deallocate();
 
     // Reference: compute G and H_ref on device using standard ops,
     // then compare on CPU (xtensor). Use gram_matmul for G (same Phase 1).
