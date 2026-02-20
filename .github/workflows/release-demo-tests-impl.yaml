@@ -58,7 +58,7 @@ jobs:
             exit 1
           fi
 
-          echo "✓ URL validation passed: $URL"
+          echo "URL validation passed: $URL"
       - name: Download tests YAML from gist (if provided)
         if: ${{ inputs.tests-yaml-gist-url != '' }}
         run: |
