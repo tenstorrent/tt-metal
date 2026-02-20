@@ -50,7 +50,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 10 * 2 = 20 (GPT-OSS)
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
         4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
     constexpr uint32_t w0_w1_blocks_per_expert =
@@ -60,7 +60,7 @@ void kernel_main() {
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 10 * 2 = 20 (GPT-OSS)
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
     constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
     constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;
@@ -109,13 +109,17 @@ void kernel_main() {
             for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
+                constexpr bool w2_has_padding = (w2_txns_h * w2_tiles_per_txn != num_w2_tiles_h);
+
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    // The last block has only 4 tiles of interest, so we exit early.
-                    if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                        if (iter == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
+                    // When W2 has padding, the last block has only 4 tiles of interest, so exit early.
+                    if constexpr (w2_has_padding) {
+                        if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
+                            if (iter == 0) {
+                                cb_pop_front(cb_w2c_rdy, 1);
+                            }
+                            break;
                         }
-                        break;
                     }
 
                     if (dm1_tiles_remaining == 0) {

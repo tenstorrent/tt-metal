@@ -12,8 +12,8 @@
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "swiglu_sfpu.h"
+
 #endif
 
 void kernel_main() {
@@ -60,18 +60,18 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 10 * 2 = 20 (GPT-OSS)
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
+        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 4 * (90 / 10) / 2 = 18 (GPT-OSS)
     constexpr uint32_t w0_w1_blocks_per_expert =
         w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A /
-        2;  // 32 * 3 = 96
+        2;  // 4 * (90 / 10) / 2 = 18 (GPT-OSS) * 3 = 96
             // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 10 * 2 = 20 (GPT-OSS)
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
     constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
     constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;
@@ -104,8 +104,8 @@ void kernel_main() {
     // Initialize matmul for W0
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
-    // Initialize SFPU for SILU and eltwise multiply
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+    // Initialize SFPU for SwiGLU activation
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -117,7 +117,7 @@ void kernel_main() {
         // Compute in @ {W0,W1}
         //---------------------------------------------------------------------
         for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
-            uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+            uint32_t in0_index = expert_id * num_w0_w1_tiles_h;
 
             tile_regs_acquire();
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
@@ -151,13 +151,10 @@ void kernel_main() {
             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
             //---------------------------------------------------------------------
-            // Apply SILU activation and then eltwise multiply
+            // Apply SwiGLU activation (fused sigmoid * gate * up)
             //---------------------------------------------------------------------
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
 
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -173,7 +170,7 @@ void kernel_main() {
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
         //---------------------------------------------------------------------
-        uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+        uint32_t out_tile_index = expert_id * num_w0_w1_tiles_h;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -186,11 +183,17 @@ void kernel_main() {
             for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
+                // Whether W2 has padding tiles (if w2_txns_h * w2_tiles_per_txn > num_w2_tiles_h)
+                constexpr bool w2_has_padding = (w2_txns_h * w2_tiles_per_txn != num_w2_tiles_h);
+
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    // The last block has only 4 tiles of interest, so we exit early.
-                    if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                        cb_pop_front(cb_w2c_rdy, 1);
-                        break;
+                    // When W2 has padding, the last block has only 4 tiles of interest, so exit early.
+                    // For GPT-OSS (90/10=9 exact), there is no padding, so this is skipped.
+                    if constexpr (w2_has_padding) {
+                        if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                            break;
+                        }
                     }
 
                     if (dm1_tiles_remaining == 0) {
