@@ -18,30 +18,15 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
 
 @skip_for_wormhole_b0("This test is for blackhole")
 @skip_for_n_or_less_dev(1)
-@pytest.mark.parametrize(
-    "device_params",
+# fmt: off
+@pytest.mark.parametrize("device_params, trace_mode, num_devices, mesh_shape, cluster_axis, batches_per_device, experts_per_device, seq_len, num_iters, warmup_iters, select_experts_k, hidden_size, num_links, dtype, input_memory_config, output_memory_config",
     [
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        ({"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, False, 4, (4, 1), 0, 8, 8, 128, 2, 1, 4, 7168, "MAX_LINKS", ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        ({"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, False, 4, (4, 1), 0, 1, 256//4, 4096, 2, 1, 8, 7168, 1, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        ({"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, False, 4, (4, 1), 0, 1, 256//4, 4096, 2, 1, 8, 7168, 2, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
     ],
-    indirect=True,
-)
-@pytest.mark.parametrize("trace_mode", [False])
-@pytest.mark.parametrize("num_devices,mesh_shape", [(4, (4, 1))])
-@pytest.mark.parametrize("cluster_axis", [0], ids=["cluster_row"])
-@pytest.mark.parametrize("experts_per_device", [8])
-@pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [7168])
-@pytest.mark.parametrize(
-    "batches_per_device, seq_len, num_iters, warmup_iters",
-    [
-        (16, 2, 2, 1),
-    ],
-    ids=["b16s2"],
-)
-@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
+    ids=["decode", "prefill_1", "prefill_2"], indirect=["device_params"])
+# fmt: on
 def test_all_to_all_dispatch_no_trace(
     bh_1d_mesh_device,
     trace_mode,

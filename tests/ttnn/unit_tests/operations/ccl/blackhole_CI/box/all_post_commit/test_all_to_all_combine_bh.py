@@ -20,37 +20,15 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 
 @skip_for_wormhole_b0("This test is for blackhole")
 @skip_for_n_or_less_dev(3)
+# fmt: off
 @pytest.mark.parametrize(
-    "device_params, axis, num_links, test_skew,topology",
+    "device_params, num_devices, mesh_shape, axis, num_links, test_skew, topology, batches_per_device, experts_per_device, seq, select_experts_k, hidden_size, local_reduce, scheme, num_iters, input_memory_config, output_memory_config, dtype",
     [
-        # FABRIC_1D_RING
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 500000,
-            },
-            0,
-            1,
-            False,
-            ttnn.Topology.Ring,
-            id="fabric_1d_ring_axis_0",
-        ),
+        ({"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 500000}, 4, (4, 1), 0, 1, False, ttnn.Topology.Ring, 8, 8, 2, 8, 7000, True, "random", 2, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16),
+        ({"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 500000}, 4, (4, 1), 0, 2, False, ttnn.Topology.Linear, 1, 256//4, 4096, 8, 7168, True, "random", 2, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16)
     ],
-    indirect=["device_params"],
-)
-@pytest.mark.parametrize("num_devices, mesh_shape", [(4, (4, 1))])
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
-@pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq", [2])
-@pytest.mark.parametrize("local_reduce", [True])
-@pytest.mark.parametrize("scheme", ["random"])
-@pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+    ids=["decode", "prefill"], indirect=["device_params"])
+# fmt: on
 def test_all_to_all_combine_no_trace(
     bh_1d_mesh_device,
     mesh_shape,
