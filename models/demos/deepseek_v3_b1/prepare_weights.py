@@ -5,8 +5,9 @@
 """
 Prepare DeepSeek V3 fused (blitz decode) weights from a state dict.
 
-Provides prepare_weights(state_dict, device, ...) -> DeepSeekV3Weights and
-dataclasses for dense vs MoE layer weight containers.
+Takes full HuggingFace state dict tensors (or per-device slice for single-device
+tests), applies key mapping, transpose, and kv_b split, then passes to
+BlitzDecodeWeights which fuses and shards onto the device or mesh.
 """
 
 from __future__ import annotations
@@ -127,28 +128,23 @@ def _get_layer_raw_tensors(
 ]:
     """Extract and transform raw tensors for one layer from the state dict.
 
-    HuggingFace linear weights are stored as (out_features, in_features). We
-    transpose to (K, N) for blitz_decode_weights so matmul uses input @ weight.
-    Norms are 1D in HF; we unsqueeze(0) to get (1, W). For kv_b_proj we split
-    into kv_b1 and kv_b2; only kv_b2 is transposed (see _split_kv_b_proj).
+    Expects full logical HF shapes. We transpose HF
+    (out_features, in_features) to (K, N); norms unsqueeze(0) to
+    (1, W); kv_b_proj is split into kv_b1 and kv_b2 (see _split_kv_b_proj).
 
-    Transformation summary (HF shape -> transform -> blitz shape):
+    Transformation (HF full logical -> transform -> passed to BlitzDecodeWeights):
 
-        Weight          | HF key (under model.layers.{i}.)           | HF shape    | Transform           | Blitz shape
-        ----------------|------------------------------------------|-------------|---------------------|-------------
-        q_a_proj        | self_attn.q_a_proj.weight                  | (1536,7168) | .T                  | (7168, 1536)
-        q_b_proj        | self_attn.q_b_proj.weight                 | (12288,1536)| .T                  | (1536, 12288)
-        kv_a_proj       | self_attn.kv_a_proj_with_mqa.weight       | (576, 7168) | .T                  | (7168, 576)
-        kv_b1_proj      | self_attn.kv_b_proj.weight (split)       | (16384,512) | split, no transpose | (8192, 512)
-        kv_b2_proj       | self_attn.kv_b_proj.weight (split)       | (16384,512) | split + .T          | (512, 8192)
-        o_proj           | self_attn.o_proj.weight                   | (7168,8192) | .T                  | (8192, 7168)
-        attn_norm        | input_layernorm.weight                    | (7168,)     | unsqueeze(0)        | (1, 7168)
-        q_norm           | self_attn.q_a_layernorm.weight             | (1536,)     | unsqueeze(0)        | (1, 1536)
-        kv_norm          | self_attn.kv_a_layernorm.weight            | (512,)      | unsqueeze(0)        | (1, 512)
-        ffn_norm         | post_attention_layernorm.weight            | (7168,)     | unsqueeze(0)        | (1, 7168)
+        Weight        | HF key (under model.layers.{i}.)     | HF shape      | Transform   | To blitz
+        --------------|-------------------------------------|---------------|-------------|------------------
+        q_b_proj      | self_attn.q_b_proj.weight            | (24576, 1536) | .T          | (1536, 24576)
+        o_proj        | self_attn.o_proj.weight              | (7168, 16384) | .T          | (16384, 7168)
+        kv_b_proj     | self_attn.kv_b_proj.weight           | (32768, 512)  | split       | kv_b1, kv_b2
+        q_a_proj      | self_attn.q_a_proj.weight            | (1536, 7168)  | .T          | (7168, 1536)
+        kv_a_proj     | self_attn.kv_a_proj_with_mqa.weight  | (576, 7168)   | .T          | (7168, 576)
+        norms         | input_layernorm, q_a_layernorm, etc. | (7168,), …    | unsqueeze(0)| (1, 7168), …
 
-    MoE-only weights (gate_mm, shared_gate_proj, shared_up_proj) are read and
-    transposed in prepare_moe_decoder_layer_weights, not here.
+    MoE-only (gate_mm, shared_gate_proj, shared_up_proj) are read in
+    prepare_moe_decoder_layer_weights.
 
     Returns:
         (q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm).
@@ -180,6 +176,7 @@ def prepare_dense_decoder_layer_weights(
     q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a)
     kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2)
 
+    # TODO: replace with actual gate_mm when available.
     gate_mm_dummy = torch.zeros(7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device)
     o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm)
     o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
@@ -207,7 +204,6 @@ def prepare_moe_decoder_layer_weights(
     q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = _get_layer_raw_tensors(
         state_dict, layer_idx
     )
-    # Single device: per-device slice. Multi device: full logical; blitz shards. No expansion.
     q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a)
     kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2)
 
@@ -242,11 +238,14 @@ def prepare_weights(
     num_layers: int = 61,
     first_k_dense_replace: int = 3,
 ) -> DeepSeekV3Weights:
-    """Build fused (blitz decode) weights from a HuggingFace-style state dict.
+    """Build fused weights from a HuggingFace-style state dict.
+
+    State dict should use full logical HF shapes when device is a mesh (e.g. 4x2);
+    internally we shard them across the mesh.
 
     Args:
         state_dict: Weights keyed by model.layers.{i}.self_attn.*, model.layers.{i}.mlp.*, etc.
-        device: ttnn device (or MeshDevice) to place tensors on.
+        device: MeshDevice to place weights on.
         num_layers: Total number of layers (default 61).
         first_k_dense_replace: Number of dense layers before MoE (default 3).
 
