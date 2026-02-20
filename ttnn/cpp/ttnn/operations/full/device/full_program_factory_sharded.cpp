@@ -45,7 +45,7 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
 
     std::vector<CoreCoord> ordered_cores_with_data;
     CoreRangeSet compute_core_range;
-    bool has_ordered_cores_with_data = false;
+    std::vector<CoreCoord> runtime_cores;
     if (memory_config.is_dram()) {  // For DRAM-sharded tensors, we just take the first n cores to use as compute cores
                                     // when sharded across n DRAM banks.
         const auto* device = output.device();
@@ -54,8 +54,8 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         for (uint32_t i = 0; i < num_compute_cores; i++) {
             ordered_cores_with_data.push_back(CoreCoord(i % grid_size.x, i / grid_size.x));
         }
-        has_ordered_cores_with_data = true;
         compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+        runtime_cores = ordered_cores_with_data;
     } else {
         if (num_compute_cores >
             num_shards) {  // For L1 sharding, the user may specify a core grid larger than the number of shards. In
@@ -67,7 +67,6 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
                                      // Use it.
                 auto buffer_dist_spec = output.buffer()->buffer_distribution_spec().value();
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
-                has_ordered_cores_with_data = true;
             } else {  // If the tensor does not have an nd_shard_spec, then we need to create a bufferdistributionspec
                       // from the shard_spec to figure out which cores have data on them.
                 const auto page_shape =
@@ -90,14 +89,16 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
                         ? tt::tt_metal::ShardDistributionStrategy::GRID_2D
                         : tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D);
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
-                has_ordered_cores_with_data = true;
             }
             compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+            runtime_cores = ordered_cores_with_data;
 
         } else {
             compute_core_range =
                 output_shard_spec.grid;  // If the user specified the same number of compute cores as the number of
                                          // shards, then we can directly use the core grid specified in the shard_spec.
+            bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+            runtime_cores = corerange_to_cores(compute_core_range, std::nullopt, is_row_major);
         }
     }
 
@@ -122,11 +123,6 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full_sharded.cpp",
         compute_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
-
-    bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    const auto& runtime_cores = has_ordered_cores_with_data
-                                    ? ordered_cores_with_data
-                                    : corerange_to_cores(compute_core_range, std::nullopt, is_row_major);
 
     uint32_t shard_height_in_pages = output.buffer()->shard_spec().shape_in_pages()[0];
     uint32_t shard_width_in_pages = output.buffer()->shard_spec().shape_in_pages()[1];
