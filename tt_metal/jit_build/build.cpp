@@ -494,11 +494,20 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
-size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* settings) const {
+std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
+    const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
+    TT_FATAL(
+        this->srcs_.size() <= kMaxBuildBitset,
+        "Number of source files ({}) exceeds kMaxBuildBitset ({})",
+        this->srcs_.size(),
+        kMaxBuildBitset);
+
+    std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (need_compile(out_dir, this->objs_[i])) {
+            compiled.set(i);
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
@@ -510,7 +519,7 @@ size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* set
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
-    return events.size();
+    return compiled;
 }
 
 bool JitBuildState::need_link(const string& out_dir) const {
@@ -637,29 +646,26 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     if (link_targets.empty()) {
         link_targets = std::span<const JitBuildState* const>(&self, 1);
     }
+    TT_FATAL(
+        link_targets.size() <= kMaxBuildBitset,
+        "Number of link targets ({}) exceeds kMaxBuildBitset ({})",
+        link_targets.size(),
+        kMaxBuildBitset);
 
-    size_t num_objs = this->objs_.size();
-    std::vector<bool> compiled(num_objs, true);
+    const size_t num_objs = this->objs_.size();
 
     fs::create_directories(out_dir);
-    size_t num_compiled = compile(out_dir, settings);
+    auto compiled = compile(out_dir, settings);
 
-    bool any_needs_link = num_compiled > 0;
-    if (!any_needs_link) {
-        for (const auto* target : link_targets) {
-            string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
-            if (target->need_link(target_out_dir)) {
-                any_needs_link = true;
-                break;
-            }
+    string link_objs;
+    // Populate link_objs once only when anything needs to be linked
+    auto populate_link_objs = [&] {
+        if (!link_objs.empty()) {
+            return;
         }
-    }
-
-    if (any_needs_link) {
-        string link_objs;
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
-            if (!fs::exists(temp_obj)) {
+            if (!compiled.test(i)) {
                 // If reusing up-to-date .o files, we should give them temporary names for linking because:
                 // 1. There is no guarantee that another process will not rename its compiled object to this .o during
                 //    our linking.
@@ -667,30 +673,32 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
                 hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
-                compiled[i] = false;
             }
             link_objs += temp_obj;
             link_objs += " ";
         }
+    };
 
-        for (const auto* target : link_targets) {
-            string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
-            fs::create_directories(target_out_dir);
-            if (num_compiled > 0 || target->need_link(target_out_dir)) {
-                target->link(target_out_dir, settings, link_objs);
-                if (target->is_fw_) {
-                    target->weaken(target_out_dir);
-                }
+    for (const auto* target : link_targets) {
+        string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
+        fs::create_directories(target_out_dir);
+        if (compiled.any() || target->need_link(target_out_dir)) {
+            populate_link_objs();
+            target->link(target_out_dir, settings, link_objs);
+            if (target->is_fw_) {
+                target->weaken(target_out_dir);
             }
         }
+    }
 
+    if (!link_objs.empty()) {
         // Rename the temporary .o and .dephash files after linking is done.
         fs::path src_path = out_dir;
         fs::path dst_path = out_dir;
         for (size_t i = 0; i < num_objs; ++i) {
             src_path.replace_filename(this->temp_objs_[i]);
             dst_path.replace_filename(this->objs_[i]);
-            if (compiled[i]) {
+            if (compiled.test(i)) {
                 fs::rename(src_path, dst_path);
                 src_path += ".dephash";
                 dst_path += ".dephash";
