@@ -35,6 +35,7 @@ class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
 class Hal;
+class RiscFirmwareInitializer;
 class dispatch_core_manager;
 class DispatchQueryManager;
 class DPrintServer;
@@ -76,8 +77,7 @@ public:
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
-    std::shared_ptr<ContextDescriptor> create_context_descriptor(
-        int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
+    std::shared_ptr<ContextDescriptor> get_context_descriptor();
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
@@ -159,9 +159,6 @@ private:
     MetalContext();
     ~MetalContext();
 
-    void clear_l1_state(ChipId device_id);
-    void clear_dram_state(ChipId device_id);
-    void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
 
@@ -174,9 +171,6 @@ private:
     void teardown_dispatch_state();
     void initialize_base_objects();
 
-    void reset_cores(ChipId device_id);
-    void assert_cores(ChipId device_id);
-
     // Returns the ERISC Launch Flag address
     uint32_t get_active_erisc_launch_flag_addr();
     // Returns true if metal firmware or a kernel is running on the virtual ethernet core
@@ -186,25 +180,9 @@ private:
 
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
-    void generate_device_bank_to_noc_tables(ChipId device_id);
-    void generate_worker_logical_to_virtual_map(ChipId device_id);
-    void initialize_device_bank_to_noc_tables(
-        ChipId device_id,
-        const HalProgrammableCoreType& core_type,
-        CoreCoord virtual_core,
-        std::optional<CoreCoord> end_core);
-    void initialize_worker_logical_to_virtual_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core);
-    void initialize_firmware(
-        ChipId device_id,
-        const HalProgrammableCoreType& core_type,
-        CoreCoord virtual_core,
-        dev_msgs::launch_msg_t::View launch_msg,
-        dev_msgs::go_msg_t::ConstView go_msg,
-        std::optional<CoreCoord> end_core = std::nullopt);
-    void initialize_and_launch_firmware(ChipId device_id);
-    dev_msgs::core_info_msg_t populate_core_info_msg(
-        ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
+
+    std::shared_ptr<ContextDescriptor> create_context_descriptor(
+        int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
 
     bool initialized_ = false;
     bool force_reinit_ = false;
@@ -250,6 +228,8 @@ private:
     std::unique_ptr<DataCollector> data_collector_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
+    std::shared_ptr<ContextDescriptor> context_descriptor_;
+    std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
