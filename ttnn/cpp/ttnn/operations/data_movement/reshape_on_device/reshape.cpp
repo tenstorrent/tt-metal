@@ -34,7 +34,7 @@ static Tensor manual_insertion(
     auto cpu_tensor = input_tensor.cpu();
     auto output =
         Tensor(
-            cpu_tensor.storage(),
+            cpu_tensor.host_storage(),
             TensorSpec(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
