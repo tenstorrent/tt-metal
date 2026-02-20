@@ -35,12 +35,13 @@ Kernels (reader → compute → writer)
 
 ### Scaling (e10-e11)
 - **e10**: Multi-core, work splitting, multicast
-- **e11**: Multi-chip, CCLs
+- **e11**: Multi-chip, CCLs, reduction operator
 
-### Advanced (e12-e14)
+### Advanced (e12-e15)
 - **e12**: Matmul variants (1d, 2d), math fidelity
-- **e13**: Kernel fusion (CCL + compute)
-- **e14**: Pipelining, double buffering
+- **e13**: SFPU activations (gelu, relu, silu)
+- **e14**: Kernel fusion (matmul + activation + CCL)
+- **e15**: Pipelining, double buffering
 
 ## Key APIs
 

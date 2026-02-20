@@ -8,6 +8,7 @@ Learn multi-device programming:
 - Set up device mesh
 - Distribute tensors across chips
 - Use collective communication (CCLs)
+- Implement reduction operations across devices
 
 ## Reference
 
