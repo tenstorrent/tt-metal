@@ -117,7 +117,7 @@ template <
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

@@ -115,7 +115,7 @@ template <
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>
 ALWI void tilize(
     uint32_t block_width_tiles, uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
