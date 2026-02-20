@@ -42,14 +42,21 @@ void kernel_main() {
     constexpr auto out_accessor_args = TensorAccessorArgs<7>();
     const auto out_accessor = TensorAccessor(out_accessor_args, out_addr, get_tile_size(cb_normalized_out));
 
+    constexpr uint32_t subblock_h = 1;  // Must match compute kernel's subblock_h
+    constexpr uint32_t row_tiles = subblock_h * head_dim_t;
+    constexpr uint32_t rows_per_chunk = Sq_chunk_t / subblock_h;
+
     for (uint32_t q = 0; q < num_q_chunks; q++) {
         uint32_t tile_base = q * out_chunk_tiles;
-        for (uint32_t tile_idx = 0; tile_idx < out_chunk_tiles; ++tile_idx) {
-            cb_wait_front(cb_normalized_out, 1);
-            uint32_t l1_read_addr = get_read_ptr(cb_normalized_out);
-            noc_async_write_tile(tile_base + tile_idx, out_accessor, l1_read_addr);
+        for (uint32_t row = 0; row < rows_per_chunk; row++) {
+            // Issue all tile writes for one row, then barrier once
+            for (uint32_t t = 0; t < row_tiles; t++) {
+                cb_wait_front(cb_normalized_out, 1);
+                uint32_t l1_read_addr = get_read_ptr(cb_normalized_out);
+                noc_async_write_tile(tile_base + row * row_tiles + t, out_accessor, l1_read_addr);
+                cb_pop_front(cb_normalized_out, 1);
+            }
             noc_async_write_barrier();
-            cb_pop_front(cb_normalized_out, 1);
         }
     }
 }
