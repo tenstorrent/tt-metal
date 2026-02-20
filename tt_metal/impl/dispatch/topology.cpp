@@ -444,9 +444,8 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     auto populate_single_device = [&]() {
         if (num_hw_cqs == 1) {
             return single_chip_arch_1cq;
-        }  // TODO: determine whether dispatch_s is inserted at this level, instead of inside
-           // Device::dispatch_s_enabled().
-        if (this->dispatch_core_manager_.get_dispatch_core_type() == CoreType::WORKER) {
+        }
+        if (this->get_dispatch_query_manager_().dispatch_s_enabled()) {
             return single_chip_arch_2cq_dispatch_s;
         }
         return single_chip_arch_2cq;
