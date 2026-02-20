@@ -982,8 +982,7 @@ void sdpa_inner_loop(
             // DeviceZoneScopedN("Softmax(Q@KT)");
             cb_wait_front(cb_q_in, q_wait_tiles);
             kt_index_offset = 0;
-
-            // Try amortizing init cost across both kt_subblocks for this q row block.
+            // Program replay once per q_subblock; restore matmul addrmods only after sub_exp transitions.
             mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 
             for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
@@ -993,6 +992,7 @@ void sdpa_inner_loop(
                     // SDPA_DeviceZoneScopedN_5("SUB EXP");
                     sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                         alias_cur_max, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+                    mm_no_mop_reinit_addrmods_only(true);
                 }
 
                 {
@@ -1126,7 +1126,8 @@ void sdpa_inner_loop(
                     PACK((llk_pack_reconfig_l1_acc(1)));
                     {
                         uint32_t v_index_offset = 0;
-                        mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
+                        mm_no_mop_init_short(
+                            cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H2");
                             SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack H2");

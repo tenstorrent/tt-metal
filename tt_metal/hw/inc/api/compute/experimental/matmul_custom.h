@@ -94,8 +94,40 @@ ALWI void matmul_block_no_mop(
  * Return value: None
  */
 // clang-format on
-ALWI void mm_no_mop_configure_addrmod_reinit() {
-    MATH((llk_math_matmul_configure_addrmod_reinit()));
+ALWI void mm_no_mop_configure_addrmod_reinit(const uint32_t transpose = 0) {
+    MATH((llk_math_matmul_configure_addrmod_reinit<MATH_FIDELITY, MM_THROTTLE>(transpose)));
+}
+
+// clang-format off
+/**
+ * Lightweight no-MOP matmul reinit for steady-state loops where tile formats/dim assumptions
+ * are unchanged. Reprograms unpack matmul setup and restores math addrmods without full init.
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void mm_no_mop_reinit_short(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose, ct_dim, rt_dim)));
+}
+
+// clang-format off
+/**
+ * Restores no-MOP matmul math-side state only (addrmods/counters), without unpack re-init
+ * and without replay program reconfiguration. Use after ops that touch math addrmods while
+ * matmul replay configuration remains valid.
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void mm_no_mop_reinit_addrmods_only(const uint32_t transpose = 0) {
+    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose)));
 }
 
 }  // namespace ckernel

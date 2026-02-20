@@ -37,4 +37,18 @@ inline void llk_math_matmul_no_mop(
     _llk_math_matmul_no_mop_<static_cast<int>(math_fidelity), THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }
 
-inline void llk_math_matmul_configure_addrmod_reinit() { matmul_configure_addrmod_reinit(); }
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+inline void llk_math_matmul_reinit_no_mop(
+    const std::uint32_t transpose = 0, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+    (void)math_fidelity;
+    (void)THROTTLE_LEVEL;
+    (void)ct_dim;
+    (void)rt_dim;
+    matmul_configure_addrmod_reinit<static_cast<int>(math_fidelity), THROTTLE_LEVEL>(transpose);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+inline void llk_math_matmul_configure_addrmod_reinit(const std::uint32_t transpose = 0) {
+    matmul_configure_addrmod_reinit<static_cast<int>(math_fidelity), THROTTLE_LEVEL>(transpose);
+}
