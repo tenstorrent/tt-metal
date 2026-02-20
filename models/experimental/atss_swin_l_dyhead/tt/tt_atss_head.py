@@ -93,8 +93,8 @@ class TtATSSHead:
             return_weights_and_bias=True,
             dtype=ttnn.bfloat16,
         )
-        output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.reshape(output, (batch, out_h, out_w, out_ch))
+        # output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
+        # output = ttnn.reshape(output, (batch, out_h, out_w, out_ch))
         return output, weight, bias
 
     def __call__(self, feats):
@@ -107,12 +107,13 @@ class TtATSSHead:
         centernesses = []
 
         for level, feat in enumerate(feats):
-            N, C, H, W = feat.shape
-            nhwc = ttnn.permute(feat, (0, 2, 3, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            nhwc = ttnn.to_layout(nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+            # N, C, H, W = feat.shape
+            N, H, W, C = feat.shape
+            # nhwc = ttnn.permute(feat, (0, 2, 3, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # nhwc = ttnn.to_layout(nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             cls_out, self.cls_weight, self.cls_bias = self._conv1x1(
-                nhwc,
+                # nhwc,
+                feat,
                 self.cls_weight,
                 self.cls_bias,
                 in_ch=self.in_channels,
@@ -121,11 +122,13 @@ class TtATSSHead:
                 h=H,
                 w=W,
             )
-            cls_nchw = ttnn.permute(cls_out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            cls_scores.append(cls_nchw)
+
+            # cls_nchw = ttnn.permute(cls_out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # cls_scores.append(cls_nchw)
+            cls_scores.append(cls_out)
 
             reg_out, self.reg_weight, self.reg_bias = self._conv1x1(
-                nhwc,
+                feat,
                 self.reg_weight,
                 self.reg_bias,
                 in_ch=self.in_channels,
@@ -134,13 +137,16 @@ class TtATSSHead:
                 h=H,
                 w=W,
             )
-            reg_out = ttnn.to_layout(reg_out, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            reg_out = ttnn.multiply(reg_out, self.scales[level], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            reg_nchw = ttnn.permute(reg_out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            bbox_preds.append(reg_nchw)
+            # reg_out = ttnn.to_layout(reg_out, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # reg_out = ttnn.multiply(reg_out, self.scales[level], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            reg_out = ttnn.multiply(reg_out, self.scales[level], memory_config=ttnn.L1_MEMORY_CONFIG)
+            # reg_nchw = ttnn.permute(reg_out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # bbox_preds.append(reg_nchw)
+            bbox_preds.append(reg_out)
 
             cent_out, self.centerness_weight, self.centerness_bias = self._conv1x1(
-                nhwc,
+                # nhwc,
+                feat,
                 self.centerness_weight,
                 self.centerness_bias,
                 in_ch=self.in_channels,
@@ -149,9 +155,11 @@ class TtATSSHead:
                 h=H,
                 w=W,
             )
-            cent_nchw = ttnn.permute(cent_out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            centernesses.append(cent_nchw)
+            # cent_nchw = ttnn.permute(cent_out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # centernesses.append(cent_nchw)
+            centernesses.append(cent_out)
 
-            ttnn.deallocate(nhwc)
+            # ttnn.deallocate(nhwc)
+            ttnn.deallocate(feat)
 
         return cls_scores, bbox_preds, centernesses
