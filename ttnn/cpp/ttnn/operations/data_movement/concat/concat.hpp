@@ -10,8 +10,8 @@
 #include <ranges>
 
 namespace ttnn {
-namespace operations {
-namespace data_movement {
+
+namespace operations::data_movement {
 
 struct ConcatOperation {
     // Wrapper for TTDNN
@@ -20,11 +20,11 @@ struct ConcatOperation {
         int dim,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        unsigned int groups = 1);
+        unsigned int groups = 1,
+        const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
-}  // namespace data_movement
-}  // namespace operations
+}  // namespace operations::data_movement
 
 constexpr auto concat = ttnn::register_operation<"ttnn::concat", ttnn::operations::data_movement::ConcatOperation>();
 

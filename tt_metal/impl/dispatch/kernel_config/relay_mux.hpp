@@ -85,7 +85,7 @@ public:
         return tt::tt_metal::TerminationInfo{
             .logical_core = logical_core_,
             .core_type = GetCoreType(),
-            .address = this->mux_kernel_config_->get_termination_signal_address(),
+            .address = static_cast<uint32_t>(this->mux_kernel_config_->get_termination_signal_address()),
             .val = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE,
         };
     }

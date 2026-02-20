@@ -4,24 +4,24 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/binary_bitwise_sfpu.h"
-#include "compute_kernel_api/binary_shift.h"
-#include "compute_kernel_api/add_int_sfpu.h"
-#include "compute_kernel_api/sub_int_sfpu.h"
-#include "compute_kernel_api/mul_int_sfpu.h"
-#include "compute_kernel_api/mul_int32_sfpu.h"
-#include "compute_kernel_api/quantization.h"
-#include "compute_kernel_api/xlogy.h"
-#include "compute_kernel_api/binary_comp.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/binary_bitwise_sfpu.h"
+#include "api/compute/binary_shift.h"
+#include "api/compute/add_int_sfpu.h"
+#include "api/compute/sub_int_sfpu.h"
+#include "api/compute/mul_int_sfpu.h"
+#include "api/compute/div_int32_sfpu.h"
+#include "api/compute/div_int32_floor.h"
+#include "api/compute/quantization.h"
+#include "api/compute/xlogy.h"
+#include "api/compute/binary_comp.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
@@ -38,7 +38,7 @@ void MAIN {
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
 #endif
 
@@ -51,7 +51,7 @@ void MAIN {
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
+#if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
@@ -62,6 +62,9 @@ void MAIN {
         copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
+#if HAS_ACTIVATIONS(POST)
+            BINARY_SFPU_INIT
+#endif
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
@@ -77,5 +80,7 @@ void MAIN {
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
+
+    // Pop the scalar tile from RHS CB
+    cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
 }
-}  // namespace NAMESPACE

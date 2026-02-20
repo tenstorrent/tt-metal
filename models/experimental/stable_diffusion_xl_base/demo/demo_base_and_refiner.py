@@ -4,7 +4,6 @@
 
 
 import pytest
-import ttnn
 import torch
 from diffusers import DiffusionPipeline, StableDiffusionXLImg2ImgPipeline
 from loguru import logger
@@ -12,6 +11,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
+    determinate_min_batch_size,
+    prepare_device,
 )
 import os
 from models.common.utility_functions import profiler
@@ -49,7 +50,7 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+    batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
 
@@ -123,7 +124,6 @@ def run_demo_inference(
     logger.info("Starting ttnn inference...")
 
     for iter in range(len(prompts) // batch_size + (1 if len(prompts) % batch_size != 0 else 0)):
-        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{min((iter + 1) * batch_size, len(prompts))}/{len(prompts)}"
         )
@@ -143,6 +143,8 @@ def run_demo_inference(
             else negative_prompt_2
         )
 
+        profiler.start("end_to_end_generation")
+
         # Combined pipeline will pad the batch internally if needed
         imgs = tt_sdxl_combined.generate(
             prompts=prompts_batch,
@@ -159,11 +161,15 @@ def run_demo_inference(
             guidance_rescale=guidance_rescale,
         )
 
-        logger.info(
-            f"Combined generation for batch {iter + 1} completed in {profiler.times['combined_generation'][-1]:.2f} seconds"
-        )
-
         profiler.end("end_to_end_generation")
+        if iter == 0:
+            profiler.times["end_to_end_generation"][0] -= profiler.times["auto_compile_if_needed"][0]
+            for key in profiler.times.keys():
+                profiler.times[key] = [profiler.times[key][-1]]
+
+        logger.info(
+            f"Combined generation for batch {iter + 1} completed in {profiler.times['end_to_end_generation'][-1]:.2f} seconds"
+        )
 
         for idx, img in enumerate(imgs):
             if iter * batch_size + idx >= len(prompts):
@@ -181,12 +187,6 @@ def run_demo_inference(
                 logger.info(f"Image saved to {output_path}")
 
     return images
-
-
-def prepare_device(mesh_device, use_cfg_parallel):
-    if use_cfg_parallel:
-        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
-        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,

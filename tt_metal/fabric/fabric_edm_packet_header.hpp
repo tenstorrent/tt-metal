@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,16 +7,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <climits>
+#include <initializer_list>
 #include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #else
 #include <tt_stl/assert.hpp>
 #endif
+
+// Include fabric_common.h for RoutingFieldsConstants and routing_encoding namespace
+#include "hostdevcommon/fabric_common.h"
 
 // These functions have different behavior on host or device.
 // This causes problems trying to detect unused parameters.
@@ -25,6 +29,10 @@
 
 // NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
+
+// Helper for dependent static_assert that always evaluates to false
+template <class>
+inline constexpr bool always_false_v = false;
 
 enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
@@ -51,7 +59,38 @@ enum EDMStatus : uint32_t {
     READY_FOR_TRAFFIC = 0xA3B3C3D3,
 
     // EDM exiting
-    TERMINATED = 0xA4B4C4D4
+    TERMINATED = 0xA4B4C4D4,
+
+    // Fabric Initialization Postcodes
+    // Initialization started
+    INITIALIZATION_STARTED = 0xB0C0D0E0,
+
+    // TXQ initialized
+    TXQ_INITIALIZED = 0xB1C1D1E1,
+
+    // Stream registers initialized
+    STREAM_REG_INITIALIZED = 0xB2C2D2E2,
+
+    // Started setting up downstream EDMs
+    DOWNSTREAM_EDM_SETUP_STARTED = 0xB3C3D3E3,
+
+    // EDM VC0 setup complete
+    EDM_VCS_SETUP_COMPLETE = 0xB4C4D4E4,
+
+    // Worker interfaces initialized
+    WORKER_INTERFACES_INITIALIZED = 0xB6C6D6E6,
+
+    // Ethernet handshake complete
+    ETHERNET_HANDSHAKE_COMPLETE = 0xB7C7D7E7,
+
+    // VCs opened
+    VCS_OPENED = 0xB8C8D8E8,
+
+    // Routing table initialized
+    ROUTING_TABLE_INITIALIZED = 0xB9C9D9E9,
+
+    // Initialization complete
+    INITIALIZATION_COMPLETE = 0xBACADAEA
 };
 
 // 3 bits
@@ -89,19 +128,152 @@ static_assert(
     "START_DISTANCE_FIELD_BIT_WIDTH + RANGE_HOPS_FIELD_BIT_WIDTH must equal 8");
 
 struct MulticastRoutingCommandHeader {
-    uint8_t start_distance_in_hops : RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
-    uint8_t range_hops : RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH;  // 0 implies unicast
+    uint8_t start_distance_in_hops;
+    uint8_t range_hops;  // 0 implies unicast
 };
-static_assert(
-    sizeof(MulticastRoutingCommandHeader) <= sizeof(RoutingFields), "MulticastRoutingCommandHeader size is not 1 byte");
+static_assert(sizeof(MulticastRoutingCommandHeader) == 2, "MulticastRoutingCommandHeader size is not 2 bytes");
+
+// Helper to extract maximum number of hops from LowLatencyPacketHeaderT
+// The other helpers are defined further down in this file, after their respective template declarations
+template <typename HEADER_TYPE>
+struct get_max_num_hops {
+    // Use std::is_same_v to ensure this static_assert is only evaluated after template instantiation
+    static_assert(!std::is_same_v<HEADER_TYPE, HEADER_TYPE>, "Unsupported header type in get_max_num_hops");
+};
+
+template <typename HEADER_TYPE>
+struct SparseMulticastRoutingCommandHeader {
+    // Each bit represents a single hop in the target direction
+    // The router will WRITE AND FORWARD at hops set to 1 and FORWARD ONLY at unset hops.
+    // This continues until the last set bit, which will WRITE ONLY and not forward the packet any further.
+    // For example, if we want to write from device 0 to devices 1 and 4 only:
+    // 0 --> 1 --> 2 --> 3 --> 4 --- 5
+    //      [X]               [X]
+    // We would set a hop mask of 0b01001
+
+    static constexpr uint32_t max_num_hops = get_max_num_hops<HEADER_TYPE>::value;
+
+    using HopMaskType = std::conditional_t<
+        max_num_hops <= 8,
+        uint8_t,
+        std::conditional_t<max_num_hops <= 16, uint16_t, std::conditional_t<max_num_hops <= 32, uint32_t, uint64_t>>>;
+
+    HopMaskType hop_mask;
+};
 
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
-#define NOC_SCATTER_WRITE_MAX_CHUNKS 2
+
+// 2 bits
+enum NocScatterWriteChunkEncoding : uint8_t {
+    CHUNK_ENCODING_NOP = 0,
+    CHUNK_ENCODING_UNICAST_WRITE = 1,
+    CHUNK_ENCODING_SEMINC_NO_FLUSH = 2,
+    CHUNK_ENCODING_SEMINC_FLUSH = 3,
+    CHUNK_ENCODING_LAST = CHUNK_ENCODING_SEMINC_FLUSH
+};
+
+constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding encoding) {
+    const uint8_t e = static_cast<uint8_t>(encoding);
+    return e | (e << 2) | (e << 4) | (e << 6);
+}
+
+inline void set_chunk_encoding(uint8_t& chunk_encoding, NocScatterWriteChunkEncoding encoding, uint32_t chunk_index) {
+    const uint8_t e = static_cast<uint8_t>(encoding);
+    chunk_encoding |= (e << (chunk_index * 2));
+}
+
+#define NOC_SCATTER_WRITE_MAX_CHUNKS 4
+static constexpr uint8_t NOC_SCATTER_WRITE_MIN_CHUNKS = 2;
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
+    uint8_t chunk_count;
+    uint8_t chunk_encoding;
+
+    NocUnicastScatterCommandHeader() = delete;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+    NocUnicastScatterCommandHeader(
+        std::initializer_list<uint64_t> addresses, std::initializer_list<uint16_t> chunk_sizes = {}) {
+        const size_t num_addresses = addresses.size();
+        this->chunk_count = static_cast<uint8_t>(num_addresses);
+
+        size_t idx = 0;
+        for (auto addr : addresses) {
+            this->noc_address[idx++] = addr;
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS) {
+            this->noc_address[idx++] = 0;
+        }
+
+        idx = 0;
+        for (auto size : chunk_sizes) {
+            this->chunk_size[idx++] = size;
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+            this->chunk_size[idx++] = 0;
+        }
+    }
+
+    // Requires: addresses[num_addresses], chunk_sizes[num_addresses - 1].
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+    NocUnicastScatterCommandHeader(
+        const uint64_t* addresses, const uint16_t* chunk_sizes, const uint8_t num_addresses) :
+        chunk_count(num_addresses) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(num_addresses > 0 && num_addresses <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+#endif
+
+        uint8_t idx = 0;
+        for (; idx < num_addresses; idx++) {
+            this->noc_address[idx] = addresses[idx];
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS) {
+            this->noc_address[idx++] = 0;
+        }
+
+        idx = 0;
+        for (; idx < num_addresses - 1; idx++) {
+            this->chunk_size[idx] = chunk_sizes[idx];
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+            this->chunk_size[idx++] = 0;
+        }
+    }
+};
+// Currently limited to 2 chunks followed by a semaphore increment
+#define NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS 2
+struct NocUnicastScatterAtomicIncFusedCommandHeader {
+    uint64_t noc_address[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS];
+    uint64_t semaphore_noc_address;
+    uint16_t chunk_size[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS - 1];  // last chunk size is implicit
+    uint16_t val;                                                              // Semaphore increment value
+    bool flush;
+
+    NocUnicastScatterAtomicIncFusedCommandHeader(
+        std::initializer_list<uint64_t> noc_addresses,
+        uint64_t semaphore_noc_address,
+        std::initializer_list<uint16_t> chunk_sizes,
+        uint16_t val,
+        bool flush = true) :
+        semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        const size_t num_noc_addresses = noc_addresses.size();
+        const size_t num_chunk_sizes = chunk_sizes.size();
+        ASSERT(num_noc_addresses == NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS);
+        ASSERT(num_chunk_sizes == num_noc_addresses - 1);
+#endif
+        size_t idx = 0;
+        for (auto addr : noc_addresses) {
+            this->noc_address[idx++] = addr;
+        }
+
+        idx = 0;
+        for (auto chunk_size : chunk_sizes) {
+            this->chunk_size[idx++] = chunk_size;
+        }
+    }
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
@@ -143,14 +315,20 @@ struct NocMulticastAtomicIncCommandHeader {
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
 static_assert(
+    sizeof(NocUnicastScatterAtomicIncFusedCommandHeader) == 32,
+    "NocUnicastScatterAtomicIncFusedCommandHeader size is not 32 bytes");
+static_assert(
     sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocUnicastInlineWriteCommandHeader size is not 16 bytes");
 static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastAtomicIncCommandHeader size is not 16 bytes");
 static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
 static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
+
+// NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
+    NocUnicastCommandHeader unicast_read;
     NocUnicastInlineWriteCommandHeader unicast_inline_write;
     NocMulticastCommandHeader mcast_write;
     NocUnicastAtomicIncCommandHeader unicast_seminc;
@@ -158,7 +336,8 @@ union NocCommandFields {
     NocMulticastAtomicIncCommandHeader mcast_seminc;
     NocUnicastScatterCommandHeader unicast_scatter_write;
 };
-static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
+// NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 40 bytes");
 
 struct UDMWriteControlHeader {
     uint8_t src_chip_id;
@@ -168,6 +347,7 @@ struct UDMWriteControlHeader {
     uint8_t risc_id;
     uint8_t transaction_id;
     uint8_t posted;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
 struct UDMReadControlHeader {
@@ -179,22 +359,29 @@ struct UDMReadControlHeader {
     uint32_t size_bytes;
     uint8_t risc_id;
     uint8_t transaction_id;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
-static_assert(sizeof(UDMReadControlHeader) == 15, "UDMReadControlHeader size is not 15 bytes");
+static_assert(sizeof(UDMWriteControlHeader) == 9, "UDMWriteControlHeader size is not 9 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 16, "UDMReadControlHeader size is not 16 bytes");
 
 union UDMControlFields {
     UDMWriteControlHeader write;
     UDMReadControlHeader read;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMControlFields) == 15, "UDMControlFields size is not 15 bytes");
+static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
+// NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 template <typename Derived>
 struct PacketHeaderBase {
-    NocCommandFields command_fields;  // size = 16B due to uint64_t alignment
+private:
+    PacketHeaderBase() = default;
+    friend Derived;
+
+public:
+    NocCommandFields command_fields;  // size = 40B due to scatter metadata
     uint16_t payload_size_bytes;
     // TODO: trim this down noc_send_type 2 bits (4 values):
     //   -> unicast_write, mcast_write, unicast_seminc, mcast_seminc
@@ -230,6 +417,13 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
+    // NOTE: Currently only defined for 1D LowLatency packet headers
+    Derived& to_chip_sparse_multicast(
+        const SparseMulticastRoutingCommandHeader<Derived>& sparse_mcast_routing_command_header) {
+        static_cast<Derived*>(this)->to_chip_sparse_multicast_impl(sparse_mcast_routing_command_header);
+        return *static_cast<Derived*>(this);
+    }
+
     Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -247,6 +441,29 @@ struct PacketHeaderBase {
         this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return *static_cast<Derived*>(this);
+    }
+
+    Derived& to_noc_unicast_read(const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
+        this->noc_send_type = NOC_UNICAST_READ;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_read = modified_command_header;
+        this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_read from host is unsupported");
 #endif
         return *static_cast<Derived*>(this);
     }
@@ -317,6 +534,16 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
+    // NOTE: Currently only defined for 1D LowLatency packet headers
+    // To use this function, use SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE> as the parameter type for the
+    // header PACKET_HEADER_TYPE is defined at the end of this file automatically, depending on the selected routing and
+    // topology
+    volatile Derived* to_chip_sparse_multicast(
+        const SparseMulticastRoutingCommandHeader<Derived>& sparse_mcast_routing_command_header) volatile {
+        static_cast<volatile Derived*>(this)->to_chip_sparse_multicast_impl(sparse_mcast_routing_command_header);
+        return static_cast<volatile Derived*>(this);
+    }
+
     volatile Derived* to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -336,11 +563,42 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
+    volatile Derived* to_noc_unicast_read(
+        const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
+        this->noc_send_type = NOC_UNICAST_READ;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_read.noc_address = noc_addr;
+        this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_read from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+
     volatile Derived* to_noc_unicast_scatter_write(
         const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
-        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+        const uint8_t chunk_count = noc_unicast_scatter_command_header.chunk_count;
+        ASSERT(chunk_count >= NOC_SCATTER_WRITE_MIN_CHUNKS && chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+
+        this->command_fields.unicast_scatter_write.chunk_count = chunk_count;
+
+        // Set the chunk encoding in this packet to all unicast writes
+        this->command_fields.unicast_scatter_write.chunk_encoding =
+            expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
+
+        for (uint8_t i = 0; i < chunk_count; i++) {
             auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
             auto noc_addr = safe_get_noc_addr(
                 noc_address_components.first.x,
@@ -348,14 +606,121 @@ struct PacketHeaderBase {
                 noc_address_components.second,
                 edm_to_local_chip_noc);
             this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
-            if (i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
-                this->command_fields.unicast_scatter_write.chunk_size[i] =
-                    noc_unicast_scatter_command_header.chunk_size[i];
-            }
         }
-        this->payload_size_bytes = payload_size_bytes;
+        for (uint8_t i = chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            this->command_fields.unicast_scatter_write.noc_address[i] = 0;
+        }
+
+        const uint8_t chunk_size_count = chunk_count - 1;
+        size_t accumulated_chunk_bytes = 0;
+        for (uint8_t i = 0; i < chunk_size_count; i++) {
+            uint16_t chunk_bytes = noc_unicast_scatter_command_header.chunk_size[i];
+            ASSERT(chunk_bytes > 0);
+            accumulated_chunk_bytes += chunk_bytes;
+            this->command_fields.unicast_scatter_write.chunk_size[i] = chunk_bytes;
+        }
+        for (uint8_t i = chunk_size_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
+            this->command_fields.unicast_scatter_write.chunk_size[i] = 0;
+        }
+
+        ASSERT(accumulated_chunk_bytes < payload_size_bytes);
+        this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+
+    // The fused scatter write + atomic inc is a special case where one or more chunks in the packet are used to send
+    // semaphore increment instructions. The packet still uses the standard scatter write packet header.
+    volatile Derived* to_noc_fused_unicast_scatter_write_atomic_inc(
+        const NocUnicastScatterAtomicIncFusedCommandHeader& noc_unicast_scatter_atomic_inc_fused_command_header,
+        size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
+
+        // Currently we only support maximum of 2 unicast writes followed by a semaphore increment
+        // This is converted into a scatter write packet, where chunk 0 and 1 are unicast writes, and chunk 2 is a
+        // semaphore increment.
+        constexpr uint8_t unicast_write_chunk_count = NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS;
+        constexpr uint8_t chunk_count = unicast_write_chunk_count + 1;  // +1 for the semaphore increment chunk
+        static_assert(
+            chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS,
+            "Fused scatter write + atomic inc command header chunk count is too large");
+
+        this->command_fields.unicast_scatter_write.chunk_count = chunk_count;
+
+        // Set destination addresses and chunk encodings for the unicast write chunks
+        uint8_t chunk_encodings = 0;
+        for (uint8_t i = 0; i < unicast_write_chunk_count; i++) {
+            // NoC Address
+            const auto noc_address_components =
+                get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.noc_address[i]);
+            const auto noc_addr = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+            this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+            // Chunk Encoding
+            set_chunk_encoding(chunk_encodings, NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE, i);
+        }
+
+        // Set the semaphore increment chunk destination address and chunk encoding
+        // NoC Address
+        const auto semaphore_noc_address_components =
+            get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.semaphore_noc_address);
+        const auto semaphore_noc_addr = safe_get_noc_addr(
+            semaphore_noc_address_components.first.x,
+            semaphore_noc_address_components.first.y,
+            semaphore_noc_address_components.second,
+            edm_to_local_chip_noc);
+        this->command_fields.unicast_scatter_write.noc_address[chunk_count - 1] = semaphore_noc_addr;
+        // Chunk Encoding
+        static_assert(
+            NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH ==
+                NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH + 1,
+            "Fused unicast scatter write header assumes that CHUNK_ENCODING_SEMINC_FLUSH = "
+            "CHUNK_ENCODING_SEMINC_NO_FLUSH + 1");
+        const NocScatterWriteChunkEncoding seminc_chunk_encoding = static_cast<NocScatterWriteChunkEncoding>(
+            NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH +
+            noc_unicast_scatter_atomic_inc_fused_command_header.flush);
+        set_chunk_encoding(chunk_encodings, seminc_chunk_encoding, chunk_count - 1);
+
+        this->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
+
+        // Set the chunk sizes for the unicast write chunks and semaphore
+        // There will always be at least 2 unicast write chunks, and the last chunk's chunk size is implicit based on
+        // payload size. (payload size does not include semaphore increment)
+        constexpr uint8_t unicast_write_chunk_size_count = unicast_write_chunk_count - 1;
+        size_t accumulated_chunk_bytes = 0;
+        for (uint8_t i = 0; i < unicast_write_chunk_size_count; i++) {
+            const uint16_t unicast_write_chunk_bytes =
+                noc_unicast_scatter_atomic_inc_fused_command_header.chunk_size[i];
+            ASSERT(unicast_write_chunk_bytes > 0);
+            accumulated_chunk_bytes += unicast_write_chunk_bytes;
+            this->command_fields.unicast_scatter_write.chunk_size[i] = unicast_write_chunk_bytes;
+        }
+        // Set the chunk size for the last unicast write chunk
+        const uint16_t last_unicast_write_chunk_bytes = payload_size_bytes - accumulated_chunk_bytes;
+        ASSERT(last_unicast_write_chunk_bytes > 0);
+        this->command_fields.unicast_scatter_write.chunk_size[unicast_write_chunk_size_count] =
+            last_unicast_write_chunk_bytes;
+        // Place the semaphore increment chunk size in the last chunk
+        this->command_fields.unicast_scatter_write.chunk_size[chunk_count - 1] =
+            noc_unicast_scatter_atomic_inc_fused_command_header.val;
+
+        // Set unused NoC addresses and chunk sizes to 0
+        for (uint8_t i = chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            this->command_fields.unicast_scatter_write.noc_address[i] = 0;
+            if (i < (NOC_SCATTER_WRITE_MAX_CHUNKS - 1)) {
+                this->command_fields.unicast_scatter_write.chunk_size[i] = 0;
+            }
+        }
+
+        this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
+#else
+        TT_THROW("Calling to_noc_fused_unicast_scatter_write_atomic_inc from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }
@@ -474,7 +839,11 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // Future changes will remove this padding and require the worker kernel to be aware of this bug
     // and pad their own CBs conditionally when reading from DRAM. It'll be up to the users to
     // manage this complexity.
-    uint8_t padding0[2];
+    uint8_t padding0[18];
+
+    // Type alias for Sparse Multicast Routing Command Header
+    // NOTE: Sparse multicast is not currently supported for Dynamic 1D Packet Headers, tracked in issue #36581
+    using SPARSE_MCAST_ROUTING_CMD_HDR_TYPE = SparseMulticastRoutingCommandHeader<PacketHeader>;
 
     static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
@@ -501,6 +870,14 @@ public:
         this->routing_fields.value =
             PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
+    void to_chip_sparse_multicast_impl(const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for Dynamic 1D Packet Headers, tracked in issue #36581
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
         this->chip_send_type = CHIP_UNICAST;
@@ -511,104 +888,248 @@ public:
         this->routing_fields.value =
             PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
+    void to_chip_sparse_multicast_impl(
+        const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for Dynamic 1D Packet Headers, tracked in issue #36581
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
 };
 
-struct LowLatencyRoutingFields {
-    static constexpr uint32_t FIELD_WIDTH = 2;
-    static constexpr uint32_t FIELD_MASK = 0b11;
-    static constexpr uint32_t NOOP = 0b00;
-    static constexpr uint32_t WRITE_ONLY = 0b01;
-    static constexpr uint32_t FORWARD_ONLY = 0b10;
-    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
-    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
-    uint32_t value;
+// Used to get the maximum number of hops that this packet header can support
+template <>
+struct get_max_num_hops<PacketHeader> {
+    static constexpr uint32_t value = ((1 << RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH) - 1) +
+                                      ((1 << RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1);
 };
 
-struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
-    LowLatencyRoutingFields routing_fields;
+// Primary template for 1D routing fields with route buffer (ExtensionWords >= 1)
+template <uint32_t ExtensionWords = 1>
+struct LowLatencyRoutingFieldsT {
+    // Type alias to reference centralized constants
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
 
+    // Template-specific constants
+    static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS * (1 + ExtensionWords);
+
+    // Block >64 hops until memory map is updated
+    static_assert(
+        ExtensionWords <= 3,
+        "ERROR: 1D routing with >64 hops (ExtensionWords > 3) requires memory map updates.\n"
+        "Current L1 allocation (ROUTING_PATH_SIZE_1D = 1024 bytes) supports max 64 hops.");
+
+    uint32_t value;                         // Active routing field (always read by router)
+    uint32_t route_buffer[ExtensionWords];  // Extension storage
+
+    /**
+     * Copy routing fields to volatile destination (packet header).
+     * Needed because router updates a cached copy then writes back to packet.
+     */
+    void copy_to(volatile LowLatencyRoutingFieldsT<ExtensionWords>* dest) const {
+        dest->value = this->value;
+        if constexpr (ExtensionWords > 0) {
+            for (uint32_t i = 0; i < ExtensionWords; i++) {
+                dest->route_buffer[i] = this->route_buffer[i];
+            }
+        }
+    }
+
+    /**
+     * Initialize from buffer (used when unpacking encoder output).
+     * Buffer layout: [value, route_buffer[0], route_buffer[1], ...]
+     */
+    static LowLatencyRoutingFieldsT<ExtensionWords> from_buffer(const uint32_t* buffer) {
+        LowLatencyRoutingFieldsT<ExtensionWords> result;
+        result.value = buffer[0];
+        if constexpr (ExtensionWords > 0) {
+            for (uint32_t i = 0; i < ExtensionWords; i++) {
+                result.route_buffer[i] = buffer[i + 1];
+            }
+        }
+        return result;
+    }
+
+} __attribute__((packed));
+
+// Partial specialization for 16-hop mode
+template <>
+struct LowLatencyRoutingFieldsT<0> {
+    // Type alias to reference centralized constants
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS;  // 16 hops max
+
+    uint32_t value;  // Only field - no route_buffer member
+
+    /**
+     * Copy to packet header (value only in 16-hop mode)
+     */
+    void copy_to(volatile LowLatencyRoutingFieldsT<0>* dest) const { dest->value = this->value; }
+
+    /**
+     * Initialize from buffer (ExtensionWords=0 specialization)
+     */
+    static LowLatencyRoutingFieldsT<0> from_buffer(const uint32_t* buffer) {
+        LowLatencyRoutingFieldsT<0> result;
+        result.value = buffer[0];
+        return result;
+    }
+} __attribute__((packed));
+
+// Temporary template function used to restrict sparse multicast to 1D LowLatency Packet headers with ExtensionWords = 0
+// Sparse multicast has not yet been implemented for ExtensionWords > 0
+template <uint32_t ExtensionWords>
+struct is_sparse_multicast_supported {
+    static constexpr bool value = false;
+};
+
+template <>
+struct is_sparse_multicast_supported<0> {
+    static constexpr bool value = true;
+};
+
+// Template for 1D packet headers with variable routing field sizes
+template <uint32_t ExtensionWords = 0>
+struct LowLatencyPacketHeaderT : public PacketHeaderBase<LowLatencyPacketHeaderT<ExtensionWords>> {
+    LowLatencyRoutingFieldsT<ExtensionWords> routing_fields;
+
+    // Constexpr helpers for size calculation
 private:
-    static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
-        // Example of unicast 3 hops away
-        // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
-        // (forward to neighbor is not encoded in the field) Last line will do 0b01 << 4 = 0b010000. This means that on
-        // the 3rd chip, we will write only. Together this means the final encoding is 0b011010
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        ASSERT(distance_in_hops > 0 && distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
-#endif
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
-                ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-               (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
+    static constexpr size_t base_size() {
+        // PacketHeaderBase: NocCommandFields(40) + payload_size_bytes(2) + noc_send_type(1) + src_ch_id(1)
+        return sizeof(NocCommandFields) + sizeof(uint16_t) + sizeof(NocSendType) + sizeof(uint8_t);
     }
-    static uint32_t calculate_chip_multicast_routing_fields_value(
-        const MulticastRoutingCommandHeader& chip_multicast_command_header) {
-        // Example of starting 3 hops away mcasting to 2 chips
-        // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
-        // (forward to neighbor is not encoded in the field) Second line will do 0xFFFFFFFF & 0b11 = 0b11. 0b11 << 4 =
-        // 0b110000. This means starting from the 3rd chip, we will write and forward once. Last line will do 0b01 << 6
-        // = 0b01000000. This means that on the 5th chip, we will write only. Together this means the final encoding is
-        // 0b01111010
-        uint32_t distance_in_hops =
-            chip_multicast_command_header.start_distance_in_hops + chip_multicast_command_header.range_hops - 1;
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        ASSERT(
-            chip_multicast_command_header.start_distance_in_hops > 0 &&
-            distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
-#endif
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
-                ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-               // TODO: We can skip the masking of the upper bits for improved performance on the workers, at the cost
-               // of readability of the packet header
-               ((LowLatencyRoutingFields::WR_ONLY_FIELD &
-                 ((1 << (chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH) - 1))
-                << ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH));
+
+    static constexpr size_t routing_fields_size() { return sizeof(LowLatencyRoutingFieldsT<ExtensionWords>); }
+
+    static constexpr size_t unpadded_size() { return base_size() + routing_fields_size(); }
+
+    static constexpr size_t target_size() {
+        // 48B for 16-hop (ExtensionWords=0), 64B for 32-hop and above
+        return (ExtensionWords == 0) ? 48 : 64;
     }
+
+    static constexpr size_t padding_size() { return target_size() - unpadded_size(); }
+
+    // Type alias for Sparse Multicast Routing Command Header
+    // To use the Sparse Multicast Functions (eg. to_chip_sparse_multicast), use
+    // SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE> as the parameter type PACKET_HEADER_TYPE is defined at
+    // the end of this file automatically
+    using SPARSE_MCAST_ROUTING_CMD_HDR_TYPE =
+        SparseMulticastRoutingCommandHeader<LowLatencyPacketHeaderT<ExtensionWords>>;
 
 public:
+    // Explicit padding to reach target size
+    // ExtensionWords=0: 48B total → 0B padding (44 base + 4 routing = 48)
+    // ExtensionWords=1: 64B total → 12B padding (44 base + 8 routing + 12 padding = 64)
+    // ExtensionWords=2: 64B total → 8B padding (44 base + 12 routing + 8 padding = 64)
+    // ExtensionWords=3: 64B total → 4B padding (44 base + 16 routing + 4 padding = 64)
+    uint8_t padding0[padding_size()];
+
+    // Helper to calculate routing fields for unicast
+    // Delegates to routing_encoding::encode_1d_unicast() - see fabric_common.h for encoding details
+    static LowLatencyRoutingFieldsT<ExtensionWords> calculate_chip_unicast_routing_fields(uint8_t distance_in_hops) {
+        // Use canonical encoder
+        constexpr uint32_t num_words = 1 + ExtensionWords;
+        uint32_t buffer[num_words];
+        routing_encoding::encode_1d_unicast(distance_in_hops, buffer, num_words);
+
+        // Unpack using helper
+        return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(buffer);
+    }
+
+    // Helper to calculate routing fields for multicast
+    // Delegates to routing_encoding::encode_1d_multicast() - see fabric_common.h for encoding details
+    static LowLatencyRoutingFieldsT<ExtensionWords> calculate_chip_multicast_routing_fields(
+        const MulticastRoutingCommandHeader& chip_multicast_command_header) {
+        const uint32_t start_hop = chip_multicast_command_header.start_distance_in_hops;
+        const uint32_t range_hops = chip_multicast_command_header.range_hops;
+
+        // Delegate to canonical encoder
+        uint32_t buffer[1 + ExtensionWords];
+        routing_encoding::encode_1d_multicast(start_hop, range_hops, buffer, 1 + ExtensionWords);
+
+        // Unpack using helper
+        return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(buffer);
+    }
+
+    // Helper to calculate routing fields for sparse multicast
+    static LowLatencyRoutingFieldsT<ExtensionWords> calculate_chip_sparse_multicast_routing_fields(
+        const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
+        // Sparse multicast currently only supports a base packet header, not extension words.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(is_sparse_multicast_supported<ExtensionWords>::value);
+#endif
+        uint32_t buffer;
+        // Delegate to canonical encoder
+        routing_encoding::encode_1d_sparse_multicast(chip_sparse_multicast_command_header.hop_mask, buffer);
+        // Unpack using helper
+        return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(&buffer);
+    }
+
     // Specialized implementations for LowLatencyPacketHeader
-    void set_routing_fields(LowLatencyRoutingFields& fields) { this->routing_fields = fields; }
+    void set_routing_fields(LowLatencyRoutingFieldsT<ExtensionWords>& fields) { this->routing_fields = fields; }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+        this->routing_fields = calculate_chip_unicast_routing_fields(distance_in_hops);
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        this->routing_fields = calculate_chip_multicast_routing_fields(chip_multicast_command_header);
+    }
+    void to_chip_sparse_multicast_impl(const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
+        this->routing_fields = calculate_chip_sparse_multicast_routing_fields(chip_sparse_multicast_command_header);
     }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+        auto routing = calculate_chip_unicast_routing_fields(distance_in_hops);
+        routing.copy_to(&this->routing_fields);
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        auto routing = calculate_chip_multicast_routing_fields(chip_multicast_command_header);
+        routing.copy_to(&this->routing_fields);
+    }
+    void to_chip_sparse_multicast_impl(
+        const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) volatile {
+        auto routing = calculate_chip_sparse_multicast_routing_fields(chip_sparse_multicast_command_header);
+        routing.copy_to(&this->routing_fields);
     }
 };
 
-struct LowLatencyMeshRoutingFields {
-    static constexpr uint32_t FIELD_WIDTH = 8;
-    static constexpr uint32_t FIELD_MASK = 0b1111;
-    static constexpr uint32_t NOOP = 0b0000;
-    static constexpr uint32_t FORWARD_EAST = 0b0001;
-    static constexpr uint32_t FORWARD_WEST = 0b0010;
-    static constexpr uint32_t WRITE_AND_FORWARD_EW = 0b0011;
-    static constexpr uint32_t FORWARD_NORTH = 0b0100;
-    static constexpr uint32_t WRITE_AND_FORWARD_NE = 0b0101;
-    static constexpr uint32_t WRITE_AND_FORWARD_NW = 0b0110;
-    static constexpr uint32_t WRITE_AND_FORWARD_NEW = 0b0111;
-    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
-    static constexpr uint32_t WRITE_AND_FORWARD_SE = 0b1001;
-    static constexpr uint32_t WRITE_AND_FORWARD_SW = 0b1010;
-    static constexpr uint32_t WRITE_AND_FORWARD_SEW = 0b1011;
-    static constexpr uint32_t WRITE_AND_FORWARD_NS = 0b1100;
-    static constexpr uint32_t WRITE_AND_FORWARD_NSE = 0b1101;
-    static constexpr uint32_t WRITE_AND_FORWARD_NSW = 0b1110;
-    static constexpr uint32_t WRITE_AND_FORWARD_NSEW = 0b1111;
+// Validate expected sizes with detailed checks
+static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48, "16-hop total must be 48B");
+static_assert(sizeof(LowLatencyPacketHeaderT<1>) == 64, "32-hop total must be 64B");
+static_assert(sizeof(LowLatencyPacketHeaderT<2>) == 64, "48-hop total must be 64B");  // NEW for 4×64
+static_assert(sizeof(LowLatencyPacketHeaderT<3>) == 64, "64-hop total must be 64B");  // NEW for 4×64
 
+// Used to get the maximum number of hops that this packet header can support
+template <uint32_t ExtensionWords>
+struct get_max_num_hops<LowLatencyPacketHeaderT<ExtensionWords>> {
+    static constexpr uint32_t value = LowLatencyRoutingFieldsT<ExtensionWords>::MAX_NUM_ENCODINGS;
+};
+
+// Conditional type selection based on injected define
+#ifndef FABRIC_1D_PKT_HDR_EXTENSION_WORDS
+// Default: backward compatibility (host-side compilation or no define set)
+using LowLatencyPacketHeader = LowLatencyPacketHeaderT<1>;  // 64B, 32-hop
+using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<1>;
+#else
+// Device-side: use injected define to select appropriate template instantiation
+using LowLatencyPacketHeader = LowLatencyPacketHeaderT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
+using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
+#endif
+
+// 2D Mesh routing fields struct
+// This struct contains routing STATE (hop_index union) for 2D packet headers.
+// All constants are centralized in RoutingFieldsConstants::Mesh (fabric_common.h).
+// Access constants via: MeshRoutingFields (aliased from RoutingFieldsConstants::Mesh)
+struct LowLatencyMeshRoutingFields {
+    // Type alias to reference centralized constants
+    using MeshRoutingFields = RoutingFieldsConstants::Mesh;
+
+    // Routing state (the actual data members)
     union {
         uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
                          // Also used when doing noc inline dword write to update packet header in next hop
@@ -616,18 +1137,23 @@ struct LowLatencyMeshRoutingFields {
         struct {
             uint16_t hop_index;
             uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
-            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast east branch
+            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast west branch
         };
     };
 };
 
-// WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
-#define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 32
-
 // TODO: https://github.com/tenstorrent/tt-metal/issues/32237
-struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
+// Primary template for 2D routing headers with variable route buffer size
+template <int RouteBufferSize = 35>
+struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
+    // Block route buffers >67 bytes until memory map is updated
+    static_assert(
+        RouteBufferSize <= 67,
+        "ERROR: 2D routing with >67-byte route buffer requires memory map updates.\n"
+        "Current L1 allocation (ROUTING_PATH_SIZE_2D = 1024 bytes) supports max 67 hops.");
+
     LowLatencyMeshRoutingFields routing_fields;
-    uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
+    uint8_t route_buffer[RouteBufferSize];
     union {
         struct {
             uint16_t dst_start_chip_id;
@@ -641,30 +1167,80 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     };
     uint8_t is_mcast_active;
 
+    // Type alias for Sparse Multicast Routing Command Header
+    // NOTE: Sparse multicast is not currently supported for 2D routing, tracked in issue #35604
+    using SPARSE_MCAST_ROUTING_CMD_HDR_TYPE =
+        SparseMulticastRoutingCommandHeader<HybridMeshPacketHeaderT<RouteBufferSize>>;
+
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+    void to_chip_sparse_multicast_impl(const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for 2D routing, tracked in issue #35604
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
-} __attribute__((packed));
-static_assert(sizeof(HybridMeshPacketHeader) == 80, "sizeof(HybridMeshPacketHeader) is not equal to 80B");
+    void to_chip_sparse_multicast_impl(
+        const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for 2D routing, tracked in issue #35604
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
+
+} __attribute__((packed, aligned(16)));
+
+// Validate expected sizes for max-capacity tiers only (one per header size)
+// Base size = 61B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
+//              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
+static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<51>) == 112, "51B buffer must result in 112B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer must result in 128B header (max capacity)");
+
+// Used to get the maximum number of hops that this packet header can support
+template <int RouteBufferSize>
+struct get_max_num_hops<HybridMeshPacketHeaderT<RouteBufferSize>> {
+    // Each byte in the packet header's route buffer represents a single hop
+    static constexpr uint32_t value = static_cast<uint32_t>(RouteBufferSize);
+};
+
+// Conditional type selection based on injected define
+#ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE>;
+#else
+// Default: backward compatibility (96B header with 35B route buffer)
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<35>;
+#endif
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[1];  // Padding to align to 80 bytes (64 base + 15 control + 1 padding = 80)
 
     // Override to return correct size for UDMHybridMeshPacketHeader
     size_t get_payload_size_including_header() volatile const {
         return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
     }
-} __attribute__((packed));
-static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
+} __attribute__((packed, aligned(16)));
+static_assert(
+    sizeof(UDMHybridMeshPacketHeader) == sizeof(HybridMeshPacketHeader) + sizeof(UDMControlFields),
+    "UDMHybridMeshPacketHeader size must equal base + UDMControlFields");
+// NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
-static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
-// Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
-static_assert(
-    sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
+static_assert(sizeof(PacketHeader) == 64, "sizeof(PacketHeader) is not equal to 64B");
+
+// Used to get the maximum number of hops that this packet header can support
+template <>
+struct get_max_num_hops<UDMHybridMeshPacketHeader> {
+    static constexpr uint32_t value = get_max_num_hops<HybridMeshPacketHeader>::value;
+};
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -679,7 +1255,8 @@ static_assert(
 
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
-    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE)) != 0))
 // 1D routing with UDM is not supported
 static_assert(false, "UDM mode does not support 1D routing - use 2D routing instead");
 

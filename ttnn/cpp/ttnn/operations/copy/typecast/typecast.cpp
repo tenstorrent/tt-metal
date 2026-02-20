@@ -5,10 +5,10 @@
 #include "typecast.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/copy/typecast/device/typecast_device_op.hpp"
+#include "ttnn/operations/core/core.hpp"  // for to_dtype
+#include "ttnn/tensor/tensor_utils.hpp"   // for is_cpu_tensor
 
-namespace ttnn {
-namespace operations {
-namespace copy {
+namespace ttnn::operations::copy {
 
 namespace detail {
 
@@ -18,6 +18,20 @@ inline Tensor typecast_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    // Handle host tensors by delegating to to_dtype
+    if (is_cpu_tensor(input_tensor)) {
+        TT_FATAL(
+            !optional_output_tensor.has_value(),
+            "Preallocated output tensor is not supported for host tensor typecast. "
+            "Use to_dtype directly if you need this functionality.");
+        TT_FATAL(
+            !sub_core_grids.has_value(),
+            "sub_core_grids is not supported for host tensor typecast (only applicable to device operations).");
+        // For host tensors, memory_config is not applicable, so we ignore it
+        return ttnn::to_dtype(input_tensor, output_dtype);
+    }
+
+    // Device tensor path
     DataType input_dtype = input_tensor.dtype();
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
@@ -72,6 +86,4 @@ Tensor Typecast::invoke(
     return detail::typecast_impl(input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
 }
 
-}  // namespace copy
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::copy

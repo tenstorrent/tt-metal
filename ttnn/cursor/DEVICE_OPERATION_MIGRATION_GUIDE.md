@@ -83,6 +83,8 @@ struct UnaryDeviceOperation {
         program::UnaryShardedProgramFactory
     >;
 
+    // select_program_factory is only required when program_factory_t has more than one variant.
+    // For single-variant program_factory_t, the framework auto-selects the sole factory.
     static program_factory_t select_program_factory(
         const operation_attributes_t&,
         const tensor_args_t&);
@@ -151,11 +153,11 @@ struct Embeddings {
 
 ```cpp
 struct operation_attributes_t {
-    const MemoryConfig output_mem_config;
-    const bool tilized;
-    const EmbeddingsType embeddings_type;
-    const std::optional<uint32_t> pad_token;
-    const DataType output_dtype;
+    MemoryConfig output_mem_config;
+    bool tilized;
+    EmbeddingsType embeddings_type;
+    std::optional<uint32_t> pad_token;
+    DataType output_dtype;
 };
 ```
 
@@ -183,9 +185,9 @@ struct Embedding {
 
 ```cpp
 struct tensor_args_t {
-    const Tensor& input_tensor_arg;
-    const Tensor& weight_arg;
-    const std::optional<Tensor>& optional_output_tensor;
+    Tensor input_tensor_arg;
+    Tensor weight_arg;
+    std::optional<Tensor> optional_output_tensor;
 };
 ```
 
@@ -221,11 +223,15 @@ using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
 **Note**: Prefer `spec_return_value_t` (TensorSpec) for newer operations as it provides more complete tensor metadata. Use `shape_return_value_t` only if maintaining compatibility with older patterns.
 
-### Step 4: Implement `select_program_factory`
+### Step 4: Implement `select_program_factory` (only for multi-variant `program_factory_t`)
 
-This method returns a `std::variant` listing all possible program factory types. The selection logic is usually straightforward based on tensor properties or operation attributes.
+`program_factory_t` is a `std::variant` listing all possible program factory types.
 
-**Example:**
+**If your operation has a single factory** (e.g., `using program_factory_t = std::variant<MyFactory>;`), you do **not** need to implement `select_program_factory` — the framework auto-selects the sole factory type.
+
+**If your operation has multiple factories**, you must implement `select_program_factory` to choose between them. If you forget, you'll get a clear compile error: *"DeviceOperation must implement select_program_factory when program_factory_t has more than one type."*
+
+**Example (multi-variant):**
 
 ```cpp
 UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_factory(
@@ -412,7 +418,7 @@ return ttnn::prim::embedding(input_tensor, weight, ...);
 
 ### Step 7: Create Program Factory
 
-To define `shared_params_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
+To define `shared_variables_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
 
 **Example - Old program factory lambda:**
 
@@ -447,18 +453,18 @@ auto override_runtime_args_callback = [
 };
 ```
 
-**Lambda capture → `shared_params_t`:**
+**Lambda capture → `shared_variables_t`:**
 
-The lambda's capture list becomes `shared_params_t`:
+The lambda's capture list becomes `shared_variables_t`:
 
 ```cpp
-struct shared_params_t {
+struct shared_variables_t {
     uint32_t num_cores_x;
     uint32_t num_cores_y;
     KernelHandle reader_kernel_id;
     KernelHandle writer_kernel_id;
     std::vector<CoreCoord> cores;
-    // Note: 'device' is typically not needed in shared_params_t
+    // Note: 'device' is typically not needed in shared_variables_t
 };
 ```
 
@@ -572,11 +578,14 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.legacy_shape();
 
-    auto program_factory = select_program_factory(args, tensor_args);
+    // For multi-variant program_factory_t, include the factory index in the hash:
+    //   auto program_factory = select_program_factory(args, tensor_args);
+    //   ... program_factory.index() ...
+    // For single-variant program_factory_t, the index is always 0.
 
     operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
         args,
-        program_factory.index(),  // Include program factory variant index
+        select_program_factory(args, tensor_args).index(),  // Include program factory variant index
         input_tensor.dtype(),     // impacts program in program factory
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
         compute_volume(input_shape)); // core groups depend on volume
@@ -607,6 +616,11 @@ Great examples of operations migrated to TMP:
 **Paged Cache operations**: `ttnn/cpp/ttnn/operations/experimental/paged_cache/device/`
 - `update_cache/`, `fill_cache/`, `fused_update_cache/` all demonstrate mesh workload factory pattern
 - Shows how to handle multiple factory variants (tiled vs row_major for fused_update_cache)
+
+**Send Async operations**: `ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/`
+- Demonstrates another mesh workload factory example
+- PRs:
+  - https://github.com/tenstorrent/tt-metal/pull/33005
 
 ---
 
@@ -648,7 +662,7 @@ Use this checklist to ensure all steps are completed:
 - [ ] **Step 3**: Defined `tensor_return_value_t` and `spec_return_value_t` appropriately
 - [ ] **Step 4**: Implemented `compute_output_specs`
 - [ ] **Step 5**: [Optional] Implemented `create_output_tensors` (if legacy had it)
-- [ ] **Step 6**: Implemented `select_program_factory` returning correct variant type
+- [ ] **Step 6**: [If multi-variant] Implemented `select_program_factory` returning correct variant type (not needed for single-variant `program_factory_t`)
 - [ ] **Step 6a**: [If needed] Created separate mesh workload factory for `mesh_coords` filtering support
 - [ ] **Step 7**: Implemented `validate_on_program_cache_miss`
 - [ ] **Step 8**: [Optional] Implemented `validate_on_program_cache_hit` (if legacy had it)
@@ -690,5 +704,5 @@ ttnn/cpp/ttnn/operations/<operation>/
 │   └── kernels/                              # Kernel files (if any)
 ├── <operation>.hpp                           # Public API wrapper
 ├── <operation>.cpp                           # Public API implementation
-└── <operation>_pybind.cpp                    # Python bindings (if any)
+└── <operation>_nanobind.cpp                    # Python bindings (if any)
 ```

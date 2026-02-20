@@ -23,6 +23,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_sub_device_manager_id_prefill=None,
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
+        is_qwen=False,
     ):
         """
         - sub devices

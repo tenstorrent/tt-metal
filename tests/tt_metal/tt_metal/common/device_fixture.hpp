@@ -38,6 +38,7 @@ protected:
             ids.push_back(id);
         }
         this->create_devices(ids);
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -51,7 +52,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
@@ -99,6 +100,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -111,7 +113,7 @@ protected:
 
     virtual bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
@@ -154,6 +156,7 @@ protected:
             GTEST_SKIP();
         }
         this->create_devices();
+        init_max_cbs();
     }
 };
 

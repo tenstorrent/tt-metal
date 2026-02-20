@@ -4,22 +4,12 @@
 
 #include "softmax_device_operation.hpp"
 
-#include "softmax_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
 
+#include "softmax_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::softmax::device {
-
-SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SoftmaxProgramFactory{};
-}
-
-void SoftmaxDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -113,21 +103,25 @@ ttsl::hash::hash_t SoftmaxDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<SoftmaxDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
-}
-
-std::tuple<operation_attributes_t, tensor_args_t> SoftmaxDeviceOperation::invoke(
-    const ttnn::Tensor& input_tensor, int32_t dim, const std::optional<ttnn::Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .dim = dim,
-        },
-        tensor_args_t{
-            .input = input_tensor,
-            .preallocated_output = preallocated_output,
-        }};
+        args, input_tensor.dtype(), input_logical_shape);
 }
 
 }  // namespace ttml::metal::ops::softmax::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::softmax::device::SoftmaxDeviceOperation::tensor_return_value_t ttml_softmax(
+    const ttnn::Tensor& input_tensor, int32_t dim, const std::optional<ttnn::Tensor>& preallocated_output) {
+    using OperationType = ttml::metal::ops::softmax::device::SoftmaxDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{.dim = dim};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .preallocated_output = preallocated_output,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::prim

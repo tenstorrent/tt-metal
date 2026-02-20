@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <array>
 #include <memory>
 #include <optional>
@@ -23,10 +23,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 struct Add1DTensorAndScalarParam {
     float scalar;
@@ -34,7 +31,7 @@ struct Add1DTensorAndScalarParam {
     uint32_t w;
 };
 
-class Add1DTensorAndScalarFixture : public TTNNFixtureWithDevice,
+class Add1DTensorAndScalarFixture : public TTNNFixtureWithSuiteDevice<Add1DTensorAndScalarFixture>,
                                     public testing::WithParamInterface<Add1DTensorAndScalarParam> {};
 
 TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
@@ -50,13 +47,9 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
         TT_FATAL(
             ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
-    ttnn::close_device(device);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Add1DTensorAndScalarTests, Add1DTensorAndScalarFixture, ::testing::Values(Add1DTensorAndScalarParam{3.0f, 32, 64}));
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary::test

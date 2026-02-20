@@ -6,6 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtBasicTransformerBlock(LightweightModule):
@@ -20,6 +21,9 @@ class TtBasicTransformerBlock(LightweightModule):
         out_dim,
     ):
         super().__init__()
+
+        self.module_path = module_path
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         self.attn1 = TtAttention(
             device,
@@ -78,42 +82,20 @@ class TtBasicTransformerBlock(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        self.ln_core_grid_x = model_config.core_grid_x
+        self.ln_program_config = model_config.get_layernorm_config(module_path)
+        self.legacy_program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
 
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
         N, C, H, W = list(input_tensor.shape)
-        if W == 640:
-            ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
-                subblock_w=4,
-                block_h=16,
-                block_w=4,
-                inplace=False,
-                legacy_reduction=True,
-                legacy_rsqrt=True,
-            )
-            is_base = True
-        elif W == 1280:
-            ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-                subblock_w=5,
-                block_h=4,
-                block_w=5,
-                inplace=False,
-                legacy_reduction=True,
-                legacy_rsqrt=True,
-            )
-            is_base = True
-        else:
-            is_base = False
-        legacy_program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
         attn_hidden_states = ttnn.layer_norm(
             input_tensor,
             weight=self.tt_norm1_weights,
             bias=self.tt_norm1_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=input_tensor.memory_config() if is_base else ttnn.L1_MEMORY_CONFIG,
-            program_config=ln_program_config if input_tensor.is_sharded() and is_base else legacy_program_config,
+            memory_config=input_tensor.memory_config() if input_tensor.is_sharded() else ttnn.L1_MEMORY_CONFIG,
+            program_config=self.ln_program_config if input_tensor.is_sharded() else self.legacy_program_config,
         )
 
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
@@ -126,12 +108,19 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm2_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=hidden_states.memory_config() if is_base else ttnn.L1_MEMORY_CONFIG,
-            program_config=ln_program_config if hidden_states.is_sharded() and is_base else legacy_program_config,
+            memory_config=hidden_states.memory_config() if hidden_states.is_sharded() else ttnn.L1_MEMORY_CONFIG,
+            program_config=self.ln_program_config if hidden_states.is_sharded() else self.legacy_program_config,
         )
 
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
-        hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
+
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # Use interleaved memory layout as LayerNorm will output a tensor with interleaved layout
+            hidden_states = ttnn.add(
+                hidden_states, attn_hidden_states, use_legacy=False, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+        else:
+            hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
@@ -139,9 +128,13 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm3_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=hidden_states.memory_config() if is_base else ttnn.DRAM_MEMORY_CONFIG,
-            program_config=ln_program_config if hidden_states.is_sharded() and is_base else legacy_program_config,
+            memory_config=hidden_states.memory_config() if hidden_states.is_sharded() else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.ln_program_config if hidden_states.is_sharded() else self.legacy_program_config,
         )
+
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # Move add output to DRAM to make space in L1 for FeedForward Matmuls
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)

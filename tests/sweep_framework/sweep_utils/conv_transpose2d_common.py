@@ -39,10 +39,10 @@ def mesh_device_fixture():
     ttnn.SetDefaultDevice(device)
 
     device_name = "Unknown"
-    if ttnn.device.is_grayskull(device):
-        device_name = "grayskull"
-    elif ttnn.device.is_wormhole_b0(device):
+    if ttnn.device.is_wormhole_b0(device):
         device_name = "wormhole_b0"
+    elif ttnn.device.is_blackhole(device):
+        device_name = "blackhole"
     yield device, device_name
 
     ttnn.close_device(device)
@@ -255,4 +255,5 @@ def run_short(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
+    pcc_passed, pcc_message = check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998)
+    return [pcc_passed, pcc_message, e2e_perf, torch_output_tensor, torch_out_golden_tensor]

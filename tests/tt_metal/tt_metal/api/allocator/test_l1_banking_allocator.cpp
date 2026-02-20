@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -19,14 +19,14 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 
 using namespace tt::tt_metal;
 namespace unit_tests::test_l1_banking_allocator {
 
 uint64_t get_alloc_limit(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     const metal_SocDescriptor& soc_desc =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);

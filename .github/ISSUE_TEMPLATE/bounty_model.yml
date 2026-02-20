@@ -12,16 +12,18 @@ body:
       placeholder: |
         Faster-RCNN example:
         This bounty is for bringing up the [Faster-RCNN](https://docs.pytorch.org/vision/main/models/faster_rcnn.html) model using TTNN APIs on Tenstorrent hardware (Wormhole or Blackhole). Faster-RCNN is a widely used deep learning model for object detection in images, applied in autonomous vehicles, surveillance, robotics, and various vision-based industrial applications. The objective is to enable the model to run efficiently on TT hardware, allowing Tenstorrent users and partners to leverage high-throughput, low-latency inference for object detection tasks.
-
+    validations:
+      required: true
 
   - type: textarea
     id: success_criteria
     attributes:
       label: "🎯 What Success Looks Like"
-      placeholder: |
-        Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages.
-        e.g. A successful submission will fulfill all requirements in the following stages. Payout is made after all stages are completed.
-
+      description: "Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages. Please modify below text as necessary."
+      value: |
+        A successful submission will fulfill all requirements in the following stages. Payout is made after **all stages** are completed.
+    validations:
+      required: true
 
   - type: textarea
     id: stage1
@@ -71,7 +73,8 @@ body:
         - Links to code, docs, previous work or tech report
         - Advice on what to look out for, or who to ask for help
         - Link to original model paper
-
+    validations:
+      required: true
 
   - type: textarea
     id: approaches
@@ -80,16 +83,15 @@ body:
       placeholder: |
         - List one or more technical approaches, architectural suggestions, or research ideas.
         - Help the developer avoid analysis paralysis (i.e., “too many options, not sure what to do”).
-
+    validations:
+      required: true
 
   - type: textarea
     id: result_submission
     attributes:
       label: "📊 Result Submission Guidelines"
-      description: "This section will be included in the final issue."
+      description: "This section will be included in the final issue; please modify it as necessary."
       value: |
-        ## 📊 Result Submission Guidelines
-
         Beyond the model implementation itself, contributors must submit the following material as proof of work.
         However, feel free to open a PR at any time if you want us checking that you are on the right track.
         Just understand that payout is only made after **all 3 stages** are completed.
@@ -102,7 +104,6 @@ body:
         **Links:**
         - [Performance Sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)
         - [Perf Header Docs](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
-      render: markdown
     validations:
       required: true
 
@@ -117,3 +118,5 @@ body:
         - [Reference documentation](link)
         - [Original model paper](link)
         - [Outside link](https://)
+    validations:
+      required: true

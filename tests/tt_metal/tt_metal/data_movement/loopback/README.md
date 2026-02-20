@@ -10,9 +10,9 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 L1 memory is allocated on a single Tensix core with separate address offsets for input and output data. Data is written into the input L1 memory location. The sender kernel issues NOC transactions to transfer this data from the input L1 address to the output L1 address within the same core (loopback). Once data is transferred, the sender kernel uses hardware barriers to ensure data validity and completion of the transaction.
 
-Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through an equality check.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:

@@ -6,7 +6,7 @@
 
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/cluster.hpp>
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
@@ -41,7 +41,7 @@ class RunTimeOptions;
 namespace tt_fabric {
 class ControlPlane;
 class FabricNodeId;
-}
+}  // namespace tt_fabric
 namespace tt_metal {
 class Hal;
 }
@@ -69,7 +69,7 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
+    Cluster(llrt::RunTimeOptions& rtoptions);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -98,11 +98,20 @@ public:
         return driver_;
     }
 
+    // Sets the HAL to be used for this Cluster
+    void set_hal(const tt_metal::Hal* hal);
+
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
+
+    // Returns map of logical chip ID to PCIe device ID
+    const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
+        return this->cluster_desc_->get_chips_with_mmio();
+    }
+
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
@@ -130,17 +139,15 @@ public:
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
-    bool verify_eth_fw_capability() const;
+    std::optional<tt::umd::semver_t> get_ethernet_firmware_version() const;
 
     void deassert_risc_reset_at_core(
-        const tt_cxy_pair& physical_chip_coord,
-        const tt::umd::RiscType& soft_resets,
-        bool staggered_start = true) const;
-    void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord, const tt::umd::RiscType& soft_resets) const;
+        const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
+    void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
-    void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
+    void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
     // Write to core. Accepts physical noc coordinates
     void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
@@ -174,9 +181,9 @@ public:
         write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
-    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
-    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     template <typename DType = uint32_t>
     [[nodiscard]] std::vector<DType> read_core(ChipId chip, const CoreCoord& core, uint64_t addr, uint32_t size) const {
@@ -184,6 +191,17 @@ public:
         read_core(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
         return read_hex_vec;
     }
+
+    // NOC multicast write wrappers
+    void noc_multicast_write(
+        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core_start, tt_cxy_pair core_end, uint64_t addr) const;
+    void noc_multicast_write(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId chip_id,
+        CoreCoord core_start,
+        CoreCoord core_end,
+        uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
@@ -208,9 +226,8 @@ public:
     void read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
     void write_sysmem(
-        const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
-    void read_sysmem(
-        void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
+        const void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
+    void read_sysmem(void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
 
     // System memory buffer allocation methods
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
@@ -263,7 +280,9 @@ public:
     //       CloseDevice(0)
     //       CloseDevice(1)
     void set_internal_routing_info_for_ethernet_cores(
-        bool enable_internal_routing, const std::vector<ChipId>& target_mmio_devices = {}) const;
+        const tt::tt_fabric::ControlPlane& control_plane,
+        bool enable_internal_routing,
+        const std::vector<ChipId>& target_mmio_devices = {}) const;
 
     const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<ChipId, EthernetChannel>>>&
     get_ethernet_connections() const {
@@ -302,20 +321,24 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
-    void initialize_fabric_config(
-        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
-
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
 
-    // Returns whether we are running on UBB Galaxy.
+    // Returns whether the Cluster instance is running on UBB Galaxy.
     bool is_ubb_galaxy() const;
+
+    static bool is_ubb_galaxy(tt::tt_metal::ClusterType cluster_type) {
+        return cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
+               cluster_type == tt::tt_metal::ClusterType::GALAXY;
+    }
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(ChipId chip_id) const;
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
+    // Returns whether NOC mapping is enabled on the system (cached at init time)
+    bool is_noc_mapping_enabled() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
@@ -324,7 +347,8 @@ public:
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
-    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(ChipId chip_id) const;
+    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(
+        const tt::tt_fabric::ControlPlane& control_plane, ChipId chip_id) const;
 
     // Get fabric ethernet cores connecting src to dst
     std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const;
@@ -344,6 +368,8 @@ public:
     // TODO: move to separate system descriptor class
     // return enum for connection type, Internal, QSFP, Other, Unknown
     bool is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) const;
+
+    uint32_t get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const;
 
     const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(ChipId chip_id) const {
         return this->frequent_retrain_cores_.at(chip_id);
@@ -389,6 +415,8 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
+    // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
+    bool noc_mapping_enabled_ = false;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
@@ -436,11 +464,13 @@ private:
     std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
+    uint32_t retrain_count_addr_ = 0;
+    uint8_t num_nocs_ = 0;
 
     // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
     // keep a local reference for init.
     const llrt::RunTimeOptions& rtoptions_;
-    const tt_metal::Hal& hal_;
+    const tt_metal::Hal* hal_ = nullptr;
 };
 
 }  // namespace tt

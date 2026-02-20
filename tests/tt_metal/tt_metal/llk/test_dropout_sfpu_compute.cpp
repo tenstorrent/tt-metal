@@ -4,9 +4,9 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <limits.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <climits>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
@@ -35,11 +35,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -118,7 +116,7 @@ bool test_dropout_standalone(
         Program program = CreateProgram();
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        const auto device = mesh_device->get_devices()[0];
+        auto* const device = mesh_device->get_devices()[0];
 
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;

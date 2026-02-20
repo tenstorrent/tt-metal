@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <array>
 #include <memory>
 #include <optional>
@@ -32,7 +32,8 @@ struct AddUnaryParam {
     uint32_t w;
 };
 
-class AddUnaryFixture : public TTNNFixtureWithDevice, public testing::WithParamInterface<AddUnaryParam> {};
+class AddUnaryFixture : public TTNNFixtureWithSuiteDevice<AddUnaryFixture>,
+                        public testing::WithParamInterface<AddUnaryParam> {};
 
 TEST_P(AddUnaryFixture, CompareWithTorchReference) {
     auto param = GetParam();

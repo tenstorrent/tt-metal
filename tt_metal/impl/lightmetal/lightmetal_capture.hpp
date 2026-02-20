@@ -7,7 +7,7 @@
 #include <vector>
 #include <memory>
 #include <flatbuffers/flatbuffers.h>
-#include <lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 
 // Forward decl for command_generated.h
 namespace tt::tt_metal::flatbuffer {
@@ -31,6 +31,9 @@ class Program;
 class Kernel;
 using CBHandle = uintptr_t;
 using TraceDescriptorByTraceIdOffset = flatbuffers::Offset<tt::tt_metal::flatbuffer::TraceDescriptorByTraceId>;
+
+using experimental::lightmetal::LightMetalBinary;
+using experimental::lightmetal::LightMetalReplay;
 
 class LightMetalCaptureContext {
 public:
@@ -81,7 +84,7 @@ private:
     std::unordered_map<uint64_t, uint32_t> program_id_to_global_id_map_;
     std::unordered_map<const Kernel*, uint32_t> kernel_to_global_id_map_;
     std::unordered_map<CBHandle, uint32_t> cb_handle_to_global_id_map_;
-    // TODO (kmabee) - consider adding map for CommandQueue object.
+    // TODO (kmabee) - consider adding map for HWCommandQueue object.
 };
 
 TraceDescriptorByTraceIdOffset to_flatbuffer(

@@ -21,6 +21,8 @@
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <distributed/mesh_device_impl.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -168,7 +170,7 @@ const void* PinnedMemoryImpl::get_host_ptr() const {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
     // Return the original (unaligned) host pointer by adjusting from aligned base
-    auto* base = static_cast<const std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
+    const auto* base = static_cast<const std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
     return static_cast<const void*>(base + host_offset_);
 }
 
@@ -187,9 +189,17 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
     if (buffer_it == device_buffers_.end()) {
         return std::nullopt;
     }
+    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
+    TT_ASSERT(!pcie_cores.empty());
+    auto pcie_xy = pcie_cores.front();
+    uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
 
     if (use_64bit_address_space_) {
-        return PinnedMemory::NocAddr{buffer_it->second->get_device_io_addr(host_offset_), mmio_device_id};
+        return PinnedMemory::NocAddr{
+            .pcie_xy_enc = pcie_xy_enc,
+            .addr = buffer_it->second->get_device_io_addr(host_offset_),
+            .device_id = mmio_device_id};
     }
 
     auto noc_addr_opt = buffer_it->second->get_noc_addr();
@@ -198,7 +208,10 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
     }
 
     // Return NOC address and the MMIO device ID where it's usable from
-    return PinnedMemory::NocAddr{noc_addr_opt.value() + static_cast<uint64_t>(host_offset_), mmio_device_id};
+    return PinnedMemory::NocAddr{
+        .pcie_xy_enc = pcie_xy_enc,
+        .addr = noc_addr_opt.value() + static_cast<uint64_t>(host_offset_),
+        .device_id = mmio_device_id};
 }
 
 std::vector<ChipId> PinnedMemoryImpl::get_device_ids() const {
@@ -213,9 +226,7 @@ std::vector<ChipId> PinnedMemoryImpl::get_device_ids() const {
     return device_ids;
 }
 
-bool PinnedMemoryImpl::has_device(ChipId device_id) const {
-    return device_to_mmio_map_.find(device_id) != device_to_mmio_map_.end();
-}
+bool PinnedMemoryImpl::has_device(ChipId device_id) const { return device_to_mmio_map_.contains(device_id); }
 
 bool PinnedMemoryImpl::usable_from_noc(ChipId device_id) const {
     // Check if mapped to NOC and device is its own MMIO device (i.e., MMIO-capable)
@@ -239,7 +250,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         }
         bool all_devices_completed = true;
         for (const auto& coord : event.device_range()) {
-            auto physical_device = event.device()->get_device(coord);
+            auto* physical_device = event.device()->impl().get_device(coord);
             if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
                 all_devices_completed = false;
                 break;
@@ -252,6 +263,8 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         }
     }
 }
+
+bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty(); }
 
 void* PinnedMemoryImpl::lock() {
     while (!barrier_events_.empty()) {
@@ -298,11 +311,13 @@ bool PinnedMemory::usable_from_noc(ChipId device_id) const { return pImpl->usabl
 
 void PinnedMemory::add_barrier_event(const distributed::MeshEvent& event) { pImpl->add_barrier_event(event); }
 
+bool PinnedMemory::lock_may_block() const { return pImpl->lock_may_block(); }
+
 void* PinnedMemory::lock() { return pImpl->lock(); }
 
 void PinnedMemory::unlock() { pImpl->unlock(); }
 
-std::unique_ptr<PinnedMemory> PinnedMemory::Create(
+std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
@@ -316,7 +331,7 @@ std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     devices.reserve(coordinates.size());
     for (const auto& coord : coordinates) {
         if (view.contains(coord)) {
-            if (auto* device = view.get_device(coord)) {
+            if (auto* device = view.impl().get_device(coord)) {
                 devices.push_back(device);
             }
         }
@@ -330,23 +345,64 @@ std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
 
-    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    auto pinned_memory = std::shared_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    HostBufferSetPinnedMemory(host_buffer, pinned_memory);
+    return pinned_memory;
 }
 
-experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
+experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& /* mesh_device */) {
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
     bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
     if (!iommu_enabled) {
         return experimental::MemoryPinningParameters{0u, 0u, false};
     }
 
-    auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance().hal();
     experimental::MemoryPinningParameters params{};
     params.max_pins = hal.get_max_pinned_memory_count();
     params.max_total_pin_size = hal.get_total_pinned_memory_size();
-    // Disable NOC mapping until tested, except on Blackhole where it's supported.
-    params.can_map_to_noc = (mesh_device.arch() == tt::ARCH::BLACKHOLE);
+    // Ideally use a 64-bit addresses through the NOC, but otherwise use the iATU to translate 36-bit addresses to 64
+    // bit addresses.
+    params.can_map_to_noc = MetalContext::instance().hal().get_supports_64_bit_pcie_addressing() ||
+                            MetalContext::instance().get_cluster().is_noc_mapping_enabled();
     return params;
 }
 
+class HostBufferPinnedMemoryHelper {
+public:
+    static void SetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+        host_buffer.pinned_memory_ = std::move(pinned_memory);
+    }
+    static std::shared_ptr<PinnedMemory> GetPinnedMemory(HostBuffer& host_buffer) { return host_buffer.pinned_memory_; }
+};
+
+void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+    HostBufferPinnedMemoryHelper::SetPinnedMemory(host_buffer, std::move(pinned_memory));
+}
+
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) {
+    return HostBufferPinnedMemoryHelper::GetPinnedMemory(host_buffer);
+}
+
+class ShardDataTransferHelper {
+public:
+    static void SetPinnedMemory(
+        distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory) {
+        shard_data_transfer.pinned_memory_ = std::move(pinned_memory);
+    }
+    static const std::shared_ptr<PinnedMemory>& GetPinnedMemory(
+        const distributed::ShardDataTransfer& shard_data_transfer) {
+        return shard_data_transfer.pinned_memory_;
+    }
+};
+
+void ShardDataTransferSetPinnedMemory(
+    distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory) {
+    ShardDataTransferHelper::SetPinnedMemory(shard_data_transfer, std::move(pinned_memory));
+}
+
+const std::shared_ptr<PinnedMemory>& ShardDataTransferGetPinnedMemory(
+    const distributed::ShardDataTransfer& shard_data_transfer) {
+    return ShardDataTransferHelper::GetPinnedMemory(shard_data_transfer);
+}
 }  // namespace tt::tt_metal::experimental

@@ -4,7 +4,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <circular_buffer_config.hpp>
-#include "impl/dispatch/command_queue.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 
@@ -71,7 +71,7 @@ void CaptureReplayTrace(IDevice* /*device*/, uint8_t cq_id, uint32_t trace_id, b
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ReplayTraceCommand, cmd.Union());
 }
 
-void CaptureEnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
+void CaptureEnqueueTrace(HWCommandQueue& cq, uint32_t trace_id, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq.id(), trace_id, blocking);
     auto cmd = tt::tt_metal::flatbuffer::CreateEnqueueTraceCommand(ctx.get_builder(), cq.id(), trace_id, blocking);
@@ -197,7 +197,7 @@ void CaptureBufferDelete(const Buffer& buffer) {
 }
 
 void CaptureEnqueueWriteBuffer(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     bool blocking) {
@@ -218,16 +218,16 @@ void CaptureEnqueueWriteBuffer(
     // TODO (kmabee) - Currently support limited data formats. Long term we might not store data in flatbuffer,
     // but have it provided at runtime so just do what's easiest here and support few types for now.
     ::flatbuffers::Offset<::flatbuffers::Vector<uint32_t>> src_vector;
-    if (auto* uint32_vec = std::get_if<const std::shared_ptr<std::vector<uint32_t>>>(&src)) {
+    if (const auto* uint32_vec = std::get_if<const std::shared_ptr<std::vector<uint32_t>>>(&src)) {
         src_vector = ctx.get_builder().CreateVector(**uint32_vec);
-    } else if (auto* uint16_vec = std::get_if<const std::shared_ptr<std::vector<uint16_t>>>(&src)) {
+    } else if (const auto* uint16_vec = std::get_if<const std::shared_ptr<std::vector<uint16_t>>>(&src)) {
         // Convert uint16_t to uint32_t before creating the FlatBuffers vector
         std::vector<uint32_t> converted(uint16_vec->get()->begin(), uint16_vec->get()->end());
         src_vector = ctx.get_builder().CreateVector(converted);
     } else if (auto* void_ptr = std::get_if<const void*>(&src)) {
         // Assuming the void* points to a buffer of uint32_t values. Infer size, cast to uint32_t.
         size_t num_elements = buffer_ptr->size() / sizeof(uint32_t);
-        auto uint32_data = static_cast<const uint32_t*>(*void_ptr);
+        const auto* uint32_data = static_cast<const uint32_t*>(*void_ptr);
         src_vector = ctx.get_builder().CreateVector(uint32_data, num_elements);
     } else {
         TT_THROW("Unsupported HostDataType for captureEnqueueWriteBuffer()");
@@ -239,7 +239,7 @@ void CaptureEnqueueWriteBuffer(
 }
 
 void CaptureEnqueueReadBuffer(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* /*dst*/,
     bool blocking) {
@@ -262,7 +262,7 @@ void CaptureEnqueueReadBuffer(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueReadBufferCommand, cmd.Union());
 }
 
-void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void CaptureFinish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto& ctx = LightMetalCaptureContext::get();
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
 
@@ -400,7 +400,7 @@ void CaptureCreateCircularBuffer(
 }
 
 void CaptureLightMetalCompare(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* golden_data,
     bool is_user_data) {

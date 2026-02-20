@@ -4,22 +4,29 @@
 
 #include "rmsnorm.hpp"
 
-#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
+#include "ttnn/device.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn {
 
-ttnn::Tensor ExecuteRMSNorm::invoke(
-    const ttnn::Tensor& input_tensor,
+DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {
+    bool approx_mode = true;
+    bool fp32_acc = false;
+    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc);
+}
+
+Tensor rms_norm(
+    const Tensor& input_tensor,
     float epsilon,
-    const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& bias,
-    const std::optional<const ttnn::Tensor>& residual_input_tensor,
+    const std::optional<const Tensor>& weight,
+    const std::optional<const Tensor>& bias,
+    const std::optional<const Tensor>& residual_input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const LayerNormProgramConfig>& program_config,
+    const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
@@ -43,21 +50,20 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
         return result;
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    return tt::tt_metal::operation::run(
-               LayerNorm{
-                   .norm_type = LayerNormType::RMSNORM,
-                   .eps = epsilon,
-                   .output_mem_config = output_memory_config,
-                   .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
-                   .compute_kernel_config = kernel_config_val},
-               {input_tensor},
-               {residual_input_tensor, weight, bias, std::nullopt})
-        .at(0);
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
+                                                                   : ttnn::GetDefaultDevice()->arch();
+    auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
+    return ttnn::prim::layer_norm(
+        input_tensor,
+        epsilon,
+        weight,
+        bias,
+        residual_input_tensor,
+        output_memory_config,
+        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
+        kernel_config_val,
+        std::nullopt,  // dtype
+        prim::LayerNormType::RMSNORM);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn

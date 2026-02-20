@@ -75,11 +75,14 @@ const {
   computeLatestRunInfo,
   getMainWindowRuns,
   computeStatusChanges,
-  enrichRegressions,
-  enrichStayedFailing,
+  enrichFailingDetails,
+  detectJobLevelRegressions,
   buildRegressionsSection,
   buildStayedFailingSection,
 } = reporting;
+
+// Import the update owners script
+const { updateOwnersJson } = require('./update-owners-from-pipeline');
 
 
 /**
@@ -87,6 +90,17 @@ const {
  */
 async function run() {
   try {
+    // Update owners.json from pipeline_reorg files at the beginning
+    try {
+      const ownersPath = path.join(__dirname, 'owners.json');
+      const pipelineReorgDir = path.join(__dirname, '../../..', 'tests/pipeline_reorg');
+      updateOwnersJson(ownersPath, pipelineReorgDir);
+      core.info('Updated owners.json from pipeline_reorg files');
+    } catch (error) {
+      core.warning(`Failed to update owners.json: ${error.message}`);
+      // Continue execution even if update fails
+    }
+
     // Get inputs
     const cachePath = core.getInput('cache-path', { required: true }); // get the workflow data cache made by the fetch-workflow-data action
     const previousCachePath = core.getInput('previous-cache-path', { required: false }); // get the previous workflow data cache made by the fetch-workflow-data action from the most recent previous run on main branch
@@ -183,10 +197,14 @@ async function run() {
     );
 
     // Enrich regressions with first failing run within the window
-    await enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, github.context);
+    await enrichFailingDetails(regressedDetails, filteredGrouped, errorSnippetsCache, changes, github.context, 'success_to_fail');
 
     // Enrich stayed failing with first failing run within the window
-    await enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, github.context);
+    await enrichFailingDetails(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, github.context, 'stayed_failing');
+
+    // Detect job-level regressions in stayed_failing workflows
+    // This identifies NEW failing jobs in pipelines that were already failing
+    await detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, github.context);
 
     // upload the changes json to the artifact space
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();

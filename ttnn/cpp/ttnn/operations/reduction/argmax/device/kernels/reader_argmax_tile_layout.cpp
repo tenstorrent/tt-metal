@@ -4,8 +4,8 @@
 
 #include "argmax_tile_layout.hpp"
 #include "argmax_common.hpp"
-#include "accessor/tensor_accessor.h"
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
 
 #include <stdint.h>
 

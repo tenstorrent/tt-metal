@@ -1,4 +1,4 @@
-name: Aggregate Workflow Data
+name: (triage) Aggregate Workflow Data
 on:
   push:
     branches:
@@ -31,7 +31,10 @@ jobs:
       other-logs-index-path: ${{ steps.fetch.outputs.other-logs-index-path }}
       last-success-timestamps-path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
     steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
 
       - name: Install fetch-workflow-data dependencies
         shell: bash
@@ -53,16 +56,16 @@ jobs:
               ".github/workflows/galaxy-profiler-tests.yaml",
               ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
               ".github/workflows/galaxy-deepseek-tests.yaml",
-              ".github/workflows/galaxy-model-perf-tests.yaml",
+              ".github/workflows/galaxy-perf-tests.yaml",
               ".github/workflows/galaxy-demo-tests.yaml",
               ".github/workflows/galaxy-unit-tests.yaml",
-              ".github/workflows/galaxy-frequent-tests.yaml",
+              ".github/workflows/galaxy-integration-tests.yaml",
               ".github/workflows/galaxy-stress-tests.yaml",
-              ".github/workflows/galaxy-nightly-tests.yaml",
+              ".github/workflows/galaxy-e2e-tests.yaml",
               ".github/workflows/galaxy-quick.yaml",
-              ".github/workflows/t3000-model-perf-tests.yaml",
-              ".github/workflows/t3000-nightly-tests.yaml",
-              ".github/workflows/t3000-frequent-tests.yaml",
+              ".github/workflows/t3000-perf-tests.yaml",
+              ".github/workflows/t3000-e2e-tests.yaml",
+              ".github/workflows/t3000-integration-tests.yaml",
               ".github/workflows/t3000-profiler-tests.yaml",
               ".github/workflows/t3000-perplexity-tests.yaml",
               ".github/workflows/t3000-demo-tests.yaml",
@@ -139,7 +142,10 @@ jobs:
       regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
       alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
     steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
       - name: Discover previous successful run id
         id: prev
         uses: actions/github-script@v7
@@ -246,16 +252,49 @@ jobs:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
+    outputs:
+      slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
     steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
       - name: Handle failed workflows
         run: |
           echo "The following workflows have failed:"
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
+        id: slack-report
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  trigger-auto-triage:
+    needs: [analyze-data, handle-failures]
+    if: ${{ always() && needs.analyze-data.result == 'success' && fromJson(needs.analyze-data.outputs.regressed_workflows) != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        working-directory: .github/actions/trigger-auto-triage-for-regressions
+        run: npm install
+      - name: Trigger auto-triage for regressed jobs
+        uses: ./.github/actions/trigger-auto-triage-for-regressions
+        with:
+          regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
+          slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          send-slack-message: true

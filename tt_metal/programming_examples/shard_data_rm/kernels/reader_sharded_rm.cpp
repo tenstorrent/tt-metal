@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // export TT_METAL_DPRINT_CORES='(0,0)-(0,3)' in order to see DPRINT messages
 

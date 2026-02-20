@@ -10,10 +10,10 @@
 //  - # blocks must evenly divide the dispatch buffer size
 //  - dispatch buffer base must be page size aligned
 
-#include "dataflow_api.h"
-#include "dataflow_api_addrgen.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
@@ -54,6 +54,7 @@ constexpr uint32_t distributed_dispatcher = DISTRIBUTED_DISPATCHER;
 constexpr uint32_t host_completion_q_wr_ptr = HOST_COMPLETION_Q_WR_PTR;
 constexpr uint32_t dev_completion_q_wr_ptr = DEV_COMPLETION_Q_WR_PTR;
 constexpr uint32_t dev_completion_q_rd_ptr = DEV_COMPLETION_Q_RD_PTR;
+constexpr uint32_t dev_dispatch_progress_ptr = DEV_DISPATCH_PROGRESS_PTR;
 
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 
@@ -85,11 +86,8 @@ constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM
 
 constexpr uint8_t num_hops = static_cast<uint8_t>(NUM_HOPS);
 
-constexpr uint32_t my_dev_id = MY_DEV_ID;
 constexpr uint32_t ew_dim = EW_DIM;
 constexpr uint32_t to_mesh_id = TO_MESH_ID;
-constexpr uint32_t to_dev_id = TO_DEV_ID;
-constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
 
@@ -132,6 +130,10 @@ static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
 static uint32_t write_offset[CQ_DISPATCH_MAX_WRITE_OFFSETS];  // added to write address on non-host writes
 
+// Runtime args
+static uint32_t my_dev_id;
+static uint32_t to_dev_id;
+static uint32_t router_direction;
 using RelayClientType =
     CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>;
 
@@ -179,6 +181,9 @@ constexpr uint32_t l1_cache_elements =
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
+static_assert(
+    l1_cache_elements * sizeof(uint32_t) / sizeof(CQDispatchWritePackedLargeUnicastSubCmd) >=
+    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
 
 // Used to send go signals asynchronously. Currently unused but this is a prototype for a GoSignalState
 // ring buffer that can be used to store and then asynchronously send Go Signals.
@@ -210,6 +215,10 @@ FORCE_INLINE volatile uint32_t* get_cq_completion_read_ptr() {
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(dev_completion_q_wr_ptr);
+}
+
+FORCE_INLINE volatile uint32_t* get_dispatch_progress_ptr() {
+    return reinterpret_cast<volatile uint32_t*>(dev_dispatch_progress_ptr);
 }
 
 FORCE_INLINE
@@ -489,9 +498,25 @@ void process_write_linear(uint32_t num_mcast_dests) {
 
     while (length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
+#if defined(FABRIC_RELAY)
+        uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
+        bool hit_boundary = false;
+        if (available_data == 0) {
+            available_data = dispatch_cb_reader.get_cb_page_and_release_pages(
+                data_ptr, [&](bool /*will_wrap*/) { hit_boundary = true; });
+        }
+        uint32_t xfer_size = length > available_data ? available_data : length;
+        if (hit_boundary) {
+            if (multicast) {
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
+            } else {
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
+            }
+        }
+#else
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
-
+#endif
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
@@ -699,6 +724,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
     uint32_t count = cmd->write_packed_large.count;
+    ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS);
     uint32_t alignment = cmd->write_packed_large.alignment;
     uint32_t write_offset_index = cmd->write_packed_large.write_offset_index;
     uint32_t local_write_offset = write_offset[write_offset_index];
@@ -719,7 +745,9 @@ void process_write_packed_large(uint32_t* l1_cache) {
     bool must_barrier = true;
     while (count != 0) {
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
-        uint32_t length = sub_cmd_ptr->length;
+        // CQDispatchWritePackedLargeSubCmd always stores length - 1, so add 1 to get the actual length
+        // This avoids the need to handle the special case where 65536 bytes overflows to 0
+        uint32_t length = sub_cmd_ptr->length_minus1 + 1;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align_power_of_2(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
@@ -815,6 +843,83 @@ void process_write_packed_large(uint32_t* l1_cache) {
         count--;
     }
     noc_nonposted_writes_acked[noc_index] = mcasts;
+
+    cmd_ptr = data_ptr;
+}
+
+// Unicast variant of packed large write with uint32_t length and discard support
+void process_write_packed_large_unicast(uint32_t* l1_cache) {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+
+    uint32_t count = cmd->write_packed_large_unicast.count;
+    ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+    uint32_t alignment = cmd->write_packed_large_unicast.alignment;
+    uint32_t write_offset_index = cmd->write_packed_large_unicast.write_offset_index;
+    uint32_t local_write_offset = write_offset[write_offset_index];
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+    data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
+
+    constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        (volatile uint32_t tt_l1_ptr*)(cmd_ptr + sizeof(CQDispatchCmd)),
+        count * sub_cmd_size / sizeof(uint32_t),
+        l1_cache);
+
+    CQDispatchWritePackedLargeUnicastSubCmd* sub_cmd_ptr = (CQDispatchWritePackedLargeUnicastSubCmd*)l1_cache;
+
+    while (count != 0) {
+        uint32_t dst_addr = sub_cmd_ptr->addr;
+        uint32_t length = sub_cmd_ptr->length;
+        uint32_t pad_size = align_power_of_2(length, alignment) - length;
+
+        // Check if this is a discard transaction
+        bool is_discard = (dst_addr == CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD);
+
+        if (!is_discard) {
+            // Normal unicast write
+            dst_addr += local_write_offset;
+            uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+
+            while (length != 0) {
+                // More data needs to be written, but we've exhausted the CB. Acquire more pages.
+                uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+
+                // Transfer size is min(remaining_length, data_available_in_cb)
+                uint32_t xfer_size = (length > available_data) ? available_data : length;
+
+                noc_async_write(data_ptr, get_noc_addr_helper(dst_noc, dst_addr), xfer_size);
+
+                length -= xfer_size;
+                data_ptr += xfer_size;
+                dst_addr += xfer_size;
+            }
+        } else {
+            // Discard: skip data without issuing NOC write
+            uint32_t remaining_length = length;
+            while (remaining_length != 0) {
+                uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+
+                uint32_t skip_size = (remaining_length > available_data) ? available_data : remaining_length;
+
+                data_ptr += skip_size;
+                remaining_length -= skip_size;
+            }
+        }
+
+        // Handle padded size and potential wrap
+        if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
+            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                if (will_wrap) {
+                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+                    pad_size -= orphan_size;
+                }
+            });
+        }
+        data_ptr += pad_size;
+
+        sub_cmd_ptr++;
+        count--;
+    }
 
     cmd_ptr = data_ptr;
 }
@@ -1087,6 +1192,12 @@ re_run_command:
             process_write_packed_large(l1_cache);
             break;
 
+        case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+            // DPRINT << "cmd_write_packed_large_unicast" << ENDL();
+            DeviceTimestampedData("packed_large_unicast_data_dispatch", cmd->write_packed_large_unicast.type);
+            process_write_packed_large_unicast(l1_cache);
+            break;
+
         case CQ_DISPATCH_CMD_WAIT:
             // DPRINT << "cmd_wait" << ENDL();
             process_wait();
@@ -1221,6 +1332,10 @@ void kernel_main() {
 #else
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
+    // Get runtime args
+    my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
+    to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
+    router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
@@ -1270,18 +1385,20 @@ void kernel_main() {
             fabric_worker_buffer_index_sem,
             fabric_mux_status_address,
             my_fabric_sync_status_addr,
-            my_dev_id,
-            to_dev_id,
             to_mesh_id,
             ew_dim,
-            router_direction,
             fabric_header_rb_base,
             num_hops,
-            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #endif
     }
     bool done = false;
     uint32_t heartbeat = 0;
+    uint32_t dispatch_progress = 0;  // Track number of commands processed for tracking dispatch progress updates
+
+    // Initialize progress counter in L1 memory
+    *get_dispatch_progress_ptr() = dispatch_progress;
+
     while (!done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
 
@@ -1289,6 +1406,10 @@ void kernel_main() {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache) : process_cmd_h(cmd_ptr);
+
+        // Increment dispatch progress counter and write to L1 memory
+        dispatch_progress++;
+        *get_dispatch_progress_ptr() = dispatch_progress;
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);

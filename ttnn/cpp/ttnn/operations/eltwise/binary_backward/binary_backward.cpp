@@ -122,8 +122,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
 std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
     const Tensor& grad,
     const Tensor& input,
-    float alpha,
-    const std::optional<MemoryConfig>& output_mem_config,
+    float /*alpha*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     input_grad = input_grad.value_or(ttnn::empty_like(input));
@@ -156,8 +156,8 @@ std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
 
 std::vector<ComplexTensor> ExecuteBackwardAdd::invoke(
     const ComplexTensor& grad,
-    const ComplexTensor& input,
-    const ComplexTensor& other,
+    const ComplexTensor& /*input*/,
+    const ComplexTensor& /*other*/,
     float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
@@ -175,13 +175,12 @@ std::vector<ComplexTensor> ExecuteBackwardAdd::invoke(
 std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const Tensor& grad,
     const Tensor& input,
-    float alpha,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    float /*alpha*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
+    const std::optional<Tensor>& input_grad) {
     std::vector<std::optional<Tensor>> result;
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
-    ttnn::assign(grad, input_grad.value());
-    result.emplace_back(input_grad);
+    result.emplace_back(
+        input_grad.has_value() ? ttnn::assign(grad, input_grad.value()) : ttnn::assign(grad, ttnn::empty_like(input)));
     return result;
 }
 
@@ -191,15 +190,15 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return ttnn::subalpha_bw(grad, input, other, 1.0f, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
 
 std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     const ComplexTensor& grad,
-    const ComplexTensor& input,
-    const ComplexTensor& other,
+    const ComplexTensor& /*input*/,
+    const ComplexTensor& /*other*/,
     float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
@@ -383,14 +382,17 @@ std::vector<Tensor> ExecuteBackwardRemainder::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor result_div = ttnn::div(input, other, true, "floor", std::nullopt, output_mem_config);
+    Tensor result_div = ttnn::div(input, other, false, "floor", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
 
 std::vector<Tensor> ExecuteBackwardRemainder::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad,
+    const Tensor& /*input*/,
+    float /*scalar*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -403,14 +405,17 @@ std::vector<Tensor> ExecuteBackwardFmod::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor result_div = ttnn::div(input, other, true, "trunc", std::nullopt, output_mem_config);
+    Tensor result_div = ttnn::div(input, other, false, "trunc", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
 
 std::vector<Tensor> ExecuteBackwardFmod::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad,
+    const Tensor& /*input*/,
+    float /*scalar*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -436,7 +441,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     const Tensor& input,
     const Tensor& other,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<ttnn::Tensor>> grad_tensor = {std::nullopt, std::nullopt};
@@ -457,8 +462,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const Tensor& /*input*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<ttnn::Tensor>> grad_tensor = {std::nullopt};
     grad_tensor[0] = input_grad.has_value() ? ttnn::assign(grad, input_grad.value()) : grad;
@@ -471,7 +476,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     const Tensor& other,
     int dim,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& /*memory_config*/,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> grad_tensor = {std::nullopt, std::nullopt};
@@ -511,8 +516,8 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardRsub::invoke(
     const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
+    const Tensor& /*input*/,
+    const Tensor& /*other*/,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
@@ -535,7 +540,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_a,
     const Tensor& input_b,
-    std::string approximate,
+    const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
         (approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
@@ -553,7 +558,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_tensor,
     float bias,
-    std::string approximate,
+    const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL(
@@ -630,17 +635,17 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     float scalar,
-    const std::optional<std::string>& round_mode,
+    const std::optional<std::string>& rounding_mode,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     std::vector<std::optional<Tensor>> result;
     input_grad = input_grad.value_or(ttnn::empty_like(input));
 
-    if (round_mode == std::nullopt) {
+    if (rounding_mode == std::nullopt) {
         float t_inf = std::numeric_limits<float>::infinity();
         if (scalar == 0.0) {
             float t_nan = std::nanf("");
@@ -667,7 +672,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    const std::optional<std::string>& round_mode,
+    const std::optional<std::string>& rounding_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
@@ -676,10 +681,10 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     preallocated_tensors_check(
         input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
     TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    if (round_mode == std::nullopt) {
+    if (rounding_mode == std::nullopt) {
         float t_nan = std::nanf("");
         float t_inf = std::numeric_limits<float>::infinity();
         float neg_inf = -std::numeric_limits<float>::infinity();
@@ -782,7 +787,7 @@ std::vector<ComplexTensor> ExecuteBackwardDiv::invoke(
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
     const Tensor& grad,
-    const Tensor& input,
+    const Tensor& /*input*/,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {

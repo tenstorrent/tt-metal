@@ -192,7 +192,8 @@ These regressions will also run after every pushed commit to the GitHub repo.
 ```
 # Build directly with CMake for full control or run the provided script for building all tests.
 ./build_metal.sh --build-tests
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
+./tests/scripts/run_python_api_unit_tests.sh
+./tests/scripts/run_cpp_unit_tests.sh
 ```
 
 If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests
@@ -224,13 +225,13 @@ on model tests.
 If you are using a machine with virtual machine specs, please use
 
 ```
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_virtual_machine
+pytest models/ -m models_performance_virtual_machine
 ```
 
 If you are using a machine with bare metal machine specs, please use
 
 ```
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_bare_metal
+pytest models/ -m models_performance_bare_metal
 ```
 
 ### Running C++ Integration Tests (Legacy)
@@ -329,7 +330,7 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
   - Once the design has been "proven", disable watcher for performance testing.
 - To print within a kernel, use the [Debug Print API](docs/source/tt-metalium/tools/kernel_print.rst):
   - Define the environment variable to specify which cores to print from, `export TT_METAL_DPRINT_CORES=(0,0)-(4,4)` to print from a 5x5 grid of cores.
-  - In the kernel, `#include "debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
+  - In the kernel, `#include "api/debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
   - For more information on kernel printing, see the [Kernel Debug Print documentation](docs/source/tt-metalium/tools/kernel_print.rst).
 
 ### Debugging device hangs
@@ -812,11 +813,6 @@ After that, the UI will usually delete your branch.
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
-
-### A recommended development flow for model writers
-
-Please refer to documentation for [adding a model](./models/docs/MODEL_ADD.md) and
-for [graduating](./models/docs/MODEL_GRADUATION.md) it.
 
 ### New feature and design specifications
 

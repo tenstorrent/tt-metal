@@ -15,14 +15,13 @@ namespace ttnn {
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
 
-namespace operations {
-namespace trace {
+namespace operations::trace {
 
 MeshTraceId begin_trace_capture(MeshDevice* device, std::optional<QueueId> cq_id);
 void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id);
 void execute_trace(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking);
 void release_trace(MeshDevice* device, MeshTraceId trace_id);
 
-}  // namespace trace
-}  // namespace operations
+}  // namespace operations::trace
+
 }  // namespace ttnn

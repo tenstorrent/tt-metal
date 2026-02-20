@@ -20,7 +20,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = input.device();
+    auto* device = input.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -90,10 +90,10 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "reader_moreh_norm_w.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "writer_moreh_norm_w.cpp";
 
@@ -120,7 +120,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
         }
     }
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "moreh_norm_w_kernel.cpp";
 
@@ -193,7 +193,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
 
 void MorehNormOperation::ProgramFactoryWOther::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;

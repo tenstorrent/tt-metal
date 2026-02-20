@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <vector>
 
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
@@ -14,12 +15,10 @@ namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2 {
 
 std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
     auto p = std::floor(ord);
-    auto decimal = ord - p;
+    auto fractional_part = ord - p;
     const bool p_is_negative = p < 0.0f;
-    if (p_is_negative) {
-        p = -p;
-    }
-    return std::make_tuple(static_cast<uint32_t>(p), decimal, p_is_negative);
+    uint32_t integer_part = static_cast<uint32_t>(std::abs(p));
+    return std::make_tuple(integer_part, fractional_part, p_is_negative);
 }
 
 MorehClipGradNormStep2Operation::ProgramFactory::cached_program_t
@@ -80,10 +79,10 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "reader_moreh_clip_grad_norm_step2.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "writer_moreh_clip_grad_norm_step2.cpp";
 
@@ -97,7 +96,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "moreh_clip_grad_norm_step2_kernel.cpp";
 

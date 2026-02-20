@@ -8,7 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::reduction::detail::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
@@ -50,9 +50,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 }  // namespace
 
 FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FastReduceNCParams& operation_attributes,
+    const FastReduceNCInputs& tensor_args,
+    Tensor& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -173,9 +173,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
@@ -193,7 +193,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
     tt_metal::CreateKernel(
         program,
@@ -293,9 +293,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
 
 void FastReduceNCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FastReduceNCParams&,
+    const FastReduceNCInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto* input_buffer = tensor_args.input.buffer();
     const auto* output_buffer = tensor_return_value.buffer();
     auto& program = cached_program.program;
@@ -315,4 +315,4 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail::program
+}  // namespace ttnn::experimental::prim

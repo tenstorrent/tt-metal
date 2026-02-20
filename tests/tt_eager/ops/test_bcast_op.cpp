@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
@@ -20,7 +20,7 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
@@ -35,7 +35,7 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-        auto device = device_owner.get();
+        auto* device = device_owner.get();
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////

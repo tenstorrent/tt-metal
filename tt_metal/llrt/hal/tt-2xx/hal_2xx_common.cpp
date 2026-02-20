@@ -28,16 +28,32 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                 case HalProcessorClassType::COMPUTE: {
                     switch (params.processor_id) {
                         case 0:
+                        case 4:
+                        case 8:
+                        case 12:
                             defines.push_back("UCK_CHLKC_UNPACK");
                             defines.push_back("NAMESPACE=chlkc_unpack");
                             break;
                         case 1:
+                        case 5:
+                        case 9:
+                        case 13:
                             defines.push_back("UCK_CHLKC_MATH");
                             defines.push_back("NAMESPACE=chlkc_math");
                             break;
                         case 2:
+                        case 6:
+                        case 10:
+                        case 14:
                             defines.push_back("UCK_CHLKC_PACK");
                             defines.push_back("NAMESPACE=chlkc_pack");
+                            break;
+                        case 3:
+                        case 7:
+                        case 11:
+                        case 15:
+                            defines.push_back("UCK_CHLKC_UNPACK");
+                            defines.push_back("NAMESPACE=chlkc_unpack");
                             break;
                         default: TT_THROW("Invalid processor id {}", params.processor_id);
                     }
@@ -78,9 +94,9 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                     break;
                 case HalProcessorClassType::COMPUTE:
                     if (params.is_fw) {
-                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/trisc.cc");
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/trisc.cc");
                     } else {
-                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/trisck.cc");
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/trisck.cc");
                     }
                     break;
             }
@@ -126,6 +142,13 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
             TT_THROW(
                 "Unsupported programmable core type {} to query target name", enchantum::to_string(params.core_type));
     }
+}
+
+std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuildQueryInterface::Params& params) const {
+    if (params.core_type == HalProgrammableCoreType::TENSIX && params.processor_class == HalProcessorClassType::DM) {
+        return "dm0";
+    }
+    return target_name(params);
 }
 
 }  // namespace tt::tt_metal::hal_2xx

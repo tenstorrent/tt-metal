@@ -14,8 +14,7 @@
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 // For command dest type
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 namespace v2 {
 struct TensorSlice {
     using ords_t = Shape4D<uint32_t>;
@@ -222,6 +221,11 @@ struct CclCommandArg {};
 using args_elem_t = uint32_t;
 template <typename T, CclCommandArgCode CODE>
 struct CclCommandArgBase {
+private:
+    CclCommandArgBase() = default;
+    friend T;
+
+public:
     // Let the user override
     using field_type = typename command_arg_field<CODE>::type;  // Ensure T::type is accessible
     static constexpr std::size_t size_in_words() { return (sizeof(T) + sizeof(uint32_t) - 1) / sizeof(uint32_t); }
@@ -376,7 +380,6 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
 
         CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::pack_to(
             &args[i], command_tensor.worker_pages_per_slice);
-        i += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
     }
 
     void pack_to(args_elem_t* args) const {
@@ -399,7 +402,6 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
         i += CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
 
         CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::unpack(&args[i], out.worker_pages_per_slice);
-        i += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
     }
 
     void unpack(volatile args_elem_t const* args) {
@@ -667,5 +669,4 @@ struct CclCommandHeader {
 static_assert(sizeof(CclCommandHeader) == sizeof(uint32_t));
 
 }  // namespace cmd
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

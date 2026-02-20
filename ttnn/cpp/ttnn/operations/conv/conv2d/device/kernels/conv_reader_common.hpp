@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/constants.hpp>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
@@ -434,9 +434,6 @@ FORCE_INLINE void read_activation_data(
                         conv_act_c_read_bytes,
                         coalesced_read_bytes,
                         stride_h_bytes);
-                    if constexpr (act_block_w_extra_align_bytes) {
-                        l1_write_addr_act += act_block_w_extra_align_bytes;
-                    }
                 } else {
                     read_dilated_channels<weight_size_h, weight_size_w>(
                         l1_write_addr_act,
@@ -445,6 +442,9 @@ FORCE_INLINE void read_activation_data(
                         conv_act_c_read_bytes,
                         stride_h_bytes,
                         stride_w_bytes);
+                }
+                if constexpr (act_block_w_extra_align_bytes) {
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
                 }
             }
         }

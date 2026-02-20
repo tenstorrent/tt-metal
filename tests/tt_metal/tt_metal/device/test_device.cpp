@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -41,6 +41,7 @@
 #include <tt-metalium/vector_aligned.hpp>
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -60,7 +61,7 @@ bool l1_ping(
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
@@ -95,7 +96,7 @@ bool dram_ping(
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (unsigned int channel = 0; channel < num_channels; channel++) {
@@ -212,7 +213,7 @@ TEST_F(MeshDeviceFixture, TensixPingIllegalL1Cores) {
 TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t num_l1_banks = mesh_device->allocator()->get_num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
         std::map<uint32_t, uint32_t> bank_id_to_value;
@@ -288,7 +289,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -323,7 +324,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
             .noc = NOC::RISCV_0_default,
             .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
     ChipId mmio_device_id =
@@ -344,7 +345,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     CoreCoord core{0, 0};
     const auto& mesh_device = devices_.at(0);
-    const auto device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->get_devices()[0];
 
     uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
@@ -393,7 +394,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
 
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -490,7 +491,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     // Use first device from the mesh for this test
     MeshCoordinate target_coord(0, 0);
-    IDevice* device = mesh_device->get_device(target_coord);
+    IDevice* device = mesh_device->impl().get_device(target_coord);
     EXPECT_TRUE(device->is_mmio_capable());
 
     CoreCoord logical_core(0, 0);
@@ -520,26 +521,19 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
             MetalContext::instance().hal().get_write_alignment(HalMemType::HOST),
         0);
 
-    // Get the pinned memory address that the device can write to
-    uint64_t pinned_memory_device_addr = pinned_memory->get_device_addr(device->id());
-
     // Write source data to L1
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
     // Create program and kernel for mesh workload
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    // Compute PCIe NOC0 XY encoding for the MMIO device and split 64-bit PCIe address
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
-    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
-    TT_ASSERT(!pcie_cores.empty());
-    auto pcie_xy = pcie_cores.front();
-    uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
+    auto noc_addr = pinned_memory->get_noc_addr(device->id());
+    ASSERT_TRUE(noc_addr.has_value());
+    ASSERT_EQ(noc_addr.value().device_id, device->id());
 
-    uint32_t dst_lo = static_cast<uint32_t>(pinned_memory_device_addr & 0xFFFFFFFFull);
-    uint32_t dst_hi = static_cast<uint32_t>(pinned_memory_device_addr >> 32);
+    uint32_t dst_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
+    uint32_t pcie_xy_enc = noc_addr.value().pcie_xy_enc;
 
     CreateKernel(
         program,
@@ -563,6 +557,61 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     // Compare with a std::vector copy to avoid allocator type mismatch in EXPECT_EQ
     std::vector<uint32_t> aligned_copy(aligned_buf->begin(), aligned_buf->end());
     EXPECT_EQ(src, aligned_copy);
+}
+
+// Test that slow dispatch users get full grid access (no reserved dispatch cores)
+TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_simulator_enabled()) {
+        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware.";
+    }
+
+    for (const auto& mesh_device : devices_) {
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            auto* device = mesh_device->get_device(coord[0], coord[1]);
+            auto compute_grid = device->compute_with_storage_grid_size();
+            auto logical_grid = device->logical_grid_size();
+
+            EXPECT_EQ(compute_grid.x, logical_grid.x)
+                << "Device " << device->id() << ": compute grid X (" << compute_grid.x
+                << ") != logical grid X (" << logical_grid.x << ")";
+            EXPECT_EQ(compute_grid.y, logical_grid.y)
+                << "Device " << device->id() << ": compute grid Y (" << compute_grid.y
+                << ") != logical grid Y (" << logical_grid.y << ")";
+
+            log_info(
+                tt::LogTest,
+                "Device {}: compute_grid={}x{}, logical_grid={}x{} - FULL GRID ACCESS ✓",
+                device->id(),
+                compute_grid.x,
+                compute_grid.y,
+                logical_grid.x,
+                logical_grid.y);
+        }
+
+        // Validate that buffers can be created and used with the full grid
+        uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+        const uint32_t num_tiles = 128;
+
+        distributed::DeviceLocalBufferConfig buffer_config{
+            .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
+        distributed::ReplicatedBufferConfig global_config{.size = num_tiles * single_tile_size};
+        auto mesh_buffer = distributed::MeshBuffer::create(global_config, buffer_config, mesh_device.get());
+
+        std::vector<uint32_t> src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
+        std::iota(src_vec.begin(), src_vec.end(), 42);
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, src_vec);
+        Finish(mesh_device->mesh_command_queue());
+
+        std::vector<uint32_t> dst_vec = {};
+        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer, true);
+        EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";
+    }
 }
 
 }  // namespace tt::tt_metal

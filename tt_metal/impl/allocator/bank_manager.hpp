@@ -22,9 +22,7 @@
 #include "hal_types.hpp"
 #include <tt-metalium/allocator_state.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class BufferType;
 namespace allocator {
 class Algorithm;
@@ -70,7 +68,7 @@ public:
 
     BankManager(
         const BufferType& buffer_type,
-        const std::vector<int64_t>& bank_descriptors,
+        const std::vector<int64_t>& bank_offsets,
         DeviceAddr size_bytes,
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
@@ -78,7 +76,7 @@ public:
         const AllocatorDependencies& dependencies = AllocatorDependencies());
     BankManager(
         const BufferType& buffer_type,
-        const std::unordered_map<uint32_t, int64_t>& bank_id_to_descriptor,
+        const std::unordered_map<uint32_t, int64_t>& bank_id_to_bank_offset,
         DeviceAddr size_bytes,
         DeviceAddr interleaved_address_limit,
         uint32_t alignment_bytes,
@@ -126,6 +124,14 @@ public:
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
+    // High water mark tracking for all allocations (both bottom-up and top-down)
+    // Tracks the maximum address extent reached during the tracking period, including deallocated buffers
+    void begin_high_water_mark_tracking();
+    DeviceAddr end_high_water_mark_tracking();
+    DeviceAddr get_high_water_mark() const;
+    DeviceAddr get_allocation_high_water_mark() const;
+    DeviceAddr get_deletion_high_water_mark() const;
+
     // AllocatorState Methods
     // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
@@ -169,6 +175,11 @@ private:
     // Per-allocator cache of: merged allocated ranges of all other dependent allocators
     ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
 
+    // High water mark tracking for allocations and deallocations
+    bool tracking_high_water_mark_ = false;
+    DeviceAddr allocation_high_water_mark_ = 0;
+    DeviceAddr deletion_high_water_mark_ = 0;
+
     /*********************************
      * Allocator-independent methods *
      *********************************/
@@ -203,6 +214,4 @@ private:
         AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit);
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

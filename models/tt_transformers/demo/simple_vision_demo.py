@@ -8,13 +8,12 @@ from typing import Optional
 
 from loguru import logger
 from PIL import Image as PIL_Image
-from pkg_resources import resource_filename
 from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
+IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -436,7 +435,7 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward(
+                    logits = generator.decode_forward_llama_vision(
                         position_id,
                         next_token_tensor,
                         prefill_batch_xattn_masks,
@@ -446,6 +445,9 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         enable_trace=enable_trace,
                     )
+
+                    if isinstance(logits, tuple):
+                        logits = logits[0]
 
                     next_tokens, next_texts = sampler(logits)
                     # Update next token
@@ -557,10 +559,10 @@ def test_multimodal_demo_text(
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (17, None),  # None to default to tolerance percentage (1.15)
             # second value to override default tolerance percentage (1.15); observing variance across different CI machines
-            # For T3K Llama-3.2-90B, the decode_t/s/u target is set to 3 with a wide tolerance (4.17, i.e. 317%) due to high variance observed across CI machines.
+            # For T3K Llama-3.2-90B, the decode_t/s/u target used to be set to 3 with a wide tolerance (4.3, i.e. 330% increase) due to high variance observed across CI machines.
             # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
-            # This wide tolerance is necessary to avoid spurious test failures until CI infrastructure is stabilized or performance variance is reduced.
-            ("T3K", "Llama-3.2-90B", 1): (3, 4.17),
+            # The slow CI machine seems to be out of circulation for now, so we can use a high target to avoid spurious test failures.
+            ("T3K", "Llama-3.2-90B", 1): (12, None),
         }
 
         perf_targets = {}

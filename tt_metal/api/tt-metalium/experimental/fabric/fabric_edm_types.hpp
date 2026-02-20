@@ -5,10 +5,18 @@
 #pragma once
 
 #include <cstdint>
+#include <iostream>
 
 namespace tt::tt_fabric {
 
-enum class Topology { Ring = 0, Linear = 1, Mesh = 2, Torus = 3 };
+enum class Topology { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4 };
+
+// Topology classification utilities
+constexpr bool is_2D_topology(Topology topology) { return topology == Topology::Mesh || topology == Topology::Torus; }
+
+constexpr bool is_ring_or_torus(Topology topology) { return topology == Topology::Ring || topology == Topology::Torus; }
+
+std::ostream& operator<<(std::ostream& os, const Topology& topology);
 
 struct WorkerXY {
     uint16_t x;

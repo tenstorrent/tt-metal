@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -93,7 +93,7 @@ void kernel_main() {
     uint8_t actual_buffer[PACKET_HEADER_MAX_SIZE];
 
 #ifdef FABRIC_2D
-    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE;
+    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE;
     auto expected_packet_header = reinterpret_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(expected_buffer);
     auto actual_packet_header = reinterpret_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(actual_buffer);
     volatile uint8_t* actual_route_buffer = actual_packet_header->route_buffer;

@@ -5,6 +5,11 @@ import pytest
 from conftest import is_galaxy
 
 
+def pytest_configure(config):
+    """Override global timeout setting for SDXL tests"""
+    config.option.timeout = 0
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--start-from",

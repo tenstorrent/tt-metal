@@ -3,6 +3,25 @@ allocation_policies:
       max_configs_per_core: 4
 
 Tests:
+  ### NEIGHBOR EXCHANGE BANDWIDTH TESTS ###
+  - name: "NeighborExchangeUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100000
+
+    patterns:
+      - type: neighbor_exchange
+
   ### LINEAR BANDWIDTH TESTS ###
   - name: "LinearMulticast"
     benchmark_mode: true
@@ -231,3 +250,209 @@ Tests:
             num_packets: 256  # number of independent latency samples to collect
             destination:
               device: [0, 1]
+
+  ### CUSTOM MAX PACKET SIZE LINEAR BANDWIDTH TESTS ###
+  - name: "CustomMaxPacketSizeLinear3K"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 3264
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 3264
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeLinear5K"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 5440
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 5440
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeLinear7K"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 7616
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 7616
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeLinear8K"
+    skip: [wormhole_b0]
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 8704
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 8704
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeLinear15K"
+    skip: [wormhole_b0]
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 15232
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 15232
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  ### CUSTOM MAX PACKET SIZE MESH BANDWIDTH TESTS ###
+  - name: "CustomMaxPacketSizeMesh3K"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 3264
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 3264
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeMesh5K"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 5440
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 5440
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeMesh7K"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 7616
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 7616
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeMesh8K"
+    skip: [wormhole_b0]
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 8704
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 8704
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "CustomMaxPacketSizeMesh15K"
+    skip: [wormhole_b0]
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 15232
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 15232
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3

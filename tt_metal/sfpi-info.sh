@@ -15,8 +15,8 @@
 # $FILE CMAKE [$pkg] -- emit cmake script to set variables
 
 # For the realm of elves, releasing the toolchain
-# eval $($FILE RELEASE $version) -- generate sfpi variables for release
-# $FILE *.md5 -- emit variable initializations from md5 file(s)
+# eval $($FILE VERSION $version) -- generate sfpi variables for release
+# $FILE CREATE [$dirs] -- emit sfpi-version file from hash files
 
 # For the realm of dwarves, building the toolchain
 # $FILE BUILD [$DIR]
@@ -26,8 +26,8 @@ set -e
 if [[ ${#1} = 0 ]]; then
     cat >&2 <<EOF
 Usage:
-$0 *.md5	 - generate release information
-$0 RELEASE \$VER - generate release names
+$0 CREATE [\$DIRS] - generate release information
+$0 VERSION \$VER - generate release names
 $0 SHELL [\$PKG] - shell use for PKG
 $0 CMAKE [\$PKG] - CMAKE use for PKG
 $0 BUILD [\$DIR] - clone and build a toolchain
@@ -36,33 +36,49 @@ EOF
 fi
 
 version_file="sfpi-version"
-if [[ ${1-} =~ '.md5'$ ]]; then
-    # convert md5 files into sfpi-version file
+hashtype=sha256
+if [[ ${1-} = CREATE ]]; then
+    # create sfpi-version file
     version=
     exit_code=0
     echo '# sfpi version information' >$version_file
     echo 'sfpi_repo=https://github.com/tenstorrent/sfpi' >>$version_file
-    for file in "$@"
+    echo "sfpi_hashtype=$hashtype" >>$version_file
+    shift
+    if [[ ${#1} = 0 ]]; then
+	set .
+    fi
+    files=()
+    for dir in "$@"
     do
-	ver="${file##*/sfpi_}"
-	ver="${ver%%_*}"
-	if [[ $ver != $version ]]; then
-	    if [[ -n $version ]]; then
-	       echo "ERROR: Multiple versions" >&2
-	       exit_code=1
+	for file in "$dir"/*.$hashtype
+	do
+	    if ! [[ -r "$file" ]]; then
+		echo "$dir contains no $hashtype files" >&2
+		exit 1
 	    fi
-	    version=$ver
-	    echo sfpi_version=$version >>$version_file
-	fi
+	    files+=("$file")
+	    ver="${file##*/sfpi_}"
+	    ver="${ver%%_*}"
+	    if [[ $ver != $version ]]; then
+		if [[ -n $version ]]; then
+		    echo "ERROR: Multiple versions" >&2
+		    exit_code=1
+		fi
+		version=$ver
+		echo sfpi_version=$version >>$version_file
+	    fi
+	done
     done
-    sed 's/^\([0-9a-f]*\) \*sfpi_[^_]*_\([^.]*\)\.\(.*\)$/sfpi_\2_\3_md5=\1/' "$@" >>$version_file
+    sed 's/^\([0-9a-f]*\) \*sfpi_[^_]*_\([^.]*\)\.\(.*\)$/sfpi_\2_\3_hash=\1/' "${files[@]}" >>$version_file
     echo "$version_file for $version created"
     exit $exit_code
 fi
 
-if [[ ${1-} = RELEASE ]]; then
+if [[ ${1-} = VERSION ]]; then
     # releaser of sfpi
     sfpi_version=$2
+    sfpi_hashtype=$hashtype
 else
     source $(dirname $0)/$version_file
 fi
@@ -93,7 +109,7 @@ sfpi_arch=$(uname -m)
 sfpi_url=$sfpi_repo/releases/download/$sfpi_version
 sfpi_filename=sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}
 
-if [[ ${1-} != RELEASE ]]; then
+if [[ ${1-} != VERSION ]]; then
     # querier of sfpi-version
     if [[ ${1-} = BUILD ]]; then
 	sfpi_pkg=txz
@@ -101,8 +117,12 @@ if [[ ${1-} != RELEASE ]]; then
 	sfpi_pkg=$2
     fi
     sfpi_filename+=".$sfpi_pkg"
-    sfpi_md5=$(eval echo "\${sfpi_${sfpi_arch}_${sfpi_dist}_${sfpi_pkg}_md5-}")
+    sfpi_hash=$(eval echo "\${sfpi_${sfpi_arch}_${sfpi_dist}_${sfpi_pkg}_hash-}")
     unset sfpi_builton
+fi
+if [[ ${1-} = CMAKE ]]; then
+    # CMake LIKES THINGS SHOUTED AT IT
+    sfpi_HASHTYPE="${sfpi_hashtype^^}"
 fi
 
 if [[ ${1-} != BUILD ]]; then

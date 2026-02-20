@@ -14,11 +14,9 @@
 #include "erisc_datamover_builder.hpp"
 #include "tt-metalium/kernel_types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "erisc_datamover_builder_helper.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/common/executor.hpp"
-#include "tt_metal/fabric/erisc_datamover_builder_helper.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_stl/small_vector.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -121,16 +119,6 @@ public:
         TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
-};
-
-class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
-public:
-    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
-};
-
-class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
-public:
-    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
 };
 
 template <typename ProgramContainer>

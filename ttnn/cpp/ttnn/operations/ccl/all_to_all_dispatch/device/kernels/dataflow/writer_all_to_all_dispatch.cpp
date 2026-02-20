@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
 namespace detail {

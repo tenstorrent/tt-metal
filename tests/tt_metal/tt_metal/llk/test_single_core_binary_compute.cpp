@@ -5,8 +5,8 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -39,11 +39,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -83,20 +81,19 @@ struct SingleCoreBinaryConfig {
 
 void set_math_fid_masks(
     uint16_t& srca_fid_mask, uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
             break;
         }
         case MathFidelity::HiFi2: {
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             ;
             break;
         }
         case MathFidelity::LoFi: {
             srca_fid_mask = 0xFFF8;
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             break;
         }
         default: {
@@ -242,20 +239,21 @@ bool single_core_binary(
         [&](const bfloat16& lhs, const bfloat16& rhs) {
             if (test_config.binary_op == "add") {
                 return (static_cast<float>(lhs) + static_cast<float>(rhs));
-            } else if (test_config.binary_op == "sub") {
+            }
+            if (test_config.binary_op == "sub") {
                 return (static_cast<float>(lhs) - static_cast<float>(rhs));
-            } else if (test_config.binary_op == "mul") {
+            }
+            if (test_config.binary_op == "mul") {
                 return (
                     static_cast<float>(
                         std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
                     static_cast<float>(
                         std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(rhs) & srcb_fid_mask))));
-            } else if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
-                return static_cast<float>(lhs);
-            } else {
-                TT_THROW("Unsupported binary_op={}", test_config.binary_op);
-                return 0.0f;
             }
+            if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
+                return static_cast<float>(lhs);
+            }
+            TT_THROW("Unsupported binary_op={}", test_config.binary_op);
         });
 
     std::vector<bfloat16> golden(input0.size());
@@ -264,17 +262,18 @@ bool single_core_binary(
             // acc_to_dest accumulates dest value with binary output, for all binary operations
             if (test_config.acc_to_dest || test_config.binary_op == "add_with_dest_reuse") {
                 return (static_cast<float>(lhs) + rhs);
-            } else if (test_config.binary_op == "sub_with_dest_reuse") {
+            }
+            if (test_config.binary_op == "sub_with_dest_reuse") {
                 return (static_cast<float>(lhs) - rhs);
-            } else if (test_config.binary_op == "mul_with_dest_reuse") {
+            }
+            if (test_config.binary_op == "mul_with_dest_reuse") {
                 return (
                     static_cast<float>(
                         std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
                     static_cast<float>(std::bit_cast<bfloat16>(
                         static_cast<uint16_t>(std::bit_cast<uint16_t>(bfloat16(rhs)) & srcb_fid_mask))));
-            } else {
-                return rhs;
             }
+            return rhs;
         });
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
@@ -571,10 +570,6 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -597,10 +592,6 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -623,10 +614,6 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;

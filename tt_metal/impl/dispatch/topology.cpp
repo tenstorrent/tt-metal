@@ -4,10 +4,11 @@
 
 #include "topology.hpp"
 
-#include <device_pool.hpp>
+#include "context/metal_context.hpp"
+#include "device/device_manager.hpp"
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <experimental/fabric/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <cstdint>
 #include <map>
@@ -22,17 +23,18 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
-#include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include "program/program_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include "program.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "dispatch_mem_map.hpp"
+#include <llrt/tt_cluster.hpp>
+#include "dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -63,9 +65,9 @@ void increment_node_ids(DispatchKernelNode& node, uint32_t inc) {
 // Downstream: send data to tunnel and/or prefetch_d variant and/or dispatch_d
 //
 constexpr noc_selection_t k_prefetcher_noc = {
-    .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
-    .upstream_noc = tt::tt_metal::NOC::NOC_0,
-    .downstream_noc = tt::tt_metal::NOC::NOC_0,
+    .non_dispatch_noc = NOC::NOC_0,
+    .upstream_noc = NOC::NOC_0,
+    .downstream_noc = NOC::NOC_0,
 };
 
 //
@@ -78,8 +80,8 @@ constexpr noc_selection_t k_prefetcher_noc = {
 // Downstream: relay data from dispatch_d to dispatch_h (return to host) and/or dispatch_s
 //
 constexpr noc_selection_t k_dispatcher_noc = {
-    .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
-    .upstream_noc = tt::tt_metal::NOC::NOC_1,
+    .non_dispatch_noc = NOC::NOC_0,
+    .upstream_noc = NOC::NOC_1,
     .downstream_noc = k_dispatch_downstream_noc,
 };
 
@@ -93,9 +95,9 @@ constexpr noc_selection_t k_dispatcher_noc = {
 // Downstream: relay data from dispatch_d to dispatch_h (return to host) and/or dispatch_s
 //
 constexpr noc_selection_t k_dispatcher_s_noc = {
-    .non_dispatch_noc = tt::tt_metal::NOC::NOC_1,
-    .upstream_noc = tt::tt_metal::NOC::NOC_1,
-    .downstream_noc = tt::tt_metal::NOC::NOC_1,
+    .non_dispatch_noc = NOC::NOC_1,
+    .upstream_noc = NOC::NOC_1,
+    .downstream_noc = NOC::NOC_1,
 };
 
 // Must be on different NOCs because Dispatch+S may be running on the same
@@ -109,9 +111,9 @@ static_assert(k_dispatcher_noc.non_dispatch_noc != k_dispatcher_s_noc.non_dispat
 // Must be NoC0
 //
 constexpr noc_selection_t k_fabric_mux_noc = {
-    .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
-    .upstream_noc = tt::tt_metal::NOC::NOC_0,
-    .downstream_noc = tt::tt_metal::NOC::NOC_0,
+    .non_dispatch_noc = NOC::NOC_0,
+    .upstream_noc = NOC::NOC_0,
+    .downstream_noc = NOC::NOC_0,
 };
 
 // clang-format off
@@ -390,18 +392,23 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
 };
 // clang-format on
 
-std::vector<FDKernel*> node_id_to_kernel;
-tt::tt_metal::detail::ProgramCompileGroup command_queue_compile_group;
-std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores;
-std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores;
-std::unordered_map<ChipId, std::unordered_set<CoreCoord>> empty_cores;
-std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> termination_info;
+DispatchTopology::DispatchTopology(const ContextDescriptor& descriptor, dispatch_core_manager& dispatch_core_manager) :
+    descriptor_(descriptor), dispatch_core_manager_(dispatch_core_manager) {
+    command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
+        std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
+        std::make_unique<DispatchMemMap>(CoreType::ETH, descriptor_.num_cqs());
+}
 
-// Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
-std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs) {
+DispatchTopology::~DispatchTopology() { reset(); }
+
+// Helper to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
+std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
+    const std::set<ChipId>& device_ids, uint32_t num_hw_cqs) const {
     // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
     // of active devices. TODO: read this out of YAML instead of the structs above?
-    uint32_t total_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+    uint32_t total_devices = descriptor_.cluster().number_of_devices();
     TT_ASSERT(
         total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 32 or
             total_devices == 36,
@@ -414,7 +421,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
     std::set<ChipId> mmio_devices;
     std::set<ChipId> remote_devices;
     for (auto id : device_ids) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(id) == id) {
+        if (descriptor_.cluster().get_associated_mmio_device(id) == id) {
             mmio_devices.insert(id);
         } else {
             remote_devices.insert(id);
@@ -425,15 +432,12 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
     auto populate_single_device = [&]() {
         if (num_hw_cqs == 1) {
             return single_chip_arch_1cq;
-        } else {
-            // TODO: determine whether dispatch_s is inserted at this level, instead of inside
-            // Device::dispatch_s_enabled().
-            if (MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type() == CoreType::WORKER) {
-                return single_chip_arch_2cq_dispatch_s;
-            } else {
-                return single_chip_arch_2cq;
-            }
+        }  // TODO: determine whether dispatch_s is inserted at this level, instead of inside
+           // Device::dispatch_s_enabled().
+        if (this->dispatch_core_manager_.get_dispatch_core_type() == CoreType::WORKER) {
+            return single_chip_arch_2cq_dispatch_s;
         }
+        return single_chip_arch_2cq;
     };
 
     if (remote_devices.empty()) {
@@ -452,7 +456,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
     } else {
         // Need to handle N300/T3000 separately from TG/TGG since they have different templates/tunnel depths
         // If using fabric, upstream would have already initalized to the proper config for dispatch
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        if (descriptor_.cluster().is_galaxy_cluster()) {
             // For Galaxy, we always init all remote devices associated with an mmio device.
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? galaxy_nine_chip_arch_1cq_fabric : galaxy_nine_chip_arch_2cq_fabric;
@@ -461,9 +465,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
                 // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
                 std::vector<ChipId> template_id_to_device_id;
                 template_id_to_device_id.push_back(mmio_device_id);
-                for (const auto& tunnel :
-                     tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(
-                         mmio_device_id)) {
+                for (const auto& tunnel : descriptor_.cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
                     TT_ASSERT(tunnel.size() == 5, "Galaxy expected 4-deep tunnels.");
                     for (auto remote_device_id : tunnel) {
                         if (remote_device_id != mmio_device_id) {
@@ -506,8 +508,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
                 ChipId remote_device_id{};
                 bool found_remote = false;
                 for (auto id : remote_devices) {
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(id) ==
-                        mmio_device_id) {
+                    if (descriptor_.cluster().get_associated_mmio_device(id) == mmio_device_id) {
                         remote_device_id = id;
                         found_remote = true;
                         break;
@@ -547,10 +548,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
     return nodes;
 }
 
-// Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
-// Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
-// and (3) the table to choose depends on total number of devices, not know at Device creation.
-void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_cqs) {
+void DispatchTopology::populate_fd_kernels(const std::vector<Device*>& devices, uint32_t num_hw_cqs) {
     std::set<ChipId> device_ids;
     for (const auto& device : devices) {
         device_ids.insert(device->id());
@@ -558,26 +556,27 @@ void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_c
     populate_fd_kernels(generate_nodes(device_ids, num_hw_cqs));
 }
 
-void populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs) {
+void DispatchTopology::populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs) {
     populate_fd_kernels(generate_nodes(device_ids, num_hw_cqs));
 }
 
-void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
+void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
-    if (!node_id_to_kernel.empty()) {
-        for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-            delete node_id_to_kernel[idx];
+    if (!node_id_to_kernel_.empty()) {
+        for (auto& kernel : node_id_to_kernel_) {
+            delete kernel;
         }
-        node_id_to_kernel.clear();
-        command_queue_compile_group.clear();
+        node_id_to_kernel_.clear();
+        command_queue_compile_group_->clear();
     }
 
     // Read the input table, create configs for each node + track mmio devices and number of cqs.
     std::unordered_set<ChipId> mmio_device_ids;
     std::unordered_set<uint8_t> hw_cq_ids;
+    node_id_to_kernel_.reserve(nodes.size());
     for (const auto& node : nodes) {
-        TT_ASSERT(node_id_to_kernel.size() == node.id);
-        node_id_to_kernel.push_back(FDKernel::Generate(
+        TT_ASSERT(node_id_to_kernel_.size() == node.id);
+        node_id_to_kernel_.emplace_back(FDKernel::Generate(
             node.id,
             node.device_id,
             node.servicing_device_id,
@@ -585,8 +584,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
             node.noc_selection,
             node.kernel_type,
             node.tunnel_index));
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(node.device_id) ==
-            node.device_id) {
+        if (descriptor_.cluster().get_associated_mmio_device(node.device_id) == node.device_id) {
             mmio_device_ids.insert(node.device_id);
         }
         hw_cq_ids.insert(node.cq_id);
@@ -598,21 +596,21 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
         for (int idx = 0; idx < node.upstream_ids.size(); idx++) {
             if (node.upstream_ids[idx] >= 0) {
                 TT_ASSERT(
-                    node.upstream_ids[idx] < node_id_to_kernel.size(),
+                    node.upstream_ids[idx] < node_id_to_kernel_.size(),
                     "Upstream kernel id {} out of bounds (max = {})",
                     node.upstream_ids[idx],
-                    node_id_to_kernel.size());
-                node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
+                    node_id_to_kernel_.size());
+                node_id_to_kernel_.at(node.id)->AddUpstreamKernel(node_id_to_kernel_.at(node.upstream_ids[idx]));
             }
         }
         for (int idx = 0; idx < node.downstream_ids.size(); idx++) {
             if (node.downstream_ids[idx] >= 0) {
                 TT_ASSERT(
-                    node.downstream_ids[idx] < node_id_to_kernel.size(),
+                    node.downstream_ids[idx] < node_id_to_kernel_.size(),
                     "Downstream kernel id {} out of bounds (max = {})",
                     node.downstream_ids[idx],
-                    node_id_to_kernel.size());
-                node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
+                    node_id_to_kernel_.size());
+                node_id_to_kernel_.at(node.id)->AddDownstreamKernel(node_id_to_kernel_.at(node.downstream_ids[idx]));
             }
         }
     }
@@ -621,8 +619,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     std::map<ChipId, uint32_t> device_id_to_tunnel_stop;
     std::map<ChipId, std::vector<ChipId>> mmio_device_id_to_serviced_devices;
     for (auto mmio_device_id : mmio_device_ids) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_device_id) !=
-            mmio_device_id) {
+        if (descriptor_.cluster().get_associated_mmio_device(mmio_device_id) != mmio_device_id) {
             continue;
         }
 
@@ -631,8 +628,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
             mmio_device_id_to_serviced_devices[mmio_device_id].push_back(mmio_device_id);
         }
         std::vector<ChipId> remote_devices;
-        for (auto tunnel :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+        for (auto tunnel : descriptor_.cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
             for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size(); tunnel_stop++) {
                 ChipId remote_device_id = tunnel[tunnel_stop];
                 device_id_to_tunnel_stop[remote_device_id] = tunnel_stop;
@@ -649,13 +645,13 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     }
 }
 
-void populate_cq_static_args(IDevice* device) {
+void DispatchTopology::populate_cq_static_args(Device* device) {
     TT_ASSERT(
-        !node_id_to_kernel.empty(),
+        !node_id_to_kernel_.empty(),
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>();
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel_) {
         // GetDeviceId() uses Id from topology as IDevice* is not present yet
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->AddDevice(device);
@@ -667,38 +663,34 @@ void populate_cq_static_args(IDevice* device) {
     }
 
     // Move program into the storage for later steps
-    command_queue_compile_group.add_program(device, std::move(cq_program_ptr));
+    command_queue_compile_group_->add_program(device, std::move(cq_program_ptr));
 }
 
-void create_cq_program(IDevice* device) {
+void DispatchTopology::create_cq_program(Device* device) {
     TT_FATAL(
-        command_queue_compile_group.contains(device),
+        command_queue_compile_group_->contains(device),
         "Tried to create and compile CQ program on device {} without static args populated (need to run "
         "populate_cq_static_args())",
         device->id());
-    empty_cores.clear();
-    // Third pass, populate dependent configs and create kernels for each node
-    for (auto node_and_kernel : node_id_to_kernel) {
+    // Third pass, populate dependent configs, runtime configs, and create kernels for each node
+    for (auto* node_and_kernel : node_id_to_kernel_) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->GenerateDependentConfigs();
-        }
-    }
-
-    for (auto node_and_kernel : node_id_to_kernel) {
-        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->InitializeRuntimeArgsValues();
             node_and_kernel->CreateKernel();
+            node_and_kernel->SetRuntimeArgs();
         }
     }
 
     // Register core coordinates for this device
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel_) {
         if (node_and_kernel->GetDeviceId() != device->id()) {
             continue;
         }
 
         switch (node_and_kernel->GetKernelType()) {
-            case FDKernelType::DISPATCH: dispatch_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
-            case FDKernelType::ROUTING: routing_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::DISPATCH: dispatch_cores_[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::ROUTING: routing_cores_[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
             case FDKernelType::VIRTUAL:
                 // Not a real kernel
                 break;
@@ -713,49 +705,47 @@ void create_cq_program(IDevice* device) {
     }
 
     // Register termination info
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (auto* node_and_kernel : node_id_to_kernel_) {
         if (node_and_kernel->GetDeviceId() != device->id()) {
             continue;
         }
 
         const auto& info = node_and_kernel->GetTerminationInfo();
         if (info.has_value()) {
-            termination_info[device->id()].insert(info.value());
+            termination_info_[device->id()].insert(info.value());
         }
     }
 }
 
-void compile_cq_programs() {
-    command_queue_compile_group.compile_all(/*force_slow_dispatch=*/true);
+void DispatchTopology::compile_cq_programs() {
+    command_queue_compile_group_->compile_all(/*force_slow_dispatch=*/true);
 
     // Write runtime args to device
-    command_queue_compile_group.write_runtime_args(/*force_slow_dispatch=*/true);
+    command_queue_compile_group_->write_runtime_args(/*force_slow_dispatch=*/true);
 }
 
-std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device) {
-    return command_queue_compile_group.remove_program(device);
+std::unique_ptr<Program> DispatchTopology::get_compiled_cq_program(Device* device) {
+    return command_queue_compile_group_->remove_program(device);
 }
 
-void configure_dispatch_cores(IDevice* device) {
+void DispatchTopology::configure_dispatch_cores(Device* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
-    CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map();
+    CoreType dispatch_core_type = this->dispatch_core_manager_.get_dispatch_core_type();
+    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)];
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
 
     // Need to set up for all devices serviced by an mmio chip
     if (device->is_mmio_capable()) {
-        for (ChipId serviced_device_id :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device->id())) {
-            uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                serviced_device_id);
+        for (ChipId serviced_device_id : descriptor_.cluster().get_devices_controlled_by_mmio_device(device->id())) {
+            uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(serviced_device_id);
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
                 tt_cxy_pair completion_q_writer_location =
-                    MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
-                        serviced_device_id, channel, cq_id);
-                IDevice* mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
+                    this->dispatch_core_manager_.completion_queue_writer_core(serviced_device_id, channel, cq_id);
+                IDevice* mmio_device =
+                    MetalContext::instance().device_manager()->get_active_device(completion_q_writer_location.chip);
                 uint32_t completion_q_wr_ptr =
                     my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                 uint32_t completion_q_rd_ptr =
@@ -790,45 +780,43 @@ void configure_dispatch_cores(IDevice* device) {
         }
     }
     // Configure cores for all nodes corresponding to this device
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            node_id_to_kernel[idx]->ConfigureCore();
+    for (auto& kernel : node_id_to_kernel_) {
+        if (kernel->GetDeviceId() == device->id()) {
+            kernel->ConfigureCore();
         }
     }
 }
 
-const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) {
-    if (!dispatch_cores.contains(dev_id)) {
-        return empty_cores[dev_id];
+const std::unordered_set<CoreCoord>& DispatchTopology::get_virtual_dispatch_cores(ChipId dev_id) const {
+    if (!dispatch_cores_.contains(dev_id)) {
+        return this->empty_container_;
     }
-    return dispatch_cores[dev_id];
+    return dispatch_cores_.at(dev_id);
 }
 
-const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) {
-    if (!routing_cores.contains(dev_id)) {
-        return empty_cores[dev_id];
+const std::unordered_set<CoreCoord>& DispatchTopology::get_virtual_dispatch_routing_cores(ChipId dev_id) const {
+    if (!routing_cores_.contains(dev_id)) {
+        return this->empty_container_;
     }
-    return routing_cores[dev_id];
+    return routing_cores_.at(dev_id);
 }
 
-const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) {
-    if (!termination_info.contains(dev_id)) {
-        termination_info[dev_id] = {};
+const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_termination_cores(ChipId dev_id) const {
+    if (!termination_info_.contains(dev_id)) {
+        return this->empty_termination_info_container_;
     }
-    return termination_info.at(dev_id);
+    return termination_info_.at(dev_id);
 }
 
-void reset_topology_state() {
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/24439
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        delete node_id_to_kernel[idx];
+void DispatchTopology::reset() {
+    for (auto& kernel : node_id_to_kernel_) {
+        delete kernel;
     }
-    node_id_to_kernel.clear();
-    command_queue_compile_group.clear();
-    dispatch_cores.clear();
-    routing_cores.clear();
-    empty_cores.clear();
-    termination_info.clear();
+    node_id_to_kernel_.clear();
+    command_queue_compile_group_->clear();
+    dispatch_cores_.clear();
+    routing_cores_.clear();
+    termination_info_.clear();
 }
 
 }  // namespace tt::tt_metal

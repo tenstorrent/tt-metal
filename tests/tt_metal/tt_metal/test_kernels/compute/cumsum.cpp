@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/cumsum.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/cumsum.h"
+#include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr int onetile = 1;
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -26,12 +26,15 @@ void MAIN {
 #endif
     cumsum_tile_init();
 
+    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
+                cb16.reserve_back(onetile);
                 acquire_dst();
-                cb_wait_front(tt::CBIndex::c_0, onetile);
+                cb0.wait_front(onetile);
 
 #ifndef ROWWISE
                 copy_tile(tt::CBIndex::c_0, 0, 0);
@@ -47,11 +50,10 @@ void MAIN {
 
                 pack_tile(0, tt::CBIndex::c_16);
 
-                cb_pop_front(tt::CBIndex::c_0, onetile);
+                cb0.pop_front(onetile);
                 release_dst();
-                cb_push_back(tt::CBIndex::c_16, onetile);
+                cb16.push_back(onetile);
             }
         }
     }
 }
-}  // namespace NAMESPACE

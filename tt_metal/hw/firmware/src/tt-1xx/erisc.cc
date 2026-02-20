@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ethernet/dataflow_api.h"
-#include "ethernet/tunneling.h"
-#include "firmware_common.h"
+#include "internal/ethernet/dataflow_api.h"
+#include "internal/ethernet/tunneling.h"
+#include "internal/firmware_common.h"
 #include "noc_parameters.h"
-#include "risc_attribs.h"
-#include "dataflow_api.h"
+#include "internal/risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "debug/watcher_common.h"
+#include "internal/debug/watcher_common.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -39,6 +38,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.

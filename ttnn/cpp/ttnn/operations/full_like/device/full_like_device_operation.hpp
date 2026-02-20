@@ -50,24 +50,20 @@ struct FullLikeOperation {
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        std::variant<float, int> fill_value,
-        const std::optional<DataType>& dtype,
-        const std::optional<Layout>& layout,
-        const std::optional<MemoryConfig>& memory_config);
 };
 
 }  // namespace ttnn::operations::full_like
 
 namespace ttnn::prim {
-constexpr auto moreh_full_like =
-    ttnn::register_operation<"ttnn::prim::moreh_full_like", ttnn::operations::full_like::FullLikeOperation>();
+ttnn::operations::full_like::FullLikeOperation::tensor_return_value_t moreh_full_like(
+    const Tensor& input,
+    std::variant<float, int> fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    const std::optional<MemoryConfig>& memory_config);
 }  // namespace ttnn::prim

@@ -4,8 +4,8 @@
 
 #include "debug_tools.hpp"
 
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
@@ -25,11 +25,9 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace internal {
 
@@ -56,15 +54,15 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     std::string type;
 
     while (std::getline(host_dispatch_dump_file, line)) {
-        if (line.find("*") != std::string::npos) {
+        if (line.find('*') != std::string::npos) {
             continue;
-        } else if (
-            line.find("BINARY SPAN") != std::string::npos or line.find("SEM") != std::string::npos or
+        }
+        if (line.find("BINARY SPAN") != std::string::npos or line.find("SEM") != std::string::npos or
             line.find("CB") != std::string::npos) {
             type = line;
         } else {
             std::vector<std::string> host_data = {line};
-            while (std::getline(host_dispatch_dump_file, line) and (line.find("*") == std::string::npos)) {
+            while (std::getline(host_dispatch_dump_file, line) and (line.find('*') == std::string::npos)) {
                 host_data.push_back(line);
             }
             host_map.push_back(make_pair(type, std::move(host_data)));
@@ -188,6 +186,12 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->write_packed_large.count),
                     val(cmd->write_packed_large.alignment));
                 break;
+            case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+                cq_file << fmt::format(
+                    " (count={}, alignment={})",
+                    val(cmd->write_packed_large_unicast.count),
+                    val(cmd->write_packed_large_unicast.alignment));
+                break;
             case CQ_DISPATCH_CMD_WAIT:
                 cq_file << fmt::format(
                     " (flags={}, count={}, addr={:#010x}, stream={})",
@@ -261,6 +265,17 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->relay_paged_packed.stride));
                 stride = cmd->relay_paged_packed.stride;
                 break;
+            case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED:
+            case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H: {
+                iq_file << fmt::format(
+                    " (count={}, noc_xy_addr={:#010x}, total_length={:#010x}, stride={:#010x})",
+                    val(cmd->relay_linear_packed.count),
+                    val(cmd->relay_linear_packed.noc_xy_addr),
+                    val(cmd->relay_linear_packed.total_length),
+                    val(cmd->relay_linear_packed.stride));
+                stride = cmd->relay_linear_packed.stride;
+                break;
+            }
             case CQ_PREFETCH_CMD_RELAY_INLINE:
             case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             case CQ_PREFETCH_CMD_EXEC_BUF_END:

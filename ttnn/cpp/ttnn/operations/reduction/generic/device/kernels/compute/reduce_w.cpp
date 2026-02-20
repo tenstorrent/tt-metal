@@ -5,14 +5,12 @@
 #include <cstdint>
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/reduce.h"
 #else
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/matmul.h"
 #endif
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
@@ -39,7 +37,7 @@ void MAIN {
 #ifndef REDUCE_ROW_SUM_VIA_MM
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #else
-                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0, false);
+                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0);
 #endif
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
@@ -51,4 +49,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

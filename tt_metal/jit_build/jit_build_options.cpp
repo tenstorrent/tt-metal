@@ -8,15 +8,9 @@
 
 #include "build.hpp"
 
-enum class MathFidelity : uint8_t;
-namespace tt {
-enum CBIndex : std::uint8_t;
-}  // namespace tt
-
 namespace tt::tt_metal {
 
-JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) :
-    build_env(env), fp32_dest_acc_en(false), bfp8_pack_precise(false) {}
+JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) : build_env(env), hlk_desc(env.get_max_cbs()) {}
 
 void JitBuildOptions::set_name(const std::string& n) {
     name = n;

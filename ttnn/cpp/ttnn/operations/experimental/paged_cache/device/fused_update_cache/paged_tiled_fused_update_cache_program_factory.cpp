@@ -14,12 +14,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::fused_update::program::tiled {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 
-namespace CMAKE_UNIQUE_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE_TILED {
 
 bool enable_fp32_dest_acc(
     const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
@@ -29,12 +29,12 @@ bool enable_fp32_dest_acc(
     return fp32_dest_acc_en;
 }
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace CMAKE_UNIQUE_NAMESPACE_TILED
 
 PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdateCacheProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& /*tensor_return_value*/) {
     Program program{};
 
     const auto& cache_tensor1 = tensor_args.cache_tensor1;
@@ -53,7 +53,7 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     bool fp32_dest_acc_en =
-        CMAKE_UNIQUE_NAMESPACE::enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
+        CMAKE_UNIQUE_NAMESPACE_TILED::enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
@@ -130,9 +130,9 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
 
     uint32_t num_input_tiles = input1_shard_spec.value().shape[0] * input1_shard_spec.value().shape[1] / TILE_HW;
 
-    auto in1_buffer_address = input1_shard_spec.has_value() ? input_tensor1.buffer() : nullptr;
+    auto* in1_buffer_address = input1_shard_spec.has_value() ? input_tensor1.buffer() : nullptr;
 
-    auto in2_buffer_address = input2_shard_spec.has_value() ? input_tensor2.buffer() : nullptr;
+    auto* in2_buffer_address = input2_shard_spec.has_value() ? input_tensor2.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
@@ -199,9 +199,9 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
         cb_page_table_id = cb_src7;
     }
 
-    auto dst1_buffer = cache_tensor1.buffer();
+    auto* dst1_buffer = cache_tensor1.buffer();
 
-    auto dst2_buffer = cache_tensor2.buffer();
+    auto* dst2_buffer = cache_tensor2.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src1_cb_index,
@@ -441,9 +441,9 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
 
 void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& /*tensor_return_value*/) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -452,14 +452,14 @@ void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
     const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
     const auto& page_table = tensor_args.page_table;
 
-    auto src1_buffer = input_tensor1.buffer();
-    auto src2_buffer = input_tensor2.buffer();
+    auto* src1_buffer = input_tensor1.buffer();
+    auto* src2_buffer = input_tensor2.buffer();
 
-    auto dst1_buffer = tensor_args.cache_tensor1.buffer();
-    auto dst2_buffer = tensor_args.cache_tensor2.buffer();
+    auto* dst1_buffer = tensor_args.cache_tensor1.buffer();
+    auto* dst2_buffer = tensor_args.cache_tensor2.buffer();
 
-    auto index_tensor_buffer = shared_vars.use_index_tensor ? update_idxs_tensor.value().buffer() : nullptr;
-    auto page_table_buffer = shared_vars.is_paged_cache ? page_table.value().buffer() : nullptr;
+    auto* index_tensor_buffer = shared_vars.use_index_tensor ? update_idxs_tensor.value().buffer() : nullptr;
+    auto* page_table_buffer = shared_vars.is_paged_cache ? page_table.value().buffer() : nullptr;
     auto index_tensor_addr = shared_vars.use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
     auto page_table_tensor_addr = shared_vars.is_paged_cache ? page_table.value().buffer()->address() : 0;
 
@@ -525,10 +525,10 @@ void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
 
 PagedTiledFusedUpdateCacheMeshWorkloadFactory::cached_mesh_workload_t
 PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const PagedFusedUpdateCacheParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& tensor_return_value) {
     log_debug(tt::LogOp, "PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload called");
     log_debug(tt::LogOp, "tensor_coords has {} ranges", tensor_coords.ranges().size());
 
@@ -550,7 +550,7 @@ PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
             // Skip this coordinate if mesh_coords is provided and this coordinate is not in the set
             if (mesh_coords_opt.has_value()) {
                 const auto& mesh_coords_set = mesh_coords_opt.value();
-                if (mesh_coords_set.find(mesh_coord) == mesh_coords_set.end()) {
+                if (!mesh_coords_set.contains(mesh_coord)) {
                     log_debug(
                         tt::LogOp, "Skipping coordinate ({}, {}) - not in mesh_coords", mesh_coord[0], mesh_coord[1]);
                     continue;  // Skip this coordinate
@@ -573,9 +573,9 @@ PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
 
 void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& tensor_return_value) {
     PagedTiledFusedUpdateCacheProgramFactory program_factory;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
@@ -592,4 +592,4 @@ void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::fused_update::program::tiled
+}  // namespace ttnn::experimental::prim

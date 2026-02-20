@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "conv_reader_common.hpp"
 #include "noc/noc_parameters.h"
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #endif
 
 // Multicasts activation data from the local circular buffer to multiple destinations depending on the core role.
@@ -282,11 +282,6 @@ void kernel_main() {
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                     // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
-                    // may not be sent in order they are issued
-                    noc_async_writes_flushed();
-#endif
 
                     if (is_receiver_core) {
                         // We should also multicast VALID flag to destinations for receiver semaphore

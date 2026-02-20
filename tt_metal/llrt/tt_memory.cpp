@@ -32,7 +32,7 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
         // debug: dump disassembly after XIP transform
         // this output is used for tt-triage
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_disable_xip_dump()) {
-            // Write the modified ELF out and run objdump -S -d on it
+            // Write the modified ELF out
             std::string out_elf_path = std::string(path) + ".xip.elf";
             try {
                 elf.WriteImage(out_elf_path);

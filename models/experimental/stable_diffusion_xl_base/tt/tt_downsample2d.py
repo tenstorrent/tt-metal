@@ -64,5 +64,5 @@ class TtDownsample2D(LightweightModule):
             self.tt_weights = tt_weights
             self.tt_bias = tt_bias
 
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         return hidden_states, [C, H, W]

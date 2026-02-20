@@ -1,21 +1,20 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <compute_kernel_api/eltwise_binary_sfpu.h>
-#include <compute_kernel_api/reconfig_data_format.h>
+#include <api/compute/eltwise_binary_sfpu.h>
+#include <api/compute/reconfig_data_format.h>
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "tt-train/sources/ttml/metal/ops/common/compute_utils.hpp"
-namespace NAMESPACE {
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/common.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 // ----------------------------------------------------------------------
 // Problem:
@@ -104,7 +103,7 @@ inline void mul_AxB_accumulate_C(
 
         // Compute C[r, c] += sum_k( A[r, k] * B[k, c] )
         for (uint32_t k = 0; k < ab_block_size; ++k) {
-            matmul_tiles(cb_a_idx, cb_b_idx, a_start_idx + k, k, c, false);
+            matmul_tiles(cb_a_idx, cb_b_idx, a_start_idx + k, k, c);
         }
 
         cb_pop_front(cb_b_idx, block_size);  // Done with all B data
@@ -155,7 +154,7 @@ inline void mul_XW_accumulate_k_block(
 
         // Accumulate: result[k] += X[p] * W[p, k] for all k in k_block
         for (uint32_t k = 0; k < k_block_size; ++k) {
-            matmul_tiles(cb_x_idx, cb_w_idx, p, k, k, false);
+            matmul_tiles(cb_x_idx, cb_w_idx, p, k, k);
         }
 
         cb_pop_front(cb_w_idx, block_size);
@@ -254,7 +253,7 @@ inline void compute_M_for_r() {
 
             // Apply SiLU activation to compute SiLU(XW1)
             copy_dest_values_init();
-            copy_dest_values(silu_reg, xw1_reg);
+            copy_dest_values(xw1_reg, silu_reg);
             sigmoid_tile_init();
             sigmoid_tile(silu_reg);
             // Multiply XW1 * sigmoid(XW1) to get SiLU(XW1)
@@ -302,7 +301,7 @@ inline void compute_M_for_r() {
 //             Y_partial[r, c] += M[r, k] * W2[k, c]
 //         store Y_partial[r, c] → Y[r, c]
 // ============================================================================
-inline void MAIN {
+void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
 
@@ -345,5 +344,3 @@ inline void MAIN {
         cb_pop_front(cb_m_idx, hidden_Wt_rounded_up);
     }
 }
-
-}  // namespace NAMESPACE

@@ -3,20 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cross_entropy_bw_device_operation.hpp"
+
 #include <enchantum/enchantum.hpp>
+
 #include "cross_entropy_bw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::cross_entropy_bw::device {
-
-CrossEntropyBackwardDeviceOperation::program_factory_t CrossEntropyBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return CrossEntropyBackwardProgramFactory{};
-}
-
-void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -99,25 +92,30 @@ ttsl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape);
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyBackwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::cross_entropy_bw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::cross_entropy_bw::device::CrossEntropyBackwardDeviceOperation::tensor_return_value_t
+ttml_cross_entropy_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& target_tensor,
     float scaler,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .scaler = scaler,
-        },
-        tensor_args_t{
-            .input = input_tensor,
-            .target = target_tensor,
-            .preallocated_output = preallocated_output,
-        }};
+    using OperationType = ttml::metal::ops::cross_entropy_bw::device::CrossEntropyBackwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{.scaler = scaler};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .target = target_tensor,
+        .preallocated_output = preallocated_output,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::cross_entropy_bw::device
+}  // namespace ttnn::prim

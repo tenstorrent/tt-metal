@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fold_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -10,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_fold {
 void MorehFoldOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input = tensor_args.input;
+    const auto& input = tensor_args.input;
     auto input_shape = input.logical_shape();
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Fold: only support input in ROW_MAJOR");
@@ -48,19 +49,9 @@ void MorehFoldOperation::validate_inputs(
             output_shape[output_rank - 1] == operation_attributes.output_size[1], "Fold: Invalid output shape size");
         TT_FATAL(output_rank == 4 || output_rank == 3, "Fold: Only support 4D and 3D output tensor");
     }
-}
-
-MorehFoldOperation::program_factory_t MorehFoldOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
 };
 
 void MorehFoldOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehFoldOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };

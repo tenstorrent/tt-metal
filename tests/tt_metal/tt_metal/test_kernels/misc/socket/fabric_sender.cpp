@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "dataflow_api.h"
-#include "socket_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 
 void fabric_write_any_len(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr,
@@ -64,8 +64,10 @@ void kernel_main() {
         socket_reserve_pages(sender_socket, 1);
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
-            uint64_t receiver_noc_coord_addr =
-                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr);
+            uint64_t receiver_noc_coord_addr = get_noc_addr(
+                downstream_enc.d2d.downstream_noc_x,
+                downstream_enc.d2d.downstream_noc_y,
+                sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
             fabric_write_any_len(
                 data_packet_header_addr,
                 fabric_connection,

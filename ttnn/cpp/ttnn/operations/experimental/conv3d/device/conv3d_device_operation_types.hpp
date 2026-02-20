@@ -10,11 +10,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 struct Conv3dConfig {
     Conv3dConfig(
-        tt::tt_metal::DataType dtype_ = tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::DataType weights_dtype_ = tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::Layout output_layout_ = tt::tt_metal::Layout::ROW_MAJOR,
         uint32_t T_out_block_ = 1,
@@ -22,14 +21,7 @@ struct Conv3dConfig {
         uint32_t H_out_block_ = 1,
         uint32_t C_out_block_ = 0,
         uint32_t C_in_block_ = 0,
-        uint32_t output_channels_ = 0,
-        const std::array<uint32_t, 3> kernel_size_ = {1, 1, 1},
-        const std::array<uint32_t, 3> stride_ = {1, 1, 1},
-        const std::array<uint32_t, 3> padding_ = {0, 0, 0},
-        const std::string& padding_mode_ = "zeros",
-        uint32_t groups_ = 1,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
-        dtype(dtype_),
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -37,15 +29,8 @@ struct Conv3dConfig {
         H_out_block(H_out_block_),
         C_out_block(C_out_block_),
         C_in_block(C_in_block_),
-        output_channels(output_channels_),
-        kernel_size(kernel_size_),
-        stride(stride_),
-        padding(padding_),
-        padding_mode(padding_mode_),
-        groups(groups_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
-    tt::tt_metal::DataType dtype;
     tt::tt_metal::DataType weights_dtype;
     tt::tt_metal::Layout output_layout;
     uint32_t T_out_block;
@@ -53,16 +38,9 @@ struct Conv3dConfig {
     uint32_t H_out_block;
     uint32_t C_out_block;
     uint32_t C_in_block;
-    uint32_t output_channels;
-    std::array<uint32_t, 3> kernel_size;
-    std::array<uint32_t, 3> stride;
-    std::array<uint32_t, 3> padding;
-    std::string padding_mode;
-    uint32_t groups;
     CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
-        "dtype",
         "weights_dtype",
         "output_layout",
         "T_out_block",
@@ -70,17 +48,10 @@ struct Conv3dConfig {
         "H_out_block",
         "C_out_block",
         "C_in_block",
-        "output_channels",
-        "kernel_size",
-        "stride",
-        "padding",
-        "padding_mode",
-        "groups",
         "compute_with_storage_grid_size");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
-            this->dtype,
             this->weights_dtype,
             this->output_layout,
             this->T_out_block,
@@ -88,31 +59,29 @@ struct Conv3dConfig {
             this->H_out_block,
             this->C_out_block,
             this->C_in_block,
-            this->output_channels,
-            this->kernel_size,
-            this->stride,
-            this->padding,
-            this->padding_mode,
-            this->groups,
             this->compute_with_storage_grid_size);
     }
 };
 
-struct operation_attributes_t {
+struct Conv3dParams {
     Conv3dConfig config;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    tt::tt_metal::DataType dtype;
+    uint32_t output_channels;
+    std::array<uint32_t, 3> kernel_size;
+    std::array<uint32_t, 3> stride;
+    std::array<uint32_t, 3> padding;
+    std::array<uint32_t, 3> dilation;
+    std::string padding_mode;
+    uint32_t groups;
 };
 
-struct tensor_args_t {
+struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
@@ -124,4 +93,4 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     const std::array<uint32_t, 3>& kernel_size);
 }  // namespace detail
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental::prim

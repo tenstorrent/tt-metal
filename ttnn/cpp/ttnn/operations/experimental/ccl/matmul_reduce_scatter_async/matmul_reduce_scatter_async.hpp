@@ -1,16 +1,15 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
 
-namespace ttnn {
-namespace operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 struct ExecuteMatmulReduceScatterAsync {
     static std::vector<ttnn::Tensor> invoke(
@@ -27,7 +26,7 @@ struct ExecuteMatmulReduceScatterAsync {
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
         bool transpose_a = false,
         bool transpose_b = false,
@@ -38,13 +37,12 @@ struct ExecuteMatmulReduceScatterAsync {
         std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 };
 
-}  // namespace operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl
 
-namespace experimental {
+namespace ttnn::experimental {
 
 constexpr auto matmul_reduce_scatter_async = ttnn::register_operation<
     "ttnn::experimental::matmul_reduce_scatter_async",
     ttnn::operations::experimental::ccl::ExecuteMatmulReduceScatterAsync>();
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

@@ -167,6 +167,11 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
             "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
         },
+        "perf_counter_data": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "TRISC_1"},
+        },
     }
 
     displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum", "Range"]
@@ -428,6 +433,10 @@ class test_dispatch_cores(default_setup):
         },
     }
     detectOps = False
+
+
+class test_dispatch_cores_extended_worker(test_dispatch_cores):
+    pass
 
 
 class test_ethernet_dispatch_cores(default_setup):

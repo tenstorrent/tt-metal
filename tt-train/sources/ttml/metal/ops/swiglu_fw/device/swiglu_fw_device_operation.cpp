@@ -4,17 +4,11 @@
 
 #include "swiglu_fw_device_operation.hpp"
 
+#include <enchantum/enchantum.hpp>
+
+#include "ttnn/device_operation.hpp"
+
 namespace ttml::metal::ops::swiglu_fw::device {
-
-SwiGLUForwardDeviceOperation::program_factory_t SwiGLUForwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SwiGLUForwardProgramFactory{};
-}
-
-void SwiGLUForwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void SwiGLUForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -23,7 +17,7 @@ void SwiGLUForwardDeviceOperation::validate_on_program_cache_miss(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "SwiGLUForward operation requires {} to be on Device. Input storage type: {}",
             name,
-            static_cast<int>(tensor.storage_type()));
+            enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(
             tensor.buffer() != nullptr,
@@ -34,20 +28,20 @@ void SwiGLUForwardDeviceOperation::validate_on_program_cache_miss(
             tensor.layout() == tt::tt_metal::Layout::TILE,
             "SwiGLUForward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
-            static_cast<int>(tensor.layout()));
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "SwiGLUForward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
-            static_cast<int>(tensor.dtype()));
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "SwiGLUForward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;
@@ -103,10 +97,8 @@ ttsl::hash::hash_t SwiGLUForwardDeviceOperation::compute_program_hash(
     const auto& w2_logical_shape = w2.logical_shape();
     const auto& w3 = tensor_args.w3;
     const auto& w3_logical_shape = w3.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SwiGLUForwardDeviceOperation>(
         args,
-        program_factory.index(),
         input.dtype(),
         input_logical_shape,
         w1.dtype(),
@@ -119,16 +111,23 @@ ttsl::hash::hash_t SwiGLUForwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<SwiGLUForwardDeviceOperation::operation_attributes_t, SwiGLUForwardDeviceOperation::tensor_args_t>
-SwiGLUForwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::swiglu_fw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return_value_t ttml_swiglu_fw(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& w1,
-    const ttnn::Tensor& w2,
-    const ttnn::Tensor& w3,
+    const ttnn::Tensor& m1,
+    const ttnn::Tensor& m2,
+    const ttnn::Tensor& m3,
     const std::optional<ttnn::Tensor>& preallocated_swiglu) {
-    return {
-        operation_attributes_t{},
-        tensor_args_t{.input = input_tensor, .w1 = w1, .w2 = w2, .w3 = w3, .preallocated_swiglu = preallocated_swiglu}};
+    using OperationType = ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor, .w1 = m1, .w2 = m2, .w3 = m3, .preallocated_swiglu = preallocated_swiglu};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::swiglu_fw::device
+}  // namespace ttnn::prim

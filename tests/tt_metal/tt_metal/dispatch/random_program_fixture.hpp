@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "dispatch_test_utils.hpp"
+#include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 namespace tt::tt_metal {
 
@@ -37,7 +38,6 @@ protected:
     static const uint32_t SEM_VAL = 1;
 
     static const uint32_t MIN_NUM_CBS = 0;
-    static const uint32_t MAX_NUM_CBS = NUM_CIRCULAR_BUFFERS;
     static const uint32_t MIN_CB_PAGE_SIZE = 16;
     static const uint32_t MAX_CB_PAGE_SIZE = 64;
     static const uint32_t MIN_CB_TOTAL_SIZE = MAX_CB_PAGE_SIZE;
@@ -53,7 +53,7 @@ protected:
         uint32_t min_num_sems;
         uint32_t max_num_sems;
         uint32_t min_num_cbs;
-        uint32_t max_num_cbs;
+        uint32_t max_num_cbs{};
         KernelProperties() :
             min_kernel_size_bytes(MIN_KERNEL_SIZE_BYTES),
             max_kernel_size_bytes(MAX_KERNEL_SIZE_BYTES),
@@ -63,8 +63,7 @@ protected:
             max_num_rt_args(MAX_NUM_RUNTIME_ARGS),
             min_num_sems(MIN_NUM_SEMS),
             max_num_sems(MAX_NUM_SEMS),
-            min_num_cbs(MIN_NUM_CBS),
-            max_num_cbs(MAX_NUM_CBS) {}
+            min_num_cbs(MIN_NUM_CBS) {}
     };
 
     static const uint32_t NUM_WORKLOADS = 75;
@@ -89,7 +88,11 @@ protected:
         Program& program,
         const CoreType kernel_core_type,
         const bool simple_kernel = false,
-        const KernelProperties& kernel_properties = KernelProperties()) {
+        KernelProperties kernel_properties = KernelProperties()) {
+        if (kernel_properties.max_num_cbs == 0) {
+            kernel_properties.max_num_cbs = max_cbs_;
+        }
+
         CoreRangeSet cores = this->get_cores(kernel_core_type);
         const bool create_eth_config = kernel_core_type == CoreType::ETH;
 
@@ -142,10 +145,7 @@ protected:
     }
 
     std::vector<uint32_t> generate_circular_buffers(
-        Program& program,
-        const CoreRangeSet& cores,
-        const uint32_t min = MIN_NUM_CBS,
-        const uint32_t max = MAX_NUM_CBS) {
+        Program& program, const CoreRangeSet& cores, const uint32_t min, const uint32_t max) {
         const uint32_t num_cbs = this->generate_random_num(min, max);
         std::vector<uint32_t> cb_page_sizes;
         for (uint32_t cb_idx = 0; cb_idx < num_cbs; cb_idx++) {
@@ -200,7 +200,7 @@ protected:
         small_kernel_properties.min_num_sems = MIN_NUM_SEMS;
         small_kernel_properties.max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
         small_kernel_properties.min_num_cbs = MIN_NUM_CBS;
-        small_kernel_properties.max_num_cbs = MAX_NUM_CBS * (3.0 / 10);
+        small_kernel_properties.max_num_cbs = max_cbs_ * (3.0 / 10);
         small_kernel_properties.min_num_rt_args =
             small_kernel_properties.max_num_sems + small_kernel_properties.max_num_cbs;
         return small_kernel_properties;
@@ -216,8 +216,8 @@ protected:
         large_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
         large_kernel_properties.min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
         large_kernel_properties.max_num_sems = MAX_NUM_SEMS;
-        large_kernel_properties.min_num_cbs = MAX_NUM_CBS * (8.0 / 10);
-        large_kernel_properties.max_num_cbs = MAX_NUM_CBS;
+        large_kernel_properties.min_num_cbs = max_cbs_ * (8.0 / 10);
+        large_kernel_properties.max_num_cbs = max_cbs_;
         return large_kernel_properties;
     }
 
@@ -265,6 +265,7 @@ private:
             const auto proc = this->get_processor(true);
             config = EthernetConfig{
                 .noc = static_cast<NOC>(proc), .processor = proc, .compile_args = compile_args, .defines = defines};
+            eth_test_common::set_arch_specific_eth_config(std::get<EthernetConfig>(config));
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
             config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};

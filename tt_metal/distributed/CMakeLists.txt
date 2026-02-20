@@ -19,6 +19,9 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh_translation_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multihost/distributed_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/h2d_socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/d2h_socket.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -78,6 +81,9 @@ else()
 endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(distributed)
 
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE} TARGET distributed)

@@ -28,8 +28,8 @@ Runtime arguments
 7. write_start_page: write start page
 */
 #include <stdint.h>
-#include "dataflow_api.h"
-#include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {

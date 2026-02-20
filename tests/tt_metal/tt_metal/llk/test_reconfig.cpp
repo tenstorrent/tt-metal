@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/bfloat8.hpp>
 #include <bit>
 #include <functional>
@@ -35,11 +35,9 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -113,7 +111,7 @@ bool single_core_reconfig(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
         .device = device,
@@ -365,10 +363,6 @@ bool single_core_reconfig(
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -406,10 +400,6 @@ TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);

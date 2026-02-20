@@ -5,13 +5,13 @@
 #include <stdint.h>
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #endif
 
 constexpr uint16_t TILE_SIZE = 32;
@@ -305,7 +305,8 @@ void kernel_main() {
             fill_with_val<num_elements_to_fill, pad_val>(get_write_ptr(pad_cb_id));
 
             const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
-            constexpr uint32_t padding_region_size = aligned_stick_nbytes / elem_nbytes;
+            // MaxChunkSize must be in bytes and >= StickNBytes to avoid misaligned NOC transactions
+            constexpr uint32_t padding_region_size = aligned_stick_nbytes;
             copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size>(padding_l1_addr);
         }
     }

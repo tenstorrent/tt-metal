@@ -4,16 +4,15 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
+#include "api/compute/matmul.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
     // const bool has_work = get_arg_val<uint32_t>(0);
     // if (!has_work) {
@@ -85,7 +84,7 @@ void MAIN {
         mm_init_short(in_cb, trans_mat_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
-            matmul_tiles(in_cb, trans_mat_cb, j, 0, j, false);
+            matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
             pack_tile(j, rotated_in_interm_cb, j);
         }
         REL();
@@ -137,4 +136,3 @@ void MAIN {
     cb_pop_front(trans_mat_cb, onetile);
     */
 }
-}  // namespace NAMESPACE

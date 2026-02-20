@@ -3,6 +3,7 @@
 set(LLRT_SRC
     llrt.cpp
     core_descriptor.cpp
+    firmware_capability.cpp
     rtoptions.cpp
     tlb_config.cpp
     tt_cluster.cpp
@@ -10,10 +11,15 @@ set(LLRT_SRC
     tt_memory.cpp
     hal.cpp
     tunnels_from_mmio_device.cpp
+    metal_soc_descriptor.cpp
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(llrt)
+
 add_subdirectory(hal)
 add_dependencies(llrt hal_generate_dev_msgs_header)
 

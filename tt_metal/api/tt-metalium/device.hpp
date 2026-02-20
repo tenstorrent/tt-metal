@@ -27,9 +27,7 @@
 
 #include <tt_stl/span.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace program_cache::detail {
 struct ProgramCache;
@@ -44,11 +42,11 @@ using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string
 enum class BufferType;
 
 class Allocator;
+class AllocatorImpl;
 class Buffer;
 class Program;
 class SubDevice;
 
-class CommandQueue;
 class SystemMemoryManager;
 struct TraceBuffer;
 struct TraceDescriptor;
@@ -80,6 +78,10 @@ public:
     virtual int num_dram_channels() const = 0;
     virtual uint32_t l1_size_per_core() const = 0;
     virtual uint32_t dram_size_per_channel() const = 0;
+    // Returns the AI clock frequency in MHz for this device.
+    // This value is queried from the actual hardware via the cluster API
+    // and reflects the device's current operating frequency.
+    virtual int get_clock_rate_mhz() const = 0;
     virtual CoreCoord grid_size() const = 0;
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;
@@ -134,6 +136,10 @@ public:
     virtual const std::unique_ptr<Allocator>& allocator() const = 0;
     virtual const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const = 0;
 
+    // Internal use only, AllocatorImpl is not exposed out
+    virtual const std::unique_ptr<AllocatorImpl>& allocator_impl() const = 0;
+    virtual const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const = 0;
+
     virtual CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const = 0;
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
     virtual uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const = 0;
@@ -155,9 +161,6 @@ public:
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
 
-    // If cq_id is not provided, the current command queue is returned from the current thread
-    virtual CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
-
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
 
@@ -170,13 +173,16 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual void init_command_queue_host() = 0;
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual void init_command_queue_device() = 0;
 
     // return false if compile fails (mainly come from Nebula on TG)
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual bool compile_fabric() = 0;
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual void configure_fabric() = 0;
-    virtual void init_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;
 
@@ -224,6 +230,4 @@ public:
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

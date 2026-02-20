@@ -6,11 +6,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-namespace ttnn {
-
-namespace operations {
-
-namespace compute_throttle_utils {
+namespace ttnn::operations::compute_throttle_utils {
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
@@ -106,8 +102,4 @@ bool should_sync_after_in1_dram(const tt::ARCH arch) {
     return sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
 }
 
-}  // namespace compute_throttle_utils
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::compute_throttle_utils

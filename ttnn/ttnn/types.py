@@ -55,7 +55,6 @@ ThrottleLevel = ttnn._ttnn.operations.core.ThrottleLevel
 DeviceComputeKernelConfig = ttnn._ttnn.operations.core.DeviceComputeKernelConfig
 WormholeComputeKernelConfig = ttnn._ttnn.operations.core.WormholeComputeKernelConfig
 BlackholeComputeKernelConfig = WormholeComputeKernelConfig
-GrayskullComputeKernelConfig = ttnn._ttnn.operations.core.GrayskullComputeKernelConfig
 
 
 @dataclasses.dataclass
@@ -80,6 +79,7 @@ NdShardSpec = ttnn._ttnn.tensor.NdShardSpec
 CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
+corerange_to_cores = ttnn._ttnn.tensor.corerange_to_cores
 
 QueueId = ttnn._ttnn.types.QueueId
 
@@ -90,13 +90,24 @@ BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
 
+DataMovementProcessor = ttnn._ttnn.types.DataMovementProcessor
+NOC = ttnn._ttnn.types.NOC
+NOC_MODE = ttnn._ttnn.types.NOC_MODE
+
+TileDescriptor = ttnn._ttnn.program_descriptor.TileDescriptor
 CBFormatDescriptor = ttnn._ttnn.program_descriptor.CBFormatDescriptor
 CBDescriptor = ttnn._ttnn.program_descriptor.CBDescriptor
 ReaderConfigDescriptor = ttnn._ttnn.program_descriptor.ReaderConfigDescriptor
 WriterConfigDescriptor = ttnn._ttnn.program_descriptor.WriterConfigDescriptor
+DataMovementConfigDescriptor = ttnn._ttnn.program_descriptor.DataMovementConfigDescriptor
 ComputeConfigDescriptor = ttnn._ttnn.program_descriptor.ComputeConfigDescriptor
 KernelDescriptor = ttnn._ttnn.program_descriptor.KernelDescriptor
+RuntimeArgs = ttnn._ttnn.program_descriptor.RuntimeArgs
+RuntimeArgsColProxy = ttnn._ttnn.program_descriptor.RuntimeArgsColProxy
 SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
 ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
+MeshProgramDescriptor = ttnn._ttnn.program_descriptor.MeshProgramDescriptor
+merge_program_descriptors = ttnn._ttnn.program_descriptor.merge_program_descriptors
+cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_from_sharded_tensor
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs

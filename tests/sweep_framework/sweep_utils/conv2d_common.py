@@ -44,9 +44,7 @@ def mesh_device_fixture():
     ttnn.SetDefaultDevice(device)
 
     device_name = "Unknown"
-    if ttnn.device.is_grayskull(device):
-        device_name = "grayskull"
-    elif ttnn.device.is_wormhole_b0(device):
+    if ttnn.device.is_wormhole_b0(device):
         device_name = "wormhole_b0"
     elif ttnn.device.is_blackhole(device):
         device_name = "blackhole"
@@ -179,6 +177,9 @@ def run_conv2d_full_sweep(
 def run_conv2d_short_sweep(
     input_specs,
     device,
+    config_tensors_in_dram=False,
+    output_dtype=None,  # ttnn dtype object (e.g., ttnn.bfloat8_b)
+    compute_config=None,  # ttnn compute config object
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -258,7 +259,13 @@ def run_conv2d_short_sweep(
 
     tt_bias_tensor = None
     conv_config = ttnn.Conv2dConfig()
-    conv_output_dtype = ttnn.bfloat16
+    # Set config_tensors_in_dram if requested (helps avoid L1 OOM for memory-intensive configs)
+    if config_tensors_in_dram:
+        conv_config.config_tensors_in_dram = True
+
+    # Use provided dtype or default to bfloat16
+    conv_output_dtype = output_dtype if output_dtype is not None else ttnn.bfloat16
+
     if is_forge_suite:
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)
@@ -302,6 +309,7 @@ def run_conv2d_short_sweep(
         return_output_dim=True,
         return_weights_and_bias=True,
         dtype=conv_output_dtype,
+        compute_config=compute_config,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

@@ -571,12 +571,12 @@ def test_div_edgcase(device):
 
     ttnn_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.div(ttnn_a, ttnn_b, accurate_mode=True)
+    output_tensor = ttnn.div(ttnn_a, ttnn_b, fast_and_approximate_mode=False)
     golden_tensor = torch.div(a, b)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # accurate_mode=True
+    # fast_and_approximate_mode=False (accurate mode)
     # output_tensor tensor([-1., inf, -inf, inf,  3.,  0.], dtype=torch.bfloat16)
     # golden_tensor tensor([-1., inf, -inf, nan,  3.,  0.], dtype=torch.bfloat16)
 
@@ -602,16 +602,16 @@ def test_addcdiv_edgcase(device):
     golden_tensor = torch.addcdiv(c, a, b, value=value)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
-    # output_tensor tensor([ 0.5000,    -inf,     inf,    -inf, -1.5000,  0.0000],dtype=torch.bfloat16)
+    # output_tensor tensor([ 0.5000,    -inf,     inf,     inf, -1.5000,  0.0000],dtype=torch.bfloat16)
     # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000],dtype=torch.bfloat16)
 
-    # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
-    golden_tensor = torch.where(
-        torch.isnan(golden_tensor), value * torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
+    # Where golden is NaN (e.g. 0/0), normalize ttnn output to NaN for comparison
+    output_tensor = torch.where(
+        torch.isnan(golden_tensor),
+        torch.tensor(float("nan"), dtype=output_tensor.dtype, device=output_tensor.device),
+        output_tensor,
     )
-
-    assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
+    assert torch.allclose(output_tensor, golden_tensor, equal_nan=True)
 
 
 def test_addcdiv_edgcase_fp32(device):

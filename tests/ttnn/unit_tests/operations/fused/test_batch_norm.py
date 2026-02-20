@@ -5,12 +5,14 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_batch_norm,
     compare_results_batch_norm,
 )
 from itertools import product
 from models.common.utility_functions import comp_pcc
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(

@@ -15,7 +15,7 @@ struct AdamWConfig {
     float beta2{0.999F};
     float epsilon{1e-8F};
     float weight_decay{0.01F};
-    // TODO: add amsgrad
+    bool amsgrad{false};
 
     // flag to enable kahan summation to reduce floating point errors
     bool use_kahan_summation{false};
@@ -23,6 +23,10 @@ struct AdamWConfig {
 
 class MorehAdamW : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "MorehAdamW";
+    }
+
     MorehAdamW(serialization::NamedParameters parameters, const AdamWConfig& config);
 
     void zero_grad() override;
@@ -47,6 +51,10 @@ private:
 
 class AdamW : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "AdamW";
+    }
+
     AdamW(serialization::NamedParameters parameters, const AdamWConfig& config);
 
     void zero_grad() override;
@@ -68,6 +76,7 @@ private:
     AdamWConfig m_config;
     serialization::NamedParameters m_first_moment;
     serialization::NamedParameters m_second_moment;
+    serialization::NamedParameters m_max_exp_avg_sq;
     serialization::NamedParameters m_kahan_compensation;
 };
 

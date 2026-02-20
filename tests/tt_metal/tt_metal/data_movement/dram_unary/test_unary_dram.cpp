@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -27,6 +28,7 @@ struct DramConfig {
     CoreCoord core_coord = {0, 0};
     uint32_t dram_channel = 0;
     uint32_t virtual_channel = 0;
+    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
@@ -35,7 +37,7 @@ struct DramConfig {
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramConfig& test_config) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // SETUP
 
     // Program
@@ -44,7 +46,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
     // DRAM Address
-    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size(mesh_device);
+    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size();
 
     uint32_t input_dram_address = dram_info.base_address;
     uint32_t output_dram_address = input_dram_address + total_size_bytes;
@@ -84,9 +86,19 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         (uint32_t)test_config.virtual_channel};
 
     // Kernels
+    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/";
+    std::string reader_kernel_filename = "reader_unary";
+    std::string writer_kernel_filename = "writer_unary";
+    if (test_config.use_2_0_api) {
+        reader_kernel_filename += "_2_0";
+        writer_kernel_filename += "_2_0";
+    }
+    std::string reader_kernel_path = kernels_dir + reader_kernel_filename + ".cpp";
+    std::string writer_kernel_path = kernels_dir + writer_kernel_filename + ".cpp";
+
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary.cpp",
+        reader_kernel_path,
         test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -95,7 +107,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary.cpp",
+        writer_kernel_path,
         test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -139,18 +151,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         device, test_config.dram_channel, output_dram_address, total_size_bytes, packed_output);
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(LogTest, "Equality Check failed");
         log_info(LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -186,7 +197,8 @@ void packet_sizes_test(
     const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
-    uint32_t dram_channel = 0) {
+    uint32_t dram_channel = 0,
+    bool use_2_0_api = false) {
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
 
@@ -209,7 +221,9 @@ void packet_sizes_test(
                 .bytes_per_page = bytes_per_page,
                 .l1_data_format = DataFormat::Float16_b,
                 .core_coord = core_coord,
-                .dram_channel = dram_channel};
+                .dram_channel = dram_channel,
+                .virtual_channel = 0,
+                .use_2_0_api = use_2_0_api};
 
             // Run
             EXPECT_TRUE(run_dm(mesh_device, test_config));
@@ -233,7 +247,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
     uint32_t test_case_id = 1;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     CoreCoord core_coord;
     uint32_t dram_channel = 0;
@@ -258,7 +272,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
     uint32_t test_case_id = 2;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     CoreCoord core_coord = {0, 0};
 
@@ -275,6 +289,17 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
     uint32_t test_id = 3;
 
     unit_tests::dm::dram::directed_ideal_test(get_mesh_device(), test_id);
+}
+
+/* ========== Test case for varying transaction numbers and sizes with 2.0 API; Test id = 40 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes2_0) {
+    unit_tests::dm::dram::packet_sizes_test(
+        get_mesh_device(),
+        40,      // Test case ID
+        {0, 0},  // Core coordinates (default)
+        0,       // DRAM channel (default)
+        true     // Use 2.0 API
+    );
 }
 
 }  // namespace tt::tt_metal

@@ -32,7 +32,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/bfloat16.hpp
     api/tt-metalium/bfloat4.hpp
     api/tt-metalium/bfloat8.hpp
-    api/tt-metalium/blockfloat_common.hpp
     api/tt-metalium/buffer.hpp
     api/tt-metalium/buffer_distribution_spec.hpp
     api/tt-metalium/buffer_page_mapping.hpp
@@ -46,13 +45,13 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/core_coord.hpp
     api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
-    api/tt-metalium/device_pool.hpp
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     api/tt-metalium/event.hpp
+    api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
@@ -65,9 +64,10 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/kernel_types.hpp
-    api/tt-metalium/lightmetal_binary.hpp
-    api/tt-metalium/lightmetal_capture_utils.hpp
-    api/tt-metalium/lightmetal_replay.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
     api/tt-metalium/memory_pin.hpp
@@ -81,11 +81,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_event.hpp
     api/tt-metalium/experimental/fabric/mesh_graph.hpp
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
-    api/tt-metalium/mesh_socket.hpp
+    api/tt-metalium/experimental/sockets/mesh_socket.hpp
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
-    api/tt-metalium/metal_soc_descriptor.h
-    api/tt-metalium/persistent_kernel_cache.hpp
     api/tt-metalium/profiler_optional_metadata.hpp
     api/tt-metalium/profiler_types.hpp
     api/tt-metalium/program.hpp
@@ -93,6 +91,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program_descriptors.hpp
     api/tt-metalium/queue_id.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
+    api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
+    api/tt-metalium/experimental/fabric/topology_solver.hpp
+    api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
@@ -109,7 +110,20 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
+    api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
+    api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
+    api/tt-metalium/experimental/tensor/host_tensor.hpp
+    api/tt-metalium/experimental/tensor/device_tensor.hpp
+    api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/page_config.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp
+    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
+    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
 )
 target_sources(
     tt_metal
@@ -144,11 +158,11 @@ set_target_properties(
 
 file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
-file(GLOB_RECURSE LITE_FABRIC_INC lite_fabric/hw/inc/*)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
     third_party/tt_llk/tt_llk_blackhole/**/*.h
+    third_party/tt_llk/tt_llk_quasar/**/*.h
 )
 
 target_sources(
@@ -172,6 +186,7 @@ target_sources(
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/n300_x2_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
@@ -188,7 +203,6 @@ target_sources(
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
             fabric/fabric_edm_packet_header.hpp
             ${FABRIC_HW_INC}
-            ${LITE_FABRIC_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_relay.hpp
@@ -252,7 +266,6 @@ target_link_libraries(
         detail
         distributed
         fabric
-        lite_fabric
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
@@ -303,7 +316,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
-add_subdirectory(lite_fabric)
+add_subdirectory(experimental/udm)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()

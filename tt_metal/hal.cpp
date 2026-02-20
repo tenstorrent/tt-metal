@@ -39,17 +39,17 @@ uint32_t get_l1_alignment() { return tt::tt_metal::MetalContext::instance().hal(
 uint32_t get_pcie_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST); }
 
 uint32_t get_erisc_l1_unreserved_base() {
-    auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 }
 
 uint32_t get_erisc_l1_unreserved_size() {
-    auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 }
 
 uint32_t get_max_worker_l1_unreserved_size() {
-    auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     size_t l1_end = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
                     hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     return l1_end - hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
@@ -60,5 +60,9 @@ float get_eps() { return tt::tt_metal::MetalContext::instance().hal().get_eps();
 float get_nan() { return tt::tt_metal::MetalContext::instance().hal().get_nan(); }
 
 float get_inf() { return tt::tt_metal::MetalContext::instance().hal().get_inf(); }
+
+uint32_t get_arch_num_circular_buffers() {
+    return tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+}
 
 }  // namespace tt::tt_metal::hal

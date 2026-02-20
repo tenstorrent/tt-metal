@@ -15,12 +15,12 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::embedding_backward::program {
+namespace ttnn::prim {
 
 EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactory::create(
-    const embedding_backward::operation_attributes_t& operation_attributes,
-    const embedding_backward::tensor_args_t& tensor_args,
-    embedding_backward::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingBackwardParams& operation_attributes,
+    const EmbeddingBackwardInputs& tensor_args,
+    Tensor& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -29,7 +29,7 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
     tt_metal::Buffer* grad_tensor_buffer = tensor_args.grad_tensor.buffer();
     tt_metal::Buffer* out_buffer = tensor_return_value.buffer();
 
-    auto device = tensor_args.grad_tensor.device();
+    auto* device = tensor_args.grad_tensor.device();
 
     const auto& index_tensor = tensor_args.index_tensor;
     ////////////////////////////////////////////////////////////////////////////
@@ -160,12 +160,12 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
 
 void EmbeddingBackwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding_backward::operation_attributes_t&,
-    const embedding_backward::tensor_args_t& tensor_args,
-    embedding_backward::tensor_return_value_t& tensor_return_value) {
-    auto index_dram_buffer = tensor_args.index_tensor.buffer();
-    auto grad_dram_buffer = tensor_args.grad_tensor.buffer();
-    auto output_dram_buffer = tensor_return_value.buffer();
+    const EmbeddingBackwardParams&,
+    const EmbeddingBackwardInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    auto* index_dram_buffer = tensor_args.index_tensor.buffer();
+    auto* grad_dram_buffer = tensor_args.grad_tensor.buffer();
+    auto* output_dram_buffer = tensor_return_value.buffer();
 
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
@@ -179,4 +179,4 @@ void EmbeddingBackwardProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::embedding_backward::program
+}  // namespace ttnn::prim

@@ -2,17 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple, List
-import os
-import itertools
-import random
-import torch
+from typing import Optional, Tuple
 
-import ttnn
+import pytest
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
-from tests.sweep_framework.sweep_utils.conv_transpose2d_common import run_short, mesh_device_fixture
+from tests.sweep_framework.sweep_utils.conv_transpose2d_common import run_short
 
 parameters = {
     "short_sweep_suite": {
@@ -29,7 +23,7 @@ parameters = {
             [1, 256, 56, 56, 128, 2, 2, 2, 2, 0, 0, 1, 1, 0, 0],
             [1, 4, 7, 7, 16, 2, 2, 2, 2, 0, 0, 1, 1, 0, 0],
             [1, 512, 16, 16, 256, 2, 2, 2, 2, 0, 0, 1, 1, 0, 0],
-            # [1, 512, 28, 28, 256, 2, 2, 2, 2, 0, 0, 1, 1, 0, 0],
+            [1, 512, 28, 28, 256, 2, 2, 2, 2, 0, 0, 1, 1, 0, 0],
             [1, 64, 128, 128, 32, 2, 2, 2, 2, 0, 0, 1, 1, 0, 0],
         ]
     },
@@ -40,24 +34,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def run(
-    input_specs,
-    *,
-    device,
-) -> list:
-    return run_short(
-        input_specs,
-        device,
-    )
-
-
-import pytest
+def run(input_specs, *, device) -> list:
+    return run_short(input_specs, device)
 
 
 @pytest.mark.parametrize("input_spec", parameters["short_sweep_suite"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_transpose2d_localrun(device, input_spec):
-    run_short(
-        input_spec,
-        device,
-    )
+    run_short(input_spec, device)

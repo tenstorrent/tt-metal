@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -92,7 +92,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
     status_ptr[0] = tt::tt_fabric::DrainerStatus::READY_FOR_TRAFFIC;
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         invalidate_l1_cache();
         bool has_unsent_payload = get_ptr_val(slots_free_stream_id) != NUM_BUFFERS;
         if (has_unsent_payload) {
@@ -101,7 +101,7 @@ void kernel_main() {
             worker_interface.notify_worker_of_read_counter_update();
             increment_local_update_ptr_val(slots_free_stream_id, 1);
         }
-        tt::tt_fabric::check_worker_connections<my_eth_channel_id>(
+        tt::tt_fabric::check_worker_connections<my_eth_channel_id, true>(
             worker_interface, connection_established, slots_free_stream_id);
     }
 

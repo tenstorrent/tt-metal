@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,8 @@ struct ExecuteUntilizeWithUnpadding {
         const ttnn::Shape& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,
         bool use_multicore = true,
-        bool use_pack_untilize = true);
+        bool use_pack_untilize = true,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace operations::data_movement

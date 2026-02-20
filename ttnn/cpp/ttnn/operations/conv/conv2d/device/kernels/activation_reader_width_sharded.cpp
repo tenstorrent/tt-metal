@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "conv_reader_common.hpp"
 
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #endif
 
 constexpr uint32_t weight_size_h = get_compile_time_arg_val(5);
@@ -237,11 +237,6 @@ void kernel_main() {
                     // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
                     // (using NOC_CMD_STATIC_VC).
 
-#ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
-                    // not be sent in order they are issued
-                    noc_async_writes_flushed();
-#endif
                     // We should also multicast VALID flag to destinations for receiver semaphore
                     noc_semaphore_set_multicast_loopback_src(
                         act_mcast_sender_semaphore_valid_addr,

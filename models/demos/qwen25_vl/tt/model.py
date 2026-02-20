@@ -9,11 +9,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
-from models.demos.qwen25_vl.tt.attention import Attention as QwenVLAttentionModule
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen25_vl.tt.rope import RotarySetup
 from models.demos.qwen25_vl.tt.vision_block import VisionBlock
+from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -55,7 +55,7 @@ class VisionTransformer(LightweightModule):
 
         # Create transformation matrix for RoPE QK prefill
         transformation_mat_torch = get_rot_transformation_mat(
-            args.head_dim
+            args.vision_head_dim
         )  # todo)) args.head_dim is ignored inside the function
         self.transformation_mats = {
             "prefill": ttnn.as_tensor(
@@ -181,7 +181,7 @@ class DropInVisionTransformer(torch.nn.Module):
         self.debug = debug
 
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
-        state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
+        state_dict = convert_hf_to_meta(state_dict, model_args.vision_head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
         state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
@@ -234,7 +234,7 @@ class DropInVisionTransformer(torch.nn.Module):
             cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
                 seq_len=unpadded_seq_len,
                 grid_thw=grid_thw,
-                head_dim=self.model_args.head_dim,
+                head_dim=self.model_args.vision_head_dim,
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
                 window_size=self.model_args.hf_config.vision_config.window_size,
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
@@ -354,7 +354,7 @@ class Transformer(TTTransformer):
             weight_cache_path=weight_cache_path,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
-            attention_class=QwenVLAttentionModule,
+            attention_class=Attention,
             rope_setup_class=RotarySetup,
         )
 

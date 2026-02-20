@@ -5,4 +5,4 @@
 #pragma once
 #include <cstdint>
 
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"

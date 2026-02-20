@@ -46,7 +46,14 @@ def close_device(device: "ttnn.device.Device"):
         Closing device 0
 
     """
-    synchronize_device(device)
+    # Try to synchronize first, but don't let failures prevent device close.
+    # If synchronize fails (e.g., due to device timeout/hang), we still need
+    # to close the device to release handles and allow subsequent operations.
+    try:
+        synchronize_device(device)
+    except Exception:
+        logger.exception("close_device: synchronize_device failed. Continuing with device close.")
+
     ttnn._ttnn.device.close_device(device)
 
 
@@ -63,13 +70,6 @@ def is_wormhole_b0(device=None):
         return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
     ARCH_NAME = ttnn._ttnn.device.get_arch_name()
     return "wormhole_b0" in ARCH_NAME
-
-
-def is_grayskull(device=None):
-    if device is not None:
-        return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
-    ARCH_NAME = ttnn._ttnn.device.get_arch_name()
-    return "grayskull" in ARCH_NAME
 
 
 def is_blackhole(device=None):
@@ -200,8 +200,7 @@ def ReadDeviceProfiler(device):
 
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
-EnablePersistentKernelCache = ttnn._ttnn.device.EnablePersistentKernelCache
-DisablePersistentKernelCache = ttnn._ttnn.device.DisablePersistentKernelCache
+ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
@@ -240,8 +239,6 @@ def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
-format_input_tensor = ttnn._ttnn.device.format_input_tensor
-format_output_tensor = ttnn._ttnn.device.format_output_tensor
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice

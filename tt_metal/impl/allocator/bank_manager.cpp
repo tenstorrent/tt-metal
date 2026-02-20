@@ -19,9 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
@@ -124,7 +122,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool 
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
     std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {
         7, 12, 20, 48, 56, 63, 70, 72, 80, 94, 108, 110, 117, 120, 124, 126, 130, 140};
-    bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.count(num_banks) > 0;
+    bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.contains(num_banks);
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
         TT_THROW(
@@ -144,7 +142,7 @@ BankManager::BankManager(
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
     buffer_type_(buffer_type),
-    interleaved_address_limit_(0),
+
     alignment_bytes_(alignment_bytes),
     allocator_dependencies_(dependencies) {
     unsigned int bank_id = 0;
@@ -194,7 +192,7 @@ int64_t BankManager::bank_offset(uint32_t bank_id) const {
 
 void BankManager::validate_bank_id(uint32_t bank_id) const {
     TT_FATAL(
-        bank_id_to_bank_offset_.find(bank_id) != bank_id_to_bank_offset_.end(),
+        bank_id_to_bank_offset_.contains(bank_id),
         "Expected bank {} to be tracked!",
         bank_id,
         bank_id_to_bank_offset_.size());
@@ -420,16 +418,32 @@ uint64_t BankManager::allocate_buffer(
     // vs. top-down allocation
     if (dependent_allocators.empty()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
-        TT_FATAL(
-            address.has_value(),
-            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-            "store {} B, but bank size is only {} B",
-            size,
-            enchantum::to_string(buffer_type_),
-            num_banks,
-            size_per_bank,
-            bank_size());
+        if (!address.has_value()) {
+            auto mem_stats = alloc->get_statistics();
+            TT_FATAL(
+                false,
+                "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
+                "store {} B, but bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+                size,
+                enchantum::to_string(buffer_type_),
+                num_banks,
+                size_per_bank,
+                bank_size(),
+                mem_stats.total_allocated_bytes,
+                mem_stats.total_free_bytes,
+                mem_stats.largest_free_block_bytes);
+        }
         allocated_buffers_[allocator_id.get()].insert(address.value());
+
+        // Track allocation high water mark
+        if (tracking_high_water_mark_) {
+            // Calculate end address in interleaved space: address + size_per_bank
+            // Bank offsets don't need to be accounted for here since overlap comparisons
+            // are done in interleaved space where both allocations have the same bank offset applied
+            DeviceAddr end_address = address.value() + size_per_bank;
+            allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+        }
+
         // No neighbors, nothing to invalidate
         return address.value();
     }
@@ -461,14 +475,21 @@ uint64_t BankManager::allocate_buffer(
         }
     }
 
-    TT_FATAL(
-        chosen.has_value(),
-        "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
-        "per bank)",
-        size,
-        enchantum::to_string(buffer_type_),
-        num_banks,
-        size_per_bank);
+    if (!chosen.has_value()) {
+        auto mem_stats = alloc->get_statistics();
+        TT_FATAL(
+            false,
+            "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
+            "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+            size,
+            enchantum::to_string(buffer_type_),
+            num_banks,
+            size_per_bank,
+            bank_size(),
+            mem_stats.total_allocated_bytes,
+            mem_stats.total_free_bytes,
+            mem_stats.largest_free_block_bytes);
+    }
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,
         "Chosen address {} is not aligned to {} B",
@@ -478,6 +499,16 @@ uint64_t BankManager::allocate_buffer(
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
+
+    // Track allocation high water mark
+    if (tracking_high_water_mark_) {
+        // Calculate end address in interleaved space: address + size_per_bank
+        // Bank offsets don't need to be accounted for here since overlap comparisons
+        // are done in interleaved space where both allocations have the same bank offset applied
+        DeviceAddr end_address = address.value() + size_per_bank;
+        allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+    }
+
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
     return address.value();
@@ -486,6 +517,17 @@ uint64_t BankManager::allocate_buffer(
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
+
+    // Track deletion high water mark - remember the extent of buffers being freed
+    if (tracking_high_water_mark_) {
+        auto size_opt = alloc->get_allocation_size(address);
+        if (size_opt.has_value()) {
+            // Update deletion high water mark with the end address of the buffer being deallocated
+            DeviceAddr end_address = address + size_opt.value();
+            deletion_high_water_mark_ = std::max(deletion_high_water_mark_, end_address);
+        }
+    }
+
     alloc->deallocate(address);
     allocated_buffers_[allocator_id.get()].erase(address);
     // Deallocation in this allocator invalidates caches in allocators that depend on this allocator
@@ -544,6 +586,25 @@ Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::Alloc
     const auto* alloc = this->get_allocator_from_id(allocator_id);
     return alloc ? alloc->get_statistics() : Statistics();
 }
+
+void BankManager::begin_high_water_mark_tracking() {
+    tracking_high_water_mark_ = true;
+    allocation_high_water_mark_ = 0;
+    deletion_high_water_mark_ = 0;
+}
+
+DeviceAddr BankManager::end_high_water_mark_tracking() {
+    tracking_high_water_mark_ = false;
+    return std::max(allocation_high_water_mark_, deletion_high_water_mark_);
+}
+
+DeviceAddr BankManager::get_high_water_mark() const {
+    return std::max(allocation_high_water_mark_, deletion_high_water_mark_);
+}
+
+DeviceAddr BankManager::get_allocation_high_water_mark() const { return allocation_high_water_mark_; }
+
+DeviceAddr BankManager::get_deletion_high_water_mark() const { return deletion_high_water_mark_; }
 
 void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);
@@ -702,6 +763,4 @@ bool BankManager::can_apply_state(const AllocatorState::BufferTypeState& state) 
            alignment_bytes_ == state.alignment_bytes;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

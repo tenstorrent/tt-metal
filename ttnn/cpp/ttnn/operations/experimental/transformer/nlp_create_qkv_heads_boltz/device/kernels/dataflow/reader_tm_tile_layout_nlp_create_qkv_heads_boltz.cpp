@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 void kernel_main() {
     // READER RUNTIME ARGS
     uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);

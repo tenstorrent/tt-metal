@@ -5,7 +5,8 @@
 #define HAL_BUILD tt::tt_metal::wormhole::idle_eth
 #define COMPILE_FOR_IDLE_ERISC
 
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::wormhole::idle_eth;
 
 #include <cstdint>
@@ -25,6 +26,10 @@ namespace tt::tt_metal::wormhole {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace idle_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace idle_eth_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_idle_eth_mem_map() {
@@ -96,19 +101,23 @@ HalCoreInfoType create_idle_eth_mem_map() {
             {"ER", "ERISC"},
         },
     };
+    std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
 
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         false /*supports_cbs*/,
+        false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
-        idle_eth_dev_msgs::create_factory()};
+        idle_eth_dev_msgs::create_factory(),
+        idle_eth_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

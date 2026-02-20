@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -35,11 +35,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -90,7 +88,7 @@ void run_single_core_cumsum(
     Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -214,11 +212,6 @@ void run_single_core_cumsum(
 }  // namespace unit_tests::compute::cumsum
 
 TEST_F(MeshDeviceFixture, TensixComputeCumsumColumnwise) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();  // Not implemented for GRAYSKULL
-    }
-
     for (int i = 1; i <= 3; i++) {
         for (int j = 1; j <= 3; j++) {
             for (int k = 1; k <= 3; k++) {
@@ -230,11 +223,6 @@ TEST_F(MeshDeviceFixture, TensixComputeCumsumColumnwise) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeCumsumRowwise) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();  // Not implemented for GRAYSKULL
-    }
-
     for (int i = 1; i <= 3; i++) {
         for (int j = 1; j <= 3; j++) {
             for (int k = 1; k <= 3; k++) {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -27,11 +27,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
@@ -40,7 +38,7 @@ using namespace tt::tt_metal;
 namespace unit_tests::initialize_semaphores {
 
 void initialize_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     distributed::MeshWorkload& workload,
     const CoreRange& core_range) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -98,7 +96,7 @@ void create_and_read_max_num_semaphores(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
@@ -148,7 +146,7 @@ void try_creating_more_than_max_num_semaphores(
 }
 
 void try_creating_semaphores_out_of_bounds(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/, distributed::MeshWorkload& workload) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     // Get mesh dimensions and use an out-of-bounds coordinate
     CoreRange core_range({0, 0}, {0, 20});

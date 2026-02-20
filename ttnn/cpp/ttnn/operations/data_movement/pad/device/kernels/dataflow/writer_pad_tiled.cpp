@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <algorithm>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
@@ -33,7 +33,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* input_id_per_dim = output_page_shape + num_dims;
     volatile tt_l1_ptr uint32_t* output_id_per_dim = input_id_per_dim + num_dims;
 
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
     const auto s0 = TensorAccessor(dst_args, output_addr, page_size);
 

@@ -7,13 +7,10 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import (
-    is_wormhole_b0,
-    torch_random,
-    is_wormhole_b0,
-    is_blackhole,
-)
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
@@ -29,7 +26,6 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.exp(input_tensor)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
