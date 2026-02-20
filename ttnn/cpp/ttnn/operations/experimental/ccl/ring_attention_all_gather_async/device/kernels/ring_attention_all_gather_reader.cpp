@@ -7,6 +7,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/debug/dprint.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -38,16 +39,20 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     uint32_t arg_idx = 0;
     // Load the input tensor spec
-    uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tensor_descriptor_args_offset = arg_idx;
+    constexpr uint32_t num_properties_per_input_tensor = 7;
+    // now follows num_inputs * num_properties_per_input_tensor properties
+    arg_idx += num_inputs * num_properties_per_input_tensor;
 
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx, page_size_base_idx);
     arg_idx += num_inputs;
@@ -64,10 +69,32 @@ void kernel_main() {
     const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     // Push out our local slice
 
-    uint32_t tiles_read = input_tile_id_start;
-    uint32_t tiles_to_read = input_tile_id_end;
+    // DPRINT << "AG reader, num inputs: " << num_inputs << ENDL();
     uint32_t output_tile_id_start = 0;
+    // Read local slice to our buffers, before sending them over
+    // DPRINT << "AG reader, reading local slice, tiles_to_read: " << tiles_to_read << ENDL();
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        // tensor_descriptor_args.push_back(input_tensor_Wt); // 0 == input_tensor_Wt
+        // tensor_descriptor_args.push_back(input_tensor_Ht); // 1 == input_tensor_Ht
+        // tensor_descriptor_args.push_back(output_tensor_Wt); // 2 == output_tensor_Wt
+        // tensor_descriptor_args.push_back(output_tensor_Ht); // 3 == output_tensor_Ht
+        // tensor_descriptor_args.push_back(batch_head_size); // 4 == batch_head_size
+        // tensor_descriptor_args.push_back(input_tile_id_start); // 5 == input_tile_id_start
+        // tensor_descriptor_args.push_back(input_tile_id_end); // 6 == input_tile_id_end
+        uint32_t input_batch_head_count =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 4);
+        uint32_t input_tensor_Wt =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor);
+        uint32_t input_tensor_Ht =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 1);
+        uint32_t tiles_read =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 5);
+        uint32_t input_tile_id_start =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 5);
+        uint32_t input_tile_id_end =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 6);
+        uint32_t tiles_to_read =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 6);
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
@@ -148,8 +175,24 @@ void kernel_main() {
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
                 // read the next backward slice out of memory, and put it in CB
-                tiles_read = input_tile_id_start;
-                tiles_to_read = input_tile_id_end;
+                uint32_t tiles_read = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 5);
+                uint32_t input_tile_id_start = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 5);
+                uint32_t input_tile_id_end = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 6);
+                uint32_t tiles_to_read = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 6);
+                uint32_t input_tensor_Wt =
+                    get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor);
+                uint32_t input_tensor_Ht = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 1);
+                uint32_t output_tensor_Wt = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 2);
+                uint32_t output_tensor_Ht = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 3);
+                uint32_t input_batch_head_count = get_arg_val<uint32_t>(
+                    tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 4);
 
                 uint32_t output_tile_id_start = 0;
                 uint32_t pages_read_in_row = input_tile_id_start % input_tensor_Wt;
@@ -191,7 +234,7 @@ void kernel_main() {
             }
         }
     }
-
     const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
     noc_inline_dw_write(dest_noc_addr, 0);
+    // DPRINT << "AGR finished" << ENDL();
 }
