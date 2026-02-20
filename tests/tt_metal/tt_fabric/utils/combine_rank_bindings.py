@@ -47,14 +47,15 @@ from pathlib import Path
 
 import yaml
 
-_BINDING_FILE_DEFAULT = "bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml"
+_BINDING_FILE_DEFAULT = "bh_4x2_multi_mesh_rank_binding.yaml"
 _OUT_BINDING = "combined_rank_binding.yaml"
 _OUT_MGD = "combined_mesh_graph_descriptor.textproto"
 _TRAY_MAPPING_FILE = "tray_to_pcie_device_mapping.yaml"
 
 # Path to parse_cluster_config.py relative to this file:
-#   this file  : tests/tt_metal/tt_fabric/utils/
-#   target     : tools/scaleout/cabling_descriptor/
+#   this file  : tests/tt_metal/tt_fabric/utils/combine_rank_bindings.py
+#   parents[4] : repo root
+#   target     : tools/scaleout/cabling_descriptor/parse_cluster_config.py
 _CLUSTER_PARSER_PATH = (
     Path(__file__).resolve().parents[4] / "tools" / "scaleout" / "cabling_descriptor" / "parse_cluster_config.py"
 )
@@ -353,11 +354,90 @@ def _build_inter_host_connections(topology, per_host, tray_to_mesh_per_host, mes
 
 
 # ---------------------------------------------------------------------------
+# Ring remapping helpers
+# ---------------------------------------------------------------------------
+
+
+def _find_ring_ordering(all_instances, all_connections):
+    """
+    Find a Hamiltonian cycle in the combined mesh graph and return the node
+    visit order as a list, starting from the smallest mesh_id.
+
+    Uses backtracking DFS.  The graph is expected to be small (O(10s) of
+    nodes) and ring-like, so this terminates quickly in practice.
+
+    Raises ValueError if no Hamiltonian cycle exists.
+    """
+    nodes = sorted(set(mesh_id for _, mesh_id in all_instances))
+    n = len(nodes)
+    node_set = set(nodes)
+
+    # Build adjacency (multiple connection blocks between the same pair count
+    # as one edge for traversal purposes).
+    adj = defaultdict(set)
+    for (_, id_a), (_, id_b), _, _ in all_connections:
+        adj[id_a].add(id_b)
+        adj[id_b].add(id_a)
+
+    start = nodes[0]
+
+    def dfs(path, visited):
+        if len(path) == n:
+            return start in adj[path[-1]]
+        current = path[-1]
+        for neighbor in sorted(adj[current]):
+            if neighbor in node_set and neighbor not in visited:
+                path.append(neighbor)
+                visited.add(neighbor)
+                if dfs(path, visited):
+                    return True
+                path.pop()
+                visited.remove(neighbor)
+        return False
+
+    path = [start]
+    if dfs(path, {start}):
+        return path
+
+    raise ValueError(
+        f"No Hamiltonian cycle found in the combined mesh graph "
+        f"(nodes: {nodes}). Verify that --cluster-config inter-host "
+        f"connections complete a ring topology."
+    )
+
+
+def _remap_to_ring(all_instances, all_connections, combined_bindings):
+    """
+    Remap mesh IDs so that the combined graph's Hamiltonian cycle aligns with
+    the natural integer sequence 0 → 1 → 2 → … → n-1 → 0.
+
+    The node that currently holds mesh_id 0 keeps id 0; subsequent nodes along
+    the cycle receive ids 1, 2, … in traversal order.
+
+    Returns (new_instances, new_connections, new_combined_bindings).
+    """
+    ring_order = _find_ring_ordering(all_instances, all_connections)
+    remap = {old_id: new_id for new_id, old_id in enumerate(ring_order)}
+    print(f"ring remapping (old -> new): { {k: v for k, v in sorted(remap.items())} }")
+
+    new_instances = sorted(
+        [(desc, remap[mid]) for desc, mid in all_instances],
+        key=lambda x: x[1],
+    )
+    new_connections = [
+        ((desc_a, remap[id_a]), (desc_b, remap[id_b]), ch, extras)
+        for (desc_a, id_a), (desc_b, id_b), ch, extras in all_connections
+    ]
+    new_bindings = [{**b, "mesh_id": remap[b["mesh_id"]]} for b in combined_bindings]
+    return new_instances, new_connections, new_bindings
+
+
+# ---------------------------------------------------------------------------
 # Main logic
 # ---------------------------------------------------------------------------
 
 
-def combine(hostnames, binding_filename, output_dir, cluster_config_path=None):
+def combine(hostnames, binding_filename, output_dir, cluster_config_path=None, remap_to_ring=False):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -425,16 +505,8 @@ def combine(hostnames, binding_filename, output_dir, cluster_config_path=None):
         all_connections.extend(inter_connections)
         print(f"added {len(inter_connections)} inter-host connection(s) from {cluster_config_path}")
 
-    # Write combined textproto
-    mgd_out = output_dir / _OUT_MGD
-    mgd_out.write_text(
-        generate_combined_descriptor(
-            mesh_desc_blocks, all_instances, all_connections, graph_name, graph_type, top_level_raw
-        )
-    )
-    print(f"written: {mgd_out}")
-
-    # Build combined rank bindings with per-host rank and mesh_id offsets
+    # Build combined rank bindings with per-host rank and mesh_id offsets.
+    # Must happen before any remapping so both outputs are transformed together.
     combined_bindings = []
     for i, (hostname, data) in enumerate(per_host):
         rank_offset = i * ranks_per_host
@@ -445,6 +517,21 @@ def combine(hostnames, binding_filename, output_dir, cluster_config_path=None):
             new_binding["mesh_id"] = binding["mesh_id"] + mesh_offset
             # env_overrides (TT_VISIBLE_DEVICES) is host-specific; preserve as-is
             combined_bindings.append(new_binding)
+
+    # Optionally remap mesh_ids so the combined graph forms a Hamiltonian ring.
+    if remap_to_ring:
+        all_instances, all_connections, combined_bindings = _remap_to_ring(
+            all_instances, all_connections, combined_bindings
+        )
+
+    # Write combined textproto
+    mgd_out = output_dir / _OUT_MGD
+    mgd_out.write_text(
+        generate_combined_descriptor(
+            mesh_desc_blocks, all_instances, all_connections, graph_name, graph_type, top_level_raw
+        )
+    )
+    print(f"written: {mgd_out}")
 
     # Store the MGD path relative to CWD (repo root convention) where possible
     try:
@@ -496,13 +583,34 @@ def main():
             "from each hostname directory to resolve tray IDs to mesh IDs."
         ),
     )
+    parser.add_argument(
+        "--remap-to-ring",
+        action="store_true",
+        default=False,
+        help=(
+            "Remap mesh IDs in both the combined mesh graph descriptor and "
+            "rank binding so that a Hamiltonian cycle (ring) exists along the "
+            "natural sequence 0 → 1 → 2 → … → n-1 → 0.  "
+            "Requires --cluster-config so that inter-host connections are "
+            "present before the ring ordering is computed."
+        ),
+    )
     args = parser.parse_args()
 
     hostnames = [h.strip() for h in args.hosts.split(",") if h.strip()]
     if not hostnames:
         parser.error("at least one hostname is required")
 
-    combine(hostnames, args.binding_file, args.output_dir, cluster_config_path=args.cluster_config)
+    if args.remap_to_ring and not args.cluster_config:
+        parser.error("--remap-to-ring requires --cluster-config")
+
+    combine(
+        hostnames,
+        args.binding_file,
+        args.output_dir,
+        cluster_config_path=args.cluster_config,
+        remap_to_ring=args.remap_to_ring,
+    )
 
 
 if __name__ == "__main__":

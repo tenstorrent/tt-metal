@@ -30,3 +30,10 @@ RANK_BINDING="${TT_METAL_HOME}/rank_bindings.yaml"
 
 # Run the test
 srun --ntasks-per-node=1 python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings_to_dir.py
+
+# combine them (only runs on host 0)
+python tests/tt_metal/tt_fabric/utils/combine_rank_bindings.py \
+    bh-glx-b08u08,bh-glx-b09u08 \
+    --output-dir combined/ \
+    --cluster-config /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+    --remap-to-ring
