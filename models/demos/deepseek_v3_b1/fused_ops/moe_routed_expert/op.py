@@ -972,6 +972,7 @@ class MoeRoutedExpert:
         reduce_output_cb = 29  # Final reduced output
         reduce_scratch_cb = 30  # Scratch for compute
         reduce_packet_cb = 31  # Scratch for sending packets
+        reduce_packet_header_cb = 32  # Packet header (persistent)
 
         # Determine if reduce_to_one is enabled (4x2 mesh mode)
         enable_reduce_to_one = (
@@ -1941,6 +1942,21 @@ class MoeRoutedExpert:
                     )
                     device_cb_descriptors.append(reduce_cb_packet_desc)
 
+                    # reduce_packet_header_cb (32): persistent packet header storage
+                    reduce_packet_header_size = 96  # Standard packet header size
+                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
+                        total_size=reduce_packet_header_size,
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=reduce_packet_header_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=reduce_packet_header_size,
+                            )
+                        ],
+                    )
+                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
+
                     # Destination L1 address depends on role
                     if device_role == MESH_LEAF:
                         dst_l1_addr = r1_tensor.buffer_address()
@@ -1977,6 +1993,7 @@ class MoeRoutedExpert:
                         ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                         ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                         ("reduce_packet_cb", reduce_packet_cb),
+                        ("reduce_packet_header_cb", reduce_packet_header_cb),
                     ]
                     brisc_ct_args.extend(reduce_brisc_ct_args)
 
