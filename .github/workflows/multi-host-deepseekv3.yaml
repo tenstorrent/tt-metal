@@ -1,41 +1,19 @@
-name: DeepSeek V3 Multi-Host Tests
+name: DeepSeek V3 Multi-Host Cache Generation
 on:
+  # schedule:
+    # - cron: '0 13 * * 6'  # Every Saturday at 13:00 UTC
   workflow_dispatch:
     inputs:
-      setup:
-        description: 'Galaxy setup to test'
+      cache-dir:
+        description: 'Destination cache directory'
         required: true
-        type: choice
-        default: both
-        options:
-          - dual
-          - quad
-          - both
-      deepseekv3_unit_tests:
-        description: 'Run DeepSeek V3 unit tests'
+        type: string
+        default: '/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI'
+      override-num-layers:
+        description: 'Optional: override the number of layers in the model'
         required: false
-        default: false
-        type: boolean
-      deepseekv3_module_tests:
-        description: 'Run DeepSeek V3 module tests'
-        required: false
-        default: false
-        type: boolean
-      teacher_forced:
-        description: 'Run teacher forced accuracy test'
-        required: false
-        default: false
-        type: boolean
-      demo:
-        description: 'Run demo test'
-        required: false
-        default: false
-        type: boolean
-      demo_stress:
-        description: 'Run demo stress test'
-        required: false
-        default: false
-        type: boolean
+        type: string
+        default: ''
       platform:
         required: false
         type: choice
@@ -61,7 +39,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "DeepSeek V3 – ${{ inputs.setup }} [${{ inputs.deepseekv3_unit_tests && 'unit ' || '' }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
+run-name: "DeepSeek V3 Cache Generation - quad"
 
 jobs:
   build-artifact:
@@ -75,8 +53,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
 
-  deepseekv3-tests:
-    if: ${{ inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
+  deepseek-cache-generation:
     runs-on:
       - multi-host-glx-4x
       - arch-wormhole_b0
@@ -104,11 +81,9 @@ jobs:
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
 
-      # ── DeepSeek V3 unit tests ──────────────────────────────────────────
-      - name: Run dual DeepSeek V3 unit tests
-        if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+      - name: Generate quad DeepSeek V3 TT-NN cache
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 480
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -118,7 +93,8 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e _DEEPSEEK_V3_CACHE_DIR=${{ inputs.cache-dir }}
+            -e _DEEPSEEK_V3_OVERRIDE_NUM_LAYERS=${{ inputs.override-num-layers }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -126,285 +102,5 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_unit_tests
-
-      - name: Run quad DeepSeek V3 unit tests
-        if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 60
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_unit_tests
-
-      # ── DeepSeek V3 module tests ────────────────────────────────────────
-      - name: Run dual DeepSeek V3 module tests
-        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 150
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
-
-      - name: Run quad DeepSeek V3 module tests
-        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 150
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_module_tests
-
-      # ── Teacher forced accuracy tests ───────────────────────────────────
-      - name: Run dual teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 60
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_teacher_forced
-
-      - name: Upload dual teacher forced accuracy artifacts
-        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: dual-teacher-forced-accuracy-${{ github.run_id }}
-          path: |
-            generated/artifacts/dual_teacher_forced_accuracy.txt
-            generated/artifacts/dual_teacher_forced_output.log
-          if-no-files-found: warn
-
-      - name: Run quad teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 60
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
-
-      - name: Upload quad teacher forced accuracy artifacts
-        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: quad-teacher-forced-accuracy-${{ github.run_id }}
-          path: |
-            generated/artifacts/quad_teacher_forced_accuracy.txt
-            generated/artifacts/quad_teacher_forced_output.log
-          if-no-files-found: warn
-
-      # ── Demo tests ──────────────────────────────────────────────────────
-      - name: Run dual demo test (256 prompts, 1 batch)
-        if: ${{ inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 40
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
-
-      - name: Upload dual demo output artifacts
-        if: ${{ always() && inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: dual-demo-output-${{ github.run_id }}
-          path: |
-            generated/artifacts/dual_demo_output.log
-            generated/artifacts/dual_demo_full_results.json
-          if-no-files-found: warn
-
-      - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 60
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
-
-      - name: Upload quad demo output artifacts
-        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: quad-demo-output-${{ github.run_id }}
-          path: |
-            generated/artifacts/quad_demo_output.log
-            generated/artifacts/quad_demo_full_results.json
-          if-no-files-found: warn
-
-      # ── Demo stress tests ───────────────────────────────────────────────
-      - name: Run dual demo stress test (56 prompts, 20 batches)
-        if: ${{ inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 90
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
-
-      - name: Upload dual demo stress output artifacts
-        if: ${{ always() && inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: dual-demo-stress-output-${{ github.run_id }}
-          path: |
-            generated/artifacts/dual_demo_stress_output.log
-            generated/artifacts/dual_demo_stress_results.json
-          if-no-files-found: warn
-
-      - name: Run quad demo stress test (56 prompts, 20 batches)
-        if: ${{ inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 90
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress
-
-      - name: Upload quad demo stress output artifacts
-        if: ${{ always() && inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: quad-demo-stress-output-${{ github.run_id }}
-          path: |
-            generated/artifacts/quad_demo_stress_output.log
-            generated/artifacts/quad_demo_stress_results.json
-          if-no-files-found: warn
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_cache_gen
