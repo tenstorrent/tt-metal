@@ -106,16 +106,21 @@ class VectorExportSource(VectorSource):
 
     def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
         """Find all JSON files for a given module (including mesh variants)"""
+        all_files = []
+
         # First try exact match (backward compatibility)
         exact_match = list(self.export_dir.glob(f"{module_name}.json"))
         if exact_match:
-            return exact_match
+            all_files.extend(exact_match)
 
-        # Then look for mesh-suffixed variants (e.g., module__mesh_2x4.json)
+        # Also look for mesh-suffixed variants (e.g., module__mesh_2x4.json)
         mesh_variants = list(self.export_dir.glob(f"{module_name}__mesh_*.json"))
         if mesh_variants:
             logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
-            return sorted(mesh_variants)  # Sort for consistent ordering
+            all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
+
+        if all_files:
+            return all_files
 
         logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
         try:
