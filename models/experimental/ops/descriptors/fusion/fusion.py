@@ -17,9 +17,13 @@ Usage (branching tree):
     >>> composite.launch([fused])
 """
 
+import os
 from typing import Any, List, Tuple
 
+import ttnn
+
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors.fusion.common import _get_risc_type
 
 
 class FusedOp:
@@ -58,6 +62,53 @@ class FusedOp:
     @property
     def output_tensors(self):
         return self.op.output_tensors
+
+    def dump_kernel_sources(self, output_dir: str) -> None:
+        """Write fused kernel sources to reader.cpp, writer.cpp, compute.cpp.
+
+        If multiple kernels share the same RISC type (e.g. two readers for
+        different core groups), they are written as reader_0.cpp, reader_1.cpp, etc.
+
+        Args:
+            output_dir: Directory to write files into (created if needed).
+        """
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Group kernels by RISC type
+        by_type: dict[str, list] = {}
+        for kernel in self.op.descriptor.kernels:
+            risc = _get_risc_type(kernel)
+            # Map internal names to friendly filenames
+            if risc == "riscv_0":
+                name = "reader"
+            elif risc == "riscv_1":
+                name = "writer"
+            elif risc == "compute":
+                name = "compute"
+            else:
+                name = "unknown"
+            by_type.setdefault(name, []).append(kernel)
+
+        for name, kernels in by_type.items():
+            for i, kernel in enumerate(kernels):
+                if kernel.source_type == ttnn.KernelDescriptor.SourceType.SOURCE_CODE:
+                    source = kernel.kernel_source
+                else:
+                    path = kernel.kernel_source
+                    source = ""
+                    for base in [os.environ.get("TT_METAL_HOME", ""), ""]:
+                        full = os.path.join(base, path) if base else path
+                        if os.path.exists(full):
+                            with open(full) as f:
+                                source = f.read()
+                            break
+                    if not source:
+                        source = f"// Could not read file: {path}\n"
+
+                filename = f"{name}.cpp" if len(kernels) == 1 else f"{name}_{i}.cpp"
+                filepath = os.path.join(output_dir, filename)
+                with open(filepath, "w") as f:
+                    f.write(source)
 
     def __repr__(self):
         n_kernels = len(self.op.descriptor.kernels) if hasattr(self.op.descriptor, "kernels") else "?"
