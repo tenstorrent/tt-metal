@@ -240,7 +240,7 @@ std::vector<uint32_t> generate_core_starting_indices(
             starting_indices.push_back(0);
             continue;
         }
-        TT_ASSERT(item.input_range.first == op_trace_metadata[output_shard_start]);
+        TT_ASSERT(item.input_range.start == op_trace_metadata[output_shard_start]);
         for (uint32_t r = 0; r < repeat_factor; r++) {
             starting_indices.push_back(op_trace_metadata[output_shard_start]);
         }
@@ -992,7 +992,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& input = tensor_args.input_tensor_;
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
-    const auto& out_mem_config = op_attr.memory_config_;
     const auto& compute_kernel_config = op_attr.compute_kernel_config_;
     const auto& output_layout = op_attr.output_layout_;
     bool count_include_pad = op_attr.count_include_pad_;
