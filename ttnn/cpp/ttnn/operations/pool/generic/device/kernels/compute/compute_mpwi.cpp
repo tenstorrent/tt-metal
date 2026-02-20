@@ -30,6 +30,8 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
+#define MPWI_TILES_PER_REDUCTION 1
+
 void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
@@ -88,11 +90,10 @@ void kernel_main() {
 
     // MPWI requires 1 tile at a time for max reduction with indices
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 1;
     constexpr uint32_t max_tiles_per_iter =
-        in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
+        in_ntiles_c < MPWI_TILES_PER_REDUCTION ? in_ntiles_c : MPWI_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
-        in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
+        in_ntiles_c % MPWI_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MPWI_TILES_PER_REDUCTION;
 
     static_assert(REDUCE_OP == PoolType::MAX, "MPWI only supports REDUCE_OP = MAX");
 

@@ -20,11 +20,15 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::pool {
+
+// Circular buffer ID used to indicate an unallocated/invalid CB
+constexpr uint32_t INVALID_CB_ID = 32;
+
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
 struct ScalarInfo {
-    // Scalar Info is used to store the information abpou the scalar used in avg pool op
+    // Scalar Info is used to store the information about the scalar used in avg pool op
     // start and end refer to indices of the output stick core is calculating.
     // These are directly mapped to the for loop that can be found in reader and compute kernel of the pool op
     // for (uint32_t i = 0; i < nsticks_per_core; ++i), start is first stick which should be reduced and multiplied by
@@ -37,7 +41,7 @@ struct ScalarInfo {
 
 // This function generates a vector of elements of type ScalarInfo. It is called once per core and generates the
 // adequate scalars for each output element that core should produce. It should be called only for avg pool operation
-// and only if the divisor_override is NOT set and the idea behind it is to generate config tesnor in cases where one
+// and only if the divisor_override is NOT set and the idea behind it is to generate config tensor in cases where one
 // scalar per core is not sufficient to create correct result. Those scenarios are ceil_mode == true and (ceil_pad_h > 0
 // || ceil_pad_w > 0) or count_include_pad == false || (pad_h > 0 || pad_w > 0). Both of these scenarios can be
 // irrelevant if the divisor_override is set, in which case we don't calculate the divisor since it is already passed as
@@ -357,7 +361,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
-    uint32_t in_scalar_cb_id_1 = 32;
+    uint32_t in_scalar_cb_id_1 = INVALID_CB_ID;
     if (params.is_avg_pool && params.split_reader && !one_scalar_per_core) {
         in_scalar_cb_id_1 = next_cb_index++;
         tt::tt_metal::create_cb(
@@ -423,7 +427,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // reader output == input to tilize
     const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_id_1 = 32;                     // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_1 = INVALID_CB_ID;          // input rows for "multiple (out_nelems)" output pixels
     const uint32_t in_cb_page_padded = tt::round_up(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
@@ -439,15 +443,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
-    uint32_t in_idx_cb_id = 32;
-    uint32_t pack_tmp_cb_id = 32;
-    uint32_t pack_idx_tmp_cb_id = 32;
-    uint32_t right_inc_cb_id = 32;
-    uint32_t down_left_wrap_inc_cb_id = 32;
-    uint32_t up_left_wrap_inc_cb_id = 32;
-    uint32_t intra_kernel_right_inc_cb_id = 32;
-    uint32_t intra_kernel_down_left_wrap_inc_cb_id = 32;
-    uint32_t compute_tmp_idx_cb_id = 32;
+    uint32_t in_idx_cb_id = INVALID_CB_ID;
+    uint32_t pack_tmp_cb_id = INVALID_CB_ID;
+    uint32_t pack_idx_tmp_cb_id = INVALID_CB_ID;
+    uint32_t right_inc_cb_id = INVALID_CB_ID;
+    uint32_t down_left_wrap_inc_cb_id = INVALID_CB_ID;
+    uint32_t up_left_wrap_inc_cb_id = INVALID_CB_ID;
+    uint32_t intra_kernel_right_inc_cb_id = INVALID_CB_ID;
+    uint32_t intra_kernel_down_left_wrap_inc_cb_id = INVALID_CB_ID;
+    uint32_t compute_tmp_idx_cb_id = INVALID_CB_ID;
     uint32_t right_inc = 0;
     uint32_t down_left_wrap_inc = 0;
     uint32_t up_left_wrap_inc = 0;
@@ -550,7 +554,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const bool zero_pages = is_output_tiled && is_output_block_format;
 
     // Conditionally allocate temporary CB - only needed for TILED output
-    uint32_t pre_tilize_cb_id = 32;  // default invalid CB ID
+    uint32_t pre_tilize_cb_id = INVALID_CB_ID;
 
     if (is_output_tiled) {
         pre_tilize_cb_id = next_cb_index++;
@@ -586,7 +590,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         params.output_data_format,
         outputs[0].buffer());
 
-    uint32_t out_idx_cb_id = 32;
+    uint32_t out_idx_cb_id = INVALID_CB_ID;
     tt::tt_metal::CBHandle out_idx_cb = 0;
     if (return_indices) {
         TT_FATAL(
@@ -620,7 +624,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     tt::tt_metal::CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
-    uint32_t config_cb_id = 32;
+    uint32_t config_cb_id = INVALID_CB_ID;
     Tensor config_tensor;
     if (!one_scalar_per_core) {
         // create config tensor
