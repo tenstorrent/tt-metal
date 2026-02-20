@@ -46,7 +46,8 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
     std::vector<CoreCoord> ordered_cores_with_data;
     CoreRangeSet compute_core_range;
     bool has_ordered_cores_with_data = false;
-    if (memory_config.is_dram()) {
+    if (memory_config.is_dram()) {  // For DRAM-sharded tensors, we just take the first n cores to use as compute cores
+                                    // when sharded across n DRAM banks.
         const auto* device = output.device();
         const auto grid_size = device->compute_with_storage_grid_size();
         num_compute_cores = std::min(num_compute_cores, num_shards);
@@ -56,22 +57,36 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         has_ordered_cores_with_data = true;
         compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
     } else {
-        if (num_compute_cores > num_shards) {
-            if (output.buffer()->buffer_distribution_spec().has_value()) {
+        if (num_compute_cores >
+            num_shards) {  // For L1 sharding, the user may specify a core grid larger than the number of shards. In
+                           // this case, we need to use the buffer distribution spec to determine which cores have data
+                           // on them so that we are not running programs on cores with no data being processed.
+            if (output.buffer()
+                    ->buffer_distribution_spec()
+                    .has_value()) {  // If the tensor also has an nd_shard_spec, then it has a bufferdistributionspec.
+                                     // Use it.
                 auto buffer_dist_spec = output.buffer()->buffer_distribution_spec().value();
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
                 has_ordered_cores_with_data = true;
-            } else {
-                const auto page_shape = (operation_attributes.layout == Layout::TILE)
-                                            ? tt::tt_metal::Shape2D(output.tensor_spec().tile().get_tile_shape())
-                                            : tt::tt_metal::Shape2D(1, shard_width);
+            } else {  // If the tensor does not have an nd_shard_spec, then we need to create a bufferdistributionspec
+                      // from the shard_spec to figure out which cores have data on them.
+                const auto page_shape =
+                    (operation_attributes.layout == Layout::TILE)
+                        ? tt::tt_metal::Shape2D(
+                              output.tensor_spec().tile().get_tile_shape())  // In tilized layout, the page is a tile.
+                        : tt::tt_metal::Shape2D(
+                              1, shard_width);  // In row-major layout, the page is a row of the shard.
                 auto buffer_dist_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
                     output.padded_shape(),
                     Shape({shard_height, shard_width}),
                     page_shape,
                     output_shard_spec.grid,
                     output_shard_spec.orientation,
-                    output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+                    output.memory_config().memory_layout() ==
+                            TensorMemoryLayout::BLOCK_SHARDED  // If the tensor is block-sharded, then we need to use
+                                                               // the grid_2d strategy to distribute the shards across
+                                                               // the cores. Otherwise, we use the round-robin_1d
+                                                               // strategy.
                         ? tt::tt_metal::ShardDistributionStrategy::GRID_2D
                         : tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D);
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
@@ -80,7 +95,9 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
             compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
 
         } else {
-            compute_core_range = output_shard_spec.grid;
+            compute_core_range =
+                output_shard_spec.grid;  // If the user specified the same number of compute cores as the number of
+                                         // shards, then we can directly use the core grid specified in the shard_spec.
         }
     }
 

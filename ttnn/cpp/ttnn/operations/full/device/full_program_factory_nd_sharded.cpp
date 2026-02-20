@@ -36,7 +36,8 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
     uint32_t num_compute_cores = ordered_cores_with_data.size();
 
     std::vector<CoreCoord> worker_cores;
-    if (memory_config.is_dram()) {
+    if (memory_config.is_dram()) {  // For DRAM-sharded tensors, we just take the first n cores to use as compute cores
+                                    // when sharded across n DRAM banks.
         const auto* device = output.device();
         const auto grid_size = device->compute_with_storage_grid_size();
         for (uint32_t i = 0; i < num_compute_cores; i++) {
