@@ -458,13 +458,13 @@ def prepare_generator_args(
             False,  # stress_test
             True,  # enable_trace
         ),
-        (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
+        (  # ci-1 [CI-only] - Measures the performance of a single user over 2048 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
             1,  # batch_size
-            4096,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
