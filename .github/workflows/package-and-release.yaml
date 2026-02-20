@@ -400,7 +400,8 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ !cancelled() &&
             needs.check-existing-release.result == 'success' &&
-            needs.check-existing-release.outputs.should-skip-release != 'true'
+            needs.check-existing-release.outputs.should-skip-release != 'true' &&
+            github.run_attempt == '1'
         }}
     steps:
       - name: Checkout
