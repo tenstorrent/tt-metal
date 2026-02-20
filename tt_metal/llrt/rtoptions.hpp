@@ -229,6 +229,8 @@ class RunTimeOptions {
 
     bool fast_dispatch = true;
 
+    bool split_prefetcher = false;
+
     bool skip_eth_cores_with_retrain = false;
 
     // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
@@ -597,6 +599,8 @@ public:
     bool get_fast_dispatch() const { return fast_dispatch; }
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
+
+    bool get_split_prefetcher() const { return split_prefetcher; }
 
     // Temporary API until all multi-device workloads are ported to run on fabric.
     // It's currently not possible to enable Erisc IRAM by default for all legacy CCL

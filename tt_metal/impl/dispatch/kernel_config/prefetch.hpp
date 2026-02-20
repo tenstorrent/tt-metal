@@ -5,7 +5,9 @@
 #pragma once
 
 #include <stdint.h>
+#include <map>
 #include <optional>
+#include <string>
 
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
@@ -111,10 +113,15 @@ public:
 
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
 
+    // Returns the compile-time defines map built during CreateKernel(). Used by PrefetchWriterKernel
+    // to compile the writer stub with the same define set as the reader.
+    const std::map<std::string, std::string>& GetDefines() const { return kernel_defines_; }
+
 private:
     prefetch_static_config_t static_config_;
     prefetch_dependent_config_t dependent_config_;
     FDKernelEdmConnectionAttributes edm_connection_attributes_;
+    std::map<std::string, std::string> kernel_defines_;
 
     bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
