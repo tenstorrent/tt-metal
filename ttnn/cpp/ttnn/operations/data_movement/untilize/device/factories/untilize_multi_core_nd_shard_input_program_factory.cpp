@@ -122,7 +122,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/reader_unary_nd_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_nd_sharded_blocks.cpp",
         compute_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -267,14 +267,9 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
         tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
     }
 
-    std::vector<CoreCoord> cores_with_run_time_args;
-    cores_with_run_time_args.reserve(ordered_cores_with_data.size());
-    cores_with_run_time_args.insert(
-        cores_with_run_time_args.end(), ordered_cores_with_data.begin(), ordered_cores_with_data.end());
-
     return cached_program_t{
         std::move(program),
-        {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, cores_with_run_time_args}};
+        {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, ordered_cores_with_data}};
 }
 
 void UntilizeMultiCoreNDShardInputProgramFactory::override_runtime_arguments(
