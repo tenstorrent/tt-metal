@@ -10,6 +10,7 @@ function(setup_metal_pipeline_test target_name test_source)
             # Metal-level socket operation implementations
             utils/mesh_socket_send_recv.cpp
             utils/mesh_socket_forward.cpp
+            utils/mesh_socket_rate.cpp
     )
     set_target_properties(
         ${target_name}
