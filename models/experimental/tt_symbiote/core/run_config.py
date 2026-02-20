@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
-from torch.utils._pytree import tree_map
+from models.experimental.tt_symbiote.core.utils import tree_map
 from tracy import signpost
 
 import ttnn
@@ -387,6 +387,7 @@ def compose_transforms(*transforms):
             result = transform(result)
         return result
 
+    _composed.__name__ = "_".join([t.__name__ for t in transforms])
     return _composed
 
 
@@ -479,29 +480,31 @@ class NormalRun:
         """Dispatch torch operations to TTNN when possible."""
         from models.experimental.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
 
-        if can_dispatch_to_ttnn(func.name(), args, kwargs):
+        begin = time.time()
+        can_to_ttnn = can_dispatch_to_ttnn(func.name(), args, kwargs)
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN",
+            (
+                ""
+                if DispatchManager.current_module_name is None
+                else DispatchManager.current_module_name + f".can_dispatch_to_ttnn"
+            ),
+            "can_dispatch_to_ttnn",
+            {},
+            end - begin,
+        )
+        if can_to_ttnn:
             rs = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
         else:
             rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
+
         return rs
 
     @staticmethod
     def to_torch(self):
         """Convert to PyTorch tensor."""
-        begin = time.time()
         if self.elem is not None and self.elem.device.type != "meta" and self.ttnn_tensor is None:
-            end = time.time()
-            DispatchManager.record_timing(
-                "Torch",
-                (
-                    ""
-                    if DispatchManager.current_module_name is None
-                    else DispatchManager.current_module_name + ".ttnn_to_torch_no_conversion"
-                ),
-                "ttnn_to_torch_no_conversion",
-                {},
-                end - begin,
-            )
             return self.elem
 
         def _to_torch(self):
@@ -521,37 +524,12 @@ class NormalRun:
         if result.device.type == "meta" and self.ttnn_tensor is not None:
             result = _to_torch(self)
         self.elem = result if self.elem is None else self.elem
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                ""
-                if DispatchManager.current_module_name is None
-                else DispatchManager.current_module_name + ".ttnn_to_torch"
-            ),
-            "ttnn_to_torch",
-            {},
-            end - begin,
-        )
         return self.elem
 
     @staticmethod
     def to_ttnn(self):
         """Convert to TTNN tensor, creating if necessary."""
-        begin = time.time()
         if self.ttnn_tensor is not None:
-            end = time.time()
-            DispatchManager.record_timing(
-                "TTNN",
-                (
-                    ""
-                    if DispatchManager.current_module_name is None
-                    else DispatchManager.current_module_name + ".torch_to_ttnn_no_conversion"
-                ),
-                "torch_to_ttnn_no_conversion",
-                {},
-                end - begin,
-            )
             return self.ttnn_tensor
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
         if self.elem.device.type == "meta":
@@ -567,18 +545,6 @@ class NormalRun:
             if self.ttnn_distributed_tensor_config
             else None,
             layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
-        )
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                ""
-                if DispatchManager.current_module_name is None
-                else DispatchManager.current_module_name + ".torch_to_ttnn"
-            ),
-            "torch_to_ttnn",
-            {},
-            end - begin,
         )
         return self.ttnn_tensor
 
@@ -926,6 +892,7 @@ class TraceEntry:
 
 # Registry of trace-enabled classes
 _TRACE_ENABLED_CLASSES: Set[Type] = set()
+_TRACE_DISABLED_CLASSES: Set[Type] = set()
 _TRACE_RUNNING = False
 
 
@@ -942,9 +909,17 @@ def trace_enabled(cls: Type) -> Type:
     return cls
 
 
+def trace_disabled(cls: Type) -> Type:
+    """
+    Decorator to mark a TTNNModule subclass as trace-disabled, even if its parent class is trace-enabled.
+    """
+    _TRACE_DISABLED_CLASSES.add(cls)
+    return cls
+
+
 def is_trace_enabled(module) -> bool:
     """Check if module's class is trace-enabled."""
-    return isinstance(module, tuple(_TRACE_ENABLED_CLASSES))
+    return isinstance(module, tuple(_TRACE_ENABLED_CLASSES)) and not isinstance(module, tuple(_TRACE_DISABLED_CLASSES))
 
 
 class TracedRun(NormalRun):
@@ -1055,10 +1030,10 @@ class TracedRun(NormalRun):
                 trace_func_args.append(arg)
 
         # Warm-up
-        _ = module.forward(*func_args, **func_kwargs)
+        trace_output = module.forward(*func_args, **func_kwargs)
         # Capture
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
-        trace_output = module.forward(*trace_func_args, **func_kwargs)
+        _ = module.forward(*trace_func_args, **func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
         ttnn.synchronize_device(device)
 
@@ -1136,7 +1111,12 @@ class TracedRun(NormalRun):
                 f"{self.__class__.__name__}: {self.module_name} on device {self.device} [First Run - Capturing Trace]"
             )
             # Capture new trace
+            begin2 = time.time()
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
+            end2 = time.time()
+            DispatchManager.record_timing(
+                "TTNN", self.module_name, self.__class__.__name__ + "_capture_trace", {}, end2 - begin2
+            )
             result = entry.trace_output
             _TRACE_RUNNING = False
         end = time.time()
