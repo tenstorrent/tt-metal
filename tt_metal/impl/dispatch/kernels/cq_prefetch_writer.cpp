@@ -18,7 +18,8 @@
 // Constants used to interact with the downstream dispatchers.
 // fd_core_type is already defined in cq_common.hpp.
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy =
+    uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
 constexpr uint32_t dispatch_s_buffer_base = DISPATCH_S_BUFFER_BASE;
 constexpr uint32_t scratch_db_base = SCRATCH_DB_BASE;
@@ -78,24 +79,17 @@ void kernel_main() {
     // dispatcher's CB, then signal each dispatcher via its semaphore.
     // No synchronisation with the reader (BRISC) is needed at this stub stage.
 
-    volatile tt_l1_ptr CQDispatchCmd* local_cmd =
-        reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(scratch_db_base);
+    volatile tt_l1_ptr CQDispatchCmd* local_cmd = reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(scratch_db_base);
     local_cmd->base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
 
     // --- Regular dispatcher ---
-    noc_async_write(
-        scratch_db_base,
-        get_noc_addr_helper(downstream_noc_xy, downstream_cb_base),
-        sizeof(CQDispatchCmd));
+    noc_async_write(scratch_db_base, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), sizeof(CQDispatchCmd));
     noc_async_writes_flushed();
-    noc_semaphore_inc(
-        get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_cb_sem_id)), 1);
+    noc_semaphore_inc(get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_cb_sem_id)), 1);
 
     // --- Subordinate dispatcher (dispatch_s) ---
     noc_async_write(
-        scratch_db_base,
-        get_noc_addr_helper(dispatch_s_noc_xy, dispatch_s_buffer_base),
-        sizeof(CQDispatchCmd));
+        scratch_db_base, get_noc_addr_helper(dispatch_s_noc_xy, dispatch_s_buffer_base), sizeof(CQDispatchCmd));
     noc_async_writes_flushed();
     noc_semaphore_inc(
         get_noc_addr_helper(dispatch_s_noc_xy, get_semaphore<fd_core_type>(downstream_dispatch_s_cb_sem_id)), 1);
