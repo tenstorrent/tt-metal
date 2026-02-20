@@ -1297,7 +1297,11 @@ ALWI void matmul_blocks_pipelined(
     const uint32_t output_num_tiles = M * N;
     const uint32_t block_tiles = in0_block_w * N;
 
-    mm_block_init_short(in0_cb, in1_cb, transpose, N, M, in0_block_w);
+    // kt_dim must be K (full inner dimension), NOT in0_block_w, because the
+    // unpacker uses kt_dim to stride between Q head rows when M > 1 (PNHt > 1):
+    //   offset_address_a = tile_size_a * (tile_index_a + t * kt_dim)
+    // With in0_block_w < K, the unpacker would read wrong Q tiles for head t>0.
+    mm_block_init_short(in0_cb, in1_cb, transpose, N, M, K);
 
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in0_cb, M * K);  // Q: all tiles present, stays in CB
@@ -1309,17 +1313,14 @@ ALWI void matmul_blocks_pipelined(
         // Incremental wait: tiles accumulate in CB, no pop between blocks
         cb_wait_front(in1_cb, (block + 1) * block_tiles);
 
-        uint32_t in0_index_offset = 0;
-        for (uint32_t m = 0; m < M; ++m) {
-            uint32_t dst_index = m * N;
-
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                uint32_t in0_index = in0_index_offset + block * in0_block_w + inner_dim;
-                // Block offset since tiles accumulate (no pop)
-                uint32_t in1_idx = block * block_tiles + inner_dim * N;
-                matmul_block(in0_cb, in1_cb, in0_index, in1_idx, dst_index, transpose, N, M, in0_block_w);
-            }
-            in0_index_offset += K;  // stride to next Q row
+        // No explicit M loop: matmul_block with rt_dim=M handles all M rows
+        // via the hardware t_dim loop. The unpacker strides between Q rows
+        // using kt_dim=K (set in mm_block_init_short and passed per-call).
+        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+            uint32_t in0_index = block * in0_block_w + inner_dim;
+            // Block offset since tiles accumulate (no pop)
+            uint32_t in1_idx = block * block_tiles + inner_dim * N;
+            matmul_block(in0_cb, in1_cb, in0_index, in1_idx, 0, transpose, N, M, K);
         }
     }
 
