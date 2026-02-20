@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Unit tests for eltwise unary program cache behavior.
 
-Tests target potential caching issues identified in GitHub issue #37167 and #33910.
+Tests target potential caching issues.
 The unary operation uses 3 ProgramFactory variants:
   - UnaryProgramFactory (interleaved)
   - UnarySubCoreGridProgramFactory (explicit sub_core_grids)
@@ -33,7 +33,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def isolate_program_cache(device):
     """Ensure each test starts with an empty program cache and cleans up after."""
     device.disable_and_clear_program_cache()
@@ -62,7 +62,7 @@ def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM
 # =============================================================================
 
 
-def test_unary_cache_reuse_same_config(device):
+def test_unary_cache_reuse_same_config(device, isolate_program_cache):
     """Same op, same shape, same dtype run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]
 
@@ -78,7 +78,7 @@ def test_unary_cache_reuse_same_config(device):
     assert not torch.equal(tt_out1, tt_out2)
 
 
-def test_unary_cache_reuse_same_volume_different_shapes(device):
+def test_unary_cache_reuse_same_volume_different_shapes(device, isolate_program_cache):
     """TILE layout: same volume, different shapes -> 1 cache entry.
     [1,1,32,64] and [1,1,64,32] have same volume (2048), so same num_pages."""
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 64], dtype=ttnn.float32)
@@ -90,7 +90,7 @@ def test_unary_cache_reuse_same_volume_different_shapes(device):
     assert device.num_program_cache_entries() == 1
 
 
-def test_unary_cache_miss_different_volumes(device):
+def test_unary_cache_miss_different_volumes(device, isolate_program_cache):
     """TILE layout: different volumes -> different cache entries.
     [1,1,32,32] (vol=1024) vs [1,1,64,64] (vol=4096) differ in num_pages."""
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 32], dtype=ttnn.float32)
@@ -107,7 +107,7 @@ def test_unary_cache_miss_different_volumes(device):
 # =============================================================================
 
 
-def test_unary_cache_miss_different_op_types(device):
+def test_unary_cache_miss_different_op_types(device, isolate_program_cache):
     """Different unary op types -> different cache entries."""
     shape = [1, 1, 32, 64]
 
@@ -120,7 +120,7 @@ def test_unary_cache_miss_different_op_types(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_unary_cache_miss_different_input_dtypes(device):
+def test_unary_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
     shape = [1, 1, 32, 64]
 
@@ -133,7 +133,7 @@ def test_unary_cache_miss_different_input_dtypes(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_unary_cache_miss_different_memory_configs(device):
+def test_unary_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     shape = [1, 1, 32, 64]
 
@@ -150,7 +150,7 @@ def test_unary_cache_miss_different_memory_configs(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_unary_cache_miss_different_sub_core_grids(device):
+def test_unary_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is part of UnaryParams (hashed via args) and also hashed explicitly.
     Uses ttnn.floor which supports sub_core_grids parameter."""
@@ -173,7 +173,7 @@ def test_unary_cache_miss_different_sub_core_grids(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_unary_cache_miss_different_factories(device):
+def test_unary_cache_miss_different_factories(device, isolate_program_cache):
     """Interleaved vs sub_core_grids factory -> different cache entries.
     factory_index is included in the hash.
     Uses ttnn.floor which supports sub_core_grids parameter."""
@@ -199,7 +199,7 @@ def test_unary_cache_miss_different_factories(device):
 # =============================================================================
 
 
-def test_unary_cache_correctness_repeated_runs(device):
+def test_unary_cache_correctness_repeated_runs(device, isolate_program_cache):
     """Run same op 5 times with different data -> all results correct."""
     shape = [1, 1, 32, 64]
     for _ in range(5):
@@ -209,7 +209,7 @@ def test_unary_cache_correctness_repeated_runs(device):
     assert device.num_program_cache_entries() == 1
 
 
-def test_unary_cache_correctness_same_volume_different_shapes(device):
+def test_unary_cache_correctness_same_volume_different_shapes(device, isolate_program_cache):
     """Same volume, different shapes all produce correct results via cache reuse."""
     # All have volume 2048: 32*64, 64*32
     for shape in [[1, 1, 32, 64], [1, 1, 64, 32]]:
@@ -224,7 +224,7 @@ def test_unary_cache_correctness_same_volume_different_shapes(device):
 # =============================================================================
 
 
-def test_unary_sharded_cache_correctness_different_grids(device):
+def test_unary_sharded_cache_correctness_different_grids(device, isolate_program_cache):
     """Sharded ttnn.abs with different grid configs must produce correct results.
     Reproduces GitHub issue #33910: ttnn.abs ProgramCache data corruption.
     The (64,64) on 2x2 grid case failed when preceded by other shard configs."""

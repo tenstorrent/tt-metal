@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Unit tests for binary_ng program cache behavior.
 
-Tests target potential caching issues identified in GitHub issue #37167.
+Tests target potential caching issues.
 The binary_ng operation uses a single ProgramFactory with caching based on:
 
 to_hash(): binary_op_type, lhs/rhs/post_activations, memory_config, get_dtype(),
@@ -31,7 +31,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def isolate_program_cache(device):
     """Ensure each test starts with an empty program cache and cleans up after."""
     device.disable_and_clear_program_cache()
@@ -79,7 +79,7 @@ def run_scalar_ng_op(device, op, shape, scalar, dtype=ttnn.bfloat16, memory_conf
 # =============================================================================
 
 
-def test_ng_cache_reuse_same_config(device):
+def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     """Same op, same shapes, same dtypes run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]
 
@@ -95,7 +95,7 @@ def test_ng_cache_reuse_same_config(device):
     assert not torch.equal(tt_out1, tt_out2)
 
 
-def test_ng_cache_reuse_scalar_different_values(device):
+def test_ng_cache_reuse_scalar_different_values(device, isolate_program_cache):
     """Different scalar values but same op -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]
 
@@ -114,7 +114,7 @@ def test_ng_cache_reuse_scalar_different_values(device):
 # =============================================================================
 
 
-def test_ng_cache_miss_different_op_types(device):
+def test_ng_cache_miss_different_op_types(device, isolate_program_cache):
     """Different binary op types -> different cache entries."""
     shape = [1, 1, 32, 64]
 
@@ -127,7 +127,7 @@ def test_ng_cache_miss_different_op_types(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_ng_cache_miss_different_input_dtypes(device):
+def test_ng_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries.
     Differentiated via input tensor dtype in compute_program_hash()."""
     shape = [1, 1, 32, 64]
@@ -141,7 +141,7 @@ def test_ng_cache_miss_different_input_dtypes(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_ng_cache_miss_different_memory_configs(device):
+def test_ng_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     shape = [1, 1, 32, 64]
 
@@ -158,7 +158,7 @@ def test_ng_cache_miss_different_memory_configs(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_ng_cache_miss_different_subtile_broadcast(device):
+def test_ng_cache_miss_different_subtile_broadcast(device, isolate_program_cache):
     """Different subtile broadcast types -> different cache entries.
     subtile_broadcast_type is in to_hash() and depends on last-2-dim shapes."""
     # NONE: equal shapes
@@ -172,7 +172,7 @@ def test_ng_cache_miss_different_subtile_broadcast(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_ng_cache_miss_different_output_dtypes(device):
+def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
     """Different output dtypes -> different cache entries."""
     shape = [1, 1, 32, 64]
 
@@ -199,7 +199,7 @@ def test_ng_cache_miss_different_output_dtypes(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_ng_scalar_vs_tensor_cache_differentiation(device):
+def test_ng_scalar_vs_tensor_cache_differentiation(device, isolate_program_cache):
     """Scalar op vs tensor op -> different cache entries.
     scalar.has_value() is not in to_hash(), but compute_program_hash()
     naturally differentiates because the scalar path excludes tensor_b
@@ -217,7 +217,7 @@ def test_ng_scalar_vs_tensor_cache_differentiation(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_ng_cache_miss_different_sub_core_grids(device):
+def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is in to_hash() and directly determines worker_grid."""
     shape = [1, 1, 32, 64]
@@ -245,7 +245,7 @@ def test_ng_cache_miss_different_sub_core_grids(device):
     assert device.num_program_cache_entries() == 2
 
 
-def test_ng_different_input_dtypes_same_output_dtype(device):
+def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cache):
     """Different input dtypes with same output dtype -> different cache entries.
     input_dtype is not in to_hash(), but compute_program_hash() includes
     input tensor dtypes directly, which compensates."""
@@ -283,7 +283,7 @@ def test_ng_different_input_dtypes_same_output_dtype(device):
 # =============================================================================
 
 
-def test_ng_cache_reuse_different_logical_shapes(device):
+def test_ng_cache_reuse_different_logical_shapes(device, isolate_program_cache):
     """Different logical shapes share 1 cache entry, different outputs (by design).
     logical_shape is correctly excluded from compute_program_hash();
     override_runtime_arguments handles shape differences at runtime."""
@@ -297,7 +297,7 @@ def test_ng_cache_reuse_different_logical_shapes(device):
     assert tt_out1.shape != tt_out2.shape
 
 
-def test_ng_cache_reuse_different_logical_shapes_correctness(device):
+def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_program_cache):
     """Correctness across multiple logical shapes sharing a single cache entry.
     override_runtime_arguments correctly updates runtime args for each shape."""
     for shape_dim in [32, 64, 128]:
@@ -319,7 +319,7 @@ def test_ng_cache_reuse_different_logical_shapes_correctness(device):
 # =============================================================================
 
 
-def test_ng_cache_correctness_repeated_runs(device):
+def test_ng_cache_correctness_repeated_runs(device, isolate_program_cache):
     """Run same op 5 times with different data -> all results correct."""
     shape = [1, 1, 32, 64]
     for _ in range(5):
@@ -327,7 +327,7 @@ def test_ng_cache_correctness_repeated_runs(device):
         assert_with_pcc(torch_ref, tt_out, 0.9999)
 
 
-def test_ng_cache_correctness_scalar_repeated(device):
+def test_ng_cache_correctness_scalar_repeated(device, isolate_program_cache):
     """Scalar ops with varying values -> all numerically correct."""
     shape = [1, 1, 32, 64]
 
@@ -336,7 +336,7 @@ def test_ng_cache_correctness_scalar_repeated(device):
         assert_with_pcc(torch_ref, tt_out, 0.999)
 
 
-def test_ng_cache_correctness_broadcast_repeated(device):
+def test_ng_cache_correctness_broadcast_repeated(device, isolate_program_cache):
     """Broadcast operations with cache reuse -> all results correct."""
     shape_a = [1, 1, 64, 64]
     shape_b = [1, 1, 1, 64]
