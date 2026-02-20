@@ -10,6 +10,7 @@ Tests for prepare_weights: building DeepSeekV3Weights from a state dict.
 - test_save_load_dense_layer_single_layer / test_save_load_moe_layer_single_layer: save then load one layer.
 - test_prepare_dense_layer_single_layer_4x2: one dense layer on 4x2 mesh.
 - test_prepare_moe_layer_single_layer_4x2: one MoE layer on 4x2 mesh.
+- test_save_load_dense_layer_single_layer_4x2: save then load one dense layer on 4x2 submesh.
 - test_save_load_moe_layer_single_layer_4x2: save then load one MoE layer on 4x2 submesh.
 """
 
@@ -330,6 +331,65 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.ffn_norm.tensor_shape == (1, 7168)
     assert layer.kv_b1_proj.tensor_shape == (8192, 512)
     assert layer.kv_b2_proj.tensor_shape == (512, 8192)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_save_load_dense_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
+    """Save one dense layer (4x2 submesh) to disk, load it back, assert metadata and fused-tensor sharing."""
+    if not is_slow_dispatch():
+        pytest.skip("prepare_weights tests require slow dispatch mode (TT_METAL_SLOW_DISPATCH_MODE=1)")
+    num_devices = 4 * 2
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires 8 devices (4x2 mesh)")
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    device_grid = submesh.compute_with_storage_grid_size()
+    if device_grid.x < 12 or device_grid.y < 10:
+        pytest.skip(f"Per-device grid {device_grid.x}x{device_grid.y} too small for blitz decode (need 12x10+)")
+
+    state = _layer_state_dict(0, is_moe=False, for_multi_device=True)
+    weights = prepare_weights(state, submesh, num_layers=1, first_k_dense_replace=1)
+    orig = weights.layers[0]
+    save_layer(
+        orig,
+        tmp_path,
+        0,
+        hf_model_name="test-dense-model-4x2",
+        hf_state_dict_name="test-dense-state-dict.safetensors",
+        device_mesh_shape=(4, 2),
+    )
+
+    assert (tmp_path / "layer_000" / "manifest.json").exists()
+    layer_dir = tmp_path / "layer_000"
+    assert (layer_dir / "q_ab_kv_a.tensorbin").exists()
+    assert (layer_dir / "o_proj_gate_mm_norms.tensorbin").exists()
+    assert (layer_dir / "kv_b12.tensorbin").exists()
+
+    deallocate_weights(weights)
+    t0 = time.perf_counter()
+    layer = load_layer(tmp_path, submesh, 0)
+    elapsed = time.perf_counter() - t0
+    logger.info("load_layer (dense, 4x2 submesh): {:.3f} s", elapsed)
+    assert isinstance(layer, DeepSeekV3DenseLayerWeights)
+
+    _assert_overlapped_tensors_match(orig.q_a_proj, layer.q_a_proj)
+    _assert_overlapped_tensors_match(orig.q_b_proj, layer.q_b_proj)
+    _assert_overlapped_tensors_match(orig.kv_a_proj, layer.kv_a_proj)
+    _assert_overlapped_tensors_match(orig.o_proj, layer.o_proj)
+    _assert_overlapped_tensors_match(orig.attn_norm, layer.attn_norm)
+    _assert_overlapped_tensors_match(orig.q_norm, layer.q_norm)
+    _assert_overlapped_tensors_match(orig.kv_norm, layer.kv_norm)
+    _assert_overlapped_tensors_match(orig.ffn_norm, layer.ffn_norm)
+    _assert_overlapped_tensors_match(orig.kv_b1_proj, layer.kv_b1_proj)
+    _assert_overlapped_tensors_match(orig.kv_b2_proj, layer.kv_b2_proj)
+
+    assert id(layer.q_a_proj.fused_tensor) == id(layer.q_b_proj.fused_tensor)
+    assert id(layer.q_b_proj.fused_tensor) == id(layer.kv_a_proj.fused_tensor)
+    assert id(layer.o_proj.fused_tensor) == id(layer.attn_norm.fused_tensor)
+    assert id(layer.kv_b1_proj.fused_tensor) == id(layer.kv_b2_proj.fused_tensor)
 
 
 @pytest.mark.parametrize(
