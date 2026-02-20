@@ -37,6 +37,7 @@ class SocketInterface:
     ):
         if upstream_socket is not None:
             self.upstream_socket = upstream_socket
+            assert upstream_core_coord is None
         else:
             socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
@@ -47,6 +48,7 @@ class SocketInterface:
 
         if downstream_socket is not None:
             self.downstream_socket = downstream_socket
+            assert downstream_core_coord is None
         else:
             socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)

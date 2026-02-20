@@ -36,7 +36,7 @@ bool logical_cores_intersect(
     }
 
     for (const auto& core : current_cores_set) {
-        if (previous_cores_set.count(core)) {
+        if (previous_cores_set.contains(core)) {
             return true;
         }
     }
