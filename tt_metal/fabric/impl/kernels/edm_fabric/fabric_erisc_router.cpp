@@ -606,9 +606,7 @@ FORCE_INLINE void send_next_data(
     }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (busy) {
-            busy = internal_::eth_txq_is_busy(sender_txq_id);
-        };
+        while (internal_::eth_txq_is_busy(sender_txq_id));
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 

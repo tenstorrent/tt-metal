@@ -43,6 +43,26 @@ void EthCoreBufferReadback::clear_buffer(uint32_t address, size_t buffer_size) {
     }
 }
 
+void EthCoreBufferReadback::write_buffer(uint32_t address, const std::vector<uint8_t>& data) {
+    auto& ctx = tt::tt_metal::MetalContext::instance();
+    auto& cluster = ctx.get_cluster();
+    auto& control_plane = ctx.get_control_plane();
+
+    for (const auto& [coord, test_device] : test_devices_) {
+        auto device_id = test_device.get_node_id();
+        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
+        auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
+        for (const auto& eth_core : active_eth_cores) {
+            if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) {
+                continue;
+            }
+
+            std::vector<CoreCoord> cores = {eth_core};
+            fixture_.write_buffer_to_ethernet_cores(coord, cores, address, data);
+        }
+    }
+}
+
 std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t address, size_t buffer_size, bool read_all_active) {
     auto& ctx = tt::tt_metal::MetalContext::instance();
     auto& cluster = ctx.get_cluster();

@@ -47,7 +47,69 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry,
     uint32_t& sender_amort_counter) {
+    // --- Code profiling timers ---
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_SENDER_FULL,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_full_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_SENDER_SEND_DATA,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_send_data_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_SENDER_CHECK_COMPLETIONS,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_check_completions_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_SENDER_CREDITS_UPSTREAM,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_credits_upstream_timer;
+    // Sub-timers for SEND_DATA breakdown
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_SENDER_SEND_ETH,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_send_eth_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_SENDER_SEND_ADV,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_send_adv_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_SENDER_SEND_NOTIFY,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_send_notify_timer;
+    // Spin iteration counters
+    SpinCounter<
+        CodeProfilingTimerType::SPEEDY_SENDER_ETH_TXQ_SPIN_1,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        eth_txq_spin_1;
+    SpinCounter<
+        CodeProfilingTimerType::SPEEDY_SENDER_ETH_TXQ_SPIN_2,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        eth_txq_spin_2;
+    SpinCounter<
+        CodeProfilingTimerType::SPEEDY_SENDER_NOC_FLUSH_SPIN,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        noc_flush_spin;
+    SpinCounter<
+        CodeProfilingTimerType::SPEEDY_SENDER_NOC_CMD_BUF_SPIN,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        noc_cmd_buf_spin;
+
     bool progress = false;
+
+    bool capture_full_timer = true;
+    sender_full_timer.open();
 
     // --- Send packet if possible (unchanged from normal path) ---
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
@@ -58,25 +120,75 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
+
+    sender_send_data_timer.set_should_dump(can_send);
+    sender_send_data_timer.open();
+    capture_full_timer = can_send && capture_full_timer;
     if (can_send) {
         progress = true;
 
-        auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            local_sender_channel.get_cached_next_buffer_slot_addr());
+        // --- Inlined send_next_data with sub-timers and spin counters ---
+        auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
+        uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
+        auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(src_addr);
 
-        send_next_data<sender_channel_index, to_receiver_pkts_sent_id, false /*SKIP_CONNECTION_LIVENESS_CHECK*/>(
-            local_sender_channel,
-            local_sender_channel_worker_interface,
-            outbound_to_receiver_channel_pointers,
-            perf_telemetry_recorder);
+        // SUB-TIMER: ETH_SEND (L1 reads + spin-wait + eth_send)
+        sender_send_eth_timer.set_should_dump(true);
+        sender_send_eth_timer.open();
+
+        const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
+        channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
+        channel_trimming_usage_recorder.update_sender_channel_packet_size(
+            sender_channel_index, static_cast<uint16_t>(pkt_header->payload_size_bytes));
+        const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
+
+        if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+                eth_txq_spin_1.increment();
+            }
+            eth_txq_spin_1.flush();
+        }
+        internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+
+        sender_send_eth_timer.close();
+
+        // SUB-TIMER: ADVANCE (pointer bookkeeping)
+        sender_send_adv_timer.set_should_dump(true);
+        sender_send_adv_timer.open();
+
+        local_sender_channel_worker_interface.template update_write_counter_for_send<false /*SKIP_LIVENESS*/>();
+        outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
+        local_sender_channel.advance_to_next_cached_buffer_slot_addr();
+        remote_receiver_num_free_slots--;
+        record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
+
+        sender_send_adv_timer.close();
+
+        // SUB-TIMER: NOTIFY (spin-wait + remote reg update)
+        sender_send_notify_timer.set_should_dump(true);
+        sender_send_notify_timer.open();
+
+        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            eth_txq_spin_2.increment();
+        }
+        eth_txq_spin_2.flush();
+        remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+
+        sender_send_notify_timer.close();
+
         sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
+    sender_send_data_timer.close();
 
-    if (sender_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
+    bool check_completions = sender_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY;
+    sender_check_completions_timer.set_should_dump(check_completions);
+    sender_check_completions_timer.open();
+    capture_full_timer = check_completions && capture_full_timer;
+    if (check_completions) {
         // --- Always check for new completions from receiver (cheap read) ---
         int32_t completions = sender_channel_from_receiver_credits
                                   .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -85,30 +197,28 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             sender_channel_from_receiver_credits.increment_num_processed_completions(completions);
 
             completion_count += completions;
-
-            // send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
-            //     local_sender_channel_worker_interface, sender_amort_counter, channel_connection_established);
-            // sender_amort_counter = 0;
         }
     }
+    sender_check_completions_timer.close();
 
     // --- Amortized: only send credits to upstream workers every N completions/acks ---
-    if (completion_count >= SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
-        // likely we are seeing an issue due to L1
+    bool send_credits = completion_count >= SENDER_CREDIT_AMORTIZATION_FREQUENCY;
+    sender_credits_upstream_timer.set_should_dump(send_credits);
+    sender_credits_upstream_timer.open();
+    capture_full_timer = send_credits && capture_full_timer;
+    if (send_credits) {
+        // Pre-spin on NOC flush and CMD_BUF with counters, pulled out of noc_fast_spoof_write_dw_inline
+        // to avoid modifying the shared NOC header. The function's internal spin-waits will be no-ops
+        // since we've already ensured the conditions are met.
         send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
             local_sender_channel_worker_interface, completion_count, channel_connection_established);
         sender_amort_counter -= completion_count;
         completion_count = 0;
     }
-    // if (!channel_connection_established) {
-    //     auto check_connection_status =
-    //         !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
-    //     if (check_connection_status) {
-    //         check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-    //             local_sender_channel_worker_interface, channel_connection_established,
-    //             sender_channel_free_slots_stream_id);
-    //     }
-    // }
+    sender_credits_upstream_timer.close();
+
+    sender_full_timer.set_should_dump(capture_full_timer);
+    sender_full_timer.close();
 
     // NO connection liveness check in inner loop (checked in outer loop between context switches)
     return progress;
@@ -124,6 +234,22 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 //   - Fused flush + completion model (static_assert ensures fuse_receiver_flush_and_completion_ptr)
 //   - After inner loop, batch-flushes all outstanding completions
 static uint32_t unacked_sends = 0;
+
+// Ping-pong TRID state for amortized flush.
+// Instead of checking each buffer slot's TRID individually (~3.7 iterations × 2 register reads),
+// all packets in a batch share a single TRID. When the batch threshold is hit, we flip to the
+// other TRID. Flush checks only the previous batch's single TRID (1 check vs ~7.4 register reads).
+static constexpr uint8_t pingpong_trid_a = RX_CH_TRID_STARTS[0];
+static constexpr uint8_t pingpong_trid_b = RX_CH_TRID_STARTS[0] + 1;
+static_assert(
+    !super_speedy_mode || NUM_TRANSACTION_IDS >= 2,
+    "Ping-pong TRID requires at least 2 transaction IDs per receiver channel");
+static_assert(!super_speedy_mode || pingpong_trid_a == 0, "Ping-pong TRID flip uses '1 - trid', requires trid_a == 0");
+static uint8_t current_write_trid = pingpong_trid_a;
+static uint8_t pending_flush_trid = pingpong_trid_b;
+static uint32_t pending_flush_batch_count = 0;
+static bool has_pending_flush = false;
+
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -145,22 +271,83 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
+    // --- Code profiling timers ---
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FULL,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_full_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FORWARD,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_forward_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_flush_timer;
+    // Sub-timers for RECEIVER_FORWARD breakdown
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FWD_HDR,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_fwd_hdr_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FWD_NOC,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_fwd_noc_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FWD_BOOK,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_fwd_book_timer;
+    // Sub-timers for RECEIVER_FLUSH breakdown
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH_TRID,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_flush_trid_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH_SEND,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_flush_send_timer;
+    // Spin iteration counters
+    SpinCounter<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_NOC_CMD_BUF_SPIN,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        noc_cmd_buf_spin;
+    SpinCounter<
+        CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH_ETH_TXQ_SPIN,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        flush_eth_txq_spin;
+
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     uint8_t src_ch_id = 0;  // receiver_channel_pointers.get_src_chan_id();
 
+    bool capture_full_timer = true;
+    receiver_full_timer.open();
+
     // Inner loop: process up to RECEIVER_CREDIT_AMORTIZATION_FREQUENCY packets
-    for (uint32_t pkt = 0; pkt < RECEIVER_CREDIT_AMORTIZATION_FREQUENCY; pkt++) {
-        auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>();
+    // for (uint32_t pkt = 0; pkt < RECEIVER_CREDIT_AMORTIZATION_FREQUENCY; pkt++) {
+    receiver_forward_timer.open();
+    auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>();
 
-        // --- ACK phase (if first-level ack enabled) ---
-        bool unwritten_packets = pkts_received != 0;
+    // --- ACK phase (if first-level ack enabled) ---
+    bool unwritten_packets = pkts_received != 0;
 
-        if (!unwritten_packets) {
-            break;  // No more packets to process
-        }
+    if (unwritten_packets) {
+        receiver_forward_timer.set_should_dump(true);
 
-        // --- Forward packet ---
+        // SUB-TIMER: HDR (cache invalidate + header load + packed load)
+        receiver_fwd_hdr_timer.set_should_dump(true);
+        receiver_fwd_hdr_timer.open();
+
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
@@ -170,6 +357,8 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         // instead of two separate uncached L1 reads
         auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
 
+        receiver_fwd_hdr_timer.close();
+
         did_something = true;
         progress = true;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -177,38 +366,89 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         }
         channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
 
+        // SUB-TIMER: NOC (execute_chip_unicast_to_local_chip_impl)
+        receiver_fwd_noc_timer.set_should_dump(true);
+        receiver_fwd_noc_timer.open();
+
         execute_chip_unicast_to_local_chip_impl(
-            packet_header, packed.payload_size_bytes, packed.noc_send_type, receiver_buffer_index, receiver_channel);
+            packet_header, packed.payload_size_bytes, packed.noc_send_type, current_write_trid, receiver_channel);
+
+        receiver_fwd_noc_timer.close();
+
+        // SUB-TIMER: BOOK (counter increment + decrement pkts)
+        receiver_fwd_book_timer.set_should_dump(true);
+        receiver_fwd_book_timer.open();
+
         wr_sent_counter.increment();
         if constexpr (!enable_first_level_ack) {
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         }
         unacked_sends++;
-    }  // end inner loop
 
-    // --- Batched completion: flush all outstanding completions ---
-    // Uses the fused flush+completion model (fuse_receiver_flush_and_completion_ptr == true)
-    if (unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) {
-        auto& completion_counter = receiver_channel_pointers.completion_counter;
-        uint32_t num_completions = 0;
-        // note that short-circuiting this loop does not result in any speedup.
-        // the bottlneck is likely on sender side.
-        while (!completion_counter.is_caught_up_to(wr_sent_counter)) {
-            auto buf_idx = completion_counter.get_buffer_index();
-            bool flushed = receiver_channel_trid_tracker.transaction_flushed(buf_idx);
-            if (!flushed) {
-                break;
-            }
-            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(buf_idx);
-            completion_counter.increment();
-            num_completions++;
+        receiver_fwd_book_timer.close();
+    } else {
+        capture_full_timer = false;
+    }
+
+    receiver_forward_timer.close();
+
+    // --- Ping-pong TRID flush ---
+    // All packets in a batch share a single TRID (current_write_trid). When the batch
+    // threshold is hit, we flip to the other TRID and check the previous batch's single
+    // TRID for completion — replacing the per-slot loop with a single register read.
+    //
+    // The pending TRID is checked eagerly (every call) to minimize credit return latency.
+    // Only the batch flip requires reaching the threshold.
+    bool did_flush = false;
+    receiver_flush_timer.open();
+
+    // Step 1: Eagerly check pending batch's TRID (cheap: single register read)
+    if (has_pending_flush) {
+        receiver_flush_trid_timer.set_should_dump(true);
+        receiver_flush_trid_timer.open();
+
+        bool flushed = ncrisc_noc_nonposted_write_with_transaction_id_sent(
+            tt::tt_fabric::edm_to_local_chip_noc, pending_flush_trid);
+        if constexpr (!tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+            flushed = flushed &&
+                      ncrisc_noc_nonposted_write_with_transaction_id_sent(edm_to_downstream_noc, pending_flush_trid);
         }
-        if (num_completions > 0) {
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender, src_ch_id, num_completions);
-            unacked_sends -= num_completions;
+
+        receiver_flush_trid_timer.close();
+
+        if (flushed) {
+            // Credit back entire previous batch
+            receiver_flush_send_timer.set_should_dump(true);
+            receiver_flush_send_timer.open();
+
+            auto& completion_counter = receiver_channel_pointers.completion_counter;
+            completion_counter.increment_n(pending_flush_batch_count);
+            receiver_send_completion_ack<false /*CHECK_BUSY*/>(
+                receiver_channel_response_credit_sender, src_ch_id, pending_flush_batch_count);
+
+            receiver_flush_send_timer.close();
+
+            unacked_sends -= pending_flush_batch_count;
+            has_pending_flush = false;
+            did_flush = true;
         }
     }
+
+    // Step 2: Flip batch when threshold hit and no pending flush
+    if (!has_pending_flush && unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) {
+        pending_flush_trid = current_write_trid;
+        pending_flush_batch_count = unacked_sends;
+        current_write_trid = 1 - current_write_trid;
+        has_pending_flush = true;
+    }
+
+    receiver_flush_timer.set_should_dump(did_flush);
+    if (!did_flush) {
+        capture_full_timer = false;
+    }
+    receiver_flush_timer.close();
+
+    receiver_full_timer.close();
 
     return progress;
 }

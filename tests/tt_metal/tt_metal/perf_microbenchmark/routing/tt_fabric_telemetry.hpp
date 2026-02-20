@@ -42,6 +42,8 @@ struct CodeProfilingEntry {
     uint64_t total_cycles{};
     uint64_t num_instances{};
     double avg_cycles_per_instance{};
+    uint64_t min_cycles{};
+    uint64_t max_cycles{};
 };
 
 const uint32_t telemetry_addr = ::tt::tt_metal::hal::get_erisc_l1_unreserved_base();

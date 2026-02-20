@@ -54,6 +54,12 @@ private:
         uint64_t duration = end_ts.full - start_ts.full;
         result_ptr->total_cycles += duration;
         result_ptr->num_instances += 1;
+        if (duration < result_ptr->min_cycles) {
+            result_ptr->min_cycles = duration;
+        }
+        if (duration > result_ptr->max_cycles) {
+            result_ptr->max_cycles = duration;
+        }
     }
 };
 
@@ -112,16 +118,60 @@ public:
 };
 
 /**
+ * @brief Spin iteration counter for busy-wait loops.
+ * Counts iterations inside spin loops and reports using the same L1 buffer format as timers.
+ * total_cycles is repurposed as total iterations; num_instances = number of spin loop entries.
+ *
+ * @tparam CounterType The timer type enum value (determines L1 buffer slot)
+ * @tparam bitfield The enabled timers bitfield (compile-time constant)
+ * @tparam buffer_base_addr The L1 buffer base address (compile-time constant)
+ */
+template <CodeProfilingTimerType CounterType, uint32_t bitfield, size_t buffer_base_addr>
+class SpinCounter {
+    static constexpr bool is_enabled = (bitfield & static_cast<uint32_t>(CounterType)) != 0;
+    static constexpr size_t result_addr = get_timer_result_addr<CounterType>(buffer_base_addr);
+    uint32_t count = 0;
+
+public:
+    SpinCounter() = default;
+
+    FORCE_INLINE void increment() {
+        if constexpr (is_enabled) {
+            count++;
+        }
+    }
+
+    // Call after exiting the spin loop to write accumulated count to L1
+    FORCE_INLINE void flush() {
+        if constexpr (is_enabled) {
+            volatile tt_l1_ptr auto* result_ptr =
+                reinterpret_cast<volatile tt_l1_ptr CodeProfilingTimerResult*>(result_addr);
+            result_ptr->total_cycles += count;
+            result_ptr->num_instances += 1;
+            if (count < result_ptr->min_cycles) {
+                result_ptr->min_cycles = count;
+            }
+            if (count > result_ptr->max_cycles) {
+                result_ptr->max_cycles = count;
+            }
+            count = 0;
+        }
+    }
+};
+
+/**
  * @brief Clear all code profiling results in the L1 buffer
  * @param buffer_base_addr The L1 buffer base address
  */
 FORCE_INLINE void clear_code_profiling_buffer(size_t buffer_base_addr) {
-    volatile tt_l1_ptr auto* buffer_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_base_addr);
-    constexpr size_t num_timers = get_max_code_profiling_timer_types();  // Maximum number of timer types
-    constexpr size_t words_per_result = sizeof(CodeProfilingTimerResult) / sizeof(uint32_t);
-    constexpr size_t total_words = num_timers * words_per_result;
+    constexpr size_t num_timers = get_max_code_profiling_timer_types();
+    volatile tt_l1_ptr auto* result_ptr =
+        reinterpret_cast<volatile tt_l1_ptr CodeProfilingTimerResult*>(buffer_base_addr);
 
-    for (size_t i = 0; i < total_words; i++) {
-        buffer_ptr[i] = 0;
+    for (size_t i = 0; i < num_timers; i++) {
+        result_ptr[i].total_cycles = 0;
+        result_ptr[i].num_instances = 0;
+        result_ptr[i].min_cycles = 0xFFFFFFFFFFFFFFFFULL;  // UINT64_MAX sentinel
+        result_ptr[i].max_cycles = 0;
     }
 }
