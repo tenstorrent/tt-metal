@@ -137,7 +137,6 @@ def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input
 
     out_ref = inp + ones
 
-    torch.set_printoptions(sci_mode=False)
     # print("\n", out_pt)
     # print("\n", out_ref)
 
