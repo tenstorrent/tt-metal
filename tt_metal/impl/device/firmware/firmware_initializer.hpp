@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <set>
 
 #include <llrt/rtoptions.hpp>
 
@@ -22,6 +23,7 @@ enum class InitializerKey {
     CommandQueue,
     Fabric,
     Dispatch,
+    Risc,
 };
 
 class FirmwareInitializer {
@@ -35,7 +37,11 @@ public:
     FirmwareInitializer(FirmwareInitializer&&) = delete;
     FirmwareInitializer& operator=(FirmwareInitializer&&) = delete;
 
+    // This is called after Devices have been activated
     virtual void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) = 0;
+
+    // This is called before Devices have been activated
+    virtual void init_by_device_ids(const std::set<tt::ChipId>& device_ids);
 
     // This is called after all init calls have completed
     virtual void configure() = 0;
