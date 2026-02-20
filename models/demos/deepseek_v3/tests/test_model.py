@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
+import re
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -27,14 +31,70 @@ from models.demos.deepseek_v3.utils.test_utils import (
     transformers_cache_from_torch,
 )
 
-REFERENCE_OUTPUT_CACHE_FILENAME = "deepseek_v3_model_reference_outputs.pt"
+REFERENCE_OUTPUT_CACHE_FILE_PREFIX = "deepseek_v3_model_reference_outputs"
+REFERENCE_OUTPUT_CACHE_LEGACY_FILENAME = f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}.pt"
 PCC_REQUIRED_PREFILL = 0.97
 PCC_REQUIRED_DECODE = 0.97
 REFERENCE_ENTRY_VERSION = 1
 
 
-def _default_reference_cache_path(cache_path: Path) -> Path:
-    return cache_path / "tests_cache" / REFERENCE_OUTPUT_CACHE_FILENAME
+def _default_reference_cache_dir(cache_path: Path) -> Path:
+    return cache_path / "tests_cache"
+
+
+def _legacy_reference_cache_path(cache_path: Path) -> Path:
+    return _default_reference_cache_dir(cache_path) / REFERENCE_OUTPUT_CACHE_LEGACY_FILENAME
+
+
+def _build_case_identity(
+    *,
+    mode: str,
+    seq_len: int,
+    batch_size_per_row: int,
+    mesh_shape: tuple[int, int],
+    decode_position_ids: int | None,
+    hf_config: PretrainedConfig,
+) -> dict[str, str | int]:
+    return {
+        "mode": mode,
+        "seq": int(seq_len),
+        "batch_per_row": int(batch_size_per_row),
+        "mesh": f"{mesh_shape[0]}x{mesh_shape[1]}",
+        "decode_pos": "auto" if decode_position_ids is None else str(decode_position_ids),
+        "layers": int(hf_config.num_hidden_layers),
+        "max_seq": int(hf_config.max_seq_len),
+    }
+
+
+def _canonical_case_identity(case_identity: dict[str, str | int]) -> str:
+    # `sort_keys=True` makes the digest stable even if call sites reorder fields.
+    return json.dumps(case_identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _case_reference_cache_filename(case_identity: dict[str, str | int]) -> str:
+    digest_input = _canonical_case_identity(case_identity)
+    digest = hashlib.sha1(digest_input.encode("utf-8")).hexdigest()[:12]
+    return (
+        f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}."
+        f"mode_{case_identity['mode']}_seq_{case_identity['seq']}_batch_per_row_{case_identity['batch_per_row']}_"
+        f"mesh_{case_identity['mesh']}_decode_pos_{case_identity['decode_pos']}_layers_{case_identity['layers']}_"
+        f"max_seq_{case_identity['max_seq']}.{digest}.pt"
+    )
+
+
+def _case_reference_cache_path(cache_path: Path, case_identity: dict[str, str | int]) -> Path:
+    return _default_reference_cache_dir(cache_path) / _case_reference_cache_filename(case_identity)
+
+
+def _legacy_case_reference_cache_filename(case_key: str) -> str:
+    # Keep filenames deterministic and readable while avoiding path-unsafe characters.
+    normalized_case_key = re.sub(r"[^a-zA-Z0-9]+", "_", case_key).strip("_").lower() or "case"
+    digest = hashlib.sha1(case_key.encode("utf-8")).hexdigest()[:12]
+    return f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}.{normalized_case_key[:96]}.{digest}.pt"
+
+
+def _legacy_case_reference_cache_path(cache_path: Path, case_key: str) -> Path:
+    return _default_reference_cache_dir(cache_path) / _legacy_case_reference_cache_filename(case_key)
 
 
 def _build_case_key(
@@ -70,14 +130,18 @@ def _extract_tt_logits_full(
     return full_torch.reshape(1, -1, vocab)
 
 
-def _load_reference_cache(path: Path) -> dict:
+def _load_torch_payload(path: Path) -> object:
+    try:
+        return torch.load(path, weights_only=True)
+    except TypeError:
+        return torch.load(path)
+
+
+def _load_legacy_reference_cache(path: Path) -> dict:
     if not path.is_file():
         return {"version": 1, "cases": {}}
 
-    try:
-        payload = torch.load(path, weights_only=True)
-    except TypeError:
-        payload = torch.load(path)
+    payload = _load_torch_payload(path)
 
     if not isinstance(payload, dict):
         raise ValueError(f"Invalid cache format in {path}: expected dict, got {type(payload)}")
@@ -88,9 +152,33 @@ def _load_reference_cache(path: Path) -> dict:
     return payload
 
 
-def _save_reference_cache(path: Path, payload: dict) -> None:
+def _load_case_reference_entry(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+
+    payload = _load_torch_payload(path)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid cache format in {path}: expected dict, got {type(payload)}")
+    return payload
+
+
+def _save_case_reference_entry(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(payload, path)
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        delete=False,
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    ) as tmp_file:
+        tmp_path = Path(tmp_file.name)
+
+    try:
+        torch.save(payload, tmp_path)
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def _expected_reference_output_shape(token_count: int, hf_config: PretrainedConfig) -> tuple[int, int, int]:
@@ -219,6 +307,14 @@ def run_test_forward_pass_dpmodel(
         decode_position_ids=decode_position_ids,
         hf_config=hf_config_short,
     )
+    case_identity = _build_case_identity(
+        mode=mode,
+        seq_len=seq_len,
+        batch_size_per_row=batch_size_per_row,
+        mesh_shape=tuple(mesh_device.shape),
+        decode_position_ids=decode_position_ids,
+        hf_config=hf_config_short,
+    )
 
     logger.info("Setting up test IO (no-reference runtime)")
     position_ids, torch_input = generate_io_without_reference(
@@ -228,13 +324,28 @@ def run_test_forward_pass_dpmodel(
     expected_local_token_count = expected_global_token_count // mesh_device.shape[0]
     expected_reference_output_shape = _expected_reference_output_shape(expected_global_token_count, hf_config_short)
 
-    cache_file = _default_reference_cache_path(cache_path)
-    cache_payload = _load_reference_cache(cache_file)
-    cached_case = cache_payload["cases"].get(case_key)
-    cached_reference_output = cached_case.get("reference_output") if cached_case is not None else None
+    cache_file = _case_reference_cache_path(cache_path, case_identity)
+    cached_case = _load_case_reference_entry(cache_file)
+    if cached_case is None:
+        legacy_case_file = _legacy_case_reference_cache_path(cache_path, case_key)
+        if legacy_case_file != cache_file:
+            cached_case = _load_case_reference_entry(legacy_case_file)
+            if isinstance(cached_case, dict):
+                _save_case_reference_entry(cache_file, cached_case)
+                logger.info(
+                    f"Migrated legacy per-case reference baseline for case '{case_key}' "
+                    f"from {legacy_case_file} to {cache_file}"
+                )
+    if cached_case is None:
+        legacy_cache = _load_legacy_reference_cache(_legacy_reference_cache_path(cache_path))
+        cached_case = legacy_cache["cases"].get(case_key)
+        if isinstance(cached_case, dict):
+            _save_case_reference_entry(cache_file, cached_case)
+            logger.info(f"Migrated legacy reference baseline for case '{case_key}' to {cache_file}")
+    cached_reference_output = cached_case.get("reference_output") if isinstance(cached_case, dict) else None
     cached_shape = tuple(cached_reference_output.shape) if isinstance(cached_reference_output, torch.Tensor) else None
     needs_regen = (
-        cached_case is None
+        not isinstance(cached_case, dict)
         or cached_case.get("entry_version") != REFERENCE_ENTRY_VERSION
         or cached_case.get("source") != "reference"
         or not isinstance(cached_reference_output, torch.Tensor)
@@ -252,8 +363,7 @@ def run_test_forward_pass_dpmodel(
             position_ids=position_ids,
             torch_input=torch_input,
         )
-        cache_payload["cases"][case_key] = cached_case
-        _save_reference_cache(cache_file, cache_payload)
+        _save_case_reference_entry(cache_file, cached_case)
         logger.info(f"Wrote reference baseline for case '{case_key}' to {cache_file}")
     else:
         logger.info(f"Using cached reference baseline for case '{case_key}' from {cache_file}")
