@@ -747,7 +747,12 @@ void reduce_c_row_group_no_push(
     /**
      * For the GROUP_SIZE rows in this group, compute the max into DST registers.
      */
-    reduce_block_max_row_init<cols>();
+    if (row_group_index == 0) {
+        // Seed full reduce config once; subsequent groups can use lighter reinit.
+        reduce_block_max_row_init<cols>();
+    } else {
+        reduce_block_max_row_reinit_short<cols>();
+    }
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * cols;
         const uint32_t reduce_dst_idx = i;

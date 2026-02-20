@@ -31,6 +31,11 @@ inline void llk_math_reduce_block_max_row_init() {
     _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>();
 }
 
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_mop_config() {
+    _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>();
+}
+
 /**
  * Performs block-based reduce_max_row operation across multiple tiles in the width dimension.
  *
