@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
-
+#include "api/debug/dprint.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
@@ -21,6 +21,7 @@ void kernel_main() {
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
+    DPRINT_MATH(DPRINT << "Computing scalar" << ENDL());
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));

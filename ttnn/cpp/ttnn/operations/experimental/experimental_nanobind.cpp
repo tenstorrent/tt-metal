@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
+#include "ttnn/operations/experimental/add/add_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
@@ -127,6 +128,7 @@ void py_module(nb::module_& mod) {
     ccl::py_module(m_experimental_ccl);
 
     broadcast_to::detail::bind_broadcast_to(mod);
+    binary::detail::bind_add(mod);
 
     operations::experimental::ternary::detail::bind_where(mod);
 
