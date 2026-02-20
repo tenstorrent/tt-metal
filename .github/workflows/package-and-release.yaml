@@ -621,7 +621,8 @@ jobs:
           inputs: |
             {
               "release-type": "rc",
-              "dry-run": "${{ inputs.dry-run || 'false' }}"
+              "dry-run": "${{ inputs.dry-run || 'false' }}",
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
             }
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
@@ -648,5 +649,6 @@ jobs:
           inputs: |
             {
               "release-type": "prod",
-              "dry-run": "${{ inputs.dry-run || 'false' }}"
+              "dry-run": "${{ inputs.dry-run || 'false' }}",
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
             }
