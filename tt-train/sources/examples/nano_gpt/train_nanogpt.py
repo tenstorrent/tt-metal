@@ -1193,7 +1193,7 @@ def main():
         print("\nMemory tracking enabled")
         memory_guard = MemoryUsageTracker.begin_capture()
 
-    instance.set_seed(training_config.seed)
+    ttml.autograd.AutoContext.get_instance().set_seed(training_config.seed)
     np.random.seed(training_config.seed)
 
     # Handle inference-only mode: load model from checkpoint
@@ -1224,7 +1224,7 @@ def main():
 
         except Exception as e:
             print(f"Error loading model from checkpoint: {e}")
-            instance.close_device()
+            ttml.autograd.AutoContext.get_instance().close_device()
             return
     else:
         # Training mode: load data and create model
@@ -1253,7 +1253,7 @@ def main():
                 )
                 print("Please specify --data_path or place shakespeare.txt in data/")
                 print(f"  Searched paths: {possible_paths}")
-                instance.close_device()
+                ttml.autograd.AutoContext.get_instance().close_device()
                 return
 
         print("1. Loading and preparing data...")
@@ -1570,7 +1570,7 @@ def main():
         )
 
     # Close device
-    instance.close_device()
+    ttml.autograd.AutoContext.get_instance().close_device()
 
 
 if __name__ == "__main__":
