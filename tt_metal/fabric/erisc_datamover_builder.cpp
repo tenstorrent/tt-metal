@@ -1277,6 +1277,23 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
     }
 
+    // Credit amortization named compile-time args
+    // Only enabled when there is a single sender channel (common 1D case)
+    uint32_t sender_amort_freq = 0;
+    uint32_t receiver_amort_freq = 0;
+    if (num_sender_channels == 1) {
+        auto* static_alloc =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+        if (static_alloc != nullptr) {
+            uint32_t receiver_slots = static_cast<uint32_t>(static_alloc->get_receiver_channel_number_of_slots(0));
+            uint32_t sender_slots = static_cast<uint32_t>(static_alloc->get_sender_channel_number_of_slots(0));
+            receiver_amort_freq = std::max<uint32_t>(std::min<uint32_t>(4u, receiver_slots / 2), 1);
+            sender_amort_freq = std::max<uint32_t>(std::min<uint32_t>(2u, sender_slots / 2), 1);
+        }
+    }
+    named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"] = sender_amort_freq;
+    named_args["RECEIVER_CREDIT_AMORTIZATION_FREQUENCY"] = receiver_amort_freq;
+
     return {std::move(ct_args), std::move(named_args)};
 }
 
