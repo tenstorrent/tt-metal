@@ -20,8 +20,6 @@
 
 // TODO: Candidate for moving to details folder after refactoring.
 #include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
-#include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
-#include <tt-metalium/experimental/tensor/host_buffer/functions.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
@@ -120,9 +118,7 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0) {
-        return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, pad_value);
-    }
+    static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
      * From original Tensor:
@@ -132,20 +128,9 @@ public:
      * - Remove tile parameter as it doesn't make sense for ROW_MAJOR layout.
      */
     template <typename T>
-    static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin) {
-        size_t volume = shape.volume();
-        TT_FATAL(
-            buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-        return HostTensor(
-            HostBuffer(buffer, std::move(pin)),
-            TensorSpec(shape, TensorLayout(convert_to_data_type<T>(), PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            TensorTopology{});
-    }
-
+    static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin);
     template <typename T>
-    static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0) {
-        return from_span(std::span<const T>(buffer.begin(), buffer.end()), spec, pad_value);
-    }
+    static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
      * From original Tensor:
@@ -153,27 +138,7 @@ public:
      * physical shape matches logical shape, and no type conversion is needed.
      */
     template <typename T>
-    static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0) {
-        size_t volume = spec.logical_shape().volume();
-        TT_FATAL(
-            buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-        if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
-            TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
-        }
-
-        // Create host tensor with DataType matching buffer
-        auto buffer_spec = TensorSpec(
-            spec.logical_shape(), TensorLayout(convert_to_data_type<T>(), spec.page_config(), spec.memory_config()));
-
-        // TODO: move these utils in.
-        auto host_buffer =
-            logical_matches_physical(buffer_spec)
-                ? HostBuffer(std::move(buffer))
-                : HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
-        auto res = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
-        // Convert to datatype from original spec
-        return to_dtype(res, spec.data_type());
-    }
+    static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
 
     // getters
 
@@ -184,46 +149,11 @@ public:
      * the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
      */
     template <typename T>
-    std::vector<T> to_vector() const {
-        // TODO: wait this means uint32_t is not supported?
-        switch (dtype()) {
-            case DataType::BFLOAT16: {
-                auto buffer = host_buffer::get_as<bfloat16>(get_host_buffer());
-                std::vector<float> physical_data;
-                physical_data.reserve(buffer.size());
-                std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
-                    return static_cast<float>(val);
-                });
-                if (logical_matches_physical(tensor_spec())) {
-                    return physical_data;
-                }
-                return tensor_impl::decode_tensor_data(tt::stl::make_const_span(physical_data), tensor_spec());
-            }
-            case DataType::FLOAT32: {
-                auto buffer = host_buffer::get_as<const float>(get_host_buffer());
-                return tensor_impl::decode_tensor_data(buffer, tensor_spec());
-            }
-            case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B: {
-                const auto& tile = tensor_spec().tile();
-                auto buffer = host_buffer::get_as<const uint32_t>(get_host_buffer());
-                std::vector<float> unpacked_data =
-                    tensor_spec().data_type() == DataType::BFLOAT8_B
-                        ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                        : unpack_bfp4_tiles_into_float_vec(
-                              buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                return tensor_impl::decode_tensor_data(tt::stl::make_const_span(unpacked_data), tensor_spec());
-            }
-            default: {
-                TT_THROW("Cannot convert tensor to vector for data type: {}", dtype());
-            }
-        }
-    }
+    std::vector<T> to_vector() const;
 
     // TODO: we should just specialize std::to_string and omit this.
     std::string write_to_string() const;
 
-    // TODO: parity with DistributedHostBuffer
     HostBuffer get_host_buffer() const {
         // TODO: figure out if we're doing DistributedHostBuffer, hardcoding (0,0) is horrifying.
         // Get shard at (0,0) for single-device tensor - always exists for HostTensor
