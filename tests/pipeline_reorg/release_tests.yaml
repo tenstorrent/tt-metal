@@ -198,7 +198,7 @@
 - name: t3k_mixtral_tests
   cmd: run_t3000_mixtral_tests
   skus:
-    wh_llmbox_perf:
+    wh_llmbox_perf_release:
       timeout: 45
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -207,7 +207,7 @@
 - name: t3k_falcon40b_tests
   cmd: run_t3000_falcon40b_tests
   skus:
-    wh_llmbox_perf:
+    wh_llmbox_perf_release:
       timeout: 25
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -216,7 +216,7 @@
 - name: t3k_llama3_tests
   cmd: run_t3000_llama3_tests
   skus:
-    wh_llmbox_perf:
+    wh_llmbox_perf_release:
       timeout: 60
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -225,7 +225,7 @@
 - name: t3k_llama3_vision_tests
   cmd: run_t3000_llama3_vision_tests
   skus:
-    wh_llmbox_perf:
+    wh_llmbox_perf_release:
       timeout: 45
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -234,7 +234,7 @@
 - name: t3k_falcon7b_tests
   cmd: run_t3000_falcon7b_tests
   skus:
-    wh_llmbox_perf:
+    wh_llmbox_perf_release:
       timeout: 25
   owner_id: U05RWH3QUPM # Salar Hosseini
   team: models
@@ -243,7 +243,7 @@
 - name: t3k_llama2_70b_tests
   cmd: run_t3000_llama2_70b_tests
   skus:
-    wh_llmbox_perf:
+    wh_llmbox_perf_release:
       timeout: 60
   owner_id: U026P83QJ6H # Johanna Rock
   team: models
@@ -262,7 +262,7 @@
     pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
   model-name: llama3
   skus:
-    wh_galaxy:
+    wh_galaxy_release:
       timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -273,7 +273,7 @@
     pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
   model-name: llama3_8b_dp
   skus:
-    wh_galaxy:
+    wh_galaxy_release:
       timeout: 20
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
@@ -284,7 +284,7 @@
     pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/tg/falcon7b/demo_galaxy.py --timeout 600
   model-name: falcon7b
   skus:
-    wh_galaxy:
+    wh_galaxy_release:
       timeout: 15
   owner_id: U05RWH3QUPM # Salar Hosseini
   team: models

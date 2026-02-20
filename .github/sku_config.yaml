@@ -18,6 +18,13 @@ skus:
       - pipeline-perf
       - in-service
 
+  wh_llmbox_perf_release:
+    runs_on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - in-release
+
   bh_p100:
     runs_on:
       - cloud-virtual-machine
@@ -30,6 +37,13 @@ skus:
       - pipeline-functional
       - topology-6u
       - in-service
+
+  wh_galaxy_release:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-functional
+      - topology-6u
+      - in-release
 
   bh_galaxy:
     runs_on:
