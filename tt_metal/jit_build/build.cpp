@@ -646,12 +646,6 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     if (link_targets.empty()) {
         link_targets = std::span<const JitBuildState* const>(&self, 1);
     }
-    TT_FATAL(
-        link_targets.size() <= kMaxBuildBitset,
-        "Number of link targets ({}) exceeds kMaxBuildBitset ({})",
-        link_targets.size(),
-        kMaxBuildBitset);
-
     const size_t num_objs = this->objs_.size();
 
     fs::create_directories(out_dir);
