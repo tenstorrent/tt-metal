@@ -236,7 +236,7 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_full_path }}"
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@adjordjevic/debug_bus_to_file
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
