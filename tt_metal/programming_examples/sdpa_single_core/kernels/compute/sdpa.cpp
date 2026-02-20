@@ -1126,7 +1126,7 @@ void sdpa_inner_loop(
                     PACK((llk_pack_reconfig_l1_acc(1)));
                     {
                         uint32_t v_index_offset = 0;
-                        mm_no_mop_init_short(
+                        mm_no_mop_reinit_short(
                             cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H2");
@@ -1214,7 +1214,7 @@ void sdpa_inner_loop(
                 {
                     SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
-                    mm_no_mop_init_short(
+                    mm_no_mop_reinit_short(
                         cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
