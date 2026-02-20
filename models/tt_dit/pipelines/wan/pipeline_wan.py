@@ -176,10 +176,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.encoder_parallel_config = encoder_parallel_config
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
-        self.t1_load_compliment = []
-        self.t2_load_compliment = []
-        self.text_encoder_load_compliment = []
-        self.vae_compliment = []
+        self.t1_load_complement = []
+        self.t2_load_complement = []
+        self.text_encoder_load_complement = []
+        self.vae_complement = []
 
         # Load TT text encoder
         umt5_config = UMT5Config(
@@ -261,10 +261,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self._prepare_vae()
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding models
-            self.t1_load_compliment.extend([self.transformer_2])
-            self.t2_load_compliment.extend([self.transformer, self.tt_umt5_encoder])
-            self.text_encoder_load_compliment.extend([self.transformer_2])
-            self.vae_compliment.extend([])  # All models currently load fine with VAE loaded. Here for completeness
+            self.t1_load_complement.extend([self.transformer_2])
+            self.t2_load_complement.extend([self.transformer, self.tt_umt5_encoder])
+            self.text_encoder_load_complement.extend([self.transformer_2])
+            self.vae_complement.extend([])  # All models currently load fine with VAE loaded. Here for completeness
         else:
             self._prepare_transformer2()
 
@@ -376,7 +376,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_text_encoder(self):
         if not self.tt_umt5_encoder.is_loaded():
-            for model in self.text_encoder_load_compliment:
+            for model in self.text_encoder_load_complement:
                 model.deallocate_weights()
 
             cache.load_model(
@@ -390,7 +390,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_transformer1(self):
         if not self.transformer.is_loaded():
-            for model in self.t1_load_compliment:
+            for model in self.t1_load_complement:
                 model.deallocate_weights()
 
             cache.load_model(
@@ -404,7 +404,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_transformer2(self):
         if not self.transformer_2.is_loaded():
-            for model in self.t2_load_compliment:
+            for model in self.t2_load_complement:
                 model.deallocate_weights()
 
             cache.load_model(
@@ -418,7 +418,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_vae(self):
         if not self.tt_vae.is_loaded():
-            for model in self.vae_compliment:
+            for model in self.vae_complement:
                 model.deallocate_weights()
 
             cache.load_model(
@@ -476,7 +476,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask)[-1]
 
-        # use the mask to zero out the padding tokens. As a result, the comment below still holds, and has been copied from initial implementaton for completeness.
+        # use the mask to zero out the padding tokens. As a result, the comment below still holds, and has been copied from initial implementation for completeness.
         # # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
         # # TODO: investigate
         prompt_embeds = prompt_embeds * ttnn.unsqueeze(tt_mask, -1)
