@@ -12,6 +12,7 @@ from ttexalens.tt_exalens_lib import (
 
 from .format_config import DataFormat
 from .llk_params import format_tile_sizes
+from .logger import logger
 from .pack import (
     pack_bfp8_b,
     pack_bfp16,
@@ -318,6 +319,35 @@ class StimuliConfig:
         - If use_dense_tile_dimensions=True: uses write_matrix_w_tile_dimensions (for new tests)
         - Otherwise: uses write_matrix (backward compatible)
         """
+        _DIM = "\033[2m"
+        _BOLD = "\033[1m"
+        _CYAN, _YELLOW, _MAGENTA, _GREEN, _RST = (
+            "\033[36m",
+            "\033[33m",
+            "\033[35m",
+            "\033[32m",
+            "\033[0m",
+        )
+        sep = f"{_DIM}{'─' * 52}{_RST}"
+        rows = [
+            f"  {_CYAN}A    0x{self.buf_a_addr:08X}{_RST}  {_DIM}{self.tile_count_A} × {self.tile_size_A_bytes} B{_RST}",
+            f"  {_YELLOW}B    0x{self.buf_b_addr:08X}{_RST}  {_DIM}{self.tile_count_B} × {self.tile_size_B_bytes} B{_RST}",
+        ]
+        if self.buffer_C is not None:
+            rows.append(
+                f"  {_MAGENTA}C    0x{self.buf_c_addr:08X}{_RST}  {_DIM}{self.tile_count_C} × {self.tile_size_C_bytes} B{_RST}"
+            )
+        rows.append(f"  {_GREEN}Res  0x{self.buf_res_addr:08X}{_RST}")
+        logger.debug(
+            "\n{}\n  {}L1 layout @ {}{}\n{}\n{}",
+            sep,
+            _BOLD,
+            location,
+            _RST,
+            "\n".join(rows),
+            sep,
+        )
+
         if self.use_dense_tile_dimensions:
             self._write_dense_tile_dimensions(location)
         else:
@@ -439,6 +469,17 @@ class StimuliConfig:
             self.stimuli_res_format, self.tile_dimensions, format_tile_sizes
         )
         read_bytes_cnt = tile_size_res_bytes * self.tile_count_res
+
+        _GREEN, _DIM, _RST = "\033[32m", "\033[2m", "\033[0m"
+        logger.debug(
+            "Reading {}Res  0x{:08X}{} {}← {} B{}",
+            _GREEN,
+            self.buf_res_addr,
+            _RST,
+            _DIM,
+            read_bytes_cnt,
+            _RST,
+        )
 
         read_data = read_from_device(
             location, self.buf_res_addr, num_bytes=read_bytes_cnt

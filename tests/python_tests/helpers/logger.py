@@ -6,7 +6,7 @@ Centralized logging configuration for LLK test infrastructure.
 
 Uses loguru for structured, leveled logging with color support.
 The log level can be controlled via:
-  1. The --loguru-level pytest CLI option (highest priority)
+  1. The --logging-level pytest CLI option (highest priority)
   2. The LOGURU_LEVEL environment variable
   3. Defaults to INFO
 
@@ -27,7 +27,7 @@ Output behavior:
     - Under pytest-xdist, each worker writes to its own log files
       (e.g. test_run_gw0.log, test_errors_gw0.log) to avoid clobbering.
     - Terminal output uses pytest's live logging (log_cli) which integrates
-      with pytest-sugar. Use --loguru-level=INFO to see logs in the terminal.
+      with pytest-sugar. Use --logging-level=INFO to see logs in the terminal.
 """
 
 import logging

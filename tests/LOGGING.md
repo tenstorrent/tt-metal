@@ -35,13 +35,13 @@ From most to least verbose:
 
 **Priority order** (highest first):
 
-1. `--loguru-level` pytest CLI option
+1. `--logging-level` pytest CLI option
 2. `LOGURU_LEVEL` environment variable
 3. Default: `INFO`
 
 ```bash
 # CLI option (highest priority)
-pytest --loguru-level=DEBUG tests/
+pytest --logging-level=DEBUG tests/
 
 # Environment variable
 LOGURU_LEVEL=TRACE pytest tests/
@@ -55,7 +55,7 @@ LOGURU_LEVEL=TRACE pytest tests/
 |-------------|------|-----------|
 | Session log | `test_run.log` | Overwritten each run (`mode="w"`) |
 | Error log | `test_errors.log` | Appended across runs (`mode="a"`, ERROR+ only) |
-| Terminal | via pytest live logging | Shown when `--loguru-level` is set |
+| Terminal | via pytest live logging | Shown when `--logging-level` is set |
 
 ## pytest-xdist (parallel workers)
 

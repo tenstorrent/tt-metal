@@ -1092,6 +1092,11 @@ class TestConfig:
         if TestConfig.MODE in [TestMode.PRODUCE, TestMode.DEFAULT]:
             self.build_elfs()
 
+        logger.debug(
+            "ELF directory: {}",
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf",
+        )
+
         if TestConfig.MODE == TestMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 

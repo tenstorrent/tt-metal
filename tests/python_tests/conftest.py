@@ -98,10 +98,10 @@ def regenerate_cpp(request):
 
 def pytest_configure(config):
     # Configure loguru log level from CLI option or environment variable.
-    log_level = config.getoption("--loguru-level", default=None)
+    log_level = config.getoption("--logging-level", default=None)
     configure_logger(level=log_level)
 
-    # Enable pytest's live logging when --loguru-level is set.
+    # Enable pytest's live logging when --logging-level is set.
     # Loguru propagates to stdlib logging, and pytest's log_cli displays
     # those messages in the terminal - integrating cleanly with pytest-sugar.
     if log_level is not None:
@@ -363,7 +363,7 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
-        "--loguru-level",
+        "--logging-level",
         action="store",
         default=None,
         help="Set loguru log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL). "

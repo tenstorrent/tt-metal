@@ -64,7 +64,7 @@ from helpers.logger import logger
 logger.info("Running op={} on {}", op_name, arch)
 ```
 
-Control verbosity with `--loguru-level=DEBUG` on the CLI or by setting the
+Control verbosity with `--logging-level=DEBUG` on the CLI or by setting the
 `LOGURU_LEVEL` environment variable. Logs are written to `test_run.log` (session)
 and `test_errors.log` (persistent, ERROR+ only).
 
