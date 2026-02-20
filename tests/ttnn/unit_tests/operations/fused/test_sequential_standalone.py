@@ -1905,7 +1905,7 @@ class TestSemaphoreInitialValue:
             "reader",
             phases,
             {0: 0, 1: 0},  # ct_offsets
-            [0],  # sweep_cb_indices
+            [[0]],  # per_phase_cb_slots
             rebind_info={},
             op_semaphore_info=[(3, 5)],  # sem_id=3, initial_value=5
             multi_barrier=multi_barrier,
@@ -1966,7 +1966,7 @@ class TestSemaphoreInitialValue:
             "reader",
             [phase0, phase1],
             {0: 0, 1: 0},
-            [0],
+            [[0]],  # per_phase_cb_slots
             rebind_info={},
             op_semaphore_info=[(2, 0), (7, 3)],  # sem 2 -> 0, sem 7 -> 3
             multi_barrier=multi_barrier,
