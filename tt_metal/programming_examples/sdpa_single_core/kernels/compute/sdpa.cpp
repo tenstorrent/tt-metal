@@ -283,8 +283,16 @@ void exp_tile_first_column(uint32_t idst) {
 // Requires sbh=1, kt_num_subblocks=2. Overlaps EXP (SFPU) with matmul (FPU).
 #define OVERLAP_DRAIN_WITH_MATMUL
 
+#define SDPA_PROFILING_SET_0
 // #define SDPA_PROFILING_SET_1
 // #define SDPA_PROFILING_SET_2
+// #define SDPA_PROFILING_SET_3
+
+#ifdef SDPA_PROFILING_SET_0
+#define SDPA_DeviceZoneScopedN_0(name) DeviceZoneScopedN(name)
+#else
+#define SDPA_DeviceZoneScopedN_0(name)
+#endif
 
 #ifdef SDPA_PROFILING_SET_1
 #define SDPA_DeviceZoneScopedN_1(name) DeviceZoneScopedN(name)
@@ -298,6 +306,11 @@ void exp_tile_first_column(uint32_t idst) {
 #define SDPA_DeviceZoneScopedN_2(name)
 #endif
 
+#ifdef SDPA_PROFILING_SET_3
+#define SDPA_DeviceZoneScopedN_3(name) DeviceZoneScopedN(name)
+#else
+#define SDPA_DeviceZoneScopedN_3(name)
+#endif
 /**
  * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
  * only at 2*q_subblock and 2*q_subblock+1 elements
@@ -759,7 +772,9 @@ void normalize_row_streaming(
     uint32_t scratch_cb,
     uint32_t normalized_out_cb) {
     for (uint32_t s = 0; s < SBH; s++) {
-        // 1. matmul_reduce: read 1 sum tile from front, matmul with col_identity, pack to scratch
+        // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
+        // Keeps the matmul result in DST[0] and applies recip directly, avoiding a
+        // pack→scratch→copy-back-to-DST round-trip.
         {
             constexpr uint32_t N = 1;
             mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
@@ -771,6 +786,9 @@ void normalize_row_streaming(
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+            // Recip directly in DST[0] — serial dependency, no overlap, but avoids DST round-trip
+            recip_tile_init();
+            MATH((recip_tile_first_column(0)));
             tile_regs_commit();
 
             tile_regs_wait();
@@ -781,25 +799,25 @@ void normalize_row_streaming(
             cb_pop_front(cur_sum_cb, 1);
         }
 
-        // 2. recip in-place on the 1-tile scratch CB
-        recip_block_inplace(scratch_cb, 1);
-
-        // 3. normalize: multiply each output tile by bcast_cols(1/sum), stream to normalized_out
+        // 3. normalize: multiply all head_dim_t_ output tiles by bcast_cols(1/sum) in one DST batch
+        static_assert(head_dim_t_ <= 8, "head_dim_t must fit in DST (max 8 tiles with fp16b double-buffer)");
         {
             mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
             cb_wait_front(cur_out_cb, head_dim_t_);
             cb_wait_front(scratch_cb, 1);
 
+            cb_reserve_back(normalized_out_cb, head_dim_t_);
+            tile_regs_acquire();
             for (uint32_t j = 0; j < head_dim_t_; ++j) {
-                cb_reserve_back(normalized_out_cb, 1);
-                tile_regs_acquire();
-                mul_tiles_bcast_cols(cur_out_cb, scratch_cb, j, 0, 0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, normalized_out_cb);
-                tile_regs_release();
-                cb_push_back(normalized_out_cb, 1);
+                mul_tiles_bcast_cols(cur_out_cb, scratch_cb, j, 0, j);
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < head_dim_t_; ++j) {
+                pack_tile(j, normalized_out_cb);
+            }
+            tile_regs_release();
+            cb_push_back(normalized_out_cb, head_dim_t_);
 
             cb_pop_front(scratch_cb, 1);
             cb_pop_front(cur_out_cb, head_dim_t_);
@@ -884,7 +902,7 @@ void sdpa_inner_loop(
 
         // ========== PHASE 1: Q@KT with alternating row buffers ==========
         for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-            DeviceZoneScopedN("Softmax(Q@KT)");
+            SDPA_DeviceZoneScopedN_0("Softmax(Q@KT)");
             cb_wait_front(cb_q_in, q_wait_tiles);
             kt_index_offset = 0;
 
@@ -971,7 +989,7 @@ void sdpa_inner_loop(
             // ===== q_subblock 0: drain last row's sub_exp from alias_prev_qkt_row + first QKT@V matmul =====
             {
                 MATH(DPRINT << "QKT@V: Processing Q_subblock 0 (drain)" << ENDL());
-                DeviceZoneScopedN("Softmax(Q@KT)@V");
+                SDPA_DeviceZoneScopedN_0("Softmax(Q@KT)@V");
 
 #ifdef OVERLAP_DRAIN_WITH_MATMUL
                 {
@@ -1115,6 +1133,8 @@ void sdpa_inner_loop(
                         alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row, w_salad);
                 }
                 if (last_iter) {
+                    MATH(DPRINT << "Row normalization for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_3("ROW_NORM");
                     cb_push_back(alias_cur_sum, sbh);
                     cb_push_back(alias_cur_out, sbh * head_dim_t);
                     normalize_row_streaming<sbh, head_dim_t>(
@@ -1135,7 +1155,7 @@ void sdpa_inner_loop(
                 MATH(
                     DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ", SALAD for row " << salad_row
                            << ENDL());
-                DeviceZoneScopedN("Softmax(Q@KT)@V");
+                SDPA_DeviceZoneScopedN_0("Softmax(Q@KT)@V");
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
                 // 1. Compute exp_max_diff for PREVIOUS row (sequential output)
@@ -1183,7 +1203,6 @@ void sdpa_inner_loop(
                 constexpr uint32_t salad_row = qktv_q_num_subblocks - 1;
                 uint32_t w_salad = salad_row - pushed_rows;
                 MATH(DPRINT << "Pipeline drain: SALAD for row " << salad_row << ENDL());
-                DeviceZoneScopedN("SALAD drain");
 
                 cb_reserve_back(cb_exp_max_diff, sbh);
                 sub_exp_first_col_blocks<scale_fp32, sbh>(alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
@@ -1260,7 +1279,7 @@ void kernel_main() {
         // Always writes to A-variant CBs since the previous Q chunk's per-row normalization
         // consumed the A-variants (or they were never written for q=0).
         {
-            DeviceZoneScopedN("DUMMY:InitPrevBuffers");
+            // DeviceZoneScopedN("DUMMY:InitPrevBuffers");
             InitPrevBuffers<Sq_chunk_t, head_dim_t>(cb_sum_A, cb_out_A, cb_max_A, cb_neginf);
         }
 

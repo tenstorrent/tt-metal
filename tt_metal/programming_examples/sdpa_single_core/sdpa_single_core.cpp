@@ -168,10 +168,12 @@ void sdpa_single_core(
                                       .set_page_size(col_identity_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_col_identity_config);
 
-    // cb_normalized_out — 1-tile streaming CB for normalized output (decoupled from ping-pong out CBs)
+    // cb_normalized_out — streaming CB for normalized output, sized for one DST batch
+    TT_FATAL(head_dim_t <= 8, "head_dim_t ({}) must fit in DST (max 8 tiles with fp16b double-buffer).", head_dim_t);
     const uint32_t normalized_out_cb_index = CBIndex::c_9;
-    auto cb_normalized_out_config = CircularBufferConfig(single_tile_size, {{normalized_out_cb_index, cb_data_format}})
-                                        .set_page_size(normalized_out_cb_index, single_tile_size);
+    auto cb_normalized_out_config =
+        CircularBufferConfig(head_dim_t * single_tile_size, {{normalized_out_cb_index, cb_data_format}})
+            .set_page_size(normalized_out_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_normalized_out_config);
 
     // cb_recip_scratch — 1-tile scratch CB for per-row normalization (1/sum intermediate)
@@ -442,9 +444,11 @@ void sdpa_single_core_test(
                                       .set_page_size(col_identity_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_col_identity_config);
 
+    TT_FATAL(head_dim_t <= 8, "head_dim_t ({}) must fit in DST (max 8 tiles with fp16b double-buffer).", head_dim_t);
     const uint32_t normalized_out_cb_index = CBIndex::c_9;
-    auto cb_normalized_out_config = CircularBufferConfig(single_tile_size, {{normalized_out_cb_index, cb_data_format}})
-                                        .set_page_size(normalized_out_cb_index, single_tile_size);
+    auto cb_normalized_out_config =
+        CircularBufferConfig(head_dim_t * single_tile_size, {{normalized_out_cb_index, cb_data_format}})
+            .set_page_size(normalized_out_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_normalized_out_config);
 
     const uint32_t recip_scratch_cb_index_t = CBIndex::c_10;
@@ -675,8 +679,8 @@ int main(int argc, char* argv[]) {
             constexpr uint32_t Sv_chunk_t = 16;
             constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
             constexpr uint32_t subblock_h = 1;
-            constexpr uint32_t num_q_chunks = 1;
-            constexpr uint32_t num_k_chunks = 5;
+            constexpr uint32_t num_q_chunks = 2;
+            constexpr uint32_t num_k_chunks = 3;
             constexpr uint32_t mm_throttle_level = 0;
             constexpr bool exp_approx_mode = false;
 
