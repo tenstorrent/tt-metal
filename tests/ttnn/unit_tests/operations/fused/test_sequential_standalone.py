@@ -1718,7 +1718,7 @@ class TestRuntimeArgsPadding:
 
             phase_kernels = [{"reader": kernel0}]
 
-            result = _concatenate_runtime_args(phase_kernels, "reader", core_range_override=core_ranges)
+            result = _concatenate_runtime_args(phase_kernels, "reader", target_core_range=core_ranges)
 
             result_dict = {(c.x, c.y): args for c, args in result}
 
@@ -2345,6 +2345,66 @@ class TestSequentialParallelAPI:
         assert root.children[0].op is b
         assert root.children[0].children[0].op is c
         assert root.children[0].children[0].children[0].op is d
+
+
+class TestPhaseNameGeneration:
+    """Tests for phase name propagation and tracy output in generated source."""
+
+    def test_phase_namespace_comment_with_name(self):
+        """Phase namespace comment includes op name when provided."""
+        gen = _mock_codegen._generate_phase_namespace
+        source = "void kernel_main() { int x = 1; }"
+        lines = gen(0, "", source, [], 0, phase_name="rms_norm")
+        header = lines[0]
+        assert "Phase 0: rms_norm" in header
+        assert "====" in header
+
+    def test_phase_namespace_comment_without_name(self):
+        """Phase namespace comment omits op name when empty."""
+        gen = _mock_codegen._generate_phase_namespace
+        source = "void kernel_main() { int x = 1; }"
+        lines = gen(0, "", source, [], 0, phase_name="")
+        header = lines[0]
+        assert "Phase 0" in header
+        assert ":" not in header.split("Phase 0")[1].split("=")[0]
+
+    def test_device_zone_scoped_emitted_with_name(self):
+        """DeviceZoneScopedN is emitted inside run() when phase_name is set."""
+        gen = _mock_codegen._generate_phase_namespace
+        source = "void kernel_main() { int x = 1; }"
+        lines = gen(0, "", source, [], 0, phase_name="layer_norm")
+        joined = "\n".join(lines)
+        assert 'DeviceZoneScopedN("layer_norm");' in joined
+        # Should be inside run()
+        run_idx = next(i for i, l in enumerate(lines) if "void run()" in l)
+        zone_idx = next(i for i, l in enumerate(lines) if "DeviceZoneScopedN" in l)
+        assert zone_idx == run_idx + 1
+
+    def test_device_zone_scoped_not_emitted_without_name(self):
+        """DeviceZoneScopedN is NOT emitted when phase_name is empty."""
+        gen = _mock_codegen._generate_phase_namespace
+        source = "void kernel_main() { int x = 1; }"
+        lines = gen(0, "", source, [], 0, phase_name="")
+        joined = "\n".join(lines)
+        assert "DeviceZoneScopedN" not in joined
+
+    def test_phase_name_default_empty(self):
+        """Default phase_name is empty (backward compat)."""
+        gen = _mock_codegen._generate_phase_namespace
+        source = "void kernel_main() { int x = 1; }"
+        lines = gen(0, "", source, [], 0)
+        joined = "\n".join(lines)
+        assert "DeviceZoneScopedN" not in joined
+
+    def test_op_descriptor_name_field(self):
+        """OpDescriptor has a name field with empty default."""
+        OpDescriptor = _mock_fusion.OpDescriptor
+        # 3-arg form still works (backward compat)
+        op = OpDescriptor("desc", ["in"], ["out"])
+        assert op.name == ""
+        # 4-arg form sets name
+        op2 = OpDescriptor("desc", ["in"], ["out"], "matmul")
+        assert op2.name == "matmul"
 
 
 if __name__ == "__main__":
