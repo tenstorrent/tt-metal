@@ -24,6 +24,10 @@ on:
         required: false
         type: string
         default: "topology-6u"
+      UMD-tests:
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   galaxy-umd-tests:
