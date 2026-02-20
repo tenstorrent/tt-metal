@@ -204,7 +204,8 @@ def test_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        # When using hf style rope, this
+        # When using hf style rope, those matrix does not have user dimension,
+        # the same position is used for all of them (see #https://github.com/tenstorrent/tt-metal/issues/38223)
         rot_mats = rope_setup.get_rot_mats(current_pos)
 
         tt_out = tt_model(

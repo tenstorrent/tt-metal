@@ -712,8 +712,8 @@ class RotarySetup(LightweightModule):
 class HfRotarySetup(LightweightModule):
     """RotarySetup variant that generates HF-format cos/sin (no Meta permutation).
 
-    This class is used with Attention2 which uses ttnn.experimental.rotary_embedding
-    (HF-style) instead of rotary_embedding_llama (Meta-style).
+    This class is used with tt_transformers model when use_hf_rope, in that case
+    ttnn.experimental.rotary_embedding (HF-style) is used  instead of rotary_embedding_llama (Meta-style).
     """
 
     def __init__(
