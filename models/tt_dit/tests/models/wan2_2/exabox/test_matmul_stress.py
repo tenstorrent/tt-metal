@@ -1,10 +1,12 @@
 import pytest
 import torch
-import ttnn
 from loguru import logger
-from .....utils.tensor import bf16_tensor
-from .....layers.linear import Linear, ColParallelLinear
+
+import ttnn
+
+from .....layers.linear import ColParallelLinear, Linear
 from .....parallel.manager import CCLManager
+from .....utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(
