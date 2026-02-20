@@ -128,7 +128,8 @@ struct DRAMStreamingMatmul {
         bool PopIn0 = true,
         bool ResetCBIn1 = false,
         uint32_t CBIn1ResetAddr = 0,
-        bool PopIndex = false>
+        bool PopIndex = false,
+        bool WaitForOutput = false>
     class Op {
     public:
         void operator()() {
@@ -239,6 +240,11 @@ struct DRAMStreamingMatmul {
             // Pop index CB after the last consumer is done reading
             if constexpr (PopIndex && CTArgs::enable_indexing) {
                 cb_pop_front(CTArgs::cb_index, 1);
+            }
+
+            // Optionally wait for compute to finish writing output
+            if constexpr (WaitForOutput) {
+                cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
             }
 
 #elif defined(COMPILE_FOR_TRISC)
