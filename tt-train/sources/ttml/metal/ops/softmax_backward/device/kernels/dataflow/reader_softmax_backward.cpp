@@ -51,30 +51,33 @@ void kernel_main() {
             for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
                 const uint32_t current_block_size = std::min(tiles_per_block, num_tiles_per_row - block_start);
 
-                cb_reserve_back(src0_cb_id, current_block_size);
-                const uint32_t l1_write_addr_src0 = get_write_ptr(src0_cb_id);
+                const uint32_t block_start_tile = row_start_tile + block_start;
 
-                cb_reserve_back(src1_cb_id, current_block_size);
-                const uint32_t l1_write_addr_src1 = get_write_ptr(src1_cb_id);
+                // CB API requires the same tile count in all cb_* calls (must divide CB size).
+                // Always reserve/push tiles_per_block; only current_block_size tiles are read from DRAM.
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    src0_cb_id,
+                    softmax_output_accessor,
+                    block_start_tile,
+                    current_block_size,
+                    src0_tile_size,
+                    tiles_per_block);
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    src1_cb_id,
+                    upstream_grad_accessor,
+                    block_start_tile,
+                    current_block_size,
+                    src1_tile_size,
+                    tiles_per_block);
 
-                for (uint32_t i = 0; i < current_block_size; ++i) {
-                    const uint32_t curr_tile = row_start_tile + block_start + i;
-
-                    noc_async_read_page(curr_tile, softmax_output_accessor, l1_write_addr_src0 + i * src0_tile_size);
-                    noc_async_read_page(curr_tile, upstream_grad_accessor, l1_write_addr_src1 + i * src1_tile_size);
-                }
-
-                // Wait for all tiles in block to be read before masking
                 noc_async_read_barrier();
 
-                // Mask padded region in last tile of the row by replacing padded values with 0.0 (BF16 only)
                 if constexpr (mask_w > 0) {
-                    const uint32_t last_tile_idx_in_block = current_block_size - 1;
                     const uint32_t global_last_tile_idx = block_start + current_block_size - 1;
-                    const bool block_contains_last_tile = (global_last_tile_idx == num_tiles_per_row - 1);
-
-                    if (block_contains_last_tile) {
-                        // Zero-fill padding in last tile (width-only; full tile height 32)
+                    if (global_last_tile_idx == num_tiles_per_row - 1) {
+                        const uint32_t last_tile_idx_in_block = current_block_size - 1;
+                        const uint32_t l1_write_addr_src0 = get_write_ptr(src0_cb_id);
+                        const uint32_t l1_write_addr_src1 = get_write_ptr(src1_cb_id);
                         fill_pad_tile<uint16_t, mask_w, 32>(
                             l1_write_addr_src0 + last_tile_idx_in_block * src0_tile_size,
                             static_cast<uint16_t>(BF16_ZERO_BITS));
@@ -84,8 +87,15 @@ void kernel_main() {
                     }
                 }
 
-                cb_push_back(src0_cb_id, current_block_size);
-                cb_push_back(src1_cb_id, current_block_size);
+                // Zero-fill tail padding so compute always sees tiles_per_block tiles (no padding logic in compute).
+                if (current_block_size < tiles_per_block) {
+                    const uint32_t pad_slots = tiles_per_block - current_block_size;
+                    fill_reserved_tiles_with_zero(src0_cb_id, current_block_size, pad_slots, src0_tile_size);
+                    fill_reserved_tiles_with_zero(src1_cb_id, current_block_size, pad_slots, src1_tile_size);
+                }
+
+                cb_push_back(src0_cb_id, tiles_per_block);
+                cb_push_back(src1_cb_id, tiles_per_block);
             }
         }
     }
