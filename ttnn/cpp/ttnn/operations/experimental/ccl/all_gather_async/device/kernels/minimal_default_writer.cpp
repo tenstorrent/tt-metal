@@ -273,6 +273,14 @@ void kernel_main() {
     }
 
     uint32_t slice_writes = 0;
+    bool split_forwarding_enabled = false;
+    if constexpr (topology == Topology::Ring) {
+        if (ring_size % 2 == 0 && ring_size > 2 &&
+            input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
+                                                             // the tiles, otherwise we write the entire packet
+            split_forwarding_enabled = true;
+        }
+    }
 
     // Write out the local slice to both DRAM and forward and backward
     uint32_t pages_read_in_row = start_pages_read_in_row;
@@ -327,11 +335,13 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
-    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-        chunk_count = 0;
-        while (tiles_read < tiles_to_read) {
-            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+
+        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+            chunk_count = 0;
+            while (tiles_read < tiles_to_read) {
+                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                uint32_t tiles_to_put_in_current_packet =
+                    std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
             cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
             size_t l1_read_addr = get_read_ptr(cb_output_id);
@@ -375,7 +385,6 @@ void kernel_main() {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                 }
                 noc_async_write_barrier();
-
             } else {
                 if constexpr (num_targets_forward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
@@ -398,9 +407,9 @@ void kernel_main() {
             }
             tiles_read += tiles_to_put_in_current_packet;
 
-            noc_async_writes_flushed();
+                noc_async_writes_flushed();
 
-            cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+                cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
 
             chunk_count++;
             if (chunk_count % chunks_per_sync == 0) {
@@ -432,15 +441,15 @@ void kernel_main() {
             tile_id_start += output_tensor_Wt * output_tensor_Ht;
         }
 
-        if (num_channels_processed_in_current_batch == input_tensor_C) {
-            num_channels_processed_in_current_batch = 0;
-        }
+            if (num_channels_processed_in_current_batch == input_tensor_C) {
+                num_channels_processed_in_current_batch = 0;
+            }
 
-        tiles_read = input_tile_id_start;
-        tiles_to_read = input_tile_id_end;
-        pages_read_in_row = start_pages_read_in_row;
-        row_offset = start_row_offset;
-    }
+            tiles_read = input_tile_id_start;
+            tiles_to_read = input_tile_id_end;
+            pages_read_in_row = start_pages_read_in_row;
+            row_offset = start_row_offset;
+        }
 
     // increment locally
     if constexpr (fuse_op) {
@@ -463,8 +472,12 @@ void kernel_main() {
     } else if constexpr (topology == Topology::Ring) {
         if (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
+            if (split_forwarding_enabled) {
+                writes_expected++;  // Backward worker will also forward 1 slice (but only half of it)
+            }
         } else {
             writes_expected = num_targets_forward_direction - 1;
+            // For 4-device ring, forward worker will only send half of last slice
         }
     }
 
@@ -479,6 +492,10 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right, and check if I have a
         // neighbor to the left
         // In the ring case, I expect to write to the left num_backward_target times
+
+        // Check if this is the last slice for split-forwarding
+        bool is_last_slice = (slice_writes == writes_expected - 1);
+
         int slice_chip_id;
         uint32_t actual_slice_chip_id;
         if (direction == 1) {
@@ -498,6 +515,32 @@ void kernel_main() {
         uint32_t pages_read_in_row = start_pages_read_in_row;
         uint32_t slice_Wt = input_tensor_Wt;
         uint32_t stride_Wt = output_tensor_Wt;
+
+        if (split_forwarding_enabled && is_last_slice) {
+            uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+            uint32_t first_half_tiles = total_tiles / 2;
+
+            if (direction == 0) {
+                // Forward worker: only forward first half
+                tiles_to_read = input_tile_id_start + first_half_tiles;
+            } else {
+                // Backward worker: skip first half, forward second half
+                tiles_read = input_tile_id_start + first_half_tiles;
+
+                // Adjust starting position for tiles
+                uint32_t tiles_to_skip = first_half_tiles;
+                while (tiles_to_skip > 0) {
+                    if (tiles_to_skip < slice_Wt - pages_read_in_row) {
+                        pages_read_in_row += tiles_to_skip;
+                        tiles_to_skip = 0;
+                    } else {
+                        tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                        row_offset += stride_Wt;
+                        pages_read_in_row = 0;
+                    }
+                }
+            }
+        }
         if constexpr (gather_dim == 3) {
             tile_id_start = actual_slice_chip_id * input_tensor_Wt;
         } else if constexpr (gather_dim == 2) {
@@ -584,10 +627,32 @@ void kernel_main() {
                 num_channels_processed_in_current_batch = 0;
             }
 
+            // Reset for next batch, but respect split slice boundaries
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
             row_offset = start_row_offset;
             pages_read_in_row = start_pages_read_in_row;
+            if (split_forwarding_enabled && is_last_slice) {
+                uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+                uint32_t first_half_tiles = total_tiles / 2;
+                if (direction == 0) {
+                    tiles_to_read = input_tile_id_start + first_half_tiles;
+                } else {
+                    tiles_read = input_tile_id_start + first_half_tiles;
+                    // Re-adjust position for second half
+                    uint32_t tiles_to_skip = first_half_tiles;
+                    while (tiles_to_skip > 0) {
+                        if (tiles_to_skip < slice_Wt - pages_read_in_row) {
+                            pages_read_in_row += tiles_to_skip;
+                            tiles_to_skip = 0;
+                        } else {
+                            tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
+                    }
+                }
+            }
         }
         slice_writes++;
     }
