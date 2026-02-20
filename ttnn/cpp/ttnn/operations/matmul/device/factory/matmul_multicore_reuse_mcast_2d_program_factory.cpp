@@ -64,7 +64,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -98,7 +99,9 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     const bool in0_block_sharded = in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
-    const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool in1_is_width_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool in1_is_height_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
@@ -149,8 +152,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
+    uint32_t start_core_x = sub_device_start_core.x;
+    uint32_t start_core_y = sub_device_start_core.y;
 
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
@@ -195,20 +198,24 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         }
 
         if (transpose_mcast) {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({0, start_core_y}).y;
+            in0_mcast_receiver_grid_diff_coord_start =
+                device->worker_core_from_logical_core({start_core_x, start_core_y}).y;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({0, start_core_y + num_blocks_x - 1}).y;
+                device->worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
-                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                in0_mcast_noc_y.push_back(
+                    device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
             }
         } else {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({start_core_x, 0}).x;
+            in0_mcast_receiver_grid_diff_coord_start =
+                device->worker_core_from_logical_core({start_core_x, start_core_y}).x;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, 0}).x;
+                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                in0_mcast_noc_x.push_back(
+                    device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
             }
         }
 
@@ -319,9 +326,16 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
     uint32_t num_dram_banks = 0;
     uint32_t per_core_N_storage = 0;
+    uint32_t batches_per_bank = 0;
     if (in1_is_sharded and in1_is_dram) {
         num_dram_banks = device->num_dram_channels();
-        per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+        if (in1_is_width_sharded) {
+            per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+        } else {
+            // Height sharded: batches are distributed across DRAM banks
+            uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_height();
+            batches_per_bank = in1_shard_height_in_tiles / K;
+        }
     }
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
@@ -471,8 +485,14 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     }
 
     if (in1_is_sharded and in1_is_dram) {
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
+        if (in1_is_width_sharded) {
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
+        } else {
+            // Height sharded: pass tiles per batch and batches per bank
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)(K * N));  // KtNt per batch (tiles)
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)batches_per_bank);
+        }
     }
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -577,7 +597,11 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     }
     if (in1_is_sharded) {
         if (in1_is_dram) {
-            mm_kernel_in1_sender_writer_defines["IN1_DRAM_SHARDED"] = "1";
+            if (in1_is_width_sharded) {
+                mm_kernel_in1_sender_writer_defines["IN1_DRAM_WIDTH_SHARDED"] = "1";
+            } else {
+                mm_kernel_in1_sender_writer_defines["IN1_DRAM_HEIGHT_SHARDED"] = "1";
+            }
         } else {
             mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
         }
@@ -642,7 +666,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
                 .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_sharded_defines});
+                .defines = mm_kernel_in0_sender_sharded_defines,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                    {"cb_in0_sharded", tt::CBIndex::c_2},
+                    {"cb_l1_array", tt::CBIndex::c_6},
+                }});
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
             in0_sender_compile_time_args[1] = 0;  // core_in_in0_receiver_mcast_grid
@@ -655,7 +684,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_sharded_defines});
+                    .defines = mm_kernel_in0_sender_sharded_defines,
+                    .named_compile_args = {
+                        {"cb_in0", tt::CBIndex::c_0},
+                        {"cb_in0_sharded", tt::CBIndex::c_2},
+                        {"cb_l1_array", tt::CBIndex::c_6},
+                    }});
         }
     } else {
         if (fuse_op) {
@@ -677,7 +711,13 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
                 .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_interleaved_defines});
+                .defines = mm_kernel_in0_sender_interleaved_defines,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                    {"cb_in0_sharded", tt::CBIndex::c_2},
+                    {"cb_sparsity", tt::CBIndex::c_6},
+                    {"cb_in0_intermediate", tt::CBIndex::c_8},
+                }});
     }
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -688,7 +728,14 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+            }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_receiver.num_cores() > 0) {
@@ -702,7 +749,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_defines});
+                .defines = mm_kernel_in1_receiver_writer_defines,
+                .named_compile_args = {
+                    {"cb_in1", tt::CBIndex::c_1},
+                    {"cb_bias", tt::CBIndex::c_3},
+                    {"cb_out", tt::CBIndex::c_4},
+                }});
     }
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
@@ -715,7 +767,10 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args});
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
@@ -731,7 +786,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_split_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
+                .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines,
+                .named_compile_args = {
+                    {"cb_in1", tt::CBIndex::c_1},
+                    {"cb_bias", tt::CBIndex::c_3},
+                    {"cb_out", tt::CBIndex::c_4},
+                }});
 
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
             program,
@@ -740,7 +800,10 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_split_noc,
-                .compile_args = in0_receiver_compile_time_args});
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     // Compute kernel compile time args
@@ -791,7 +854,17 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1180,66 +1253,71 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 }
 
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
-                    uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
-                    vc = vc == 3 ? 0 : vc + 1;
-                    mm_in1_sender_writer_args.push_back(vc);
+                    if (in1_is_width_sharded) {
+                        uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
+                        vc = vc == 3 ? 0 : vc + 1;
+                        mm_in1_sender_writer_args.push_back(vc);
 
-                    uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
+                        uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
 
-                    if (curr_storage_core < num_dram_banks) {
-                        num_iter++;
-
-                        worker_core_stride = per_core_N_storage - storage_core_stride;
-
-                        mm_in1_sender_writer_args.push_back(
-                            storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
-                        mm_in1_sender_writer_args.push_back(
-                            worker_core_stride * in1_single_tile_size);          // per_core_N_dram_bytes
-                        mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
-
-                        log_debug(
-                            tt::LogOp,
-                            "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
-                            curr_worker_core,
-                            worker_core_stride,
-                            curr_storage_core,
-                            storage_core_stride);
-
-                        curr_storage_core += (storage_core_stride + worker_core_stride) / per_core_N_storage;
-                        storage_core_stride = (storage_core_stride + worker_core_stride) % per_core_N_storage;
-
-                        uint32_t curr_worker_core_old = curr_worker_core;
-                        if (worker_core_stride >= per_core_N) {
-                            curr_worker_core += 1;
-                        }
-
-                        while (curr_worker_core <= curr_worker_core_old and curr_storage_core < num_dram_banks) {
+                        if (curr_storage_core < num_dram_banks) {
                             num_iter++;
 
-                            uint32_t stride = worker_core_stride + per_core_N_storage;
-                            stride = std::min(stride, per_core_N);
+                            worker_core_stride = per_core_N_storage - storage_core_stride;
 
                             mm_in1_sender_writer_args.push_back(
-                                (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes
-                            mm_in1_sender_writer_args.push_back(curr_storage_core);     // current_dram_bank_id
+                                storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
+                            mm_in1_sender_writer_args.push_back(
+                                worker_core_stride * in1_single_tile_size);          // per_core_N_dram_bytes
+                            mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
 
                             log_debug(
                                 tt::LogOp,
                                 "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
                                 curr_worker_core,
-                                (stride - worker_core_stride),
+                                worker_core_stride,
                                 curr_storage_core,
                                 storage_core_stride);
 
-                            if (stride >= per_core_N) {
+                            curr_storage_core += (storage_core_stride + worker_core_stride) / per_core_N_storage;
+                            storage_core_stride = (storage_core_stride + worker_core_stride) % per_core_N_storage;
+
+                            uint32_t curr_worker_core_old = curr_worker_core;
+                            if (worker_core_stride >= per_core_N) {
                                 curr_worker_core += 1;
                             }
-                            storage_core_stride = (stride - worker_core_stride) % per_core_N_storage;
-                            curr_storage_core += (stride - worker_core_stride) / per_core_N_storage;
-                            worker_core_stride = stride;
+
+                            while (curr_worker_core <= curr_worker_core_old and curr_storage_core < num_dram_banks) {
+                                num_iter++;
+
+                                uint32_t stride = worker_core_stride + per_core_N_storage;
+                                stride = std::min(stride, per_core_N);
+
+                                mm_in1_sender_writer_args.push_back(
+                                    (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes
+                                mm_in1_sender_writer_args.push_back(curr_storage_core);     // current_dram_bank_id
+
+                                log_debug(
+                                    tt::LogOp,
+                                    "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
+                                    curr_worker_core,
+                                    (stride - worker_core_stride),
+                                    curr_storage_core,
+                                    storage_core_stride);
+
+                                if (stride >= per_core_N) {
+                                    curr_worker_core += 1;
+                                }
+                                storage_core_stride = (stride - worker_core_stride) % per_core_N_storage;
+                                curr_storage_core += (stride - worker_core_stride) / per_core_N_storage;
+                                worker_core_stride = stride;
+                            }
                         }
+                        mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
+                    } else {
+                        // Height sharded: no additional runtime args needed
+                        // (bank/offset computed from compile-time args + batch index)
                     }
-                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
                 }
                 if (fuse_op) {
                     if (fused_op_signaler->is_all_gather()) {
@@ -1614,6 +1692,17 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
+    //                      Sub-device start core
+    ////////////////////////////////////////////////////////////////////////////
+    CoreCoord sub_device_start_core = {0, 0};
+    if (operation_attributes.sub_device_id.has_value()) {
+        auto sub_device_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
+        auto bbox = sub_device_cores.bounding_box();
+        sub_device_start_core = bbox.start_coord;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
@@ -1654,7 +1743,8 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         bias_data_format,
         output_data_format,
         untilize_out,
-        fused_op_signaler);
+        fused_op_signaler,
+        sub_device_start_core);
 }
 
 MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast2DProgramFactory::create(

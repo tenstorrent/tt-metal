@@ -161,8 +161,8 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto forwarding_links =
-        get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+    const auto forwarding_links = get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
         "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
@@ -258,6 +258,65 @@ void append_fabric_connection_rt_args(
             worker_buffer_index_semaphore_id,
             worker_args);
     }
+}
+
+std::vector<eth_chan_directions> get_neighbor_eth_directions(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::vector<eth_chan_directions> directions;
+    for (const auto& direction : FabricContext::routing_directions) {
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
+        if (std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end()) {
+            directions.push_back(control_plane.routing_direction_to_eth_direction(direction));
+        }
+    }
+    return directions;
+}
+
+// append runtime parameter for RoutingPlaneConnectionManager
+// convenience function using RoutingDirection's
+template <typename ProgramOrDescriptor>
+uint32_t append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<eth_chan_directions>& attempted_directionss,
+    const std::vector<uint32_t>& connection_link_indices,
+    ProgramOrDescriptor& worker_program_or_desc,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    FabricApiType api_type,
+    CoreType core_type) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    std::vector<FabricNodeId> dst_nodes;
+    std::unordered_set<RoutingDirection> used_directions;
+    for (auto dir : attempted_directionss) {
+        auto routing_direction = control_plane.eth_direction_to_routing_direction(dir);
+        TT_FATAL(
+            !used_directions.contains(routing_direction),
+            "Multiple ethernet cores in the same direction ({}) are not currently supported. "
+            "This restriction will be removed in a future update when proper multi-core routing is implemented.",
+            routing_direction);
+        used_directions.insert(routing_direction);
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, routing_direction);
+
+        if (!neighbors.empty()) {
+            dst_nodes.push_back(FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]));
+        }
+    }
+
+    append_routing_plane_connection_manager_rt_args<ProgramOrDescriptor>(
+        src_fabric_node_id,
+        dst_nodes,
+        connection_link_indices,
+        worker_program_or_desc,
+        kernel_id,
+        worker_core,
+        worker_args,
+        api_type,
+        core_type);
+
+    return dst_nodes.size();
 }
 
 // append runtime parameter for RoutingPlaneConnectionManager
@@ -376,7 +435,7 @@ std::vector<uint32_t> get_forwarding_link_indices(
     }
 
     return get_forwarding_link_indices_in_direction(
-        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {
@@ -485,6 +544,28 @@ template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
     tt::tt_metal::ProgramDescriptor&,
     const CoreCoord&,
     std::vector<uint32_t>&,
+    CoreType);
+
+template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricNodeId&,
+    const std::vector<eth_chan_directions>&,
+    const std::vector<uint32_t>&,
+    tt::tt_metal::ProgramDescriptor&,
+    tt::tt_metal::KernelHandle&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    FabricApiType,
+    CoreType);
+
+template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::Program>(
+    const FabricNodeId&,
+    const std::vector<eth_chan_directions>&,
+    const std::vector<uint32_t>&,
+    tt::tt_metal::Program&,
+    tt::tt_metal::KernelHandle&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    FabricApiType,
     CoreType);
 
 template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(

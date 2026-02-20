@@ -7,7 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "ttnn/deprecated/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp"
+#include "ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
 
 #define ENABLE_L1_BUFFER_OVERLAP 0
 // #define ENABLE_L1_BUFFER_OVERLAP 1

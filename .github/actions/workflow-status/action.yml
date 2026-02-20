@@ -35,7 +35,7 @@ runs:
           for (const job of optionalJobs) {
             const result = needs[job]?.result || "success"; // Default to success if missing
             console.log(`Job: ${job}, Result: ${result}`);
-            if (result === "failure") {
+            if (result === "failure" || result === "cancelled") {
               core.setFailed(`Optional job '${job}' failed.`);
             }
           }

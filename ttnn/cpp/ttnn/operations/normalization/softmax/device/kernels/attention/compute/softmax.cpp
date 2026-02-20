@@ -7,11 +7,11 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/softmax.h"
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/softmax.h"
+#include "api/compute/reduce.h"
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -67,8 +67,7 @@ void calc_numeric_stable(
     cb_wait_front(cb_out, Wt);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -322,4 +321,3 @@ void MAIN {
     // cb_pop_front(cb_bcast_scaler, 1); // we don't actually have to do this
     // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
 }
-}  // namespace NAMESPACE

@@ -43,6 +43,11 @@ uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
+
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
 uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
@@ -134,8 +139,15 @@ int main(int argc, char* argv[]) {
 #endif
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+        // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
+        // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
+        uint64_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
+        setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);
+#ifdef ARCH_BLACKHOLE
+        uint32_t local_cb_mask_upper = static_cast<uint32_t>(local_cb_mask >> 32);
+        setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 32, local_cb_mask_upper);
+#endif
 
 #if defined(ARCH_WORMHOLE)
         l1_to_ncrisc_iram_copy_wait();

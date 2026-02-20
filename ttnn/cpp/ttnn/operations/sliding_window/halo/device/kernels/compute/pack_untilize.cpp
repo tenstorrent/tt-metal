@@ -4,14 +4,13 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t out_cb_id0 = get_compile_time_arg_val(1);
     constexpr uint32_t out_cb_id1 = get_compile_time_arg_val(2);
@@ -48,4 +47,3 @@ void MAIN {
         pack_untilize_uninit(out_cb_id0);
     }
 }
-}  // namespace NAMESPACE

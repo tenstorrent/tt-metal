@@ -44,51 +44,16 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
 
-std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
-    IDevice* device, uint32_t W, const CoreRangeSet& cores, const bool use_welford) {
-    const auto num_cores = cores.num_cores();
-    std::optional<Tensor> recip_tensor = std::nullopt;
-    uint32_t reciprocal_CB_size_bytes = 0;
-    if (use_welford) {
-        const auto recip_dtype = tt::tt_metal::DataType::FLOAT32;
-        const tt::tt_metal::ShardSpec shard_spec(cores, {1, W}, ShardOrientation::ROW_MAJOR);
-        const MemoryConfig mem_config =
-            MemoryConfig{tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
-        const tt::tt_metal::TensorLayout tensor_layout(
-            tt::tt_metal::TensorLayout(recip_dtype, Layout::ROW_MAJOR, mem_config));
-        const Shape tensor_shape{num_cores, W};
-        const TensorSpec tensor_spec(tensor_shape, tensor_layout);
-        // Compute the reciprocals of an ascending sequence of integers
-        std::vector<float> reciprocals(num_cores * W);
-        for (uint32_t i = 0; i < W; i++) {
-            // Compute for first row
-            reciprocals[i] = 1.0f / (i + 1);
-        }
-        for (uint32_t i = 1; i < num_cores; i++) {
-            // Copy to other rows
-            std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
-        }
-
-        if (auto* p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
-            recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
-        } else {
-            TT_THROW("Cannot cast to MeshDevice");
-        }
-
-        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
-    }
-
-    return std::make_pair(recip_tensor, reciprocal_CB_size_bytes);
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGatherWelfordProgramFactory::create(
-    const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output) {
+    const LayerNormPreAllGatherParams& operation_attributes,
+    const LayerNormPreAllGatherInputs& tensor_args,
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    const auto& a = tensor_args;
+    const auto& a = tensor_args.input;
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -211,14 +176,17 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
 
-    auto [recip_tensor, reciprocal_CB_size_bytes] =
-        CMAKE_UNIQUE_NAMESPACE::create_reciprocal_tensor_if_needed(device, W, all_cores, true);
+    TT_FATAL(
+        tensor_args.recip_tensor.has_value(),
+        "Welford algorithm requires recip_tensor. Use ttnn.create_layer_norm_reciprocals() to create it.");
+    const auto& recip_tensor = tensor_args.recip_tensor.value();
+    const uint32_t reciprocal_CB_size_bytes = recip_tensor.buffer()->aligned_size_per_bank();
 
     constexpr tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
     auto c_recip_config =
         tt::tt_metal::CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_2, reciprocal_cb_data_format}})
             .set_page_size(tt::CBIndex::c_2, reciprocal_CB_size_bytes)
-            .set_globally_allocated_address(*recip_tensor.value().buffer());
+            .set_globally_allocated_address(*recip_tensor.buffer());
     tt::tt_metal::CreateCircularBuffer(program, all_cores, c_recip_config);
 
     // Log all circular buffers
@@ -269,12 +237,12 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
 void LayerNormPreAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const LayerNormPreAllGatherParams& /*operation_attributes*/,
-    const Tensor& tensor_args,
+    const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.buffer()->address();
+    const auto input_addr = tensor_args.input.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);

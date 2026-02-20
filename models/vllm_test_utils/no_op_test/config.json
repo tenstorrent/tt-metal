@@ -1,0 +1,5 @@
+{
+    "architectures": ["DummyNoOpModel"],
+    "model_type": "llama",
+    "vocab_size": 128256
+}

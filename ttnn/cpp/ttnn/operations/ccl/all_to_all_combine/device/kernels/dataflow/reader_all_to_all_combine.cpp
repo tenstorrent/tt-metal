@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 #include "api/debug/dprint_pages.h"
 

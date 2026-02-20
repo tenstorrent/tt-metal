@@ -26,6 +26,7 @@ struct OnePacketConfig {
     uint32_t num_packets = 0;
     uint32_t packet_size_bytes = 0;
     bool read = true;
+    bool use_2_0 = false;
 };
 
 /// @brief Does OneToOne or OneFromOne but with one_packet read/write
@@ -67,12 +68,26 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     vector<uint32_t> compile_args = {
         (uint32_t)test_config.num_packets, (uint32_t)test_config.packet_size_bytes, (uint32_t)test_config.test_id};
 
+
+    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_packet/kernels/";
+    std::string read_kernel_filename = "read_one_packet";
+    std::string write_kernel_filename = "write_one_packet";
+    if (test_config.read) {
+        kernels_dir += read_kernel_filename;
+    } else {
+        kernels_dir += write_kernel_filename;
+    }
+    if (test_config.use_2_0) {
+        kernels_dir += "_2_0";
+    }
+    kernels_dir += ".cpp";
+
     // Kernel
     tt::tt_metal::KernelHandle kernel;
     if (test_config.read) {
         kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/one_packet/kernels/read_one_packet.cpp",
+            kernels_dir,
             master_core_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
@@ -81,7 +96,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     } else {
         kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/one_packet/kernels/write_one_packet.cpp",
+            kernels_dir,
             master_core_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
@@ -300,6 +315,78 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal) 
 
     // Run
     EXPECT_TRUE(run_dm(mesh_device, test_config));
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_device(0);
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Parameters
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packets = 256;
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 84,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = true,
+                .use_2_0 = true,
+            };
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Parameters
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packets = 257;
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 85,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = false,
+                .use_2_0 = true,
+            };
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

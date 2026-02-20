@@ -23,7 +23,7 @@ void write_dependency_hashes(
 
 // Reads dependencies from .d file and writes their hashes to .hash file.
 // Deletes the .hash file on any failure.
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj);
+void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path);
 
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
 bool dependencies_up_to_date(std::istream& hash_file);

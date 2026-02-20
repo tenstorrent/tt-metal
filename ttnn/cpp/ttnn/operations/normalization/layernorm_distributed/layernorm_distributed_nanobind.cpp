@@ -45,6 +45,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration. Defaults to None.
                 program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
                 memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
+                recip_tensor (ttnn.Tensor, optional): the reciprocals tensor for Welford algorithm. Required when using Welford (use_welford=True in program_config). Create using :func:`ttnn.create_layer_norm_reciprocals`. Defaults to None.
 
               Returns:
                 ttnn.Tensor: the output tensor.
@@ -75,6 +76,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 - Unsharded runs: :attr:`input_tensor` must be interleaved.
                 - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).
                 - When using :attr:`residual_input_tensor` with sharding, it must match the :attr:`input_tensor` padded shape and sharding.
+                - When using Welford algorithm (use_welford=True), :attr:`recip_tensor` must be provided.
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
@@ -83,7 +85,8 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("recip_tensor") = nb::none()});
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {

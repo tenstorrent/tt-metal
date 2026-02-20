@@ -11,9 +11,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteConv3d::invoke(
+ttnn::Tensor conv3d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
@@ -45,4 +45,4 @@ ttnn::Tensor ExecuteConv3d::invoke(
         compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental

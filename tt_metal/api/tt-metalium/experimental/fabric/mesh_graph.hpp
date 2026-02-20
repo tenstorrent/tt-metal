@@ -23,6 +23,9 @@
 #include <memory>
 #include <vector>
 
+namespace tt {
+class Cluster;
+}  // namespace tt
 namespace tt::tt_metal {
 enum class ClusterType : std::uint8_t;
 class PhysicalSystemDescriptor;
@@ -101,7 +104,14 @@ using RequestedIntermeshPorts =
 class MeshGraph {
 public:
     explicit MeshGraph(
-        const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config = std::nullopt);
+        tt::tt_metal::ClusterType cluster_type,
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<FabricConfig> fabric_config = std::nullopt);
+
+    explicit MeshGraph(
+        const tt::Cluster& cluster,
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<FabricConfig> fabric_config = std::nullopt);
     ~MeshGraph() = default;
 
     void print_connectivity() const;
@@ -155,7 +165,11 @@ public:
 
     // Generate a mesh graph of a specific shape (used by topology mapper)
     static MeshGraph generate_mesh_graph_of_shape(
-        MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction);
+        MeshShape mesh_shape,
+        tt::tt_fabric::FabricType fabric_type,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode,
+        tt::ARCH arch,
+        std::uint32_t num_connections_per_direction);
 
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
@@ -186,7 +200,6 @@ public:
     std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
 
 private:
-    // Private constructor for static factory functions
     MeshGraph() = default;
 
     void validate_mesh_id(MeshId mesh_id) const;
@@ -194,7 +207,8 @@ private:
         const MeshCoordinate& src_mesh_coord,
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
-    void initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config);
+    void initialize_from_mgd(
+        const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

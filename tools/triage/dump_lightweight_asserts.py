@@ -29,6 +29,7 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.hardware.risc_debug import CallstackEntryVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
@@ -156,7 +157,7 @@ def dump_lightweight_asserts(
         elif current_instruction != ebreak_instruction:
             return None
 
-        callstack_data = callstack_provider.get_callstacks(
+        callstack_data = callstack_provider.get_cached_callstacks(
             location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True
         )
         arguments_and_locals = None
@@ -192,6 +193,8 @@ def dump_lightweight_asserts(
             arguments_and_locals=arguments_and_locals,
         )
 
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         log_check_risc(
             risc_name,

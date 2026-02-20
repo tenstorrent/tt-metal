@@ -1,25 +1,5 @@
-set(UNIT_TESTS_DEBUG_TOOLS_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_eth_cores.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_invalid_print_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_mute_device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_mute_print_server.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_buffering.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_all_harts.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_before_finish.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_prepend_device_core_risc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tensix_dest.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tiles.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_config_register.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_assert.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize_delays.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_sanitize.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_pause.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_ringbuf.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_stack_usage.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_runtime_args_known_garbage.cpp
-)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 function(create_unit_test_executable)
     set(exec_name unit_tests_debug_tools)
@@ -57,8 +37,6 @@ endfunction()
 create_unit_test_executable()
 
 # Inspector unit tests
-set(UNIT_TESTS_INSPECTOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/inspector/test_rpc_startup.cpp)
-
 # Create the test executable
 add_executable(unit_tests_inspector ${UNIT_TESTS_INSPECTOR_SRC})
 

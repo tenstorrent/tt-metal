@@ -38,6 +38,7 @@ The tests use the Mesh Device API with fast dispatch mode:
 | multicast_scheme_type         | uint32_t              | Specifies the multicast scheme type for advanced multicast tests. |
 | virtual_channel               | N/A                   | (1) Option to specify unicast VC for each transaction, (2) Option for a sub-test that uses a separate VC for each transaction (TODO)|
 | use_2_0_api                   | bool                  | Determines if the test uses the experimental device 2.0 API |
+| use_semaphore                 | bool                  | Determines if the test uses semaphore-based synchronization between sender and receivers |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
@@ -65,5 +66,10 @@ This test suite now includes tests using the new device 2.0 experimental NOC API
 ### Device 2.0 Kernels:
 - `sender_multicast_2_0.cpp`: Implements the sender functionality using the experimental NOC API with multicast async write operations
 - `sender_unicast_2_0.cpp`: Implements the sender functionality using the experimental NOC API with unicast async write operations
+
+## Semaphore-Based Synchronization Kernels
+The semaphore-based tests use additional kernels for sender-receiver synchronization:
+- `sender_multicast_sem.cpp`: Implements the multicast sender with semaphore synchronization using `noc_semaphore_set_multicast` and `noc_semaphore_wait`
+- `receiver_sem.cpp`: Implements the receiver with semaphore synchronization using `noc_semaphore_inc` and `noc_semaphore_wait`
 
 Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new experimental API.

@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 #include "internal/debug/dprint_test_common.h"
 /*
  * Test printing from a kernel running on TRISC.
  */
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Wait for BRISC to signal it is done writing to CB, then call DPRINT
     UNPACK(mailbox_read(ThreadId::BriscThreadId););
     DPRINT_UNPACK(DPRINT << "Test Debug Print: Unpack" << ENDL(); print_test_data(););
@@ -19,4 +18,3 @@ void MAIN {
     PACK(mailbox_read(ThreadId::BriscThreadId););
     DPRINT_PACK(DPRINT << "Test Debug Print: Pack" << ENDL(); print_test_data(););
 }
-}  // namespace NAMESPACE

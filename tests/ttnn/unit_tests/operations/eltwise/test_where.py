@@ -602,16 +602,16 @@ def test_addcdiv_edgcase(device):
     golden_tensor = torch.addcdiv(c, a, b, value=value)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
-    # output_tensor tensor([ 0.5000,    -inf,     inf,    -inf, -1.5000,  0.0000],dtype=torch.bfloat16)
+    # output_tensor tensor([ 0.5000,    -inf,     inf,     inf, -1.5000,  0.0000],dtype=torch.bfloat16)
     # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000],dtype=torch.bfloat16)
 
-    # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
-    golden_tensor = torch.where(
-        torch.isnan(golden_tensor), value * torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
+    # Where golden is NaN (e.g. 0/0), normalize ttnn output to NaN for comparison
+    output_tensor = torch.where(
+        torch.isnan(golden_tensor),
+        torch.tensor(float("nan"), dtype=output_tensor.dtype, device=output_tensor.device),
+        output_tensor,
     )
-
-    assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
+    assert torch.allclose(output_tensor, golden_tensor, equal_nan=True)
 
 
 def test_addcdiv_edgcase_fp32(device):

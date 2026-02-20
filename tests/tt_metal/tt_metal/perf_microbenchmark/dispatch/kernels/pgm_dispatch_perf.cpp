@@ -16,10 +16,6 @@ static uint32_t global;
 #endif
 
 #ifdef COMPILE_FOR_TRISC
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {}
-}  // namespace NAMESPACE
-#else
-void kernel_main() {}
+#include "api/compute/common.h"
 #endif
+void kernel_main() {}

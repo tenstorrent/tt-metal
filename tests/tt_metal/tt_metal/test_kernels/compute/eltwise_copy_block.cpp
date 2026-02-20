@@ -3,11 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t block_num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
 
@@ -34,4 +33,3 @@ void MAIN {
         release_dst();
     }
 }
-}  // namespace NAMESPACE

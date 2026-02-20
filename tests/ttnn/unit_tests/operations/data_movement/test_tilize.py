@@ -6,7 +6,6 @@ import pytest
 import torch
 from functools import partial
 
-
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
@@ -48,3 +47,35 @@ def test_tilize_fp32_truncation(device, shape, use_multicore):
     input_tensor = ttnn.tilize(input_tensor, use_multicore=use_multicore)
     output_tensor = ttnn.to_torch(input_tensor)
     assert torch.allclose(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("tensor_shape", [[32, 256 * 64]])
+@pytest.mark.parametrize("shard_shape", [[32, 256]])
+@pytest.mark.parametrize(
+    "shard_core_grid", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})]
+)  # 64 cores in an 8x8 grid
+def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_shape, shard_core_grid):
+    torch.manual_seed(42)
+    torch.set_printoptions(sci_mode=False)
+
+    shard_spec = ttnn.ShardSpec(shard_core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    # Create test data with sequential values from 1 to n for debugging
+    for _ in range(30):
+        input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+        # Convert to ttnn tensor with row major layout and width sharding
+        input_ttnn_tensor = ttnn.from_torch(
+            input_torch_tensor,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_memory_config,
+        )
+        ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config)
+        output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+        assert torch.equal(input_torch_tensor, output_torch_tensor)

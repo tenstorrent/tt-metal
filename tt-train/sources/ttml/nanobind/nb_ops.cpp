@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,6 +64,11 @@ void py_module(nb::module_& m) {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
         py_binary.def(
             "add",
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const ttnn::Tensor&)>(&ops::operator+),
+            nb::arg("a"),
+            nb::arg("b"));
+        py_binary.def(
+            "add",
             static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::AutocastTensor&)>(
                 &ops::operator+),
             nb::arg("a"),
@@ -105,11 +110,28 @@ void py_module(nb::module_& m) {
             "all_reduce",
             &ttml::ops::distributed::all_reduce,
             nb::arg("tensor"),
-            nb::arg("noop_backward") = false);
+            nb::arg("noop_backward") = false,
+            nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
-            "reduce_scatter", &ttml::ops::distributed::reduce_scatter, nb::arg("tensor"), nb::arg("dim"));
-        py_distributed.def("all_gather", &ttml::ops::distributed::all_gather, nb::arg("tensor"), nb::arg("dim"));
-        py_distributed.def("broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"));
+            "reduce_scatter",
+            &ttml::ops::distributed::reduce_scatter,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "scatter",
+            &ttml::ops::distributed::scatter,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "all_gather",
+            &ttml::ops::distributed::all_gather,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
     }
 
     {
@@ -129,13 +151,14 @@ void py_module(nb::module_& m) {
 
     {
         auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def("layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta"));
+        py_layernorm.def(
+            "layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta") = nb::none());
         py_layernorm.def(
             "composite_layernorm",
             &ttml::ops::composite_layernorm,
             nb::arg("tensor"),
             nb::arg("gamma"),
-            nb::arg("beta"));
+            nb::arg("beta") = nb::none());
     }
 
     {

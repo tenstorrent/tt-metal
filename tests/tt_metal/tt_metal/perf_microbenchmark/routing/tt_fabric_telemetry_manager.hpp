@@ -11,7 +11,6 @@
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_constants.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
-#include "tt_fabric_test_results.hpp"
 
 using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
 using FabricNodeId = tt::tt_fabric::FabricNodeId;

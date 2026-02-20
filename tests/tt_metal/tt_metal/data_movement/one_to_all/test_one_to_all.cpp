@@ -45,6 +45,7 @@ struct OneToAllConfig {
     uint32_t multicast_scheme_type = 0;
     uint32_t num_virtual_channels = 1;  // Number of virtual channels to cycle through (only useful for unicast)
     bool use_2_0_api = false;           // Use Device 2.0 API
+    bool use_semaphore = false;
 
     // TODO: Add the following parameters
     //  1. Posted flag (posted multicast has much better performance at larger grid sizes, than non-posted due to
@@ -74,6 +75,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 
     // Master Logical
     CoreRangeSet mst_logical_core_set({CoreRange(test_config.mst_core_coord)});
+    auto mst_core_physical = device->worker_core_from_logical_core(test_config.mst_core_coord);
+    uint32_t mst_core_coord_packed = (mst_core_physical.x << 16) | (mst_core_physical.y & 0xFFFF);
 
     // Subordinate Logical
     CoreCoord sub_logical_start_coord = test_config.sub_start_core_coord;
@@ -133,6 +136,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
     uint32_t sub_l1_base_address =
         test_config.loopback ? mst_l1_base_address : mst_l1_base_address + (bytes_per_transaction);
 
+    // Initialize Semaphores
+    uint32_t sender_sem_id = CreateSemaphore(program, mst_logical_core_set, 0);
+    uint32_t sender_valid_sem_id = CreateSemaphore(program, mst_logical_core_set, 1);
+    uint32_t receiver_sem_id = CreateSemaphore(program, sub_logical_core_set, 0);
+
     // Initialize Kernels
 
     // Sender Kernel
@@ -161,6 +169,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 
         sender_kernel_path += "sender_multicast";
 
+        if (test_config.use_semaphore) {
+            sender_compile_args.insert(
+                sender_compile_args.end(),
+                {(uint32_t)sender_sem_id, (uint32_t)sender_valid_sem_id, (uint32_t)receiver_sem_id});
+
+            sender_kernel_path += "_sem";
+        }
     } else {  // Unicast Sender Kernel
         sender_compile_args.push_back((uint32_t)test_config.num_virtual_channels);
         sender_kernel_path += "sender_unicast";
@@ -178,6 +193,28 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         mst_logical_core_set,
         DataMovementConfig{
             .processor = data_movement_processor, .noc = test_config.noc_id, .compile_args = sender_compile_args});
+
+    if (test_config.use_semaphore) {
+        vector<uint32_t> receiver_compile_args = {
+            (uint32_t)test_config.num_of_transactions,
+            (uint32_t)test_config.pages_per_transaction,
+            (uint32_t)test_config.bytes_per_page,
+            (uint32_t)test_config.test_id,
+            (uint32_t)sender_sem_id,
+            (uint32_t)receiver_sem_id,
+            (uint32_t)mst_core_coord_packed,
+        };
+        string receiver_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/receiver_sem.cpp";
+        auto receiver_kernel = CreateKernel(
+            program,
+            receiver_kernel_path,
+            sub_logical_core_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = test_config.noc_id == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0,
+                .compile_args = receiver_compile_args});
+        SetRuntimeArgs(program, receiver_kernel, sub_logical_core_set, {});
+    }
 
     // Runtime Arguments
     vector<uint32_t> sender_runtime_args = {};
@@ -251,7 +288,9 @@ void directed_ideal_test(
     bool loopback,
     NOC noc_id,
     uint32_t multicast_scheme_type,
-    bool use_2_0_api) {
+    bool use_2_0_api,
+    bool use_semaphore,
+    uint32_t pages_override_factor) {
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -261,7 +300,7 @@ void directed_ideal_test(
     }
 
     // Adjustable Parameters (Ideal: Less transactions, more data per transaction)
-    uint32_t pages_per_transaction = 256;
+    uint32_t pages_per_transaction = 256 * pages_override_factor;
     uint32_t num_of_transactions = 256;
 
     unit_tests::dm::core_to_all::OneToAllConfig test_config = {
@@ -280,6 +319,7 @@ void directed_ideal_test(
         .multicast_scheme_type = multicast_scheme_type,
         .num_virtual_channels = 1,
         .use_2_0_api = use_2_0_api,
+        .use_semaphore = use_semaphore,
     };
 
     // Run
@@ -294,7 +334,9 @@ void packet_sizes_test(
     CoreCoord mst_core_coord,
     CoreCoord sub_start_core_coord,
     CoreCoord sub_grid_size,
-    bool use_2_0_api = false) {
+    bool use_2_0_api = false,
+    bool use_semaphore = false,
+    uint32_t max_pages_override_factor = 1) {
     // Parameters
     NOC noc_id = NOC::NOC_0;
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
@@ -303,9 +345,10 @@ void packet_sizes_test(
     /* Running the Test */
 
     uint32_t max_transactions = 256;
-    uint32_t max_pages_reservable_per_transaction = mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
-                                                        ? 1024
-                                                        : 2048;  // Max total transaction size == 64 KB
+    uint32_t max_pages_reservable_per_transaction =
+        mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
+            ? 1024 * max_pages_override_factor
+            : 2048 * max_pages_override_factor;  // Max total transaction size == 64 KB
 
     for (bool loopback : {true, false}) {
         if (loopback) {
@@ -335,7 +378,8 @@ void packet_sizes_test(
                     .loopback = loopback,
                     .is_multicast = is_multicast,
                     .is_linked = is_linked,
-                    .use_2_0_api = use_2_0_api};
+                    .use_2_0_api = use_2_0_api,
+                    .use_semaphore = use_semaphore};
 
                 // Run
                 EXPECT_TRUE(run_dm(mesh_device, test_config));
@@ -631,6 +675,104 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacket
         mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
+/* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
+/* ========== 2x2 ========= */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore2x2PacketSizes) {
+    GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
+
+    // Parameters
+    uint32_t test_case_id = 24;
+
+    auto mesh_device = get_mesh_device();
+
+    bool is_multicast = true;
+    bool is_linked = true;
+    bool use_2_0_api = false;
+    bool use_semaphore = true;
+    uint32_t max_pages_override_factor = 8;
+
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {2, 2};
+
+    unit_tests::dm::core_to_all::packet_sizes_test(
+        mesh_device,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size,
+        use_2_0_api,
+        use_semaphore,
+        max_pages_override_factor);
+}
+
+/* ========== 5x5 ========= */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x5PacketSizes) {
+    GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
+
+    // Parameters
+    uint32_t test_case_id = 25;
+
+    auto mesh_device = get_mesh_device();
+
+    bool is_multicast = true;
+    bool is_linked = true;
+    bool use_2_0_api = false;
+    bool use_semaphore = true;
+    uint32_t max_pages_override_factor = 8;
+
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {5, 5};
+
+    unit_tests::dm::core_to_all::packet_sizes_test(
+        mesh_device,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size,
+        use_2_0_api,
+        use_semaphore,
+        max_pages_override_factor);
+}
+
+/* ========== All ========= */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphorePacketSizes) {
+    GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
+
+    // Parameters
+    uint32_t test_case_id = 26;
+
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    bool is_multicast = true;
+    bool is_linked = true;
+    bool use_2_0_api = false;
+    bool use_semaphore = true;
+    uint32_t max_pages_override_factor = 8;
+
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+
+    unit_tests::dm::core_to_all::packet_sizes_test(
+        mesh_device,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size,
+        use_2_0_api,
+        use_semaphore,
+        max_pages_override_factor);
+}
+
 /* ========== DIRECTED IDEAL ========== */
 
 /* ========== UNICAST ========== */
@@ -724,6 +866,43 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
         loopback,
         noc_id,
         0);  // multicast_scheme_type (not used here)
+}
+
+/* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreDirectedIdeal) {
+    // Parameters
+    uint32_t test_case_id = 56;  // Arbitrary test id
+
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    bool loopback = true;
+    NOC noc_id = NOC::NOC_0;
+
+    bool is_multicast = true;
+    bool is_linked = true;
+    bool use_2_0_api = false;
+    bool use_semaphore = true;
+    uint32_t pages_override_factor = 32;
+
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+
+    unit_tests::dm::core_to_all::directed_ideal_test(
+        mesh_device,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size,
+        loopback,
+        noc_id,
+        0,  // multicast_scheme_type (not used here)
+        use_2_0_api,
+        use_semaphore,
+        pages_override_factor);
 }
 
 /* ========== VIRTUAL CHANNELS ========== */

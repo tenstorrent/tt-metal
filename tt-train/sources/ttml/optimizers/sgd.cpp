@@ -51,17 +51,28 @@ void SGD::step() {
 
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
-                ttnn::multiply(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay),
+                ttnn::multiply(
+                    tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+                    m_config.weight_decay,
+                    /* fast_and_approximate_mode*/ true),
                 gradients);
         }
 
         if (m_config.momentum != 0.0F) {
             if (m_steps != 0) {
                 // apply momentum
-                theta = ttnn::multiply(theta, m_config.momentum);
+                theta = ttnn::multiply(
+                    theta,
+                    m_config.momentum,
+                    /* fast_and_approximate_mode*/ true);
                 // dampening
                 if (m_config.dampening != 0.0F) {
-                    theta = ttnn::add(theta, ttnn::multiply(gradients, 1 - m_config.dampening));
+                    theta = ttnn::add(
+                        theta,
+                        ttnn::multiply(
+                            gradients,
+                            1 - m_config.dampening,
+                            /* fast_and_approximate_mode*/ true));
                 } else {
                     theta = ttnn::add(theta, gradients);
                 }
@@ -70,14 +81,23 @@ void SGD::step() {
             }
 
             if (m_config.nesterov) {
-                gradients = ttnn::add(gradients, ttnn::multiply(theta, m_config.momentum));
+                gradients = ttnn::add(
+                    gradients,
+                    ttnn::multiply(
+                        theta,
+                        m_config.momentum,
+                        /* fast_and_approximate_mode*/ true));
             } else {
                 gradients = theta;
             }
         }
         theta_ptr->set_value(theta);
         tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL), ttnn::multiply(gradients, m_config.lr)));
+            tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+            ttnn::multiply(
+                gradients,
+                m_config.lr,
+                /* fast_and_approximate_mode*/ true)));
     }
     m_steps++;
 }

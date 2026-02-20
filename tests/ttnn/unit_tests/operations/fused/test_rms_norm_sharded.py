@@ -15,6 +15,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     rms_norm_golden,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_watcher_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -70,9 +71,6 @@ def test_rms_norm_sharded_two_stage(
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_residual(device, two_stage, tensor_type, dtype):
-    if tensor_type == "random" or tensor_type == "random_normal":
-        pytest.skip("Low PCC, see #30455")
-
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
@@ -121,6 +119,9 @@ def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, d
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tensor_type, dtype):
+    if is_watcher_enabled() and two_stage is False:
+        pytest.skip("Skipping test with watcher enabled, see github issue #37259")
+
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
 
     weight = generate_input_tensor(1, w, "random", dtype)
@@ -146,9 +147,6 @@ def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tens
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_and_residual(device, two_stage, tensor_type, dtype):
-    if tensor_type == "random" or tensor_type == "random_normal":
-        pytest.skip("Low PCC, see #30455")
-
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)

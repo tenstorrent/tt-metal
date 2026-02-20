@@ -8,7 +8,7 @@ set_target_properties(
 )
 
 # Add the protobuf generated headers directory for tests
-target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
 target_link_libraries(
     test_factory_system_descriptor
@@ -33,7 +33,7 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tools/scaleout
 )
 
-target_include_directories(test_descriptor_merger SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+target_include_directories(test_descriptor_merger SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
 target_link_libraries(
     test_descriptor_merger
@@ -73,7 +73,7 @@ target_include_directories(
     test_link_retraining
     SYSTEM
     PRIVATE
-        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
+        ${Metalium_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 
 target_link_libraries(
@@ -104,8 +104,8 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_BINARY_DIR}/tools/scaleout
-        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+        ${Metalium_BINARY_DIR}/tools/scaleout
+        $<TARGET_PROPERTY:fabric,BINARY_DIR>
         "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
 
@@ -121,4 +121,5 @@ target_link_libraries(
 
 # Make sure protobuf files are generated before compiling
 add_dependencies(test_cabling_descriptor_mgd_generation scaleout_generated_protos)
+add_dependencies(test_cabling_descriptor_mgd_generation fabric_generated_protos)
 add_dependencies(test_cabling_descriptor_mgd_generation tt_metal)

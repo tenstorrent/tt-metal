@@ -8,7 +8,6 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.common.utility_functions import is_grayskull
 
 
 @pytest.mark.parametrize("shape", [(1, 10, 64, 96), (32, 1, 64, 64), (32, 3, 256, 256), (16, 1, 1024, 1024)])

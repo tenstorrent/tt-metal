@@ -8,11 +8,20 @@ This script regenerates the checked-in `.refpt` artifact so the reference can
 be refreshed or reproduced when needed.
 """
 
+import argparse
 import os
+import types
 from pathlib import Path
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
+from transformers.cache_utils import DynamicCache
+from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
 
 from models.demos.deepseek_v3.utils.config_helpers import dequantize
 from models.demos.deepseek_v3.utils.hf_model_utils import (
@@ -29,14 +38,24 @@ MODEL_PATH = Path(
     )
 )
 
+# Remote-code models may expect DynamicCache.get_max_length; add a shim if missing.
+if not hasattr(DynamicCache, "get_max_length"):
+
+    def _get_max_length(self):
+        return self.get_seq_length()
+
+    DynamicCache.get_max_length = _get_max_length
+
 REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
 
-TEST_PROMPT = "What is the capital of France? Please provide a brief answer."
+TEST_PROMPT = "What is the correct answer to this question:Racemic 3-methylpent-1-ene is treated with Grubbs catalyst. How many possible products are there (excluding ethene)?\nChoices:\n(A) 8\n(B) 2\n(C) 6\n(D) 4\nPlease reason step by step, and your final answer must be only (A,B,C or D) within \\boxed\nAnswer:"
 
 
 def generate_reference(
-    max_new_tokens: int = 32,
+    max_new_tokens: int = 128,
     reference_file: Path = REFERENCE_FILE,
+    prompt: str = TEST_PROMPT,
+    debug_one_layer: bool = False,
 ) -> Path:
     """
     Generate reference tokens using HuggingFace model and save to refpt file.
@@ -45,18 +64,20 @@ def generate_reference(
       1) Pass an explicit attention_mask (prevents pad/bos collisions breaking generate()).
       2) Use a "safe" pad_token_id (typically eos_token_id, not 0).
       3) Save prompt_tokens and generated_tokens explicitly (downstream teacher forcing is simpler).
-      4) Compute top-5 via a teacher-forcing forward pass for clean alignment.
+      4) Compute top-5 directly from generation logits (single pass).
 
     top5_tokens alignment convention:
       - reference_tokens[0, i] is the *actual* token at position i
       - top5_tokens[i] is the model's top-5 prediction for token at position i,
         given context tokens [0..i-1]
       - top5_tokens[0] is zeros (no prediction for the first token)
+      - For single-pass generation, we populate top5_tokens only for generated
+        positions (>= prompt_len) and leave earlier rows as zeros.
     """
 
     print("\n=== Phase 1: Generate reference tokens with HuggingFace model ===")
     print(f"Using model_path={MODEL_PATH}")
-    print(f"Prompt: {TEST_PROMPT!r}")
+    print(f"Prompt: {prompt!r}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -68,6 +89,13 @@ def generate_reference(
     model = load_model_uninitialized(str(MODEL_PATH))
     model.eval()
     print("Model structure created successfully")
+
+    if debug_one_layer:
+        print("Debug mode: truncating to 1 decoder layer")
+        if hasattr(model, "model") and hasattr(model.model, "layers"):
+            model.model.layers = model.model.layers[:1]
+        if hasattr(model, "config"):
+            model.config.num_hidden_layers = 1
 
     print("Loading weights dictionary from disk...")
     weights_dict = load_model_weights(str(MODEL_PATH))
@@ -137,12 +165,57 @@ def generate_reference(
     add_dynamic_weight_loading_hooks_with_dtype(model, weights_dict)
     print("Lazy weight loading configured - weights will be loaded as needed during generation")
 
+    def _get_past_length(past_key_values) -> int:
+        if past_key_values is None:
+            return 0
+        if hasattr(past_key_values, "get_seq_length"):
+            return past_key_values.get_seq_length()
+        if hasattr(past_key_values, "get_max_length"):
+            return past_key_values.get_max_length()
+        try:
+            return past_key_values[0][0].shape[-2]
+        except Exception:
+            return 0
+
+    original_prepare = model.prepare_inputs_for_generation.__func__
+
+    def _patched_prepare_inputs_for_generation(self, *args, **kwargs):
+        model_inputs = original_prepare(self, *args, **kwargs)
+        attention_mask = model_inputs.get("attention_mask")
+        past_key_values = model_inputs.get("past_key_values", kwargs.get("past_key_values"))
+        input_ids = model_inputs.get("input_ids")
+        if attention_mask is not None and past_key_values is not None and input_ids is not None:
+            expected_len = _get_past_length(past_key_values) + input_ids.shape[-1]
+            if attention_mask.shape[-1] != expected_len:
+                if attention_mask.shape[-1] < expected_len:
+                    pad = torch.ones(
+                        attention_mask.shape[0],
+                        expected_len - attention_mask.shape[-1],
+                        dtype=attention_mask.dtype,
+                        device=attention_mask.device,
+                    )
+                    attention_mask = torch.cat([attention_mask, pad], dim=-1)
+                else:
+                    attention_mask = attention_mask[:, :expected_len]
+                model_inputs["attention_mask"] = attention_mask
+        return model_inputs
+
+    model.prepare_inputs_for_generation = types.MethodType(_patched_prepare_inputs_for_generation, model)
+
+    original_generate = model.generate.__func__
+
+    def _patched_generate(self, *args, **kwargs):
+        kwargs.pop("cache_implementation", None)
+        return original_generate(self, *args, **kwargs)
+
+    model.generate = types.MethodType(_patched_generate, model)
+
     model = model.to(device)
     print(f"Model moved to {device}")
 
     # --- Build prompt tokens (must match TT generator) ---
     raw_prompt_tokens = tokenizer.apply_chat_template(
-        [{"role": "user", "content": TEST_PROMPT}],
+        [{"role": "user", "content": prompt}],
         add_generation_prompt=True,
         tokenize=True,
     )
@@ -172,62 +245,129 @@ def generate_reference(
     print(f"Prompt tokens: {prompt_len}")
     print(f"bos_id={bos_id} eos_id={eos_id} pad_id={pad_id} safe_pad_id={safe_pad_id}")
 
+    reference_file.parent.mkdir(parents=True, exist_ok=True)
+
     # --- Generation (greedy, deterministic) ---
     # NOTE: use_cache=False avoids DynamicCache API mismatch with some transformers versions
     print(f"Generating up to {max_new_tokens} new tokens using model.generate()...")
-    with torch.no_grad():
-        outputs = model.generate(
-            input_ids=prompt_tokens_tensor,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            return_dict_in_generate=True,
-            output_scores=False,  # compute top-5 via teacher forcing pass for clean alignment
-            pad_token_id=safe_pad_id,
-            eos_token_id=eos_id,
-            use_cache=False,  # disable KV cache to avoid DynamicCache.get_max_length() error
-        )
+
+    def build_payload(reference_tokens_tensor: torch.Tensor, top5_tokens_full: torch.Tensor) -> dict:
+        generated_tokens_tensor = reference_tokens_tensor[0, prompt_len:]
+        generated_tokens = generated_tokens_tensor.tolist()
+        generated_tokens_tensor = generated_tokens_tensor.unsqueeze(0)
+        return {
+            "reference_tokens": reference_tokens_tensor,  # [1, L]
+            "prompt_tokens": torch.tensor(raw_prompt_tokens, dtype=torch.long).unsqueeze(0),  # [1, prompt_len]
+            "generated_tokens": generated_tokens_tensor,  # [1, gen_len]
+            "top5_tokens": top5_tokens_full,  # [L, 5]
+            "tf_prompt_len": prompt_len,
+            "max_new_tokens": max_new_tokens,
+            "prompt": prompt,
+            "decoded_generated_text": tokenizer.decode(generated_tokens, skip_special_tokens=False),
+            "token_ids_meta": {
+                "bos_id": bos_id,
+                "eos_id": eos_id,
+                "pad_id": pad_id,
+                "safe_pad_id_used_for_generate": safe_pad_id,
+            },
+        }
+
+    class ReferenceSnapshotter(StoppingCriteria):
+        def __init__(
+            self,
+            prompt_len: int,
+            max_new_tokens: int,
+            reference_file: Path,
+            tokenizer,
+            pbar,
+        ) -> None:
+            self.prompt_len = prompt_len
+            self.reference_file = reference_file
+            self.max_total_len = prompt_len + max_new_tokens
+            self.top5_tokens_full = torch.zeros(self.max_total_len, 5, dtype=torch.long)
+            self.last_len = prompt_len
+            self.tokenizer = tokenizer
+            self.pbar = pbar
+
+        def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+            current_len = input_ids.shape[-1]
+            if current_len > self.last_len:
+                if scores is not None:
+                    # scores is a list/tuple of per-step logits; use the latest step.
+                    step_scores = scores[-1] if isinstance(scores, (list, tuple)) else scores
+                    if step_scores is not None:
+                        if step_scores.dim() == 2:
+                            step_scores = step_scores[0]
+                        top5 = torch.topk(step_scores, k=5, dim=-1).indices.to(torch.long).cpu()
+                        self.top5_tokens_full[current_len - 1] = top5
+                self.last_len = current_len
+                reference_tokens_tensor = input_ids.detach().cpu()
+                generated_tokens = reference_tokens_tensor[0, self.prompt_len :].tolist()
+                decoded = self.tokenizer.decode(generated_tokens, skip_special_tokens=False)
+                if self.pbar is not None:
+                    self.pbar.write(f"Decoded so far: {decoded!r}")
+                else:
+                    print(f"Decoded so far: {decoded!r}")
+                payload = build_payload(
+                    reference_tokens_tensor,
+                    self.top5_tokens_full[:current_len].clone().cpu(),
+                )
+                torch.save(payload, self.reference_file)
+            return False
+
+    class TokenProgress(StoppingCriteria):
+        def __init__(self, prompt_len: int, pbar) -> None:
+            self.prompt_len = prompt_len
+            self.pbar = pbar
+
+        def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+            generated = input_ids.shape[-1] - self.prompt_len
+            if generated > self.pbar.n:
+                self.pbar.update(generated - self.pbar.n)
+            return False
+
+    pbar = None
+    stopping_criteria = None
+    snapshotter = None
+    if tqdm is not None and max_new_tokens > 0:
+        pbar = tqdm(total=max_new_tokens, desc="Generating tokens", unit="tok", mininterval=1)
+        snapshotter = ReferenceSnapshotter(prompt_len, max_new_tokens, reference_file, tokenizer, pbar)
+        stopping_criteria = StoppingCriteriaList([TokenProgress(prompt_len, pbar), snapshotter])
+    elif tqdm is None and max_new_tokens > 0:
+        print("tqdm not available; generation progress bar disabled.")
+        snapshotter = ReferenceSnapshotter(prompt_len, max_new_tokens, reference_file, tokenizer, None)
+        stopping_criteria = StoppingCriteriaList([snapshotter])
+
+    try:
+        with torch.no_grad():
+            outputs = model.generate(
+                input_ids=prompt_tokens_tensor,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                return_dict_in_generate=True,
+                output_logits=True,  # reuse logits from the generation pass
+                output_scores=True,  # needed for incremental top5 in stopping criteria
+                pad_token_id=safe_pad_id,
+                eos_token_id=eos_id,
+                use_cache=True,
+                stopping_criteria=stopping_criteria,
+            )
+    finally:
+        if pbar is not None:
+            pbar.close()
 
     full_sequence_tensor = outputs.sequences[0]  # [prompt_len + gen_len]
     generated_tokens_tensor = full_sequence_tensor[prompt_len:]
     generated_tokens = generated_tokens_tensor.tolist()
-
     print(f"Phase 1: Generated {len(generated_tokens)} tokens")
     print("Decoded generation (raw):", repr(tokenizer.decode(generated_tokens, skip_special_tokens=False)))
 
-    # --- Teacher-forcing pass to compute top-5 aligned to positions ---
-    # We run the model on full_sequence[:-1], and predict each next token.
-    with torch.no_grad():
-        tf_inp = full_sequence_tensor[:-1].unsqueeze(0)  # [1, L-1]
-        tf_attn = torch.ones_like(tf_inp, dtype=torch.long, device=device)
-        tf_out = model(input_ids=tf_inp, attention_mask=tf_attn, use_cache=False)
-        logits = tf_out.logits[0]  # [L-1, vocab]
-        top5 = torch.topk(logits, k=5, dim=-1).indices.to(torch.long).cpu()  # [L-1, 5]
-
     total_length = int(full_sequence_tensor.numel())
-    top5_tokens_full = torch.zeros(total_length, 5, dtype=torch.long)  # [L, 5]
-    top5_tokens_full[1:] = top5  # shift so row i predicts token at position i
+    top5_tokens_full = snapshotter.top5_tokens_full[:total_length].clone().cpu()
 
     # --- Save payload (explicit prompt/generated + full sequence) ---
-    reference_file.parent.mkdir(parents=True, exist_ok=True)
-
-    payload = {
-        "reference_tokens": full_sequence_tensor.unsqueeze(0).cpu(),  # [1, L]
-        "prompt_tokens": torch.tensor(raw_prompt_tokens, dtype=torch.long).unsqueeze(0),  # [1, prompt_len]
-        "generated_tokens": generated_tokens_tensor.unsqueeze(0).cpu(),  # [1, gen_len]
-        "top5_tokens": top5_tokens_full,  # [L, 5]
-        "tf_prompt_len": prompt_len,
-        "max_new_tokens": max_new_tokens,
-        "prompt": TEST_PROMPT,
-        "decoded_generated_text": tokenizer.decode(generated_tokens, skip_special_tokens=False),
-        "token_ids_meta": {
-            "bos_id": bos_id,
-            "eos_id": eos_id,
-            "pad_id": pad_id,
-            "safe_pad_id_used_for_generate": safe_pad_id,
-        },
-    }
-
+    payload = build_payload(full_sequence_tensor.unsqueeze(0).cpu(), top5_tokens_full)
     torch.save(payload, reference_file)
 
     print(
@@ -240,5 +380,31 @@ def generate_reference(
 
 
 if __name__ == "__main__":
-    path = generate_reference()
+    parser = argparse.ArgumentParser(description="Generate DeepSeek V3 teacher-forcing reference file.")
+    parser.add_argument("--prompt", default=TEST_PROMPT, help="Prompt text to generate from.")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=128,
+        help="Number of new tokens to generate.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=REFERENCE_FILE,
+        help="Path to output .refpt file.",
+    )
+    parser.add_argument(
+        "--debug-one-layer",
+        action="store_true",
+        help="Use only the first decoder layer (debugging; not for real references).",
+    )
+    args = parser.parse_args()
+
+    path = generate_reference(
+        max_new_tokens=args.max_new_tokens,
+        reference_file=args.output,
+        prompt=args.prompt,
+        debug_one_layer=args.debug_one_layer,
+    )
     print(f"\nDone. Reference saved to: {path}")

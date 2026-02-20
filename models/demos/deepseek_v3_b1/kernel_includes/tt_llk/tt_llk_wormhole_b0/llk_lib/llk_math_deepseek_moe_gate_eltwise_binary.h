@@ -64,12 +64,12 @@ inline void deepseek_moe_gate_eltwise_binary_reuse_dest_as_src() {
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, DstSync Dst, bool is_fp32_dest_acc_en, int NUM_FIDELITY_PHASES = 0>
+template <EltwiseBinaryType eltwise_binary_type, DstSync Dst, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_deepseek_moe_gate_eltwise_binary_(
-    const std::uint32_t num_faces, uint dst_index, const bool clear_fp32_dst_acc) {
+    const std::uint32_t num_faces, std::uint32_t dst_index, const bool clear_fp32_dst_acc) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
-    constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
     static_assert(!(eltwise_binary_type == ELWMUL && high_fidelity), "High fidelity is not supported for ELWMUL");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -81,20 +81,20 @@ inline void _llk_math_deepseek_moe_gate_eltwise_binary_(
     math::clear_dst_reg_addr();
 }
 
-template <EltwiseBinaryType eltwise_binary_type, DeepseekMoeGateEltwiseBinaryMode mode, int NUM_FIDELITY_PHASES = 0>
+template <EltwiseBinaryType eltwise_binary_type, DeepseekMoeGateEltwiseBinaryMode mode, MathFidelity math_fidelity>
 inline void deepseek_moe_gate_eltwise_binary_configure_mop(
     const std::uint32_t acc_to_dest = 0, const std::uint32_t num_faces = 4) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
-    const uint addr_mod = ADDR_MOD_0;
-    constexpr uint innerloop = 16 >> 3;  // 8 rows per eltwise op at a time.
-    uint outerloop = num_faces;
-    auto broadcast_type = p_elwise::SRCB_NO_BCAST;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    const std::uint32_t addr_mod = ADDR_MOD_0;
+    constexpr std::uint32_t innerloop = 16 >> 3;  // 8 rows per eltwise op at a time.
+    std::uint32_t outerloop = num_faces;
+    const auto broadcast_type = p_elwise::SRCB_NO_BCAST;
 
-    constexpr uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
-    constexpr uint32_t dst_math_offset = 2 * dst_tile_offset;
+    constexpr std::uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
+    constexpr std::uint32_t dst_math_offset = 2 * dst_tile_offset;
 
-    uint math_op;
+    std::uint32_t math_op;
 
     // TODO: Probably not worth it to use a replay buffer/mop for this
     // Just hardcode the math ops in _llk_math_deepseek_moe_gate_eltwise_binary_ since we only have 1 face
@@ -110,7 +110,7 @@ inline void deepseek_moe_gate_eltwise_binary_configure_mop(
     if constexpr (mode == DeepseekMoeGateEltwiseBinaryMode::RELOAD) {
         lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 5);
         deepseek_moe_gate_eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>();
-        uint replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
+        std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
         ckernel_template tmp(outerloop, innerloop, math_op);
         tmp.set_start_op(replay_instr);
         tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
@@ -122,17 +122,16 @@ inline void deepseek_moe_gate_eltwise_binary_configure_mop(
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, DeepseekMoeGateEltwiseBinaryMode mode, int MATH_FIDELITY_DESC = 0>
+template <EltwiseBinaryType eltwise_binary_type, DeepseekMoeGateEltwiseBinaryMode mode, MathFidelity math_fidelity>
 inline void _llk_math_deepseek_moe_gate_eltwise_binary_init_(
     const std::uint32_t num_faces, const std::uint32_t acc_to_dest) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
 
     deepseek_moe_gate_eltwise_binary_configure_addrmod<eltwise_binary_type>();
 
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
-        deepseek_moe_gate_eltwise_binary_configure_mop<eltwise_binary_type, mode, MATH_FIDELITY_PHASES>(
+        deepseek_moe_gate_eltwise_binary_configure_mop<eltwise_binary_type, mode, math_fidelity>(
             acc_to_dest, num_faces);
     }
 

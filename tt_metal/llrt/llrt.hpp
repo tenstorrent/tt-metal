@@ -66,6 +66,8 @@ namespace internal_ {
 void wait_until_cores_done(
     ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
 
+void wait_for_idle(ChipId device_id, const std::vector<std::vector<CoreCoord>>& logical_cores);
+
 // Send a message to the ethernet firmware mailbox, if supported
 // Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg
 // Maximum number of args depends on the architecture. Args not provided will be set to zero.

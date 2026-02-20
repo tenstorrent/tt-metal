@@ -24,6 +24,7 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
     export TT_METAL_DPRINT_CORES=0,0                    # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
     export TT_METAL_DPRINT_ETH_CORES=0,0                # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
     export TT_METAL_DPRINT_CHIPS=0                      # optional, comma separated list of chips OR all. Default is all.
+    export TT_METAL_DPRINT_NODES="(M0,D0),(M0,D1)"      # optional, comma separated list of `FabricNodeId` nodes (unique node identifiers in format (Mn,Dn), where M is mesh ID and D is device ID) OR all. Default is all. Cannot specify both TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_NODES at the same time.
     export TT_METAL_DPRINT_RISCVS=BR                    # optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*
     export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.

@@ -5,22 +5,21 @@
 #include <cstdint>
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 #include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
 using namespace ckernel;
 
-namespace NAMESPACE {
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in0_cb has rows*cols produced
@@ -361,7 +360,7 @@ void top_k() {
     // sfpu::_init_sfpu_config_reg();
 }
 
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t expert_mask_cb_index = get_compile_time_arg_val(2);
@@ -420,4 +419,3 @@ void MAIN {
     // final sum
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Kt>();
 }
-}  // namespace NAMESPACE

@@ -8,6 +8,7 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"

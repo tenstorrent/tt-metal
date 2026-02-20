@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <vector>
+#include "../../../../sdpa/device/kernels/dataflow/dataflow_common.hpp"
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -12,49 +13,8 @@
  ******************************************************************************/
 
 /******************************************************************************
- *                   Generic Utility Functions                                 *
- ******************************************************************************/
-template <uint32_t tile_bytes, uint32_t num_readers>
-constexpr uint32_t get_barrier_read_threshold() {
-    return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
-}
-
-/******************************************************************************
- *                   Page Cache Functions            *
- ******************************************************************************/
-template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
-    // Given some index in the sequence tiles in range [0, max_seq_len_t]
-    // Return the physical tile id for that tile row
-    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
-    const uint32_t head_offset = cur_head * block_size_t * Wt;
-
-    const uint32_t virtual_block = seq_tile_idx / block_size_t;
-
-    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
-    const uint32_t block_row_offset = seq_tile_idx % block_size_t;
-    const uint32_t block_offset = block_row_offset * Wt;
-    return physical_block * block_stride + head_offset + block_offset;
-}
-
-// Backward-compatible overload (defaults to uint32_t page table entries)
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
-    return virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
-        seq_tile_idx, cur_head, page_table_ptr);
-}
-
-/******************************************************************************
  *                   Generic Tile Manipulation Functions                       *
  ******************************************************************************/
-template <uint32_t tile_bytes>
-void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
-    noc_async_read(
-        noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
-}
-
 template <uint32_t tile_bytes>
 void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
     if (val == 0) {
@@ -518,6 +478,118 @@ uint32_t write_partial_tiles_to_memory(
 /******************************************************************************
  *                   Reader Kernel Specific Functions                         *
  ******************************************************************************/
+template <
+    uint32_t cb_k_in,
+    uint32_t DHt,
+    uint32_t num_kv_heads,
+    uint32_t block_size_t,
+    uint32_t k_tile_bytes,
+    uint32_t barrier_threshold,
+    bool is_page_table_sharded,
+    typename KReaderType>
+uint64_t read_k(
+    uint32_t k_chunk_tiles,
+    uint32_t cur_head,
+    uint32_t Sk_chunk_t_dynamic,
+    uint32_t k_chunk_start_row_num,
+    const KReaderType& k_reader,
+    volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
+    volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
+    uint32_t& barrier_count) {
+    cb_reserve_back(cb_k_in, k_chunk_tiles);
+    uint32_t k_write_ptr = get_write_ptr(cb_k_in);
+    uint64_t k_base_read_ptr = get_noc_addr(k_write_ptr);
+    barrier_count = 0;
+    for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+        uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
+        uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
+        uint32_t physical_k_tile_id =
+            (is_page_table_sharded)
+                ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
+                      virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
+                : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
+                      virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
+        for (uint32_t col = 0; col < DHt; ++col) {
+            noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+            physical_k_tile_id += 1;                               // Go to next tile in row
+            k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
+
+            if (++barrier_count == barrier_threshold) {
+                noc_async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_k_in, k_chunk_tiles);
+    return k_base_read_ptr;
+}
+
+template <
+    uint32_t cb_v_in,
+    uint32_t vDHt,
+    uint32_t num_kv_heads,
+    uint32_t block_size_t,
+    uint32_t v_tile_bytes,
+    uint32_t barrier_threshold,
+    bool is_page_table_sharded,
+    bool reuse_k,
+    typename VReaderType>
+void read_v(
+    uint32_t v_chunk_tiles,
+    uint32_t cur_head,
+    uint32_t Sk_chunk_t_dynamic,
+    uint32_t k_chunk_start_row_num,
+    const VReaderType& v_reader,
+    volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
+    volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
+    uint32_t& barrier_count,
+    uint64_t k_base_read_ptr = 0,
+    uint32_t k_tile_bytes = 0) {
+    cb_reserve_back(cb_v_in, v_chunk_tiles);
+    uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+
+    if constexpr (reuse_k) {
+        // Read V chunk (transpose of K), from K's L1 buffer
+        uint64_t k_read_ptr = k_base_read_ptr;
+        for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {  // Row of V
+            k_read_ptr = k_base_read_ptr + row * k_tile_bytes;     // Increment across K's Col
+            for (uint32_t col = 0; col < vDHt; ++col) {            // Col of V
+                noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
+                v_write_ptr += v_tile_bytes;
+                k_read_ptr += Sk_chunk_t_dynamic * k_tile_bytes;  // Stride across K's width
+            }
+        }
+        noc_async_read_barrier();
+    } else {
+        // Read V chunk in row major order, write in row-major order
+        // V is an independent tensor with its own layout (width = vDHt, not DHt)
+        barrier_count = 0;
+        for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+            uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
+            // Use vDHt for V tensor's width since V is independent
+            uint32_t physical_v_tile_id =
+                (is_page_table_sharded)
+                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, vDHt>(
+                          virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
+                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt>(
+                          virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
+            for (uint32_t col = 0; col < vDHt; ++col) {
+                noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
+                physical_v_tile_id += 1;
+                v_write_ptr += v_tile_bytes;
+
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
+                }
+            }
+            // No padding to skip - V is an independent tensor with contiguous layout
+        }
+        noc_async_read_barrier();
+    }
+    cb_push_back(cb_v_in, v_chunk_tiles);
+}
 
 template <
     uint32_t DHt,
@@ -537,6 +609,7 @@ void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,
+    uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
     uint32_t Sk_chunk_t,
     uint32_t k_chunk_tiles,
@@ -591,10 +664,11 @@ void read_kv_mask_chunks(
                 }
             }
         } else {
+            // V is an independent tensor with its own layout (width = vDHt)
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
-            uint32_t v_tile_id = k_start_tile_id;
+            uint32_t v_tile_id = v_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
                     noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
@@ -605,7 +679,7 @@ void read_kv_mask_chunks(
                     v_tile_id++;
                     v_write_ptr += v_tile_bytes;
                 }
-                v_tile_id += (DHt - vDHt);  // Skip the padding!
+                // No padding to skip - V is an independent tensor with contiguous layout
             }
         }
         noc_async_read_barrier();
@@ -613,5 +687,8 @@ void read_kv_mask_chunks(
 
         // Update the starting tile id for next iteration
         k_start_tile_id += k_chunk_tiles;
+        if constexpr (!reuse_k) {
+            v_start_tile_id += v_chunk_tiles;
+        }
     }
 }

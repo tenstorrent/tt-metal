@@ -34,14 +34,31 @@ void bind_complex_tensor(nb::module_& mod) {
             Create a complex tensor from real and imaginary part tensors.
 
             Args:
-                * :attr:`real`
-                * :attr:`imag`
+                real (ttnn.Tensor): the real part tensor.
+                imag (ttnn.Tensor): the imaginary part tensor.
 
-            Example:
+            Returns:
+                ttnn.ComplexTensor: the complex tensor with real and imag parts.
 
-                >>> real = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> imag = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> complex_tensor = ttnn.complex_tensor(real, imag)
+            Note:
+                This operation supports tensors according to the following data types and layouts:
+
+                .. list-table:: real and imag tensors
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                        - TILE
+                    * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                        - ROW_MAJOR
+
+                Memory Support:
+                    - Interleaved: DRAM and L1
+                    - Height, Width, Block, and ND Sharded: DRAM and L1
+
+                Limitations:
+                    -  The real and imag tensors must have the same shape and layout (both must be TILE or ROW_MAJOR).
         )doc",
         ttnn::complex_tensor.base_name());
 

@@ -17,7 +17,7 @@ struct Core {
     static constexpr bool is_active_core = get_named_compile_time_arg_val("is_active_core") == 1;
 };
 
-KERNEL_ENTRY {
+void kernel_main() {
 // ============================================================================
 // Define args per RISC (different compile-time arg layout per processor)
 // ============================================================================
@@ -49,8 +49,11 @@ KERNEL_ENTRY {
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
-    // CTArgs type alias (required for Op template) - out_w is compile-time for TRISC
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w")>;
+    // CTArgs type alias (required for Op template) - out_w, transpose, fused_activation are compile-time for TRISC
+    using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("matmul_out_w"),
+        get_named_compile_time_arg_val("matmul_transpose"),
+        get_named_compile_time_arg_val("matmul_fused_activation")>;
 
     // Named compile-time args
     constexpr uint32_t in0_cb = get_named_compile_time_arg_val("matmul_in0");
@@ -65,6 +68,8 @@ KERNEL_ENTRY {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ========================================================================
@@ -74,4 +79,3 @@ KERNEL_ENTRY {
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_active_core, true, true> matmul;
     matmul(matmul_args);
 }
-KERNEL_END

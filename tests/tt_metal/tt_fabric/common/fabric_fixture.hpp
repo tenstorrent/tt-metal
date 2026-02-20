@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,8 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/allocator.hpp>
+#include "test_host_kernel_common.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -42,6 +44,15 @@ class ControlPlaneFixture : public ::testing::Test {
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
                tt::tt_fabric::FabricConfig::DISABLED);
        }
+};
+
+struct WorkerMemMap {
+    uint32_t source_l1_buffer_address;
+    uint32_t packet_payload_size_bytes;
+    uint32_t test_results_address;
+    uint32_t target_address;
+    uint32_t notification_mailbox_address;
+    uint32_t test_results_size_bytes;
 };
 
 class BaseFabricFixture : public ::testing::Test {
@@ -149,6 +160,30 @@ public:
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             tt::tt_metal::distributed::Finish(cq);
         }
+    }
+
+    // Utility function reused across tests to get address params
+    static WorkerMemMap generate_worker_mem_map(
+        const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
+        constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
+        constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
+        constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
+
+        uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
+        uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
+        uint32_t target_address = source_l1_buffer_address;
+        uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
+
+        uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
+
+        return {
+            source_l1_buffer_address,
+            packet_payload_size_bytes,
+            test_results_address,
+            target_address,
+            notification_mailbox_address,
+            TEST_RESULTS_SIZE_BYTES};
     }
 };
 
@@ -373,28 +408,16 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
-enum NocSendType : uint8_t {
-    NOC_UNICAST_WRITE = 0,
-    NOC_UNICAST_INLINE_WRITE = 1,
-    NOC_UNICAST_ATOMIC_INC = 2,
-    NOC_FUSED_UNICAST_ATOMIC_INC = 3,
-    NOC_UNICAST_SCATTER_WRITE = 4,
-    NOC_MULTICAST_WRITE = 5,       // mcast has bug
-    NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
-    NOC_UNICAST_READ = 7,          // read wont be supported without UDM mode
-    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
-};
-
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& pair_ordered_dirs,
     FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
 
 void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::variant<
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
@@ -402,17 +425,17 @@ void UDMFabricUnicastCommon(
     std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt,
     bool dual_risc = false);
 
-void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, bool dual_risc = false);
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType noc_packet_type, bool dual_risc = false);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs,
     bool with_state = false);
 
 void Fabric2DMulticastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>& connection_configs,
     bool with_state = false);
 

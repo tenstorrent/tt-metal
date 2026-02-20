@@ -1,0 +1,73 @@
+{
+  "operation_id": 2,
+  "operation_name": "ttnn.to_device",
+  "args": [
+    {
+      "position": 0,
+      "value": {
+        "type": "ttnn.Tensor",
+        "shape": [
+          2,
+          3
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.50390625,
+            -0.57421875,
+            -0.1279296875
+          ],
+          [
+            1.453125,
+            -0.5859375,
+            1.59375
+          ]
+        ],
+        "original_shape": [
+          2,
+          3
+        ],
+        "original_dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "storage_type": "StorageType.HOST"
+      }
+    }
+  ],
+  "kwargs": {
+    "device": {
+      "type": "MeshDevice",
+      "value": "MeshDevice(1x1 grid, 1 devices)"
+    },
+    "memory_config": {
+      "type": "MemoryConfig",
+      "value": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
+    }
+  },
+  "return_value": {
+    "type": "ttnn.Tensor",
+    "shape": [
+      2,
+      3
+    ],
+    "dtype": "float32",
+    "values": [
+      [
+        0.50390625,
+        -0.57421875,
+        -0.1279296875
+      ],
+      [
+        1.453125,
+        -0.5859375,
+        1.59375
+      ]
+    ],
+    "original_shape": [
+      2,
+      3
+    ],
+    "original_dtype": "DataType.BFLOAT16",
+    "layout": "Layout.TILE",
+    "storage_type": "StorageType.DEVICE"
+  }
+}

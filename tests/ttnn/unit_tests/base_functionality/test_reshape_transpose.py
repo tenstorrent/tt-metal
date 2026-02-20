@@ -5,8 +5,10 @@
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_watcher
 
 
+@skip_with_watcher("Skipping test with watcher enabled due to hang, see github issue #37096")
 def test_transpose_with_reshape(device):
     # Create input tensor
     torch_input = torch.rand((1, 1, 2048, 512), dtype=torch.bfloat16)

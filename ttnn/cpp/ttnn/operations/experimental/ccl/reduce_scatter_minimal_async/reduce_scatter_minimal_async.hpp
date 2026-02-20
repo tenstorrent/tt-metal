@@ -27,7 +27,8 @@ struct ExecuteReduceScatterMinimalAsync {
         std::optional<uint32_t> cluster_axis = std::nullopt,
         std::optional<uint32_t> chunks_per_sync = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
-        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+        std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

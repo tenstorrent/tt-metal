@@ -2,18 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/reg_api.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-
-namespace NAMESPACE {
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -138,7 +136,7 @@ inline void compute_times_grad() {
     pack_and_push_block(cb_dL_da_idx, block_size);
 }
 
-inline void MAIN {
+void kernel_main() {
     init_sfpu(cb_input_idx, cb_dL_da_idx);
     binary_op_init_common(cb_input_idx, cb_dL_out_idx, cb_dL_da_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
@@ -162,5 +160,3 @@ inline void MAIN {
         }
     }
 }
-
-}  // namespace NAMESPACE

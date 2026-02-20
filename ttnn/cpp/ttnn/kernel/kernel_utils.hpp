@@ -8,7 +8,7 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 #endif
 
 #include <utility>

@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "groupnorm.hpp"
 #include "groupnorm_input_mask.hpp"
 
@@ -17,10 +17,7 @@ namespace ttnn::operations::normalization::detail {
 
 namespace {
 void bind_normalization_group_norm_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::group_norm,
-        R"doc(
+    const auto* doc = R"doc(
                 Computes group_norm over :attr:`input_tensor`.
                 See `Group Normalization <https://arxiv.org/abs/1803.08494>`_ for more details.
 
@@ -108,8 +105,13 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.
               - Width-sharding is not supported
-        )doc",
-        ttnn::nanobind_arguments_t{
+        )doc";
+
+    ttnn::bind_function<"group_norm">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::group_norm,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("num_groups"),
@@ -126,7 +128,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
             nb::arg("num_out_blocks") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("negative_mask") = nb::none(),
-            nb::arg("use_welford") = false});
+            nb::arg("use_welford") = false));
     mod.def(
         "create_group_norm_input_mask",
         [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {

@@ -6,9 +6,10 @@
 
 #include "device/profiler_no_op_device_operation.hpp"
 
-namespace ttml::metal::ops::profiler_no_op {
+namespace ttml::metal {
 
-ttnn::Tensor ProfilerNoopOperation::invoke(const ttnn::Tensor& input_tensor, const std::string& identifier) {
+ttnn::Tensor profiler_no_op(const ttnn::Tensor& input_tensor, const std::string& identifier) {
     return ttnn::prim::ttml_profiler_no_op(input_tensor, identifier);
 }
-}  // namespace ttml::metal::ops::profiler_no_op
+
+}  // namespace ttml::metal

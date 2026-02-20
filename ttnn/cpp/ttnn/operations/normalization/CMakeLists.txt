@@ -1,7 +1,7 @@
 add_library(ttnn_op_normalization ${LIB_TYPE})
 add_library(TTNN::Ops::Normalization ALIAS ttnn_op_normalization)
 
-target_precompile_headers(ttnn_op_normalization REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_normalization REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_normalization)
 set_target_properties(
     ttnn_op_normalization
@@ -68,6 +68,7 @@ target_sources(
         layernorm/device/layernorm_common.cpp
         layernorm/device/layernorm_op_multi_core.cpp
         layernorm/device/layernorm_op_multi_core_sharded.cpp
+        layernorm/device/sharded_layernorm_factory_helpers.cpp
         layernorm/layernorm.cpp
         layernorm_distributed/device/layernorm_post_all_gather_device_operation.cpp
         layernorm_distributed/device/layernorm_post_all_gather_program_factory.cpp

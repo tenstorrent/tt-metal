@@ -5,6 +5,7 @@
 import pytest
 import torch
 from loguru import logger
+from models.common.utility_functions import is_watcher_enabled
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -18,6 +19,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
+    if T == 2048 and B == 2 and C == 4096 and is_watcher_enabled():
+        pytest.skip("Skipping test due to watcher being enabled, github issue #37021")
+
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x) if cores_y > 0 and cores_x > 0 else None

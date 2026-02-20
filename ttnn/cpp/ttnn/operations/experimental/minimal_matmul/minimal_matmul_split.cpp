@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "minimal_matmul_split.hpp"
-#include "device/minimal_matmul_split_device_operation.hpp"
+#include "device/minimal_matmul_device_operation.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
@@ -44,17 +44,18 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulSplit::invoke(
         N_per_chunk,
         tt::constants::TILE_WIDTH);
 
-    return ttnn::prim::minimal_matmul_split(
+    // Call the unified minimal_matmul device operation with chunks and dim parameters
+    return ttnn::prim::minimal_matmul(
         input_tensor,
         weight_tensor,
-        chunks,
-        dim,
         bias_tensor,
         std::move(fused_activation),
         config,
         memory_config,
         dtype,
-        compute_kernel_config);
+        compute_kernel_config,
+        chunks,
+        dim);
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul_split

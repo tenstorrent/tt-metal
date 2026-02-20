@@ -10,7 +10,6 @@ void kernel_main() {
     const auto output_addr = get_arg_val<uint32_t>(0);
     const auto num_tiles = get_arg_val<uint32_t>(1);
     const auto start_id = get_arg_val<uint32_t>(2);
-    const auto output_is_dram = (get_arg_val<uint32_t>(3) == 1);
 
     constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t onetile = 1;

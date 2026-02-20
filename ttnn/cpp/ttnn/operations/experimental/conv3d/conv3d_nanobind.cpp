@@ -15,16 +15,15 @@
 #include <nanobind/stl/string.h>
 
 #include "conv3d.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::conv3d::detail {
 
 void bind_conv3d(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"conv3d", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::conv3d,
         R"doc(
         Applies a 3D convolution over an input signal composed of several input planes. \
         Expects Input Tensor in [N, D, H, W, C] format.  \
@@ -46,53 +45,22 @@ void bind_conv3d(nb::module_& mod) {
         Returns:
             ttnn.Tensor: Output tensor after applying the Conv3D operation.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::conv3d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               const std::optional<ttnn::Tensor>& bias_tensor,
-               const ttnn::experimental::prim::Conv3dConfig& config,
-               const tt::tt_metal::DataType& dtype,
-               const uint32_t& output_channels,
-               const std::array<uint32_t, 3>& kernel_size,
-               const std::array<uint32_t, 3>& stride,
-               const std::array<uint32_t, 3>& padding,
-               const std::array<uint32_t, 3>& dilation,
-               const std::string& padding_mode,
-               const uint32_t& groups,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    bias_tensor,
-                    config,
-                    dtype,
-                    output_channels,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    padding_mode,
-                    groups,
-                    memory_config,
-                    compute_kernel_config);
-            },
-            nb::kw_only(),
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::arg("bias_tensor") = nb::none(),
-            nb::arg("config"),
-            nb::arg("dtype"),
-            nb::arg("output_channels"),
-            nb::arg("kernel_size"),
-            nb::arg("stride") = std::array<uint32_t, 3>{1, 1, 1},
-            nb::arg("padding") = std::array<uint32_t, 3>{0, 0, 0},
-            nb::arg("dilation") = std::array<uint32_t, 3>{1, 1, 1},
-            nb::arg("padding_mode") = "zeros",
-            nb::arg("groups") = 1,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::experimental::conv3d,
+        nb::kw_only(),
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("bias_tensor") = nb::none(),
+        nb::arg("config"),
+        nb::arg("dtype"),
+        nb::arg("output_channels"),
+        nb::arg("kernel_size"),
+        nb::arg("stride") = std::array<uint32_t, 3>{1, 1, 1},
+        nb::arg("padding") = std::array<uint32_t, 3>{0, 0, 0},
+        nb::arg("dilation") = std::array<uint32_t, 3>{1, 1, 1},
+        nb::arg("padding_mode") = "zeros",
+        nb::arg("groups") = 1,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     auto py_conv3d_config =
         nb::class_<ttnn::experimental::prim::Conv3dConfig>(

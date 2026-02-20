@@ -38,6 +38,7 @@ class DeepseekV3LMHead(nn.Module):
         return self.lm_head(hidden_states)
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -52,6 +53,7 @@ class DeepseekV3LMHead(nn.Module):
         ("prefill", 1024),
     ],
 )
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 def test_forward_pass(
     mode: str,
     batch_size_per_row: int,

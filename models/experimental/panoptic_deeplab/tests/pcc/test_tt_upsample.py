@@ -48,7 +48,7 @@ def test_bilinear_upsample_matmul_vs_torch(b, h, w, c, scale, input_channels_fir
     out_torch = upsampler.forward(img_torch)
 
     # Torch bilinear upsampling (always works with channels-first)
-    out_t = torch.nn.functional.interpolate(img_nchw, scale_factor=scale, mode="bilinear", align_corners=True)
+    out_t = torch.nn.functional.interpolate(img_nchw, scale_factor=scale, mode="bilinear", align_corners=False)
 
     if output_channels_first:
         # Keep channels-first format
@@ -145,9 +145,9 @@ def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
     output_matmul = upsampler(ttnn_input_tensor)
     output_matmul_torch = ttnn.to_torch(output_matmul)
 
-    # Method 2: PyTorch reference with align_corners=True
+    # Method 2: PyTorch reference with align_corners=False
     torch_result_nchw = torch.nn.functional.interpolate(
-        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=True
+        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=False
     )
 
     if output_channels_first:
@@ -240,9 +240,9 @@ def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
     output_matmul = upsampler(ttnn_input_tensor)
     output_matmul_torch = ttnn.to_torch(output_matmul)
 
-    # Method 2: PyTorch reference with align_corners=True
+    # Method 2: PyTorch reference with align_corners=False
     torch_result_nchw = torch.nn.functional.interpolate(
-        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=True
+        img_torch_nchw, scale_factor=scale, mode="bilinear", align_corners=False
     )
 
     if output_channels_first:

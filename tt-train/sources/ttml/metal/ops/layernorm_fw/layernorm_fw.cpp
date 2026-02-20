@@ -9,9 +9,9 @@
 #include "core/compute_kernel_config.hpp"
 #include "device/layernorm_fw_device_operation.hpp"
 
-namespace ttml::metal::ops::layernorm_fw {
+namespace ttml::metal {
 
-std::vector<std::optional<ttnn::Tensor>> LayerNormForwardOperation::invoke(
+std::vector<std::optional<ttnn::Tensor>> layernorm_fw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& beta_tensor,
@@ -21,4 +21,4 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormForwardOperation::invoke(
     return ttnn::prim::ttml_layernorm_fw(input_tensor, gamma_tensor, beta_tensor, epsilon, return_mean_rstd);
 }
 
-}  // namespace ttml::metal::ops::layernorm_fw
+}  // namespace ttml::metal

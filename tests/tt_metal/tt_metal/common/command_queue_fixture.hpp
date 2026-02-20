@@ -32,6 +32,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -90,6 +91,7 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        init_max_cbs();
     }
 
     void CreateDevices(const size_t trace_region_size) { this->create_devices(trace_region_size); }
@@ -106,6 +108,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -174,6 +177,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
+        init_max_cbs();
     }
 };
 
@@ -208,6 +212,7 @@ protected:
         for (const auto& [id, device] : reserved_devices) {
             devices_.push_back(device);
         }
+        init_max_cbs();
     }
 
     void TearDown() override {

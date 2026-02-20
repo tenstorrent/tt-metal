@@ -10,10 +10,7 @@
 
 // Printing tiles from CBs requires reading CB config from generated files
 #if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
-#include "chlkc_unpack_data_format.h"
-#include "chlkc_unpack_tile_dims.h"
-#include "chlkc_pack_data_format.h"
-#include "chlkc_pack_tile_dims.h"
+#include "chlkc_descriptors.h"
 #endif
 
 // Macros for printing circular buffer internals
@@ -198,7 +195,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
 
         // DataFormat, rd/wr pointer, and Tile size all depend on RISC + in/out
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        tile_info_t tile_info = get_tile_info(cb, ptr_type, cb_type);
+        tile_info_t tile_info = get_tile_info(cb, cb_type, ptr_type);
 #else
         tile_info_t tile_info = get_tile_info(cb);
 #endif

@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_api.h"
 
 // The SFPU itself only available on the MATH core. The TRISC_MATH macro
 // is defined when the code is being compiled for the MATH core.
@@ -108,8 +108,7 @@ inline void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0)
     MATH(_llk_math_eltwise_binary_sfpu_params_<false>(my_add_tile_face, idx_dst0, idx_dst1, idx_out0));
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
     // We are going to read from these two circular buffers
@@ -150,4 +149,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

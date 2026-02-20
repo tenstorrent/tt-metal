@@ -8,11 +8,6 @@
 
 namespace ttnn::experimental::prim {
 
-IntImgDeviceOperation::program_factory_t IntImgDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return IntImgProgramFactory{};
-}
-
 void IntImgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_shape = tensor_args.logical_shape();
@@ -28,11 +23,6 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
         input_dtype == DataType::BFLOAT16 || input_dtype == DataType::FLOAT32,
         "only bf16 and fp32 dtypes are supported, {} was provided instead",
         input_dtype);
-}
-
-void IntImgDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output_specs(

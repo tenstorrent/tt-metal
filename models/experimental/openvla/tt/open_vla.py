@@ -529,14 +529,14 @@ class OpenVLALanguageModel(GenerationMixin):
         out_tok = prefilled_token
         while user_decoding:
             # Run decode forward
-            decode_output = self.generator.decode_forward_text(
+            decode_output = self.generator.decode_forward(
                 out_tok,
                 current_pos,
                 page_table=self.page_table,
                 kv_cache=self.tt_kv_cache,
                 sampling_params=device_sampling_params,
             )
-            # decode_forward_text returns (logits, log_probs) tuple
+            # decode_forward returns (logits, log_probs) tuple
             logits = decode_output[0] if isinstance(decode_output, tuple) else decode_output
 
             # Get the next token
@@ -695,7 +695,7 @@ class OpenVLALanguageModel(GenerationMixin):
             # Prefill: model[0].forward(..., kv_cache=self.tt_kv_cache[0], ...)
             # Decode must read from the SAME KV cache object
             CHECKPOINTS.checkpoint("start_LLM_DECODE")
-            decode_output = self.generator.decode_forward_text(
+            decode_output = self.generator.decode_forward(
                 out_tok,
                 current_pos,
                 page_table=page_table_user,
@@ -703,7 +703,7 @@ class OpenVLALanguageModel(GenerationMixin):
                 sampling_params=None,
                 enable_trace=False,
             )
-            # decode_forward_text returns (logits, log_probs) tuple
+            # decode_forward returns (logits, log_probs) tuple
             logits = decode_output[0] if isinstance(decode_output, tuple) else decode_output
             CHECKPOINTS.checkpoint("end_LLM_DECODE")
 

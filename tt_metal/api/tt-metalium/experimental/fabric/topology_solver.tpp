@@ -181,10 +181,74 @@ void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
 }
 
 template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+    TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
+    // Intersect valid_mappings_[target] with global_nodes
+    if (valid_mappings_[target_node].empty()) {
+        // First constraint: initialize with the provided set of nodes
+        valid_mappings_[target_node] = global_nodes;
+    } else {
+        // Intersect with existing constraints
+        valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], global_nodes);
+    }
+
+    // Validate automatically and throw if invalid
+    validate_and_throw();
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+    const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
+    // For each target node, intersect valid_mappings_[target] with {global_node}
+    for (const auto& target_node : target_nodes) {
+        if (valid_mappings_[target_node].empty()) {
+            // First constraint: initialize with this single node
+            valid_mappings_[target_node].insert(global_node);
+        } else {
+            // Intersect with existing constraints
+            std::set<GlobalNode> singleton{global_node};
+            valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], singleton);
+        }
+    }
+
+    // Validate automatically and throw if invalid
+    validate_and_throw();
+}
+
+template <typename TargetNode, typename GlobalNode>
 void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
     TargetNode target_node, GlobalNode global_node) {
     // Add to preferred mappings (doesn't restrict valid mappings)
     preferred_mappings_[target_node].insert(global_node);
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
+    TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
+    // Intersect preferred_mappings_[target] with global_nodes
+    if (preferred_mappings_[target_node].empty()) {
+        // First preferred constraint: initialize with the provided set of nodes
+        preferred_mappings_[target_node] = global_nodes;
+    } else {
+        // Intersect with existing preferred constraints
+        preferred_mappings_[target_node] = intersect_sets(preferred_mappings_[target_node], global_nodes);
+    }
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
+    const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
+    // For each target node, intersect preferred_mappings_[target] with {global_node}
+    for (const auto& target_node : target_nodes) {
+        if (preferred_mappings_[target_node].empty()) {
+            // First preferred constraint: initialize with this single node
+            preferred_mappings_[target_node].insert(global_node);
+        } else {
+            // Intersect with existing preferred constraints
+            std::set<GlobalNode> singleton{global_node};
+            preferred_mappings_[target_node] = intersect_sets(preferred_mappings_[target_node], singleton);
+        }
+    }
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -200,7 +264,18 @@ void MappingConstraints<TargetNode, GlobalNode>::validate_and_throw() const {
     if (!conflicted_targets.empty()) {
         std::ostringstream oss;
         oss << "Constraint validation failed: " << conflicted_targets.size()
-            << " target node(s) have no valid mappings (overconstrained).";
+            << " target node(s) have no valid mappings (overconstrained).\n";
+        oss << "Overconstrained target nodes:\n";
+        for (const auto& target : conflicted_targets) {
+            oss << "  - " << target << "\n";
+        }
+
+        // Show summary of all constraints for context
+        oss << "\nConstraint summary:\n";
+        oss << "  Total target nodes with constraints: " << valid_mappings_.size() << "\n";
+        oss << "  Target nodes with valid mappings: " << (valid_mappings_.size() - conflicted_targets.size()) << "\n";
+        oss << "  Overconstrained target nodes: " << conflicted_targets.size() << "\n";
+
         TT_THROW("{}", oss.str());
     }
 }
@@ -263,7 +338,8 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    ConnectionValidationMode connection_validation_mode) {
+    ConnectionValidationMode connection_validation_mode,
+    bool quiet_mode) {
     using namespace tt::tt_fabric::detail;
 
     auto start_time = std::chrono::steady_clock::now();
@@ -276,7 +352,7 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
 
     // Run DFS search (state is now internal to the engine)
     DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode);
+    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode, quiet_mode);
 
     // Calculate elapsed time
     auto end_time = std::chrono::steady_clock::now();
@@ -285,7 +361,7 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Get state from engine and build result using validator
     const auto& state = search_engine.get_state();
     auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
-        state.mapping, graph_data, state, constraints, connection_validation_mode);
+        state.mapping, graph_data, state, constraints, connection_validation_mode, quiet_mode);
 
     // Set elapsed time
     result.stats.elapsed_time = elapsed_ms;

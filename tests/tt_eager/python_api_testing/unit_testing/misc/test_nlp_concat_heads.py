@@ -8,7 +8,6 @@ from loguru import logger
 from models.common.utility_functions import comp_pcc, tt2torch_tensor
 import torch
 from models.common.utility_functions import is_wormhole_b0
-from models.common.utility_functions import is_grayskull
 import ttnn
 
 
@@ -81,8 +80,6 @@ def run_nlp_concat_heads_test(batch, seq_len, num_heads, head_dim, dtype, in0_me
 def test_nlp_concat_heads_test(
     batch, seq_len, num_heads, head_dim, dtype, in0_mem_config, out_mem_config, request, device
 ):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
     run_nlp_concat_heads_test(batch, seq_len, num_heads, head_dim, dtype, in0_mem_config, out_mem_config, device)
 
 

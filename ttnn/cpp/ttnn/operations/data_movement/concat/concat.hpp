@@ -20,7 +20,8 @@ struct ConcatOperation {
         int dim,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        unsigned int groups = 1);
+        unsigned int groups = 1,
+        const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace operations::data_movement

@@ -9,6 +9,8 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "hal.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -38,14 +40,32 @@ CircularBufferConfig::CircularBufferConfig(
 CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
     if (descriptor.buffer) {
         this->set_globally_allocated_address(*descriptor.buffer);
+        if (descriptor.address_offset != 0) {
+            uint32_t l1_alignment = hal::get_l1_alignment();
+            TT_FATAL(
+                descriptor.address_offset % l1_alignment == 0,
+                "address_offset ({}) must be aligned to L1 alignment ({})",
+                descriptor.address_offset,
+                l1_alignment);
+            this->address_offset_ = descriptor.address_offset;
+            this->globally_allocated_address_ = this->globally_allocated_address_.value() + descriptor.address_offset;
+            this->max_size_ -= descriptor.address_offset;
+            TT_FATAL(
+                this->total_size_ <= this->max_size_,
+                "address_offset ({}) + total_size ({}) exceeds buffer bank size ({})",
+                descriptor.address_offset,
+                this->total_size_,
+                this->max_size_ + descriptor.address_offset);
+        }
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
-        if (format_descriptor.buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
+        uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+        if (format_descriptor.buffer_index > max_cbs - 1) {
             TT_THROW(
                 "Buffer index ({}) exceeds max number of circular buffers per core ({})",
                 format_descriptor.buffer_index,
-                NUM_CIRCULAR_BUFFERS);
+                max_cbs);
         }
         this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
         if (this->total_size_ % format_descriptor.page_size != 0) {
@@ -101,11 +121,9 @@ CircularBufferConfig::CircularBufferConfig(
     buffer_size_(buffer_size) {}
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
-    if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
-        TT_THROW(
-            "Buffer index ({}) exceeds max number of circular buffers per core ({})",
-            buffer_index,
-            NUM_CIRCULAR_BUFFERS);
+    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    if (buffer_index > max_cbs - 1) {
+        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
     }
     if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
@@ -194,6 +212,8 @@ uint32_t CircularBufferConfig::max_size() const { return this->max_size_; }
 
 uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; }
 
+uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
+
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
     auto is_remote_index = parent.remote_buffer_indices_.contains(buffer_index);
@@ -221,11 +241,9 @@ CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
 
 CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buffer_index) :
     parent_(parent), buffer_index_(buffer_index) {
-    if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
-        TT_THROW(
-            "Buffer index ({}) exceeds max number of circular buffers per core ({})",
-            buffer_index,
-            NUM_CIRCULAR_BUFFERS);
+    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    if (buffer_index > max_cbs - 1) {
+        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
     }
     parent_.buffer_indices_.insert(buffer_index_);
 }
@@ -259,19 +277,17 @@ CircularBufferConfig::Builder CircularBufferConfig::remote_index(uint8_t buffer_
 }
 
 void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
-    if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
+    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    if (data_format_spec.size() > max_cbs) {
         TT_THROW(
             "Only {} circular buffer slots are available but data formats are specified for {} indices",
-            NUM_CIRCULAR_BUFFERS,
+            max_cbs,
             data_format_spec.size());
     }
 
     for (const auto& [buffer_index, data_format] : data_format_spec) {
-        if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
-            TT_THROW(
-                "Buffer index ({}) exceeds max number of circular buffers per core ({})",
-                buffer_index,
-                NUM_CIRCULAR_BUFFERS);
+        if (buffer_index > max_cbs - 1) {
+            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
         }
         this->data_formats_[buffer_index] = data_format;
         this->buffer_indices_.insert(buffer_index);

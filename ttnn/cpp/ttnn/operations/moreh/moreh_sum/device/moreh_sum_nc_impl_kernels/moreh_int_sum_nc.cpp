@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_unary/sfpu_int_sum.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "api/compute/eltwise_unary/sfpu_int_sum.h"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
@@ -41,4 +40,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

@@ -88,10 +88,6 @@ void UpsampleOperation::validate_on_program_cache_miss(const operation_attribute
             input, args.scale_factor_h, args.scale_factor_w, args.mode));
 }
 
-void UpsampleOperation::validate_on_program_cache_hit(const operation_attributes_t& args, const Tensor& input) {
-    validate_on_program_cache_miss(args, input);
-}
-
 UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
     const operation_attributes_t& args, const Tensor& input) {
     const auto input_shape = get_input_shape(args, input);

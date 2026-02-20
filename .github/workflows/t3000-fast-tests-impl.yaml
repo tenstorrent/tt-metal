@@ -45,6 +45,11 @@ on:
         type: string
         default: 'true'
         description: "Run t3k ttnn ccl tests"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 
 jobs:
   t3000-fast-tests:
@@ -73,6 +78,7 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -128,21 +134,18 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Check for benchmark data
-        id: check-benchmark-data
+      - name: Check for benchmark and latency data
+        id: check-data
         if: ${{ !cancelled() && github.ref_name == 'main' }}
-        shell: bash
-        run: |
-          if [ -f "generated/fabric/bandwidth_summary_results_wormhole_b0_upload.csv" ]; then
-            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-            echo "Benchmark files found, will upload to database"
-          else
-            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-            echo "Benchmark files not found, database upload will be skipped"
-          fi
+        uses: tenstorrent/tt-metal/.github/actions/check-latency-bw-results@main
+        with:
+          path: /work
+          arch: wormhole_b0
+          check_bw: ${{ github.ref_name == 'main' }}
+          check_latency: ${{ github.ref_name == 'main' }}
       - name: Upload benchmark data
         ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-benchmark-data.outputs.has_benchmark_data == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -150,6 +153,13 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+      - name: Upload latency data
+        ## Only upload fabric latency data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work

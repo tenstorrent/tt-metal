@@ -11,6 +11,7 @@ from transformers.models.mixtral.modeling_mixtral import MixtralRMSNorm as RefRM
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
@@ -33,7 +34,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
     "max_seq_len",
     (128000,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 def test_rms_norm_inference(
     max_seq_len,
     batch_size,
@@ -65,8 +66,6 @@ def test_rms_norm_inference(
         weight_key=f"{norm_type}_norm",
         weight_dtype=dtype,
         is_distributed=model_args.is_distributed_norm,
-        sharded_program_config=model_args.get_model_config()[f"SHARDED_NORM_{config_type}_PRGM_CFG"],
-        sharded_output_config=model_args.get_model_config()[f"SHARDED_{config_type}_INPUT_MEMCFG"],
     )
 
     input = torch.rand(1, 1, 4096, 4096)
@@ -80,7 +79,8 @@ def test_rms_norm_inference(
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
-    tt_output = tt_inner_norm(tt_input, mode="prefill")
+    norm_config = model_args.get_norm_config("ff", mode, None)
+    tt_output = tt_inner_norm(tt_input, mode=mode, norm_config=norm_config)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 

@@ -86,6 +86,8 @@ public:
     uint32_t max_size() const;
     uint32_t buffer_size() const;
 
+    uint32_t address_offset() const;
+
     const Buffer* shadow_global_buffer{nullptr};
 
     class Builder {
@@ -132,6 +134,7 @@ private:
     // Will be removed once tests are updated to respect the correct `max_size_` constraint
     uint32_t max_size_ = 0;
     uint32_t buffer_size_ = 0;
+    uint32_t address_offset_ = 0;
 };
 
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);

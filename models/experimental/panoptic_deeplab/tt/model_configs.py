@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from abc import ABC, abstractmethod
 from dataclasses import replace
 from models.tt_cnn.tt.builder import (
     Conv2dConfiguration,
@@ -17,11 +18,84 @@ from models.tt_cnn.tt.builder import (
 )
 
 
+class BaseModelOptimiser(ABC):
+    """
+    Abstract base class for model optimization strategies.
+
+    Each concrete implementation provides core-grid-specific optimization
+    configurations for different parts of the Panoptic-DeepLab model.
+    """
+
+    def __init__(self, model_config):
+        """Initialize with reference to main ModelOptimisations instance."""
+        self.config = model_config
+
+    # ResNet backbone setup methods
+    @abstractmethod
+    def setup_stem(self):
+        pass
+
+    @abstractmethod
+    def setup_res2_stage(self):
+        pass
+
+    @abstractmethod
+    def setup_res3_stage(self):
+        pass
+
+    @abstractmethod
+    def setup_res4_stage(self):
+        pass
+
+    @abstractmethod
+    def setup_res5_stage(self):
+        pass
+
+    @abstractmethod
+    def setup_resnet_conv1_deallocation(self):
+        pass
+
+    @abstractmethod
+    def setup_resnet_activation_fusion(self):
+        pass
+
+    # ASPP setup method
+    @abstractmethod
+    def setup_aspp(self):
+        pass
+
+    # Decoder setup methods
+    @abstractmethod
+    def setup_decoder(self, iteration_index: int = 0):
+        pass
+
+    @abstractmethod
+    def setup_decoder_fuse_conv_0(self, stage: str, iteration_index: int):
+        pass
+
+    @abstractmethod
+    def setup_decoder_fuse_conv_1(self, stage: str):
+        pass
+
+    # Head setup methods
+    @abstractmethod
+    def setup_semantic_head(self):
+        pass
+
+    @abstractmethod
+    def setup_instance_center_head(self):
+        pass
+
+    @abstractmethod
+    def setup_instance_offset_head(self):
+        pass
+
+
 class ModelOptimisations:
     """
     Configuration manager for Panoptic-DeepLab model optimizations.
 
-    This class manages default and layer-specific overrides for Conv2dConfiguration,
+    This class manages default and layer-specific overrides mostly for Conv2dConfiguration,
     allowing fine-grained control over sharding strategies, slicing, data types,
     and other convolution parameters on a per-layer basis.
     """
@@ -71,6 +145,15 @@ class ModelOptimisations:
         self._setup_matmul_configs()
 
         self.layer_overrides = {}
+
+        compute_grid = device.compute_with_storage_grid_size()
+        # Create the appropriate optimizer based on the device's core grid size
+        if compute_grid.x == 5 and compute_grid.y == 4:
+            self.optimiser = TwentyCoreOptimiser(self)
+        elif compute_grid.x == 11 and compute_grid.y == 10:
+            self.optimiser = HundredTenCoreOptimiser(self)
+        else:
+            raise NotImplementedError("No optimiser implemented for this core grid size.")
 
     # =========================================================================
     # CORE API METHODS
@@ -165,9 +248,9 @@ class ModelOptimisations:
         for path in layer_paths:
             self.register_layer_override(path, **overrides)
 
-    def _register_stage_blocks(self, stage: str, num_blocks: int, conv_name: str, **overrides):
-        """Register overrides for a specific conv across all blocks in a stage."""
-        for i in range(num_blocks):
+    def _register_stage_blocks(self, stage: str, num_blocks: int, conv_name: str, start_idx: int = 0, **overrides):
+        """Helper to register overrides for blocks starting from start_idx."""
+        for i in range(start_idx, num_blocks):
             self.register_layer_override(f"{stage}.{i}.{conv_name}", **overrides)
 
     # =========================================================================
@@ -226,6 +309,39 @@ class ModelOptimisations:
                     ),
                 }
             )
+        elif compute_grid.x == 11 and compute_grid.y == 10:
+            self.default_matmul_overrides.update(
+                {
+                    "final_upsample_mm_config1": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(8, 8),
+                        in0_block_w=8,
+                        out_subblock_h=1,
+                        out_subblock_w=4,
+                        out_block_h=16,
+                        out_block_w=4,
+                        per_core_M=16,
+                        per_core_N=4,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        transpose_mcast=False,
+                    ),
+                    "final_upsample_mm_config2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(4, 8),
+                        in0_block_w=4,
+                        out_subblock_h=4,
+                        out_subblock_w=1,
+                        out_block_h=16,
+                        out_block_w=1,
+                        per_core_M=16,
+                        per_core_N=1,
+                        fuse_batch=False,
+                        fused_activation=None,
+                        mcast_in0=True,
+                        gather_in0=False,
+                        untilize_out=False,
+                    ),
+                }
+            )
         else:
             # Auto-config for other grid sizes
             self.default_matmul_overrides.update(
@@ -241,51 +357,92 @@ class ModelOptimisations:
 
     def setup_resnet_backbone(self):
         """Setup ResNet50 backbone configurations (stem + res2-5 stages)."""
-        self._setup_stem()
-        self._setup_res2_stage()
-        self._setup_res3_stage()
-        self._setup_res4_stage()
-        self._setup_res5_stage()
-        self._setup_resnet_activation_fusion()
-        self._setup_resnet_conv1_deallocation()
+        self.optimiser.setup_stem()
+        self.optimiser.setup_res2_stage()
+        self.optimiser.setup_res3_stage()
+        self.optimiser.setup_res4_stage()
+        self.optimiser.setup_res5_stage()
+        self.optimiser.setup_resnet_activation_fusion()
+        self.optimiser.setup_resnet_conv1_deallocation()
 
-    def _setup_stem(self):
+    def setup_aspp(self):
+        """
+        Setup ASPP configurations for all 5 branches.
+
+        ASPP has 5 parallel branches:
+        - Branch 0: 1x1 conv (no dilation)
+        - Branch 1-3: 3x3 dilated convs (dilation=6, 12, 18)
+        - Branch 4: Global average pooling + 1x1 conv
+        - Project: 1x1 conv to combine branches
+
+        ASPP is the direct consumer of res5 backbone features, so all branches
+        must have deallocate_activation=False to preserve the backbone output.
+        """
+        self.optimiser.setup_aspp()
+
+    def setup_decoder(self, iteration_index: int = 0):
+        """
+        Setup decoder configurations for projection and fusion layers.
+
+        Decoder processes features from res5->res4->res3->res2 stages,
+        progressively upsampling and fusing features.
+
+        Args:
+            iteration_index: Decoder iteration (0 for first pass)
+        """
+        self.optimiser.setup_decoder(iteration_index)
+
+    def setup_heads(self):
+        """Setup all head configurations (semantic, center, offset)."""
+        self.optimiser.setup_semantic_head()
+        self.optimiser.setup_instance_center_head()
+        self.optimiser.setup_instance_offset_head()
+
+
+class TwentyCoreOptimiser(BaseModelOptimiser):
+    """
+    Optimization strategy for devices with 5x4 (20) core grids.
+
+    Contains all the layer-specific configurations optimized for 20-core devices.
+    """
+
+    def setup_stem(self):
         """
         Stem: 3 convolutions that downsample 512x1024 -> 128x256
         - conv1: 3->64, stride=2, needs height sharding with large act_block_h
         - conv2, conv3: Use width slicing
         """
-        self.register_layer_override(
+        self.config.register_layer_override(
             "stem.conv1",
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1312),  # 41 tiles
         )
-        self._register_multiple_layers(
+        self.config._register_multiple_layers(
             ["stem.conv2", "stem.conv3"],
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
         )
-        self.register_layer_override(
+        self.config.register_layer_override(
             "stem.maxpool",
             slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
             dtype=ttnn.bfloat8_b,
             output_layout=ttnn.TILE_LAYOUT,
         )
 
-    def _setup_res2_stage(self):
+    def setup_res2_stage(self):
         """
         Res2 (128x256): 3 bottleneck blocks, 256 output channels
         - conv2: 3x3 convs need height sharding
         - conv3: 1x1 convs need width slicing to reduce buffer size
         """
         # Conv2: 3x3 spatial convolutions
-        self._register_stage_blocks(
+        self.config._register_stage_blocks(
             "res2",
             3,
             "conv2",
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
         )
 
-    def _setup_res3_stage(self):
+    def setup_res3_stage(self):
         """
         Res3 (128x256->64x128): 4 bottleneck blocks, 512 output channels
         - First block has stride=2 downsample
@@ -293,18 +450,18 @@ class ModelOptimisations:
         - shortcut: First block uses width slicing and block sharding
         """
         # Conv1: First block takes res2 output as input, must not deallocate it
-        self.register_layer_override(
+        self.config.register_layer_override(
             "res3.0.conv1",
             deallocate_activation=False,
         )
         # Conv2: First block downsamples with stride=2
-        self.register_layer_override(
+        self.config.register_layer_override(
             "res3.0.conv2",
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=256),  # 8 tiles
         )
 
         # Conv2: Remaining blocks at 64x128 resolution
-        self._register_stage_blocks(
+        self.config._register_stage_blocks(
             "res3",
             3,
             "conv2",
@@ -313,13 +470,13 @@ class ModelOptimisations:
         )
 
         # Shortcut: Downsample layer in first block
-        self.register_layer_override(
+        self.config.register_layer_override(
             "res3.0.shortcut",
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
             sharding_strategy=HeightShardedStrategyConfiguration(),
         )
 
-    def _setup_res4_stage(self):
+    def setup_res4_stage(self):
         """
         Res4 (64x128->32x64): 6 bottleneck blocks, 1024 output channels
         - First block has stride=2 downsample
@@ -327,39 +484,39 @@ class ModelOptimisations:
         - shortcut: First block uses block sharding
         """
         # Conv2: First block downsamples with stride=2
-        self.register_layer_override(
+        self.config.register_layer_override(
             "res4.0.conv2",
             sharding_strategy=HeightShardedStrategyConfiguration(),
         )
 
         # Conv2: Remaining blocks at 32x64 resolution
         for i in range(1, 6):
-            self.register_layer_override(
+            self.config.register_layer_override(
                 f"res4.{i}.conv2",
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),  # 2 tiles
             )
 
         # Shortcut: Downsample layer in first block
-        self.register_layer_override(
+        self.config.register_layer_override(
             "res4.0.shortcut",
             sharding_strategy=BlockShardedStrategyConfiguration(),
             enable_weights_double_buffer=True,
         )
 
-    def _setup_res5_stage(self):
+    def setup_res5_stage(self):
         """
         Res5 (32x64): 3 bottleneck blocks with dilation=2, 2048 output channels
         - All conv2: 3x3 dilated convs with block sharding and width slicing
         """
         for i in range(3):
-            self.register_layer_override(
+            self.config.register_layer_override(
                 f"res5.{i}.conv2",
                 sharding_strategy=BlockShardedStrategyConfiguration(),
                 slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
                 enable_weights_double_buffer=True,
             )
 
-    def _setup_resnet_activation_fusion(self):
+    def setup_resnet_activation_fusion(self):
         """
         Disable ReLU fusion for layers where ReLU is applied after residual add.
 
@@ -373,17 +530,17 @@ class ModelOptimisations:
         for stage, num_blocks in stage_configs:
             for i in range(num_blocks):
                 # Disable ReLU fusion for conv3 (output goes to residual add)
-                self.register_layer_override(f"{stage}.{i}.conv3", activation=None)
+                self.config.register_layer_override(f"{stage}.{i}.conv3", activation=None)
 
                 # First block in each stage has shortcut (downsample)
                 if i == 0:
-                    self.register_layer_override(
+                    self.config.register_layer_override(
                         f"{stage}.{i}.shortcut",
                         activation=None,
                         deallocate_activation=False,
                     )
 
-    def _setup_resnet_conv1_deallocation(self):
+    def setup_resnet_conv1_deallocation(self):
         """
         Set deallocate_activation=False for conv1 in blocks that need to preserve
         the input tensor for residual connections, allowing us to avoid ttnn.clone().
@@ -404,36 +561,16 @@ class ModelOptimisations:
                 # Also, res4 and res5 blocks always need this (even block 0)
                 # Exception: res3.3 needs deallocate_activation=True to avoid L1 memory issues
                 if (i > 0 or stage in ["res4", "res5"]) and not (stage == "res3" and i == 3):
-                    self.register_layer_override(
+                    self.config.register_layer_override(
                         f"{stage}.{i}.conv1",
                         deallocate_activation=False,
                     )
 
-    def _register_stage_blocks(self, stage: str, num_blocks: int, conv_name: str, start_idx: int = 0, **overrides):
-        """Helper to register overrides for blocks starting from start_idx."""
-        for i in range(start_idx, num_blocks):
-            self.register_layer_override(f"{stage}.{i}.{conv_name}", **overrides)
-
-    # -------------------------------------------------------------------------
-    # ASPP (ATROUS SPATIAL PYRAMID POOLING) CONFIGURATION
-    # -------------------------------------------------------------------------
-
     def setup_aspp(self):
-        """
-        Setup ASPP configurations for all 5 branches.
-
-        ASPP has 5 parallel branches:
-        - Branch 0: 1x1 conv (no dilation)
-        - Branch 1-3: 3x3 dilated convs (dilation=6, 12, 18)
-        - Branch 4: Global average pooling + 1x1 conv
-        - Project: 1x1 conv to combine branches
-
-        ASPP is the direct consumer of res5 backbone features, so all branches
-        must have deallocate_activation=False to preserve the backbone output.
-        """
+        """Setup ASPP configurations for 20-core devices."""
         # Branches without slicing (1x1 convs and pooling)
         no_slice_branches = ["aspp.convs.0", "aspp.convs.4", "aspp.project"]
-        self._register_multiple_layers(
+        self.config._register_multiple_layers(
             no_slice_branches,
             deallocate_activation=False,
         )
@@ -446,7 +583,7 @@ class ModelOptimisations:
         ]
 
         for path, num_slices, act_block_h in dilated_configs:
-            self.register_layer_override(
+            self.config.register_layer_override(
                 path,
                 slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices),
                 sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=act_block_h),
@@ -462,39 +599,27 @@ class ModelOptimisations:
             for i in range(5):
                 if i == 4:
                     # Branch 4 has a pooling conv
-                    self.register_layer_override(
+                    self.config.register_layer_override(
                         f"{head_prefix}.decoder.res5.project_conv.convs.4.1",
                         deallocate_activation=False,
                     )
                 else:
-                    self.register_layer_override(
+                    self.config.register_layer_override(
                         f"{head_prefix}.decoder.res5.project_conv.convs.{i}",
                         deallocate_activation=False,
                     )
             # ASPP project layer
-            self.register_layer_override(
+            self.config.register_layer_override(
                 f"{head_prefix}.decoder.res5.project_conv.project",
                 deallocate_activation=False,
             )
 
-    # -------------------------------------------------------------------------
-    # DECODER CONFIGURATION
-    # -------------------------------------------------------------------------
-
     def setup_decoder(self, iteration_index: int = 0):
-        """
-        Setup decoder configurations for projection and fusion layers.
-
-        Decoder processes features from res5->res4->res3->res2 stages,
-        progressively upsampling and fusing features.
-
-        Args:
-            iteration_index: Decoder iteration (0 for first pass)
-        """
+        """Setup decoder configurations for 20-core devices."""
         # Projection layers: No slicing, preserve backbone outputs for head sharing
         # These are the direct consumers of backbone features, so they must not deallocate them
         projection_layers = [f"decoder.{stage}.project_conv" for stage in ["res5", "res4", "res3", "res2"]]
-        self._register_multiple_layers(
+        self.config._register_multiple_layers(
             projection_layers,
             deallocate_activation=False,
         )
@@ -502,17 +627,17 @@ class ModelOptimisations:
         # Each head has its own decoder, so we need to configure both semantic and instance heads
         for head_prefix in ["semantic_head", "instance_head"]:
             for stage in ["res5", "res4", "res3", "res2"]:
-                self.register_layer_override(
+                self.config.register_layer_override(
                     f"{head_prefix}.decoder.{stage}.project_conv",
                     deallocate_activation=False,
                 )
 
         # Fusion layers: Two convs per stage (except res5 which only has projection)
         for stage in ["res4", "res3", "res2"]:
-            self._setup_decoder_fuse_conv_0(stage, iteration_index)
-            self._setup_decoder_fuse_conv_1(stage)
+            self.setup_decoder_fuse_conv_0(stage, iteration_index)
+            self.setup_decoder_fuse_conv_1(stage)
 
-    def _setup_decoder_fuse_conv_0(self, stage: str, iteration_index: int):
+    def setup_decoder_fuse_conv_0(self, stage: str, iteration_index: int):
         """
         Setup fuse_conv.0 (first fusion conv) for a decoder stage.
 
@@ -523,7 +648,7 @@ class ModelOptimisations:
         path = f"decoder.{stage}.fuse_conv.0"
 
         if iteration_index == 0 and stage in ["res3", "res2"]:
-            self.register_layer_override(
+            self.config.register_layer_override(
                 path,
                 slice_strategy=None,
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=0),
@@ -531,86 +656,467 @@ class ModelOptimisations:
                 activation=None,
             )
         else:
-            self.register_layer_override(
+            self.config.register_layer_override(
                 path,
                 slice_strategy=HeightSliceStrategyConfiguration(num_slices=2),
                 sharding_strategy=HeightShardedStrategyConfiguration(),
                 deallocate_activation=False,
             )
 
-    def _setup_decoder_fuse_conv_1(self, stage: str):
+    def setup_decoder_fuse_conv_1(self, stage: str):
         """Setup fuse_conv.1 (second fusion conv) with width slicing."""
-        self.register_layer_override(
+        self.config.register_layer_override(
             f"decoder.{stage}.fuse_conv.1",
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
             sharding_strategy=HeightShardedStrategyConfiguration(),
             deallocate_activation=False,
         )
 
-    # -------------------------------------------------------------------------
-    # HEAD CONFIGURATION
-    # -------------------------------------------------------------------------
-
-    def setup_heads(self):
-        """Setup all head configurations (semantic, center, offset)."""
-        self._setup_semantic_head()
-        self._setup_instance_center_head()
-        self._setup_instance_offset_head()
-
-    def _setup_semantic_head(self):
+    def setup_semantic_head(self):
         """
         Semantic segmentation head: 2 intermediate convs + predictor.
         - head.0, head.1: Width slicing with height sharding
         - predictor: No activation (raw logits)
         """
         head_layers = ["semantic_head.head.0", "semantic_head.head.1"]
-        self._register_multiple_layers(
+        self.config._register_multiple_layers(
             head_layers,
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
             sharding_strategy=HeightShardedStrategyConfiguration(),
             deallocate_activation=False,
         )
 
-        self.register_layer_override(
+        self.config.register_layer_override(
             "semantic_head.predictor",
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=False,
         )
 
-    def _setup_instance_center_head(self):
+    def setup_instance_center_head(self):
         """
         Instance center head: 2 intermediate convs + predictor.
         Same configuration as semantic head.
         """
         head_layers = ["instance_head.center_head.0", "instance_head.center_head.1"]
-        self._register_multiple_layers(
+        self.config._register_multiple_layers(
             head_layers,
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
             sharding_strategy=HeightShardedStrategyConfiguration(),
             deallocate_activation=False,
         )
 
-        self.register_layer_override(
+        self.config.register_layer_override(
             "instance_head.center_predictor",
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=False,
         )
 
-    def _setup_instance_offset_head(self):
+    def setup_instance_offset_head(self):
         """
         Instance offset head: 2 intermediate convs + predictor.
         Same configuration as semantic head.
         """
         head_layers = ["instance_head.offset_head.0", "instance_head.offset_head.1"]
-        self._register_multiple_layers(
+        self.config._register_multiple_layers(
             head_layers,
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
             sharding_strategy=HeightShardedStrategyConfiguration(),
             deallocate_activation=False,
         )
 
-        self.register_layer_override(
+        self.config.register_layer_override(
             "instance_head.offset_predictor",
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=False,
+        )
+
+
+class HundredTenCoreOptimiser(BaseModelOptimiser):
+    """
+    Optimization strategy for devices with 11x10 (110) core grids.
+
+    Contains all the layer-specific configurations optimized for 110-core devices.
+    """
+
+    def setup_stem(self):
+        """
+        Stem: 3 convolutions that downsample 512x1024 -> 128x256
+        - conv1: 3->64, stride=2, needs height sharding with large act_block_h
+        - conv2, conv3: Use width slicing
+        """
+        self.config.register_layer_override(
+            "stem.conv1",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            # padded_output_height_ntiles_per_core=38
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=19 * 32),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_multiple_layers(
+            ["stem.conv2", "stem.conv3"],
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=2 * 32),
+            enable_weights_double_buffer=True,
+        )
+        self.config.register_layer_override(
+            "stem.maxpool",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
+
+    def setup_res2_stage(self):
+        """
+        Res2 (128x256): 3 bottleneck blocks, 256 output channels
+        Placeholder for 110-core specific optimizations.
+        """
+        # Shortcut: Downsample layer in first block
+        self.config.register_layer_override(
+            "res2.0.shortcut",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320, reshard_if_not_optimal=True),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res2",
+            3,
+            "conv1",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320, reshard_if_not_optimal=True),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res2",
+            3,
+            "conv2",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res2",
+            3,
+            "conv3",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320),
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_res3_stage(self):
+        """
+        Res3 (128x256->64x128): 4 bottleneck blocks, 512 output channels
+        - First block has stride=2 downsample
+        """
+        self.config.register_layer_override(
+            "res3.0.shortcut",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=96),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res3",
+            4,
+            "conv1",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=96),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res3",
+            4,
+            "conv2",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=96),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res3",
+            4,
+            "conv3",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=96),
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_res4_stage(self):
+        """
+        Res4 (64x128->32x64): 6 bottleneck blocks, 1024 output channels
+        - First block has stride=2 downsample
+        - conv2: 3x3 convs with height sharding
+        - shortcut: override_output_sharding_config forcing to use the same core grid as convs
+        """
+        self.config.register_layer_override(
+            "res4.0.shortcut",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224, reshard_if_not_optimal=True),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res4",
+            6,
+            "conv1",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256, reshard_if_not_optimal=True),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res4",
+            6,
+            "conv2",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res4",
+            6,
+            "conv3",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256),
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_res5_stage(self):
+        """
+        Res5 (32x64): 3 bottleneck blocks with dilation=2, 2048 output channels
+        """
+        # Shortcut: Downsample layer in first block
+        self.config.register_layer_override(
+            "res5.0.shortcut",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res5",
+            3,
+            "conv1",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res5",
+            3,
+            "conv2",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224),
+            enable_weights_double_buffer=True,
+        )
+        self.config._register_stage_blocks(
+            "res5",
+            3,
+            "conv3",
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224),
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_resnet_activation_fusion(self):
+        """
+        Disable ReLU fusion for layers where ReLU is applied after residual add.
+
+        In ResNet bottlenecks:
+        - conv3 (final 1x1 conv): Output goes to residual add, then ReLU
+        - shortcut: Output goes to residual add, then ReLU
+        """
+        # Disable activation fusion for all conv3 and shortcut layers
+        stage_configs = [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]
+
+        for stage, num_blocks in stage_configs:
+            for i in range(num_blocks):
+                # Disable ReLU fusion for conv3 (output goes to residual add)
+                self.config.register_layer_override(f"{stage}.{i}.conv3", activation=None)
+
+                # First block in each stage has shortcut (downsample)
+                if i == 0:
+                    self.config.register_layer_override(
+                        f"{stage}.{i}.shortcut",
+                        activation=None,
+                        deallocate_activation=False,
+                    )
+
+    def setup_resnet_conv1_deallocation(self):
+        """
+        Set deallocate_activation=False for conv1 in blocks that need to preserve
+        the input tensor for residual connections, allowing us to avoid ttnn.clone().
+
+        Blocks that need this:
+        - All blocks without shortcuts (i > 0 in each stage)
+        - All res4 blocks
+        - All res5 blocks
+        """
+        stage_configs = [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]
+
+        for stage, num_blocks in stage_configs:
+            for i in range(num_blocks):
+                # Blocks without shortcuts (i > 0) need conv1 to not deallocate input
+                # Also, res4 and res5 blocks always need this (even block 0)
+                if i > 0 or stage in ["res4", "res5"]:
+                    self.config.register_layer_override(
+                        f"{stage}.{i}.conv1",
+                        deallocate_activation=False,
+                    )
+
+    def setup_aspp(self):
+        """Setup ASPP configurations for 110-core devices."""
+        # Dilated conv branches
+        dilated_configs = [
+            ("aspp.convs.0", 256),  # 1x1 convolution
+            ("aspp.convs.1", 128),  # dilation=6, act_block_h=128
+            ("aspp.convs.2", 64),  # dilation=12, act_block_h=64
+            ("aspp.convs.4", 512),  # pooling conv
+            ("aspp.project", 512),  # project conv
+        ]
+
+        for path, act_block_h in dilated_configs:
+            self.config.register_layer_override(
+                path,
+                slice_strategy=L1FullSliceStrategyConfiguration(),
+                sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=act_block_h),
+                deallocate_activation=False,
+                enable_weights_double_buffer=True,
+            )
+
+        self.config.register_layer_override(
+            "aspp.convs.3",  # dilation=18
+            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256),
+            deallocate_activation=False,
+            activation=None,
+            enable_weights_double_buffer=True,
+        )
+
+        self.config.register_layer_override(
+            "aspp.project",
+            deallocate_activation=True,
+        )
+
+        # Also set per-head ASPP paths explicitly to ensure backbone features are preserved
+        # Each head has its own ASPP (as decoder.res5.project_conv)
+        for head_prefix in ["semantic_head", "instance_head"]:
+            # ASPP conv branches (0-4)
+            for i in range(5):
+                if i == 4:
+                    # Branch 4 has a pooling conv
+                    self.config.register_layer_override(
+                        f"{head_prefix}.decoder.res5.project_conv.convs.4.1",
+                        deallocate_activation=False,
+                    )
+                else:
+                    self.config.register_layer_override(
+                        f"{head_prefix}.decoder.res5.project_conv.convs.{i}",
+                        deallocate_activation=False,
+                    )
+            # ASPP project layer
+            self.config.register_layer_override(
+                f"{head_prefix}.decoder.res5.project_conv.project",
+                deallocate_activation=False,
+            )
+
+    def setup_decoder(self, iteration_index: int = 0):
+        """Setup decoder configurations for 110-core devices."""
+        # Projection layers: No slicing, preserve backbone outputs for head sharing
+        # These are the direct consumers of backbone features, so they must not deallocate them
+        projection_layers = [f"decoder.{stage}.project_conv" for stage in ["res5", "res4", "res3", "res2"]]
+        self.config._register_multiple_layers(
+            projection_layers,
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
+        )
+
+        # Each head has its own decoder, so we need to configure both semantic and instance heads
+        for head_prefix in ["semantic_head", "instance_head"]:
+            for stage in ["res5", "res4", "res3", "res2"]:
+                self.config.register_layer_override(
+                    f"{head_prefix}.decoder.{stage}.project_conv",
+                    slice_strategy=L1FullSliceStrategyConfiguration(),
+                    sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+                    deallocate_activation=True,
+                    enable_weights_double_buffer=True,
+                )
+
+        # Fusion layers: Two convs per stage (except res5 which only has projection)
+        for stage in ["res4", "res3", "res2"]:
+            self.setup_decoder_fuse_conv_0(stage, iteration_index)
+            self.setup_decoder_fuse_conv_1(stage)
+
+    def setup_decoder_fuse_conv_0(self, stage: str, iteration_index: int):
+        """
+        Setup fuse_conv.0 (first fusion conv) for a decoder stage.
+        """
+        path = f"decoder.{stage}.fuse_conv.0"
+
+        self.config.register_layer_override(
+            path,
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_decoder_fuse_conv_1(self, stage: str):
+        """Setup fuse_conv.1 (second fusion conv) with width slicing."""
+        self.config.register_layer_override(
+            f"decoder.{stage}.fuse_conv.1",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_semantic_head(self):
+        """Setup semantic head configurations for 110-core devices."""
+        head_layers = ["semantic_head.head.0", "semantic_head.head.1"]
+        self.config._register_multiple_layers(
+            head_layers,
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
+        )
+
+        self.config.register_layer_override(
+            "semantic_head.predictor",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320),
+            activation=None,  # Raw logits, no ReLU
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_instance_center_head(self):
+        """
+        Instance center head: 2 intermediate convs + predictor.
+        Same configuration as semantic head.
+        """
+        self.config.register_layer_override(
+            "instance_head.center_head.0",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            deallocate_activation=False,
+            enable_weights_double_buffer=True,
+        )
+
+        self.config.register_layer_override(
+            "instance_head.center_head.1",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
+        )
+
+        self.config.register_layer_override(
+            "instance_head.center_predictor",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            activation=None,  # Raw logits, no ReLU
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
+        )
+
+    def setup_instance_offset_head(self):
+        """
+        Instance offset head: 2 intermediate convs + predictor.
+        Same configuration as semantic head.
+        """
+        head_layers = ["instance_head.offset_head.0", "instance_head.offset_head.1"]
+        self.config._register_multiple_layers(
+            head_layers,
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
+        )
+
+        self.config.register_layer_override(
+            "instance_head.offset_predictor",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            activation=None,  # Raw logits, no ReLU
+            deallocate_activation=True,
+            enable_weights_double_buffer=True,
         )

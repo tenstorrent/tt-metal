@@ -7,9 +7,7 @@
 #include "llk_unpack_AB_api.h"
 #include "llk_unpack_untilize_api.h"
 
-namespace NAMESPACE {
-
-void unpack_main() {
+void kernel_main() {
     uint32_t per_core_num_blocks = get_compile_time_arg_val(0);
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
@@ -23,7 +21,11 @@ void unpack_main() {
             llk_wait_tiles(0, per_core_block_c_tiles);
             llk_unpack_untilize_<true>(0, per_core_block_c_tiles);
             llk_unpack_untilize_<false>(0, per_core_block_c_tiles);
+#ifdef ARCH_BLACKHOLE
             llk_unpack_untilize_uninit(0);
+#else
+            llk_unpack_untilize_uninit();
+#endif
             llk_pop_tiles(0, per_core_block_c_tiles);
             llk_pop_tiles(1, per_core_block_c_tiles);
 
@@ -38,4 +40,3 @@ void unpack_main() {
         }
     }
 }
-}  // namespace NAMESPACE

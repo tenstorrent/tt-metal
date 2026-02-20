@@ -26,6 +26,47 @@ class TestMetadataLoader:
         with open(self.config.test_type_attributes_path, "r") as file:
             return yaml.safe_load(file)
 
+    def get_test_metadata(self, test_id: int, arch: str) -> Dict[str, str]:
+        """
+        Get metadata for a specific test ID from test_information.yaml.
+
+        Args:
+            test_id: The test ID to get metadata for
+            arch: The architecture name (e.g., "blackhole", "wormhole_b0")
+
+        Returns:
+            Dictionary containing metadata fields: memory_type, mechanism, pattern, architecture, and other optional fields
+
+        Raises:
+            KeyError: If test_id not found or doesn't have required metadata fields
+        """
+        test_info = self.load_test_information()
+        test_data = test_info.get("tests", {}).get(test_id, {})
+
+        # Check if test has required metadata fields
+        if "memory_type" not in test_data or "mechanism" not in test_data or "pattern" not in test_data:
+            raise KeyError(f"Test ID {test_id} does not have complete metadata (memory, mechanism, pattern)")
+
+        # Build result with all metadata fields, excluding 'name' and 'comment'
+        result = {}
+        for key, value in test_data.items():
+            if key not in ["name", "comment"]:
+                result[key] = value
+
+        # Set architecture based on runtime environment
+        result["architecture"] = arch.lower()
+
+        return result
+
+    @staticmethod
+    def metadata_field_to_column_name(field_name: str) -> str:
+        """
+        Convert metadata field name to CSV column header.
+        Capitalizes each word separated by underscore.
+        """
+        words = field_name.split("_")
+        return " ".join(word.capitalize() for word in words)
+
     def _get_test_id_to_name(self, test_info: Dict[str, Any]) -> Dict[str, str]:
         """Extract test_id_to_name mapping from test information."""
         return {test_id: info["name"] for test_id, info in test_info["tests"].items()}

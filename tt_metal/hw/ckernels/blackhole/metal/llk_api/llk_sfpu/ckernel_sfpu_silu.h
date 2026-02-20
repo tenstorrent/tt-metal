@@ -29,11 +29,8 @@ inline void calculate_silu() {
 
 template <bool APPROXIMATION_MODE>
 inline void silu_init() {
-    if constexpr (!APPROXIMATION_MODE) {
-        _init_sfpu_reciprocal_<false>();
-    } else {
-        _init_sfpu_reciprocal_<true>();
-    }
+    // calculate_silu uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must use non-approx sigmoid_init
+    sigmoid_init<false>();
 }
 
 }  // namespace ckernel::sfpu

@@ -1,1 +1,1 @@
-../../../../models/demos/gemma3/tests/test_ci_dispatch.py
+../../../../models/demos/multimodal/gemma3/tests/test_ci_dispatch.py

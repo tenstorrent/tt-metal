@@ -11,6 +11,7 @@
 #include <string>
 
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/operations/trace.hpp"
 
 namespace ttnn::graph {
@@ -60,12 +61,12 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
 
     device->enable_program_cache();
     {  // warm up the program cache - required for trace capture
-        std::apply(op, transformed_args);
+        detail::invoke_op(op, transformed_args);
     }
 
     auto trace_id = ttnn::operations::trace::begin_trace_capture(device, ttnn::QueueId(0));
     try {
-        std::apply(op, transformed_args);
+        detail::invoke_op(op, transformed_args);
     } catch (const std::exception& e) {
         // Ensure trace capture is stopped and released before returning to avoid a memory leak
         ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::QueueId(0));

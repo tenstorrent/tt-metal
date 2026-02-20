@@ -11,7 +11,6 @@ on:
         options:
           - all
           - falcon7b
-          - mamba
           - functional_unet
           - stable_diffusion
           - sentence_bert
@@ -28,9 +27,54 @@ on:
           - vovnet
           - ufld_v2
           - efficientnetb0
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
+    inputs:
+      model:
+        description: "Select model to test (all, falcon7b, functional_unet, stable_diffusion, etc.)"
+        required: false
+        type: string
+        default: "all"
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact:
@@ -40,7 +84,9 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   models-perf:
     needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml

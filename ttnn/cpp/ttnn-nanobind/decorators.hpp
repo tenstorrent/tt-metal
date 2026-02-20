@@ -5,9 +5,9 @@
 #pragma once
 
 #include <string>
-#include <type_traits> // decay
-#include <tuple>       // forward_as_tuple, apply
-#include <utility>     // forward
+#include <type_traits>  // decay
+#include <tuple>        // forward_as_tuple, apply
+#include <utility>      // forward
 #include <optional>
 
 #include <nanobind/nanobind.h>

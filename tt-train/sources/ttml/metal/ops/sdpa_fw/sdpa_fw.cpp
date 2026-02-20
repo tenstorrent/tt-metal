@@ -6,9 +6,9 @@
 
 #include "device/sdpa_fw_device_operation.hpp"
 
-namespace ttml::metal::ops::sdpa_fw {
+namespace ttml::metal {
 
-std::vector<std::optional<ttnn::Tensor>> SDPAForwardOperation::invoke(
+std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
@@ -24,6 +24,6 @@ std::vector<std::optional<ttnn::Tensor>> SDPAForwardOperation::invoke(
     }
 
     return {result[0], result[1]};  // maybe I need to return more than 2 tensors in the future
-};
+}
 
-}  // namespace ttml::metal::ops::sdpa_fw
+}  // namespace ttml::metal

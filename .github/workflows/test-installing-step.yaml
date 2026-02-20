@@ -1,0 +1,16 @@
+name: "Test INSTALLING.md install.sh step"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner-label:
+        description: Runner label (e.g., N150)
+        required: false
+        default: N150
+
+jobs:
+  test-installing-step:
+    uses: ./.github/workflows/test-installing-step-impl.yaml
+    secrets: inherit
+    with:
+      runner-label: ${{ inputs.runner-label || 'N150' }}

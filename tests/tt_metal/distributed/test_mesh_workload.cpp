@@ -52,6 +52,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -120,9 +121,9 @@ void verify_cb_config(
     MeshWorkload& workload,
     std::vector<CBConfig>& golden_cb_config,
     CoreRangeSet& crs) {
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
     std::vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {

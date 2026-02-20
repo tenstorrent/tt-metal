@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/matmul.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t sub_Mt = get_compile_time_arg_val(0);
     uint32_t Kt = get_compile_time_arg_val(1);
     uint32_t sub_Nt = get_compile_time_arg_val(2);
@@ -27,4 +26,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

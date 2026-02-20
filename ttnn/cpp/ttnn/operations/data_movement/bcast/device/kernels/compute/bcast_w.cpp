@@ -4,10 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/bcast.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t w = 0;
     constexpr uint32_t onetile = 1;
     uint32_t B = get_arg_val<uint32_t>(0);
@@ -37,4 +36,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

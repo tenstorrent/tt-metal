@@ -6,10 +6,8 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::silu_bw {
+namespace ttml::metal {
 
-struct SiLUBackwardOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& dL_dout_tensor);
-};
+ttnn::Tensor silu_bw(const ttnn::Tensor& input_tensor, const ttnn::Tensor& dL_dout_tensor);
 
-}  // namespace ttml::metal::ops::silu_bw
+}  // namespace ttml::metal

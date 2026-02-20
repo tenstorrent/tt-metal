@@ -41,11 +41,6 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     return GroupNormMcastProgramFactory{};
 }
 
-void GroupNormDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void GroupNormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;

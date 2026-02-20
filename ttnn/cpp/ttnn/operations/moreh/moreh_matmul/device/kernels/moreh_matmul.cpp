@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Implemented based on bmm.cpp
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
-
-namespace NAMESPACE {
+#include "api/compute/matmul.h"
+#include "api/compute/transpose_wh.h"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 ////////////////////
 // global variables
@@ -331,7 +329,7 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
     }
 }
 
-void MAIN {
+void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t Mt = get_compile_time_arg_val(1);
@@ -383,4 +381,3 @@ void MAIN {
         matmul(num_output_tiles, Kt);
     }
 }
-}  // namespace NAMESPACE

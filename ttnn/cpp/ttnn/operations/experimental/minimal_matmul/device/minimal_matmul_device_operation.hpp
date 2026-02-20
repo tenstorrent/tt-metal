@@ -18,18 +18,11 @@ namespace ttnn::experimental::prim {
 struct MinimalMatmulDeviceOperation {
     using operation_attributes_t = MinimalMatmulParams;
     using tensor_args_t = MinimalMatmulInputs;
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<MinimalMatmulProgramFactory>;
-
-    static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
     static void validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(
@@ -46,14 +39,19 @@ struct MinimalMatmulDeviceOperation {
         const std::optional<const MinimalMatmulConfig>& config,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<const DataType> dtype,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+        int32_t chunks = 1,
+        int32_t dim = -1,
+        std::optional<float> fused_ternary_scalar = std::nullopt,
+        const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
+        const std::optional<Tensor>& fused_ternary_input_b = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-Tensor minimal_matmul(
+std::vector<Tensor> minimal_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
@@ -61,6 +59,11 @@ Tensor minimal_matmul(
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t chunks = 1,
+    int32_t dim = -1,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
+    const std::optional<Tensor>& fused_ternary_input_b = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -5,13 +5,13 @@
 #include <cstdint>
 
 #include "internal/mod_div_lib.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
 
 // #include "api/debug/dprint.h"
 
@@ -166,8 +166,7 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
@@ -625,5 +624,4 @@ void MAIN {
             bias_block_offset += in1_block_w;
         }
     }  // for in1_num_blocks_w
-}  // MAIN
-}  // namespace NAMESPACE
+}  // void kernel_main()

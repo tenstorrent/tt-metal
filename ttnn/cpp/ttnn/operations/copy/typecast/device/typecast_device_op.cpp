@@ -30,11 +30,6 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
     return TypecastProgramFactory{};
 }
 
-void TypecastDeviceOperation::validate_on_program_cache_hit(
-    const TypecastParams& args, const TypecastInputs& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void TypecastDeviceOperation::validate_on_program_cache_miss(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;

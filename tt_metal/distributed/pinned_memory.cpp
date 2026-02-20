@@ -190,7 +190,7 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
         return std::nullopt;
     }
     const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
-    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     TT_ASSERT(!pcie_cores.empty());
     auto pcie_xy = pcie_cores.front();
     uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
@@ -264,6 +264,8 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
     }
 }
 
+bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty(); }
+
 void* PinnedMemoryImpl::lock() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
@@ -309,11 +311,13 @@ bool PinnedMemory::usable_from_noc(ChipId device_id) const { return pImpl->usabl
 
 void PinnedMemory::add_barrier_event(const distributed::MeshEvent& event) { pImpl->add_barrier_event(event); }
 
+bool PinnedMemory::lock_may_block() const { return pImpl->lock_may_block(); }
+
 void* PinnedMemory::lock() { return pImpl->lock(); }
 
 void PinnedMemory::unlock() { pImpl->unlock(); }
 
-std::unique_ptr<PinnedMemory> PinnedMemory::Create(
+std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
@@ -341,7 +345,9 @@ std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
 
-    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    auto pinned_memory = std::shared_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    HostBufferSetPinnedMemory(host_buffer, pinned_memory);
+    return pinned_memory;
 }
 
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& /* mesh_device */) {

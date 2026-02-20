@@ -65,9 +65,9 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables
 ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate> forward_device_coord,
+    std::optional<MeshCoordinate> backward_device_coord,
     std::vector<Tensor>& output_tensor,
     int32_t dim,
     uint32_t num_links,

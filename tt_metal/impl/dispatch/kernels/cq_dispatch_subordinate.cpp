@@ -76,23 +76,14 @@ static uint32_t num_worker_sems = 1;
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
     uint64_t xy_local_addr = get_noc_addr_helper(my_noc_xy, 0);
-    NOC_CMD_BUF_WRITE_REG(
-        my_noc_index,
-        DISPATCH_S_WR_REG_CMD_BUF,
-        NOC_TARG_ADDR_COORDINATE,
-        (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+    noc_cmd_buf_set_targ_addr_coordinate(
+        my_noc_index, DISPATCH_S_WR_REG_CMD_BUF, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 }
 
 FORCE_INLINE
 void dispatch_s_atomic_cmd_buf_init() {
     uint64_t atomic_ret_addr = get_noc_addr_helper(my_noc_xy, MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    NOC_CMD_BUF_WRITE_REG(
-        my_noc_index, DISPATCH_S_ATOMIC_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
-    NOC_CMD_BUF_WRITE_REG(
-        my_noc_index,
-        DISPATCH_S_ATOMIC_CMD_BUF,
-        NOC_RET_ADDR_COORDINATE,
-        (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT));
+    noc_cmd_buf_set_ret_addr(my_noc_index, DISPATCH_S_ATOMIC_CMD_BUF, atomic_ret_addr);
 }
 
 FORCE_INLINE
@@ -248,11 +239,12 @@ void process_go_signal_mcast_cmd() {
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
 
-        noc_nonposted_writes_acked[noc_index] += num_dests;
+        // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
+        noc_increment_nonposted_writes_acked(noc_index, num_dests);
 
         wait_for_workers(wait_count, wait_stream);
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
-        noc_nonposted_writes_num_issued[noc_index] += 1;
+        noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
         wait_for_workers(wait_count, wait_stream);
     }

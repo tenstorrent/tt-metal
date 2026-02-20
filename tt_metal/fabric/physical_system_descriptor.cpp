@@ -68,7 +68,8 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     tt::umd::Cluster& cluster,
     ChipId chip_id,
     bool using_mock_cluster_desc,
-    std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray) {
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray,
+    std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
     auto* cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
@@ -79,6 +80,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
         auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
+        pcie_id_to_asic_location[pcie_id] = ASICLocation{ubb_id.asic_id};
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     }
     auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
@@ -229,6 +231,8 @@ void PhysicalSystemDescriptor::clear() {
     host_to_mobo_name_.clear();
     host_to_rank_.clear();
     exit_node_connection_table_.clear();
+    pcie_devices_per_tray_.clear();
+    pcie_id_to_asic_location_.clear();
 }
 
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
@@ -266,7 +270,11 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
             "discovery");
         tt::umd::Cluster& cluster = *cluster_;
         auto [tray_id, asic_location] = get_asic_position(
-            cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon, pcie_devices_per_tray_);
+            cluster,
+            src_chip_id,
+            target_device_type_ != TargetDevice::Silicon,
+            pcie_devices_per_tray_[hostname],
+            pcie_id_to_asic_location_[hostname]);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -359,6 +367,12 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
+    }
+    for (auto& [host_name, tray_map] : other.get_pcie_devices_per_tray()) {
+        pcie_devices_per_tray_[host_name] = std::move(tray_map);
+    }
+    for (auto& [host_name, pcie_map] : other.get_pcie_id_to_asic_location()) {
+        pcie_id_to_asic_location_[host_name] = std::move(pcie_map);
     }
 
     // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported

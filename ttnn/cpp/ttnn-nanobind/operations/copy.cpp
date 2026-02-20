@@ -21,23 +21,40 @@ namespace {
 void bind_global_typecast(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
-Applies {0} to :attr:`input_tensor`.
+        Performs {0} on elements of a tensor on the host or device to the desired dtype.
 
-Args:
-    * :attr:`input_tensor` (ttnn.Tensor): input tensors must be on device, in ROW MAJOR or TILE layout
-    * :attr:`dtype` (Optional[ttnn.DataType]): data type must be one of the following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32,INT32 and UINT16.
-    *
-Keyword Args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-    * :attr:`output_tensor` (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
+        Args:
+            input_tensor (ttnn.Tensor): input tensor to be typecast (can be on the host or device).
+            dtype (ttnn.DataType): data type to cast the tensor elements to.
 
-Returns:
-    ttnn.Tensor: The tensor with the updated data type. Output tensor will be on device, in same layout, and have the given data type.
+        Keyword Args:
+            memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+            output_tensor (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
 
-Example::
+        Returns:
+            ttnn.Tensor: The tensor with the updated data type. The output tensor will be in the same layout as the input tensor and have the given data type.
 
-    >>> tensor = ttnn.typecast(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), ttnn.uint16)
-)doc",
+        Note:
+            This operations supports tensors according to the following data types and layout:
+
+            .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - TILE
+                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                    - ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Height, Width, and Block Sharded: DRAM and L1
+
+            Limitations:
+                -  ND Sharded tensors are not supported.
+                -  If preallocated output tensor is used, it must match the input tensor's shape and layout.
+        )doc",
         ttnn::typecast.base_name());
 
     using TypecastType = decltype(ttnn::typecast);

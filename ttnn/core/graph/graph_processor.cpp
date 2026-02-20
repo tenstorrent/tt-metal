@@ -57,7 +57,7 @@ nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& d
 
 namespace ttnn::graph {
 
-GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mode); }
+GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { GraphProcessor::begin_capture(mode); }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);

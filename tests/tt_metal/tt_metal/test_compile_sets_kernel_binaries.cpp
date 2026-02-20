@@ -25,7 +25,6 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -184,7 +183,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                     kernel_name);
             }
         }
-        detail::ClearKernelCache();
+        jit_build_cache_clear();
         std::vector<Program> new_programs;
         for (int i = 0; i < num_devices_; i++) {
             auto& device = devices_[i];
@@ -253,7 +252,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                         BuildEnvManager::get_instance()
                             .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 1)
                             .get_target_out_path(kernel_name);
-                    auto load_type = (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)
+                    auto load_type = (device->arch() == tt::ARCH::WORMHOLE_B0)
                                          ? ll_api::memory::Loading::CONTIGUOUS
                                          : ll_api::memory::Loading::CONTIGUOUS_XIP;
                     const ll_api::memory& ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, load_type);

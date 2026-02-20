@@ -23,11 +23,7 @@ struct HaloDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<UntilizeWithHaloProgramFactory>;
-
-    static program_factory_t select_program_factory(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
@@ -40,7 +36,6 @@ Tensor halo(
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
-    const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool config_tensors_in_dram);
 

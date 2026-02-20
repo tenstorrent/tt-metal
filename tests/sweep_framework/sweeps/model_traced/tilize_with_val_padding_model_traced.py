@@ -78,11 +78,29 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
+    # Handle both sample suite (tuple) and model_traced suite (dict, if ever treated as binary)
+    if isinstance(input_shape, dict) and "self" in input_shape:
+        # This is model_traced suite - dict with 'self' key (shouldn't happen for unary, but handle it)
+        shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
+    elif isinstance(input_shape, (tuple, list)):
+        shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
     else:
         shape = input_shape
+
+    # Ensure padded_shape is also a tuple
+    if isinstance(padded_shape, list):
+        padded_shape = tuple(padded_shape)
+
+    # Validation: padded_shape must be >= input_shape in each dimension
+    if isinstance(shape, tuple) and isinstance(padded_shape, tuple):
+        if len(shape) != len(padded_shape):
+            raise ValueError(f"Padded shape rank {len(padded_shape)} must match input shape rank {len(shape)}")
+        for i, (input_dim, padded_dim) in enumerate(zip(shape, padded_shape)):
+            if padded_dim < input_dim:
+                raise ValueError(
+                    f"Padded shape {padded_shape} must be >= input shape {shape} in each dimension, "
+                    f"but dimension {i} has padded={padded_dim} < input={input_dim}"
+                )
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

@@ -4,17 +4,16 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 
 #ifdef FUSE_BIAS
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/bcast.h"
 #endif
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);        // outer row block size (in inner row blocks)
     uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);      // out_subblock_h*in0_block_w*in0_num_subblocks;
@@ -168,4 +167,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

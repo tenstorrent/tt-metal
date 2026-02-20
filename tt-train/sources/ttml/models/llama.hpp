@@ -7,11 +7,15 @@
 #include "autograd/tensor.hpp"
 #include "base_transformer.hpp"
 #include "common/transformer_common.hpp"
+#include "modules/embedding_module.hpp"
 #include "modules/grouped_query_attention.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/llama_block.hpp"
 #include "modules/module_base.hpp"
+#include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
+
 namespace ttml::models::llama {
 
 using RunnerType = common::transformer::RunnerType;
@@ -41,10 +45,10 @@ class Llama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     LlamaConfig m_config;
-    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
-    std::vector<std::shared_ptr<ModuleBase>> blocks;
-    std::shared_ptr<ModuleBase> ln_fc;
-    std::shared_ptr<ttml::modules::ModuleBase> fc;
+    std::shared_ptr<ttml::modules::Embedding> tok_emb;
+    std::vector<std::shared_ptr<ttml::modules::LlamaBlock>> blocks;
+    std::shared_ptr<ttml::modules::RMSNormLayer> ln_fc;
+    std::shared_ptr<ttml::modules::LinearLayer> fc;
     ops::RotaryEmbeddingParams m_rope_params;
     uint32_t m_original_vocab_size = 0U;
 

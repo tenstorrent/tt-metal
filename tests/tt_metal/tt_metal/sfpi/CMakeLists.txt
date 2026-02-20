@@ -1,8 +1,11 @@
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
 # Create the object library first
 add_library(unit_tests_sfpi_lib OBJECT)
 add_library(TT::Metalium::Test::SFPI ALIAS unit_tests_sfpi_lib)
 
-target_sources(unit_tests_sfpi_lib PRIVATE test_sfpi.cpp)
+target_sources(unit_tests_sfpi_lib PRIVATE ${UNIT_TESTS_SFPI_SOURCES})
 target_include_directories(
     unit_tests_sfpi_lib
     BEFORE

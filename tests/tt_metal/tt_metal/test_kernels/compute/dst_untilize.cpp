@@ -4,12 +4,10 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-
-namespace NAMESPACE {
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
@@ -24,7 +22,7 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-void MAIN {
+void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     constexpr uint32_t num_faces = get_compile_time_arg_val(2);
@@ -58,4 +56,3 @@ void MAIN {
 
     pack_untilize_uninit(tt::CBIndex::c_16);
 }
-}  // namespace NAMESPACE

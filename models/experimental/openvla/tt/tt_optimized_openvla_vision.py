@@ -3,7 +3,7 @@
 
 """
 Optimized DINOv2 and SigLIP encoders for OpenVLA.
-Copied from models/demos/vit/tt/ttnn_optimized_vit_highres_gs.py for self-contained openvla module.
+Copied from models/demos/vision/classification/vit/common/tt/ttnn_optimized_vit_highres_gs.py for self-contained openvla module.
 """
 
 import numpy as np

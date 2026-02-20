@@ -5,14 +5,14 @@
 #include "elemwise_where_kernel_args.hpp"
 #include "ttnn/kernel/kernel_utils.hpp"
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/tile_move_copy.h"
 
-#include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_binary.h"
 
 constexpr auto cb_condition = tt::CBIndex::c_0;
 constexpr auto cb_true_values = tt::CBIndex::c_1;
@@ -20,8 +20,7 @@ constexpr auto cb_false_values = tt::CBIndex::c_2;
 constexpr auto cb_true_values_out = tt::CBIndex::c_3;
 constexpr auto cb_out = tt::CBIndex::c_4;
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     using namespace ttnn::kernel_utils;
     using namespace ttnn::kernel::eltwise::where_args;
     auto args = make_runtime_struct_from_args<ElemwiseComputeKernelArgs>();
@@ -87,5 +86,3 @@ void MAIN {
         cb_push_back(cb_out, args.per_core_block_size);
     }
 }
-
-}  // namespace NAMESPACE

@@ -77,6 +77,40 @@ struct BinaryOperationWithFastApprox {
 };
 
 template <BinaryOpType binary_op_type>
+struct MulOperationWithFastApprox {
+    static Tensor invoke(
+        const Tensor& lhs,
+        const Tensor& rhs,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt,
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+    static Tensor invoke(
+        const ttnn::Tensor& lhs,
+        float rhs,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt,
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+    // Simplified overloads for fast_and_approximate_mode
+    static Tensor invoke(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode);
+
+    static Tensor invoke(const Tensor& lhs, float rhs, bool fast_and_approximate_mode);
+};
+
+template <BinaryOpType binary_op_type>
 struct RelationalBinary {
     static Tensor invoke(
         const Tensor& lhs,
@@ -189,6 +223,29 @@ struct InplaceBinaryOperationWithFastApprox {
 };
 
 template <BinaryOpType binary_op_type>
+struct InplaceMulOperationWithFastApprox {
+    static Tensor invoke(
+        const Tensor& lhs,
+        const Tensor& rhs,
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt,
+        std::optional<bool> fast_and_approximate_mode = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& lhs,
+        float rhs,
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt,
+        std::optional<bool> fast_and_approximate_mode = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+};
+
+template <BinaryOpType binary_op_type>
 struct BinaryOperationSfpu {
     static Tensor invoke(
         const Tensor& lhs,
@@ -255,11 +312,6 @@ constexpr auto subtract = ttnn::
 constexpr auto subtract_ = ttnn::register_operation<
     "ttnn::subtract_",
     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SUB>>();
-constexpr auto multiply = ttnn::
-    register_operation<"ttnn::multiply", operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>>();
-constexpr auto multiply_ = ttnn::register_operation<
-    "ttnn::multiply_",
-    operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::MUL>>();
 constexpr auto eq =
     ttnn::register_operation<"ttnn::eq", operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ>>();
 constexpr auto ne =
@@ -310,6 +362,12 @@ constexpr auto divide = ttnn::register_operation<
 constexpr auto divide_ = ttnn::register_operation<
     "ttnn::divide_",
     operations::binary::InplaceBinaryOperationWithFastApprox<operations::binary::BinaryOpType::DIV>>();
+constexpr auto multiply = ttnn::register_operation<
+    "ttnn::multiply",
+    operations::binary::MulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>>();
+constexpr auto multiply_ = ttnn::register_operation<
+    "ttnn::multiply_",
+    operations::binary::InplaceMulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>>();
 constexpr auto gt_ = ttnn::register_operation<
     "ttnn::gt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GT>>();

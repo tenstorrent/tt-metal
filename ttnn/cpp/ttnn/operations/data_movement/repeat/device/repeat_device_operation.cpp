@@ -44,11 +44,6 @@ void RepeatDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must have the same memory layout as input tensor");
 }
 
-void RepeatDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) {
     const auto& input_tensor_a = input_tensors.input;

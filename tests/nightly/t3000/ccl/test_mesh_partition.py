@@ -350,3 +350,46 @@ def test_mesh_partition_rm(
         output_memory_config,
         scheme="random",
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("per_device_output_shape, dim", [((1, 4, 1, 576), 1), ((1, 4, 1, 576), 3)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("mesh_axes", [[0, 1]])
+@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG])
+def test_mesh_partition_tile(
+    mesh_device,
+    mesh_shape,
+    per_device_output_shape,
+    dtype,
+    layout,
+    dim,
+    cluster_axis,
+    mesh_axes,
+    input_memory_config,
+    output_memory_config,
+):
+    num_iters = 2
+    warmup_iters = 0
+
+    run_mesh_partition_test(
+        mesh_device,
+        per_device_output_shape,
+        dim,
+        num_iters,
+        warmup_iters,
+        False,
+        dtype,
+        layout,
+        cluster_axis,
+        mesh_axes,
+        mesh_shape,
+        input_memory_config,
+        output_memory_config,
+        scheme="random",
+    )

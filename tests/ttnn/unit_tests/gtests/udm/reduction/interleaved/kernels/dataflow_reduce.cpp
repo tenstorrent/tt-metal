@@ -27,7 +27,7 @@
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "api/debug/dprint.h"
 
 void kernel_main() {

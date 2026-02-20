@@ -49,10 +49,9 @@ static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_hal
     tt::tt_metal::Tensor haloed_tensor = ttnn::halo(
         input_tensor_reshaped,
         sliding_window_config,
-        0,      // pad_val
-        false,  // remote_read
-        false,  // transpose_mcast
-        input_tensor_reshaped.memory_config(),
+        0,       // pad_val
+        false,   // remote_read
+        false,   // transpose_mcast
         false);  // is_out_tiled
 
     return {haloed_tensor, sliding_window_config};
@@ -76,7 +75,7 @@ static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
 }
 
-ttnn::Tensor ExecuteUpSample::invoke(
+ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
     std::variant<int, std::array<int, 2>, float, std::array<float, 2>> scale_factor,
     const std::string& mode,

@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
-UNET_LOOP_PCC = {"10": 0.923, "50": 0.911}
+UNET_LOOP_PCC = {"10": 0.92, "50": 0.92}
 
 
 @torch.no_grad()

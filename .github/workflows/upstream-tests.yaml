@@ -6,7 +6,33 @@ on:
       request-force-publish:
         default: "passing-only"
         type: string
-        description: "Control image publishing: 'passing-only' (default), 'all', or JSON array of hw_topology values like [\"wh-6u\", \"bh\"]"
+        description: >-
+          Control image publishing: 'passing-only' (default), 'all',
+          or JSON array of hw_topology values like ["wh-6u", "bh"]
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: '0 12 * * *'
 
@@ -31,7 +57,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
       build-umd-tests: true
       tracy: true
@@ -60,16 +88,25 @@ jobs:
       - name: Set image tags
         id: set-image-tags
         run: |
-          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-deskbox-image-tag=${{ env.BLACKHOLE_DESKBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-glx-image-tag=${{ env.BLACKHOLE_GLX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          image_suffix="${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}"
+          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
+          echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
+          echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
+          echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
+          echo "bh-deskbox-image-tag=${{ env.BLACKHOLE_DESKBOX_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
+          echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
+          echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
+          echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
+          echo "bh-glx-image-tag=${{ env.BLACKHOLE_GLX_IMAGE_NAME }}:${image_suffix}" \
+            >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
@@ -187,7 +224,8 @@ jobs:
           export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
           export TT_METAL_DEV_VERSION=latest
           export TT_METAL_COMMIT_SHA=${{ github.sha }}
-          envsubst < dockerfile/upstream_test_images/Dockerfile.template > dockerfile/upstream_test_images/Dockerfile-generated
+          envsubst < dockerfile/upstream_test_images/Dockerfile.template \
+            > dockerfile/upstream_test_images/Dockerfile-generated
           cat dockerfile/upstream_test_images/Dockerfile-generated
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -195,11 +233,12 @@ jobs:
           file: dockerfile/upstream_test_images/Dockerfile-generated
           platforms: linux/amd64
           pull: true
-          push: true
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
           build-args: |
             TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
   test-wh-6u-image:
     needs:
       - get-image-tags
@@ -210,8 +249,8 @@ jobs:
       - in-service
       - pipeline-functional
     steps:
-      # TODO -likely need to put this into a script which can be parameterized on the build number
-      # and whether to only pull
+      # TODO -likely need to put this into a script which can be parameterized
+      # on the build number and whether to only pull
       - name: Pull image
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
@@ -220,10 +259,16 @@ jobs:
         env:
           SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        run: |
+          docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
+            --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro \
+            -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+        run: |
+          docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
+            --device /dev/tenstorrent \
+            ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
   test-bh-glx-image:
     needs:
       - get-image-tags
@@ -234,8 +279,8 @@ jobs:
       - in-service
       - pipeline-functional
     steps:
-      # TODO -likely need to put this into a script which can be parameterized on the build number
-      # and whether to only pull
+      # TODO -likely need to put this into a script which can be parameterized
+      # on the build number and whether to only pull
       - name: Pull image
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
@@ -244,7 +289,11 @@ jobs:
         env:
           HF_MODEL: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
           TT_CACHE_PATH: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+        run: |
+          docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
+            --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
+            -e HF_MODEL -e TT_CACHE_PATH \
+            ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
   test-bh-multicard-image:
     needs:
       - get-image-tags
@@ -274,9 +323,18 @@ jobs:
         timeout-minutes: 30
         env:
           # For different environments, BH VLAN vs. cloud
-          HF_MODEL: ${{ matrix.bh-config.extra-tag == 'pipeline-perf' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-          TT_CACHE_PATH: ${{ matrix.bh-config.extra-tag == 'pipeline-perf' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
+          HF_MODEL: >-
+            ${{ matrix.bh-config.extra-tag == 'pipeline-perf'
+            && '/localdev/blackhole_demos/huggingface_data'
+            || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: >-
+            ${{ matrix.bh-config.extra-tag == 'pipeline-perf'
+            && '/localdev/blackhole_demos/huggingface_data'
+            || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+        run: |
+          docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
+            --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
+            -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -295,13 +353,21 @@ jobs:
         timeout-minutes: 15
         run: |
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+          base_url="http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/"
+          model_path="model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/"
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga \
+            -R "index.html*" \
+            -P /localdev/blackhole_demos/huggingface_data/meta-llama \
+            "${base_url}${model_path}"
       - name: Run image
         timeout-minutes: 60
         env:
           HF_MODEL: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
           TT_CACHE_PATH: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
+        run: |
+          docker run --network none --device /dev/tenstorrent \
+            -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH \
+            ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -324,12 +390,23 @@ jobs:
         timeout-minutes: 40
         env:
           # For different environments, yyz BH VLAN vs. cloud
-          HF_MODEL: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-          TT_CACHE_PATH: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ needs.get-image-tags.outputs.bh-image-tag }}
+          HF_MODEL: >-
+            ${{ contains(runner.name, 'gh')
+            && '/localdev/blackhole_demos/huggingface_data'
+            || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: >-
+            ${{ contains(runner.name, 'gh')
+            && '/localdev/blackhole_demos/huggingface_data'
+            || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+        run: |
+          docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
+            -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH \
+            ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+        run: |
+          docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
+            ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
   calculate-to-publish:
     if: ${{ !cancelled() }}
     needs:
@@ -448,7 +525,8 @@ jobs:
 
             # Validate it's a JSON array
             if [[ $(echo ${request_input} | jq 'type') != '"array"' ]]; then
-              echo "ERROR: When providing specific hw_topology values, input must be a JSON array like [\"wh-6u\", \"bh\"]" >&2
+              echo "ERROR: When providing specific hw_topology values," \
+                "input must be a JSON array like [\"wh-6u\", \"bh\"]" >&2
               exit 1
             fi
 
@@ -479,7 +557,8 @@ jobs:
           else
             echo "Converting ${#images_to_push_array[@]} images to JSON for next job's matrix"
             # Use -c because whitespace in GITHUB_OUTPUT might cause issues
-            images_to_push_json=$(printf '%s\n' "${images_to_push_array[@]}" | jq -R '.' | jq -c -s 'map({"image-tag": .})')
+            images_to_push_json=$(printf '%s\n' "${images_to_push_array[@]}" \
+              | jq -R '.' | jq -c -s 'map({"image-tag": .})')
           fi
 
           echo "Final images to push:"

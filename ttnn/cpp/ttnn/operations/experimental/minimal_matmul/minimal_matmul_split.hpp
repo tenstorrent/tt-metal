@@ -11,7 +11,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_split_device_operation_types.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::minimal_matmul_split {
 

@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent_attention_decode import (
+from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     page_table_setup,
     to_paged_cache,
     from_paged_cache,

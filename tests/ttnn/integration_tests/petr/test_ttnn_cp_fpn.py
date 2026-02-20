@@ -5,7 +5,6 @@
 import ttnn
 import torch
 import pytest
-from models.utility_functions import skip_for_grayskull
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -43,7 +42,6 @@ def create_custom_preprocessor(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@skip_for_grayskull()
 def test_cp_fpn(device, reset_seeds):
     torch_model = CPFPN(in_channels=[768, 1024], out_channels=256, num_outs=2)
     torch_model.eval()

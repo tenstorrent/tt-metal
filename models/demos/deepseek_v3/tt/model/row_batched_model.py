@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 import torch
 from tqdm.auto import tqdm
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -218,20 +219,50 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
         page_tables: Sequence[ttnn.Tensor],
+        profile_decode: bool = False,
     ) -> ttnn.Tensor:
-        """Forward pass for decode mode."""
+        """Forward pass for decode mode.
+
+        Args:
+            x: Input tensor
+            position_idxs: Position indices
+            cfg: Run configuration
+            rope_tensors: RoPE tensors
+            page_tables: Page tables for each layer
+            profile_decode: If True, only run first dense layer + first MoE layer for profiling
+        """
 
         x = Embedding2D.forward_decode(x, cfg["embedding"])
 
-        for (block_cfg, BlockClass), page_table in zip(
-            itertools.chain(
-                zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
-                zip(cfg["moe_decoder_block"], itertools.repeat(MoEDecoderBlock2D)),
-            ),
-            page_tables,
-            strict=True,
-        ):
-            x = BlockClass.forward_decode(x, position_idxs, block_cfg, rope_tensors, page_table)
+        if profile_decode:
+            # Profile mode: run only first dense layer + first MoE layer
+            # First dense layer (MLP)
+            if cfg["mlp_decoder_block"]:
+                signpost(header="first_dense_layer")
+                x = DecoderBlock2D.forward_decode(
+                    x, position_idxs, cfg["mlp_decoder_block"][0], rope_tensors, page_tables[0]
+                )
+                signpost(header="first_dense_layer")
+            # First MoE layer
+            if cfg["moe_decoder_block"]:
+                signpost(header="first_moe_layer")
+                moe_page_table_idx = len(cfg["mlp_decoder_block"])
+                x = MoEDecoderBlock2D.forward_decode(
+                    x, position_idxs, cfg["moe_decoder_block"][0], rope_tensors, page_tables[moe_page_table_idx]
+                )
+                signpost(header="first_moe_layer")
+
+        else:
+            # Normal mode: run all layers
+            for (block_cfg, BlockClass), page_table in zip(
+                itertools.chain(
+                    zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
+                    zip(cfg["moe_decoder_block"], itertools.repeat(MoEDecoderBlock2D)),
+                ),
+                page_tables,
+                strict=True,
+            ):
+                x = BlockClass.forward_decode(x, position_idxs, block_cfg, rope_tensors, page_table)
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])

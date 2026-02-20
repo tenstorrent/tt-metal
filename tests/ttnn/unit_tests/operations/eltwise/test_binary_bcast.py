@@ -2318,24 +2318,6 @@ def test_add_i32(device):
     assert torch.equal(torch_add, output_tensor)
 
 
-def test_add_error(device):
-    pytest.skip("Test is skipped because half mem config feature not supported yet")
-    # Create input tensors with specified shapes
-    input_shape = [1, 1, 1, 39576]
-    bias_shape = [1, 39576]
-
-    # Create random tensors
-    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
-    torch_bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
-
-    # Convert to TTNN tensors with tile layout
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
-    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
-
-    # Perform the add operation with the specified memory config
-    ttnn_result = ttnn.add(ttnn_input, ttnn_bias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, use_legacy=None)
-
-
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -3423,6 +3405,34 @@ def rand_bf16_gen_dtype(shape, device, *, min=0, max=1, dtype, memory_config=ttn
     return pt, tt
 
 
+def gen_tensor_for_dtype(shape, device, dtype_pt, dtype_tt, *, low=1, high=10, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Generate tensors with appropriate values for different dtypes.
+
+    For float32, generates values with precision in the lower mantissa bits (bits 0-12)
+    to properly test FP32 vs TF32 (which only has 10 mantissa bits).
+    """
+    if dtype_pt == torch.float32:
+        # Generate values that require >10 mantissa bits (expose TF32 precision loss)
+        # TF32 has only 10 mantissa bits vs FP32's 23 bits
+        # Base value (uses upper mantissa bits) + delta (uses lower mantissa bits)
+        base = torch.randn(shape, dtype=dtype_pt) * (high - low) + low
+        # Add precision in bits 11-22 of mantissa (2^-12 to 2^-18 relative precision)
+        precision_delta = torch.randn(shape, dtype=dtype_pt) * 2**-12 + torch.randn(shape, dtype=dtype_pt) * 2**-18
+        pt = base + precision_delta
+    elif dtype_pt == torch.bfloat16:
+        pt = torch.rand(shape, dtype=dtype_pt) * (high - low) + low
+    elif dtype_pt == torch.int32:
+        pt = torch.randint(low=low, high=high, size=shape, dtype=dtype_pt)
+    elif dtype_pt == torch.uint32:
+        pt = torch.randint(low=low, high=high, size=shape, dtype=torch.int64).to(torch.uint32)
+    elif dtype_pt == torch.uint16:
+        pt = torch.randint(low=low, high=high, size=shape, dtype=torch.int32).to(torch.uint16)
+    else:
+        pt = torch.rand(shape, dtype=dtype_pt) * (high - low) + low
+    tt = ttnn.from_torch(pt, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    return pt, tt
+
+
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -3454,6 +3464,52 @@ def test_binary_sfpu_row_bcast(a_shape, b_shape, device):
 
     calculated = ttnn.to_torch(out_tt)
     assert_with_pcc(calculated, golden, 0.999)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    (
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+        (torch.int32, ttnn.int32),
+        (torch.uint32, ttnn.uint32),
+        (torch.uint16, ttnn.uint16),
+    ),
+)
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    (
+        # row bcast
+        (torch.Size([5, 10, 64, 128]), torch.Size([5, 10, 1, 128])),
+        (torch.Size([5, 10, 1, 128]), torch.Size([5, 10, 64, 128])),
+        # row col mixed bcast
+        (torch.Size([5, 10, 64, 1]), torch.Size([5, 10, 1, 128])),
+        (torch.Size([5, 10, 1, 128]), torch.Size([5, 10, 64, 1])),
+    ),
+)
+def test_binary_sfpu_row_bcast_multi_dtype(a_shape, b_shape, dtype_pt, dtype_tt, device):
+    """Test binary SFPU row broadcast with multiple data types including 32-bit formats."""
+    torch.manual_seed(0)
+
+    a_pt, a_tt = gen_tensor_for_dtype(a_shape, device, dtype_pt, dtype_tt, low=1, high=10)
+    b_pt, b_tt = gen_tensor_for_dtype(b_shape, device, dtype_pt, dtype_tt, low=1, high=10)
+
+    # Use add for all types (pow doesn't work for integer types)
+    out_tt = ttnn.add(a_tt, b_tt, use_legacy=None)
+
+    # PyTorch doesn't support add for uint32/uint16, so compute golden using int64
+    if dtype_pt in (torch.uint32, torch.uint16):
+        golden = torch.add(a_pt.to(torch.int64), b_pt.to(torch.int64)).to(dtype_pt)
+    else:
+        golden = torch.add(a_pt, b_pt)
+
+    calculated = ttnn.to_torch(out_tt)
+
+    # For integer types, use exact comparison; for float types, use PCC
+    if dtype_pt in (torch.int32, torch.uint32, torch.uint16):
+        assert torch.equal(golden.to(calculated.dtype), calculated), "Integer tensors not equal"
+    else:
+        assert_with_pcc(calculated, golden, 0.999)
 
 
 @pytest.mark.parametrize(
@@ -4361,7 +4417,6 @@ def test_binary_sharded_half_mem_config_scalar(device, output_memory_config, sca
 
 
 def test_binary_bcast_sharded_output_half_mem_config(device):
-    pytest.skip("Skipping test due to incomplete implementation of sharded broadcast output")
     """Test binary broadcast with generic sharded memory config inheriting from sharded input"""
     torch.manual_seed(0)
     torch_input_a = torch.rand((2, 7, 64, 128), dtype=torch.bfloat16)
@@ -4383,5 +4438,71 @@ def test_binary_bcast_sharded_output_half_mem_config(device):
     # Use generic height sharded memory config - should inherit from input B
     output = ttnn.add(input_a, input_b, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
     output = ttnn.to_torch(output)
-
     assert_with_pcc(torch_output, output)
+
+    # swap a and b
+    output = ttnn.add(input_b, input_a, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output)
+
+
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+def test_binary_sharded_half_mem_config_interleaved(device, memory_config):
+    torch.manual_seed(0)
+    # Create input tensors with specified shapes
+    input_shape = [1, 1, 1, 395]
+    bias_shape = [395, 395]
+
+    # Create random tensors
+    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the add operation with the specified memory config
+    torch_output = torch.add(torch_input, torch_bias)
+    ttnn_result = ttnn.add(ttnn_input, ttnn_bias, memory_config=memory_config, use_legacy=None)
+    ttnn_result = ttnn.to_torch(ttnn_result)
+
+    assert_with_pcc(torch_output, ttnn_result)
+
+
+def test_binary_sharded_output_uneven(device):
+    h_dim = 544
+    torch.manual_seed(0)
+    width_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [h_dim, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    pt_in1 = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    pt_in2 = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    tt_in1 = ttnn.from_torch(
+        pt_in1, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    tt_in2 = ttnn.from_torch(
+        pt_in2, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    block_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [96, 384],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch_output = torch.multiply(pt_in1, pt_in2)
+    result = ttnn.multiply(tt_in1, tt_in2, memory_config=block_sharded)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(torch_output, result)

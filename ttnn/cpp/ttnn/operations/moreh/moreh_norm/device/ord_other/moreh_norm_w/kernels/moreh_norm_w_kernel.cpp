@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     int i{0};
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
     const auto Wt = get_arg_val<uint32_t>(i++);
@@ -115,8 +114,8 @@ void MAIN {
                 copy_tile_init_with_dt(cb_cal);
                 copy_tile(cb_cal, 0, dst1);
 
-                max_tile_init();
-                max_tile(dst0, dst1);
+                binary_max_tile_init();
+                binary_max_tile(dst0, dst1, dst0);
 #endif
                 tile_regs_commit();
 
@@ -171,6 +170,4 @@ void MAIN {
     if (do_mask_w) {
         cb_pop_front(cb_mask_w, onetile);
     }
-
-}  // void MAIN
-}  // namespace NAMESPACE
+}

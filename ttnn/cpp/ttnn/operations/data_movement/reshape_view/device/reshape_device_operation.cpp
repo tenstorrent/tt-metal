@@ -31,11 +31,6 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must have the same memory layout as input tensor");
 }
 
-void ReshapeViewDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;

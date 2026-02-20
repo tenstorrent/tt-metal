@@ -95,17 +95,7 @@ void MorehSumBackwardOperation::validate_inputs(
     }
 }
 
-MorehSumBackwardOperation::program_factory_t MorehSumBackwardOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void MorehSumBackwardOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehSumBackwardOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };

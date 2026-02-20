@@ -88,7 +88,7 @@ void kernel_main() {
         );
     }
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t one_tile = 1;
@@ -103,7 +103,8 @@ void kernel_main() {
 
     uint32_t noc_shard_read_start_addr = 0;
     if constexpr (extract_shard_sub_blocks) {
-        constexpr uint32_t cb_id_in2 = 2;  // in0 sharded cb if extract_shard_sub_blocks
+        constexpr uint32_t cb_id_in2 =
+            get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
         noc_shard_read_start_addr = get_read_ptr(cb_id_in2);
     }
 
@@ -112,7 +113,7 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 
     // sparsity accessor
-    constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
 
 #ifndef SKIP_MCAST
@@ -206,7 +207,8 @@ void kernel_main() {
 #ifndef IN0_SHARDED
 
 #ifdef INTERMEDIATE_CB_READ
-                        constexpr uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+                        constexpr uint32_t in0_intermediate_cb_index =
+                            get_named_compile_time_arg_val("cb_in0_intermediate");
                         cb_reserve_back(in0_intermediate_cb_index, one_tile);
                         uint32_t l1_write_addr_helper = get_write_ptr(in0_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ

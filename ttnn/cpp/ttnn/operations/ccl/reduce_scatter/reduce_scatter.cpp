@@ -28,7 +28,8 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     std::optional<tt::tt_fabric::Topology> topology,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call reduce-scatter on cluster_axis=1, then
     // reduce-scatter on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -48,7 +49,8 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
                     topology,
                     chunks_per_sync,
                     num_workers_per_link,
-                    num_buffers_per_channel);
+                    num_buffers_per_channel,
+                    compute_kernel_config);
             }
             return tensor;
         }
@@ -74,7 +76,8 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
             cluster_axis,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            compute_kernel_config);
     }
     return ttnn::prim::reduce_scatter(
                input_tensor,
@@ -88,7 +91,8 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
                topology_,
                chunks_per_sync,
                num_workers_per_link,
-               num_buffers_per_channel)
+               num_buffers_per_channel,
+               compute_kernel_config)
         .at(1);  // first is the intermediate tensor
 }
 

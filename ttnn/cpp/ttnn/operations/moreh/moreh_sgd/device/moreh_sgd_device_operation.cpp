@@ -30,19 +30,9 @@ void MorehSgdOperation::validate_inputs(
     if (tensor_args.momentum_buffer_out.has_value()) {
         check_tensor(tensor_args.momentum_buffer_out.value(), "moreh_sgd", "momentum_buffer_out", {DataType::BFLOAT16});
     }
-}
-
-MorehSgdOperation::program_factory_t MorehSgdOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
 };
 
 void MorehSgdOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehSgdOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };

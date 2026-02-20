@@ -10,8 +10,8 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/tt-metalium/constants.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 
@@ -40,7 +40,12 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr uint32_t gamma_element_size = get_compile_time_arg_val(7);
     constexpr uint32_t beta_element_size = get_compile_time_arg_val(8);
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    constexpr uint32_t gamma_is_batched = get_compile_time_arg_val(9);
+    constexpr uint32_t beta_is_batched = get_compile_time_arg_val(10);
+    constexpr uint32_t gamma_batch_stride_tiles = get_compile_time_arg_val(11);
+    constexpr uint32_t beta_batch_stride_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t Ht = get_compile_time_arg_val(13);
+    constexpr auto src_args = TensorAccessorArgs<14>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -67,6 +72,13 @@ void kernel_main() {
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 
+    // Track the current batch for batched gamma/beta
+    // batch_idx = tile_row / Ht (Ht = tile rows per sequence position in NC dimension)
+    uint32_t current_gamma_batch = tile_row_start / Ht;
+    uint32_t current_beta_batch = tile_row_start / Ht;
+    bool gamma_loaded_for_batch = false;
+    bool beta_loaded_for_batch = false;
+
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t stats_tile_idx = tile_row * stats_tiles_cols;
         cb_reserve_back(cb_stats, stats_tiles_cols);
@@ -79,6 +91,34 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_stats, stats_tiles_cols);
+
+        // Check if we've switched to a new batch
+        uint32_t batch_idx = tile_row / Ht;
+
+#ifdef FUSE_GAMMA
+        bool need_new_gamma = false;
+        if constexpr (gamma_is_batched) {
+            if (batch_idx != current_gamma_batch || !gamma_loaded_for_batch) {
+                need_new_gamma = true;
+                current_gamma_batch = batch_idx;
+            }
+        } else {
+            // Non-batched: only load on first tile_row
+            need_new_gamma = (tile_row == tile_row_start);
+        }
+#endif
+#ifdef FUSE_BETA
+        bool need_new_beta = false;
+        if constexpr (beta_is_batched) {
+            if (batch_idx != current_beta_batch || !beta_loaded_for_batch) {
+                need_new_beta = true;
+                current_beta_batch = batch_idx;
+            }
+        } else {
+            // Non-batched: only load on first tile_row
+            need_new_beta = (tile_row == tile_row_start);
+        }
+#endif
 
         // Loop tiles in blocks of block_size
         uint32_t input_tile_idx = tile_row * Wt;
@@ -96,13 +136,16 @@ void kernel_main() {
             cb_push_back(cb_inp, block_size);
 
 #ifdef FUSE_GAMMA
-            if (tile_row == tile_row_start) {
-                // Read in gamma block-by-block when on the first row
+            if (need_new_gamma) {
+                // Read in gamma block-by-block for this batch
                 cb_reserve_back(cb_gamma, block_size);
-                DPRINT << "reserve_back gamma on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL();
+                DPRINT << "reserve_back gamma on tile_row: " << tile_row << " col_tile: " << col_tile
+                       << " batch: " << batch_idx << ENDL();
                 uint32_t l1_write_addr_g = get_write_ptr(cb_gamma);
+                // Calculate tile offset for this batch
+                uint32_t gamma_batch_offset = gamma_is_batched ? (batch_idx * gamma_batch_stride_tiles) : 0;
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
-                    uint64_t gamma_noc_addr = get_noc_addr(col_tile + i, addrg);
+                    uint64_t gamma_noc_addr = get_noc_addr(gamma_batch_offset + col_tile + i, addrg);
                     async_read_row_to_tile<gamma_is_row_major, gamma_element_size>(gamma_noc_addr, l1_write_addr_g);
                     l1_write_addr_g += gamma_tile_bytes;
                 }
@@ -111,13 +154,16 @@ void kernel_main() {
             }
 #endif
 #ifdef FUSE_BETA
-            if (tile_row == tile_row_start) {
-                // Read in beta block-by-block when on the first row
+            if (need_new_beta) {
+                // Read in beta block-by-block for this batch
                 cb_reserve_back(cb_beta, block_size);
-                DPRINT << "reserve_back beta on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL();
+                DPRINT << "reserve_back beta on tile_row: " << tile_row << " col_tile: " << col_tile
+                       << " batch: " << batch_idx << ENDL();
                 uint32_t l1_write_addr_b = get_write_ptr(cb_beta);
+                // Calculate tile offset for this batch
+                uint32_t beta_batch_offset = beta_is_batched ? (batch_idx * beta_batch_stride_tiles) : 0;
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
-                    uint64_t beta_noc_addr = get_noc_addr(col_tile + i, addrb);
+                    uint64_t beta_noc_addr = get_noc_addr(beta_batch_offset + col_tile + i, addrb);
                     async_read_row_to_tile<beta_is_row_major, beta_element_size>(beta_noc_addr, l1_write_addr_b);
                     l1_write_addr_b += beta_tile_bytes;
                 }
@@ -126,6 +172,17 @@ void kernel_main() {
             }
 #endif
         }
+
+#ifdef FUSE_GAMMA
+        if (need_new_gamma) {
+            gamma_loaded_for_batch = true;
+        }
+#endif
+#ifdef FUSE_BETA
+        if (need_new_beta) {
+            beta_loaded_for_batch = true;
+        }
+#endif
     }
 }
 

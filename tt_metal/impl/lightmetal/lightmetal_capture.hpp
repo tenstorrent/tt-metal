@@ -84,7 +84,7 @@ private:
     std::unordered_map<uint64_t, uint32_t> program_id_to_global_id_map_;
     std::unordered_map<const Kernel*, uint32_t> kernel_to_global_id_map_;
     std::unordered_map<CBHandle, uint32_t> cb_handle_to_global_id_map_;
-    // TODO (kmabee) - consider adding map for CommandQueue object.
+    // TODO (kmabee) - consider adding map for HWCommandQueue object.
 };
 
 TraceDescriptorByTraceIdOffset to_flatbuffer(

@@ -4,13 +4,12 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/socket_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
@@ -41,4 +40,3 @@ void MAIN {
         socket_pop_pages(socket, 1);
     }
 }
-}  // namespace NAMESPACE

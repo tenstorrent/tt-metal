@@ -16,6 +16,7 @@
 
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp>
 #include <umd/device/cluster.hpp>
@@ -116,9 +117,16 @@ ValidationMetrics run_bandwidth_validation(
     ChipId dst_chip) {
     ValidationMetrics metrics;
 
+    tt::tt_fabric::MeshId mesh_id_0 = tt::tt_fabric::MeshId(0);
+
+    // Convert logical to physical chip ID for reading back telemetry (which requires a physical, not logical, chip ID)
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    tt::tt_fabric::FabricNodeId src_fabric_node_id(mesh_id_0, src_chip);
+    int src_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+
     // Configure workload
     tt::tt_fabric::bench::PerfParams params;
-    params.mesh_id = 0;
+    params.mesh_id = *mesh_id_0;
     params.src_chip = src_chip;
     params.dst_chip = dst_chip;
     params.tensor_bytes = transfer_size_bytes;
@@ -145,9 +153,9 @@ ValidationMetrics run_bandwidth_validation(
 
     // Baseline measurement
     log_info(tt::LogTest, "Reading baseline counters...");
-    ChannelCounters baseline = sum_all_tx_counters(fixture.get_cluster(), fixture.get_hal(), src_chip);
+    ChannelCounters baseline = sum_all_tx_counters(fixture.get_cluster(), fixture.get_hal(), src_physical_chip_id);
 
-    float aiclk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(src_chip);
+    float aiclk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(src_physical_chip_id);
     log_info(tt::LogTest, "Using AICLK = {:.1f} MHz", aiclk_mhz);
 
     // Run measured transfers
@@ -169,7 +177,7 @@ ValidationMetrics run_bandwidth_validation(
     metrics.bench_bandwidth_mbps = (total_payload_bytes / (total_time_sec * params.trace_iters)) / 1e6;
 
     // Read telemetry after
-    ChannelCounters after = sum_all_tx_counters(fixture.get_cluster(), fixture.get_hal(), src_chip);
+    ChannelCounters after = sum_all_tx_counters(fixture.get_cluster(), fixture.get_hal(), src_physical_chip_id);
     ChannelCounters delta = after - baseline;
 
     // Calculate telemetry bandwidth

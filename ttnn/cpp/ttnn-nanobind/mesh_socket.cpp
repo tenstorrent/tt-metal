@@ -29,7 +29,25 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     device_coord (MeshCoordinate): The device coordinate of the core
                     core_coord (CoreCoord): The core coordinate of the core
-            )doc");
+                )doc")
+        .def_rw("device_coord", &tt::tt_metal::distributed::MeshCoreCoord::device_coord, "Device coordinate")
+        .def_rw("core_coord", &tt::tt_metal::distributed::MeshCoreCoord::core_coord, "Core coordinate")
+        .def(
+            "__eq__",
+            [](const tt::tt_metal::distributed::MeshCoreCoord& a, const tt::tt_metal::distributed::MeshCoreCoord& b) {
+                return a == b;
+            })
+        .def(
+            "__ne__",
+            [](const tt::tt_metal::distributed::MeshCoreCoord& a, const tt::tt_metal::distributed::MeshCoreCoord& b) {
+                return a != b;
+            })
+        .def("__repr__", [](const tt::tt_metal::distributed::MeshCoreCoord& mcc) {
+            std::stringstream ss;
+            ss << "MeshCoreCoord(device=" << mcc.device_coord << ", core=(" << mcc.core_coord.x << ","
+               << mcc.core_coord.y << "))";
+            return ss.str();
+        });
     nb::class_<tt::tt_metal::distributed::SocketConnection>(mod, "SocketConnection")
         .def(
             nb::init<tt::tt_metal::distributed::MeshCoreCoord, tt::tt_metal::distributed::MeshCoreCoord>(),
@@ -110,6 +128,15 @@ void py_module_types(nb::module_& mod) {
                 Note:
                     Sockets should typically be created in pairs using create_socket_pair()
                     rather than using this constructor directly.
+            )doc")
+        .def(
+            "get_config_buffer_address",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) {
+                return static_cast<uint32_t>(socket.get_config_buffer()->address());
+            },
+            R"doc(
+                Returns the L1 address of the socket configuration buffer on the device.
+                This address is passed to device kernels to access socket metadata.
             )doc");
 }
 

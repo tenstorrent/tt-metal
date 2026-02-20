@@ -1043,6 +1043,11 @@ class TT_CCL:
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
+        # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
+        if seqlen > 128:
+            num_workers_per_link = 4
+        else:
+            num_workers_per_link = 1
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
@@ -1054,7 +1059,7 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
-            num_workers_per_link=1,
+            num_workers_per_link=num_workers_per_link,
         )
 
         # reshape input back
@@ -1111,6 +1116,9 @@ class TT_CCL:
             assert buffer_key is not None, "buffer_key is None"
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        barrier_semaphore = None
+        if persistent_buffer is None:
+            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
         semaphores = (
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
             if self.use_ring_ag_prefill
@@ -1127,6 +1135,7 @@ class TT_CCL:
             topology=topology,
             multi_device_global_semaphore=semaphores,
             persistent_output_tensor=persistent_buffer,
+            barrier_semaphore=barrier_semaphore,
             num_links=num_links,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,

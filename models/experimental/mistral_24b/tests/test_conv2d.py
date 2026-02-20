@@ -14,7 +14,17 @@ import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
+from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from ttnn import ConcatMeshToTensor
+
+
+def reference_conv2d_patch(model_args):
+    """Mistral-specific reference method for conv2d patch."""
+    model = model_args.reference_vision_transformer(wrap=False)
+    layer = model.vision_tower.patch_conv
+    layer._load_state_dict = layer.load_state_dict
+    layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, model_args.head_dim))
+    return layer
 
 
 @run_for_wormhole_b0()
@@ -65,7 +75,7 @@ def test_conv2d_inference(
     input_tensor = torch.randn((B, NCH, H, W)).to(dtype=torch.bfloat16)
     logger.info(f"Input tensor shape: {input_tensor.shape}")
 
-    reference_model = model_args.reference_conv2d_patch()
+    reference_model = reference_conv2d_patch(model_args)
     reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor)
 

@@ -12,11 +12,6 @@
 
 namespace ttnn::operations::data_movement {
 
-MoeRoutingRemapDeviceOperation::program_factory_t MoeRoutingRemapDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return SingleCore{};
-}
-
 void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_routing_weights = tensor_args.input_routing_weights;

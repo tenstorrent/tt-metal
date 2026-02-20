@@ -8,7 +8,6 @@
 #include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -44,10 +43,6 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
-
-namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;

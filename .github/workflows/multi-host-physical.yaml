@@ -12,11 +12,35 @@ on:
         required: false
         default: true
         type: boolean
-      glx_4x_multihost:
-        description: 'Run Galaxy 4x multi-host job (timeshare)'
+      glx_4x_unit_tests:
+        description: 'Run Galaxy 4x unit tests'
         required: false
         default: false
         type: boolean
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
     - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
@@ -35,7 +59,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
 
   multi-host-t3k:
@@ -87,8 +113,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
@@ -140,12 +166,12 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    if: ${{ github.event.inputs.glx_4x_multihost == 'true' || github.event.schedule == '0 4 * * *' }}
+    if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
@@ -173,9 +199,10 @@ jobs:
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
-      - name: Run tests on multiple hosts
+      - name: Run quad galaxy unit tests
+        if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 140
+        timeout-minutes: 30
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -193,6 +220,6 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests

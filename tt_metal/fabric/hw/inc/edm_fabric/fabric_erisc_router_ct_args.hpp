@@ -421,6 +421,9 @@ constexpr bool ENABLE_FABRIC_TELEMETRY = static_cast<bool>(get_compile_time_arg_
 
 constexpr uint8_t FABRIC_TELEMETRY_STATS_MASK =
     static_cast<uint8_t>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+constexpr bool FABRIC_TELEMETRY_ROUTER_STATE =
+    ENABLE_FABRIC_TELEMETRY &&
+    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::ROUTER_STATE)) != 0);
 constexpr bool FABRIC_TELEMETRY_BANDWIDTH =
     ENABLE_FABRIC_TELEMETRY &&
     ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::BANDWIDTH)) != 0);
@@ -430,8 +433,8 @@ constexpr bool FABRIC_TELEMETRY_HEARTBEAT_TX =
 constexpr bool FABRIC_TELEMETRY_HEARTBEAT_RX =
     ENABLE_FABRIC_TELEMETRY &&
     ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_RX)) != 0);
-constexpr bool FABRIC_TELEMETRY_ANY_DYNAMIC_STAT =
-    FABRIC_TELEMETRY_BANDWIDTH || FABRIC_TELEMETRY_HEARTBEAT_TX || FABRIC_TELEMETRY_HEARTBEAT_RX;
+constexpr bool FABRIC_TELEMETRY_ANY_DYNAMIC_STAT = FABRIC_TELEMETRY_ROUTER_STATE || FABRIC_TELEMETRY_BANDWIDTH ||
+                                                   FABRIC_TELEMETRY_HEARTBEAT_TX || FABRIC_TELEMETRY_HEARTBEAT_RX;
 
 constexpr PerfTelemetryRecorderType perf_telemetry_mode =
     static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 2));

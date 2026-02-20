@@ -51,11 +51,6 @@ void MorehMeanOperation::validate_on_program_cache_miss(
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void MorehMeanOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-};
-
 MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {

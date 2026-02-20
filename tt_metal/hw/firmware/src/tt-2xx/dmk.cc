@@ -10,7 +10,6 @@
 #include "tensix_types.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"
-#include "ckernel_structs.h"
 #include "stream_io_map.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"

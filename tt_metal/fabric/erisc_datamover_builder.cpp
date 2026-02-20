@@ -1002,7 +1002,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // unsure which one we should prefer at the moment
     // bool z_routers_enabled = fabric_context.get_builder_context().get_intermesh_vc_config().router_type ==
     // IntermeshRouterType::Z_INTERMESH;
-    bool z_router_enabled = fabric_context.has_z_router_on_device(local_fabric_node_id);
+    bool z_router_enabled = fabric_context.has_z_router_on_device(control_plane, local_fabric_node_id);
 
     log_debug(
         LogFabric,

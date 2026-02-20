@@ -131,7 +131,8 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        first_coord);  // first core in the subdevice is our offset as we don't use this version for fusions
+        first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+        operation_attributes.compute_kernel_config);
 
     shared_variables_t shared_vars{
         .multidevice_semaphores = multidevice_semaphores,

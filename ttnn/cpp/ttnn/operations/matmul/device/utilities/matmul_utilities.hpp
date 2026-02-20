@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <vector>
+
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -151,3 +154,23 @@ inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, b
 }
 
 }  // namespace ttnn::operations::matmul::utilities
+
+namespace ttnn::prim::dram_sharded_helpers {
+// This type of access pattern cannot be copied.
+// Treat it as a one off patch to restore functionality that
+// was adjusted to fix one P0 causing another P0.
+// TODO: Proper fix will be implemented in Issue #32205
+tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord);
+
+void get_max_page_size_and_num_pages(
+    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
+
+void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons);
+
+void get_optimal_dram_bank_to_reader_assignment(
+    tt::tt_metal::IDevice* device,
+    std::vector<CoreCoord>& all_worker_cores_ordered,
+    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::NOC noc);
+
+}  // namespace ttnn::prim::dram_sharded_helpers

@@ -44,7 +44,14 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
+
+#ifdef FUSE_TERNARY
+    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
+    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+#endif  // FUSE_TERNARY
+
+    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<21>();
@@ -61,6 +68,27 @@ void kernel_main() {
     constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
 #endif
+
+#ifdef FUSE_TERNARY
+// Calculate offset for ternary_a_args
+#ifdef FUSE_BIAS
+    constexpr uint32_t ternary_a_args_cta_offset = in2_args.next_compile_time_args_offset();
+#else
+    constexpr uint32_t ternary_a_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+#endif
+    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+
+    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
+    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
+
+    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
+    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
+
+#endif  // FUSE_TERNARY
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
@@ -117,8 +145,6 @@ void kernel_main() {
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
     bool k_forward = true;
-    bool n_forward = true;
-    bool reuse_block = false;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -135,9 +161,10 @@ void kernel_main() {
         }
 #endif
 
+        k_forward = true;
+
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
-                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
+            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
@@ -174,10 +201,6 @@ void kernel_main() {
                     }
                 }
 
-                if (reuse_block && k_block_iter == 0) {
-                    reuse_block = false;
-                    continue;
-                }
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -245,6 +268,22 @@ void kernel_main() {
             }
 #endif
 
+#ifdef FUSE_TERNARY
+            if constexpr (!is_output_writer) {
+                read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
+                    ternary_a_reader,
+                    ternary_b_reader,
+                    out_shape,
+                    cb_id_ternary_a,
+                    cb_id_ternary_b,
+                    ternary_a_tile_size,
+                    m_tile,
+                    m_tile_end,
+                    n_tile,
+                    n_tile_end);
+            }
+#endif  // FUSE_TERNARY
+
             k_forward = !k_forward;
             // We have an output block to write out
 
@@ -287,11 +326,6 @@ void kernel_main() {
                 }
             }
         }
-#ifndef FUSE_AG
-        n_forward = !n_forward;
-        // We get reuse on in1 when striding M block
-        reuse_block = true;
-#endif
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

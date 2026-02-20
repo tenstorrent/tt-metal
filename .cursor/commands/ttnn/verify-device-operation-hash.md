@@ -42,12 +42,14 @@ The infrastructure provides a default `compute_program_hash` that automatically 
 
 ### Step 1: Identify Program Factory(ies)
 
-1. Check `select_program_factory` in the device operation to see if there are multiple factories
-2. If single factory: analyze that one factory
-3. If multiple factories: analyze each factory variant separately
+1. Check `program_factory_t` in the device operation to see how many factory variants exist
+2. If single-variant (`std::variant<OneFactory>`): analyze that one factory. Note: single-variant operations do not need `select_program_factory` — the framework auto-selects the sole factory.
+3. If multi-variant: check `select_program_factory` to understand the selection logic, then analyze each factory variant separately
 
-**Example (Dropout):**
+**Example (Dropout — multi-variant, requires `select_program_factory`):**
 ```cpp
+using program_factory_t = std::variant<DropoutProgramFactory, DropoutMeshWorkloadFactory>;
+
 program_factory_t select_program_factory(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.use_per_device_seed) {
         return program::DropoutMeshWorkloadFactory{};

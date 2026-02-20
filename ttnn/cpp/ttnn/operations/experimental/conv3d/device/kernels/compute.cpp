@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include <tt-metalium/constants.hpp>
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/untilize.h"
+#include "api/compute/tilize.h"
+#include "api/compute/matmul.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -121,8 +121,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     }
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_vol2col_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_vol2col_tiled = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(2);
@@ -291,4 +290,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

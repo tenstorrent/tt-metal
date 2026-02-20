@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_dropout ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Dropout ALIAS ttnn_op_experimental_dropout)
 
-target_precompile_headers(ttnn_op_experimental_dropout REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_dropout REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_dropout)
 
 set_target_properties(

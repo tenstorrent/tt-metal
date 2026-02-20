@@ -1,21 +1,48 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 
 #include "topk_common_funcs.hpp"
 
-namespace NAMESPACE {
+#include <cstdint>
 
-void MAIN {
+/**
+ * TopK Multicore Compute Kernel Implementation - Final Aggregation Phase
+ *
+ * This kernel implements the final aggregation stage of the multicore TopK algorithm.
+ * It receives locally optimal TopK results from multiple worker cores and performs
+ * a final bitonic merge to produce globally optimal TopK values and indices.
+ *
+ * ================================================================================================
+ * FINAL AGGREGATION PHASE - GLOBAL TopK COMPUTATION
+ * ================================================================================================
+ *
+ * ALGORITHM OVERVIEW:
+ * 1. Receive Kt tiles from each of the (num_cores-1) local processing cores
+ * 2. Treat received data as Wt_final width of tiles containing candidate TopK elements
+ * 3. Apply the same bitonic merge algorithm as local cores to find global optimum
+ * 4. Output final TopK values and indices in the desired format
+ *
+ * INPUT DATA STRUCTURE:
+ * - input_cb_index/index_cb_index: Received data from all local cores
+ * - Data layout: [Core0_TopK][Core1_TopK]...[CoreN_TopK] each of size Kt tiles
+ * - Total width: Wt_final = num_local_cores * Kt tiles
+ *
+ * PROCESSING DIFFERENCES FROM LOCAL CORES:
+ * - No initial local sort needed (data already sorted per core)
+ * - Copy input data to transposed buffers for in-place bitonic operations
+ * - Apply log(Wt_final) bitonic merge iterations
+ * - Final output is the globally optimal TopK result
+ */
+
+void kernel_main() {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
@@ -43,77 +70,83 @@ void MAIN {
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
 
     // init pack, compute and unpack
-    init_sfpu(input_cb_index, tt::CBIndex::c_16);
+    init_sfpu(input_cb_index, values_cb_index);
     ckernel::topk_tile_init();
 
+    // Aggregate results from all local cores for each height row
     for (uint32_t ht = 0; ht < Ht; ++ht) {
-        cb_wait_front(input_cb_index, Wt);
-        cb_wait_front(index_cb_index, Wt);
+        cb_wait_front(input_cb_index, Wt);  // Wait for all local TopK results (values)
+        cb_wait_front(index_cb_index, Wt);  // Wait for all local TopK results (indices)
 
-        // have to use a different buffer than input_cb_index and index_cb_index as we pop/reserve/wait/push on tiles
-        // for all the in-place operations we will end up racing with reader if both kernels use cb apis on the same
-        // buffer (input_cb_index/index_cb_index)
+        // Use separate buffers to avoid racing conditions with reader kernel.
+        // The reader kernel manages input_cb_index/index_cb_index, while compute
+        // operations require separate staging buffers for in-place bitonic operations.
+
         pack_reconfig_data_format(input_transposed_cb_index);
-        // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
+        // Copy all received value tiles from local cores to transposed staging buffer
         for (uint32_t wt = 0; wt < Wt; wt++) {
             acquire_dst();
-            // copy in inputs from input_cb_index - TODO: figure out how to optimize this out
             cb_reserve_back(input_transposed_cb_index, 1);
-            copy_tile(input_cb_index, wt, 0);
-            // pack value tiles into cb_intermed2
-            pack_tile(0, input_transposed_cb_index);
+            copy_tile(input_cb_index, wt, 0);         // Copy tile from local core wt
+            pack_tile(0, input_transposed_cb_index);  // Pack to staging buffer
             release_dst();
-        }
+        }  // wt loop
         cb_push_back(input_transposed_cb_index, Wt);
         cb_wait_front(input_transposed_cb_index, Wt);
-        cb_pop_front(input_cb_index, Wt);
+        cb_pop_front(input_cb_index, Wt);  // Release input buffer space
 
+        // Copy all received index tiles from local cores to transposed staging buffer
         copy_tile_to_dst_init_short_with_dt(input_cb_index, index_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             acquire_dst();
-            // copy in inputs from index_cb_index
             cb_reserve_back(index_transposed_cb_index, 1);
-            copy_tile(index_cb_index, wt, 0);
-            // pack value tiles into cb_intermed3
-            pack_tile(0, index_transposed_cb_index);
+            copy_tile(index_cb_index, wt, 0);         // Copy index tile from local core wt
+            pack_tile(0, index_transposed_cb_index);  // Pack to staging buffer
             cb_push_back(index_transposed_cb_index, 1);
             release_dst();
-        }
+        }  // wt loop
         cb_wait_front(index_transposed_cb_index, Wt);
-        cb_pop_front(index_cb_index, Wt);
+        cb_pop_front(index_cb_index, Wt);  // Release input buffer space
 
-        uint32_t num_k_sequences = (Wt * 32) / K;
+        uint32_t num_k_sequences = (Wt * 32) / K;  // K-element sequences across all local results
 
-        // iterative divide and conquer on pairs of tiles (bitonic topk merge and rebuild)
-        // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in each
-        // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
-        // Wt/2 tile single buffer as we can pack tiles back in-place
+        // Bitonic merge iterations to compute global TopK
+        // Apply the same log(Wt_final) bitonic merge iterations as local cores,
+        // but now operating on the aggregated results from all cores.
+        // This produces the globally optimal TopK from all local TopK results.
+        //
+        // Merge pattern for Wt_final tiles:
+        // - Iteration 0: Merge (0,1), (2,3), (4,5), ... from different local cores
+        // - Iteration 1: Merge (0,2), (4,6), (8,10), ... across core boundaries
+        // - Final iteration: Global TopK across all cores' contributions
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
             process_iteration(
-                m_iter,
-                K,
-                Wt,
-                num_k_sequences,
-                tiles_per_seq,
-                input_transposed_cb_index,
-                index_transposed_cb_index,
-                input_dest_start,
-                input_dest_end,
-                index_dest_start,
-                index_dest_end,
-                largest,
-                switch_dir,
-                logk,
-                seq_per_2tiles,
-                largest);
+                m_iter,                     // Current merge iteration
+                K,                          // TopK value
+                Wt,                         // Total width tiles (from all cores)
+                num_k_sequences,            // K-sequences in aggregated data
+                tiles_per_seq,              // Tiles per sequence (ceil(K/32))
+                input_transposed_cb_index,  // Aggregated values buffer
+                index_transposed_cb_index,  // Aggregated indices buffer
+                input_dest_start,           // Destination register 0
+                input_dest_end,             // Destination register 1
+                index_dest_start,           // Destination register 2
+                index_dest_end,             // Destination register 3
+                largest,                    // Sort direction
+                switch_dir,                 // Direction switching strategy
+                logk,                       // log2(K) for bitonic depth
+                seq_per_2tiles,             // Sequences per tile pair
+                largest);                   // Find largest vs smallest
         }
 
-        // transpose value tiles and pack into output buffer
+        // Extract the globally optimal TopK values and indices and prepare
+        // for final output. Transpose back to WH format as required.
+
+        // Extract and output final TopK values (first Kt tiles contain global optimum)
         transpose_and_pack(input_transposed_cb_index, values_cb_index, Kt, Wt);
 
-        // transpose index tiles and pack into output buffer
+        // Extract and output final TopK indices (corresponding to global optimum values)
         transpose_and_pack(index_transposed_cb_index, output_ind_cb_index, Kt, Wt);
-    }
+    }  // ht loop
 }
-}  // namespace NAMESPACE

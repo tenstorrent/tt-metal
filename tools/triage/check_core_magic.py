@@ -25,6 +25,8 @@ from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
+from ttexalens.umd_device import TimeoutDeviceRegisterError
+
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -84,6 +86,8 @@ def try_read_magic_with_dispatcher_data(
     try:
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
         return dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value()
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         log_check_location(
             location,

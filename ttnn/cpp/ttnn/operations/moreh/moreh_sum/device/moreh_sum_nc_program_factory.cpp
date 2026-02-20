@@ -108,10 +108,6 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc.cpp";
-    if (device->arch() == tt::ARCH::GRAYSKULL) {
-        compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc_gs.cpp";
-    }
     CreateComputeKernel(
         program,
         compute_kernel_file,

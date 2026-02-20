@@ -324,7 +324,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
             .noc = NOC::RISCV_0_default,
             .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
     ChipId mmio_device_id =

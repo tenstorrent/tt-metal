@@ -7,28 +7,27 @@
 #include "api/debug/dprint.h"
 // TODO FIXME: this build system is ridiculously stupid
 #ifdef COMPILE_FOR_TRISC
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 #include "defines_generated.h"
 #endif
 
-#ifdef DATA_MOVEMENT
-namespace {
 void kernel_main() {
+    volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
+    constexpr uint32_t kCommonRTASeparation = 1024;
+    uint64_t hartid = 0;
+#ifdef COMPILE_FOR_DM
+    // Quasar DM only: Get DM processor ID
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    // Quasar DM only: write the actual L1 base addresses at the end of CRTA payload from all DMs
+    results[kCommonRTASeparation + MAX_DMS * NUM_RUNTIME_ARGS + hartid] = static_cast<uint32_t>(get_common_arg_addr(0));
 #endif
-#ifdef COMPUTE
-    namespace NAMESPACE {
-    void MAIN {
-#endif
-        volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
-        int i;
-        for (i = 0; i < NUM_RUNTIME_ARGS; i++) {
+    for (uint32_t i = 0; i < NUM_RUNTIME_ARGS; i++) {
 #ifdef COMMON_RUNTIME_ARGS
-            constexpr uint32_t kCommonRTASeparation = 1024;
-            results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);
+        results[i + kCommonRTASeparation + hartid * NUM_RUNTIME_ARGS] = get_common_arg_val<uint32_t>(i);
 #endif
-            results[i] = get_arg_val<uint32_t>(i);
-        }
+        results[i] = get_arg_val<uint32_t>(i);
+    }
 
 #ifdef COORDS_ADDR
 #ifdef DATA_MOVEMENT
@@ -41,5 +40,4 @@ void kernel_main() {
         coords[5] = get_relative_logical_y();
 #endif
 #endif
-    }
-    }
+}

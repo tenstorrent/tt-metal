@@ -142,17 +142,17 @@ In addition, you can add the following environment variable to print currently e
 #### How to launch C++ example code from VSCode
 * Add the Makefile Tools extension
 * Be sure to build with `make tests/tt_eager`
-* Update launch.json to debug the code sample you want to run.  For example if you want to run test_bert, your update to launch.json might look like:
+* Update launch.json to debug the code sample you want to run.  For example if you want to run a test, your update to launch.json might look like:
     ```
             {
-                "name": "test_bert",
+                "name": "test_example",
                 "type": "cppdbg",
                 "request": "launch",
                 "args": [],
                 "stopAtEntry": false,
                 "externalConsole": false,
                 "cwd": "${workspaceFolder}/build",
-                "program": "${workspaceFolder}/build/test/tt_eager/integration_tests/test_bert",
+                "program": "${workspaceFolder}/build/test/tt_eager/ops/test_eltwise_binary_op",
                 "MIMode": "gdb",
                 "miDebuggerPath": "gdb",
                 "setupCommands": [

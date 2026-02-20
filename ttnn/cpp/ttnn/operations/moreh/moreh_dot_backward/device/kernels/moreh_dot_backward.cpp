@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/bcast.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr int onetile = 1;
     uint32_t has_input_grad = get_arg_val<uint32_t>(0);
     uint32_t has_other_grad = get_arg_val<uint32_t>(1);
@@ -38,4 +37,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

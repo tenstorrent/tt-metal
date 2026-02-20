@@ -124,6 +124,14 @@ public:
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
+    // High water mark tracking for all allocations (both bottom-up and top-down)
+    // Tracks the maximum address extent reached during the tracking period, including deallocated buffers
+    void begin_high_water_mark_tracking();
+    DeviceAddr end_high_water_mark_tracking();
+    DeviceAddr get_high_water_mark() const;
+    DeviceAddr get_allocation_high_water_mark() const;
+    DeviceAddr get_deletion_high_water_mark() const;
+
     // AllocatorState Methods
     // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
@@ -166,6 +174,11 @@ private:
 
     // Per-allocator cache of: merged allocated ranges of all other dependent allocators
     ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
+
+    // High water mark tracking for allocations and deallocations
+    bool tracking_high_water_mark_ = false;
+    DeviceAddr allocation_high_water_mark_ = 0;
+    DeviceAddr deletion_high_water_mark_ = 0;
 
     /*********************************
      * Allocator-independent methods *

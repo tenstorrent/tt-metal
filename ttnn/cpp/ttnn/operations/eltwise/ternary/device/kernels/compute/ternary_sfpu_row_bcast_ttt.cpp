@@ -15,10 +15,11 @@
 
 #include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/where.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/lerp.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);

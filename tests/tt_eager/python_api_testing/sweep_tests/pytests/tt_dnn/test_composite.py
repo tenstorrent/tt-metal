@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.common.utility_functions import is_wormhole_b0, is_grayskull
+from models.common.utility_functions import is_wormhole_b0
 
 
 reference_pcc = defaultdict(lambda: 0.999)
@@ -135,9 +135,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     if is_wormhole_b0():
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
-    if is_grayskull():
-        if fn in ["mish"]:
-            pytest.skip("does not work for Grayskull -skipping")
     if fn in [
         "logical_xor",
     ]:

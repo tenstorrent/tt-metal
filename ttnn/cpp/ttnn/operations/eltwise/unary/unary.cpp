@@ -25,15 +25,17 @@ inline Tensor unary_impl(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
-    DataType output_dtype = (op_chain[0].type() == UnaryOpType::TYPECAST || op_chain[0].type() == UnaryOpType::BITCAST)
-                                ? static_cast<DataType>(*op_chain[0].get_param_if<float>(1))
-                                : input_dtype;
+    // TYPECAST/BITCAST should always be the last operation in the chain when present; use its output dtype (param 1)
+    DataType output_dtype = input_dtype;
+    if (op_chain.back().type() == UnaryOpType::TYPECAST || op_chain.back().type() == UnaryOpType::BITCAST) {
+        output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
+    }
     bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
                             output_dtype == DataType::UINT8 or input_dtype == DataType::UINT8 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
-    bool bfp8_pack_precise = (op_chain[0].type() == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
+    bool bfp8_pack_precise = (op_chain.back().type() == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
     auto output_memory_config = optional_output_tensor.has_value()
                                     ? optional_output_tensor.value().memory_config()
@@ -226,6 +228,8 @@ template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::FILL>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::POWER>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::POWER_ITERATIVE>;
 
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GE>;
@@ -580,7 +584,6 @@ Tensor Swish::invoke(
     return detail::unary_impl(input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;

@@ -55,7 +55,7 @@ inline std::string get_core_descriptor_file(
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
-        if (grid_size.y <= 2) {  // these SOC descriptors declare a 2x2 grid
+        if (grid_size.y <= 2 || grid_size.x <= 2) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
         }
     }
@@ -95,7 +95,7 @@ inline std::string get_core_descriptor_file(
                 } else {
                     return core_desc_dir + "blackhole_140_arch.yaml";
                 }
-            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_8x4_arch.yaml";
         };
     }
     return "";

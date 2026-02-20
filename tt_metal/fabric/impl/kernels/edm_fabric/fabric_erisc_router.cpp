@@ -32,7 +32,6 @@
 #include "noc_overlay_parameters.h"
 #include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
-#include "hostdevcommon/fabric_common.h"
 #include "hostdev/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
@@ -1369,7 +1368,9 @@ bool any_sender_channels_active(
  */
 constexpr bool IS_RETRAIN_SYNC_MASTER() { return enable_context_switch; }
 
-void run_routing_without_noc_sync_coordinated_as_master(
+// Signals intent to enter coordinated context switch and waits for erisc1 acknowledgement.
+// After this returns, erisc1 is in a wait loop and will not execute routing logic.
+FORCE_INLINE void coordinated_context_switch_start_as_master(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (IS_RETRAIN_SYNC_MASTER()) {
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
@@ -1381,7 +1382,14 @@ void run_routing_without_noc_sync_coordinated_as_master(
                 return;
             }
         }
-        run_routing_without_noc_sync();
+    }
+}
+
+// Signals completion of coordinated context switch and waits for erisc1 acknowledgement.
+// After this returns, erisc1 is free to resume normal routing execution.
+FORCE_INLINE void coordinated_context_switch_finish_as_master(
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (IS_RETRAIN_SYNC_MASTER()) {
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE));
         // Wait for erisc1 to ack
@@ -1394,6 +1402,15 @@ void run_routing_without_noc_sync_coordinated_as_master(
         // Resume normal operation
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION));
+    }
+}
+
+void run_routing_without_noc_sync_coordinated_as_master(
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+        coordinated_context_switch_start_as_master(termination_signal_ptr);
+        run_routing_without_noc_sync();
+        coordinated_context_switch_finish_as_master(termination_signal_ptr);
     }
 }
 FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
@@ -1437,6 +1454,12 @@ FORCE_INLINE void update_telemetry(
     bool rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
     volatile tt_l1_ptr LocalTelemetryT* fabric_telemetry) {
+    if constexpr (FABRIC_TELEMETRY_ROUTER_STATE) {
+        const auto* routing_table_l1 =
+            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
+        fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = state_manager_l1->state;
+    }
     if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX) {
         bool sender_idle = false;
         if (!tx_progress) {
@@ -1971,6 +1994,91 @@ FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
     }(std::make_index_sequence<OutboundReceiverChannelPointers::N>{});
 }
 
+// Input State(s): PAUSED
+// Output State(s): PAUSED
+void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    // Placeholder
+    state_manager_l1->state = RouterState::RETRAINING;
+    run_routing_without_noc_sync();
+    while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::RETRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+        // Wait for confirmation from host to avoid the WAW hazard:
+        // Host issues retrain
+        // Router enters retrain state
+        // Router completes retrain
+        // Router goes back to pause state, sets current state to PAUSED
+        // Host status read lands - it doesn't know if the RETRAIN landed and is done or was raced ahead
+        //
+        // For the time being, the implementation is conservative
+        //
+        // This can be avoided if the host guarantees that the reads are queued strictly behind writes
+        // For the entirety of the H->D datapath. For the time being, this is too strong of a requirement
+        // for cases where router code is not running in traditional H->D server/PC configurations
+        // (i.e. some custom IP integrations may not easily satisfy this guarantee this)
+    }
+
+    // PAUSED is the only legal output state
+    ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::PAUSE);
+};
+
+// Input State(s): PAUSED
+// Output State(s): DRAINING
+void run_drain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    state_manager_l1->state = RouterState::DRAINING;
+    ASSERT(false); // not implemented
+    while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::DRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+    }
+
+    ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::PAUSE);
+};
+
+__attribute__((noinline))
+void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (MY_ERISC_ID == 0) {
+        // Master erisc will handle the pause command but we need to make sure the other erisc is in its wait loop
+        // before we proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
+
+        bool keep_running_pause = true;
+        while (keep_running_pause && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            state_manager_l1->state = RouterState::PAUSED;
+            switch (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
+                case RouterCommand::RUN:
+                    keep_running_pause = false;
+                    break;
+                case RouterCommand::PAUSE:
+                    // nothing to do, we are paused, we may as well context switch to base FW
+                    run_routing_without_noc_sync();
+                    break;
+                case RouterCommand::DRAIN:
+                    run_drain_step(state_manager_l1, termination_signal_ptr);
+                    break;
+                case RouterCommand::RETRAIN:
+                    run_retrain_step(state_manager_l1, termination_signal_ptr);
+                    break;
+                default:
+                    ASSERT(false); // illegal state transition
+            }
+        }
+
+        //
+        // Likewise, we should resume other eriscs here
+        //
+    }
+};
+
+template <bool RISC_CPU_DATA_CACHE_ENABLED>
+FORCE_INLINE bool continue_running_main_run_loop(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr, tt_l1_ptr RouterStateManager* state_manager_l1) {
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
+            return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr);
+        } else {
+            return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) &&
+                   !state_manager_l1->is_non_run_command_pending /*<ENABLE_RISC_CPU_DATA_CACHE>*/ ();
+        }
+    } else {
+        return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending();
+    }
+}
+
 /*
  * Main control loop for fabric EDM. Run indefinitely until a termination signal is received
  *
@@ -2015,6 +2123,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
@@ -2060,87 +2169,79 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
     auto sender_channel_from_receiver_credits =
         init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
+
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
+    auto execute_main_loop = [&]() {
+        // while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/()) {
+        while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
+            did_something = false;
 
-    uint64_t loop_start_cycles;
-    while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-        did_something = false;
+            uint32_t tx_progress = 0;
+            uint32_t rx_progress = 0;
 
-        uint32_t tx_progress = 0;
-        uint32_t rx_progress = 0;
-        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-            loop_start_cycles = get_timestamp();
-        }
+            if constexpr (is_sender_channel_serviced[0]) {
+                open_perf_recording_window(inner_loop_perf_telemetry_collector);
+            }
 
-        if constexpr (is_sender_channel_serviced[0]) {
-            open_perf_recording_window(inner_loop_perf_telemetry_collector);
-        }
+            uint64_t loop_start_cycles;
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                loop_start_cycles = get_timestamp();
+            }
 
-        for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-            // Capture these to see if we made progress
+            for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
+                router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+                // Capture these to see if we made progress
 
-            // There are some cases, mainly for performance, where we don't want to switch between sender channels
-            // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
-                local_sender_channels,
-                local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointer_ch0,
-                remote_receiver_channels,
-                channel_connection_established,
-                local_sender_channel_free_slots_stream_ids,
-                sender_channel_from_receiver_credits,
-                inner_loop_perf_telemetry_collector,
-                local_fabric_telemetry);
+                // There are some cases, mainly for performance, where we don't want to switch between sender channels
+                // so we interoduce this to provide finer grain control over when we disable the automatic switching
+                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                    local_sender_channels,
+                    local_sender_channel_worker_interfaces,
+                    outbound_to_receiver_channel_pointer_ch0,
+                    remote_receiver_channels,
+                    channel_connection_established,
+                    local_sender_channel_free_slots_stream_ids,
+                    sender_channel_from_receiver_credits,
+                    inner_loop_perf_telemetry_collector,
+                    local_fabric_telemetry);
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
-            // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
-            // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
-            rx_progress |= run_receiver_channel_step<
-                0,
-                ENABLE_FIRST_LEVEL_ACK_VC0,
-                VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
-                DownstreamSenderVC1T,
-                decltype(local_relay_interface)>(
-                local_receiver_channels,
-                downstream_edm_noc_interfaces_vc1,
-                local_relay_interface,
-                receiver_channel_pointers_ch0,
-                receiver_channel_0_trid_tracker,
-                port_direction_table,
-                receiver_channel_response_credit_senders,
-                routing_table,
-                local_fabric_telemetry);
+                // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
+                // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
+                rx_progress |= run_receiver_channel_step<
+                    0,
+                    ENABLE_FIRST_LEVEL_ACK_VC0,
+                    VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
+                    DownstreamSenderVC1T,
+                    decltype(local_relay_interface)>(
+                    local_receiver_channels,
+                    downstream_edm_noc_interfaces_vc1,
+                    local_relay_interface,
+                    receiver_channel_pointers_ch0,
+                    receiver_channel_0_trid_tracker,
+                    port_direction_table,
+                    receiver_channel_response_credit_senders,
+                    routing_table,
+                    local_fabric_telemetry);
 #else
-            rx_progress |= run_receiver_channel_step<
-                0,
-                ENABLE_FIRST_LEVEL_ACK_VC0,
-                VC0_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC0 downstream interfaces
-                DownstreamSenderVC0T,
-                decltype(local_relay_interface)>(
-                local_receiver_channels,
-                downstream_edm_noc_interfaces_vc0,
-                local_relay_interface,
-                receiver_channel_pointers_ch0,
-                receiver_channel_0_trid_tracker,
-                port_direction_table,
-                receiver_channel_response_credit_senders,
-                routing_table,
-                local_fabric_telemetry);
+                rx_progress |= run_receiver_channel_step<
+                    0,
+                    ENABLE_FIRST_LEVEL_ACK_VC0,
+                    VC0_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC0 downstream interfaces
+                    DownstreamSenderVC0T,
+                    decltype(local_relay_interface)>(
+                    local_receiver_channels,
+                    downstream_edm_noc_interfaces_vc0,
+                    local_relay_interface,
+                    receiver_channel_pointers_ch0,
+                    receiver_channel_0_trid_tracker,
+                    port_direction_table,
+                    receiver_channel_response_credit_senders,
+                    routing_table,
+                    local_fabric_telemetry);
 #endif
-            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
-                local_sender_channels,
-                local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointer_ch0,
-                remote_receiver_channels,
-                channel_connection_established,
-                local_sender_channel_free_slots_stream_ids,
-                sender_channel_from_receiver_credits,
-                inner_loop_perf_telemetry_collector,
-                local_fabric_telemetry);
-            if constexpr (is_2d_fabric) {
-                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -2150,18 +2251,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector,
-                    local_fabric_telemetry);
-                if constexpr (ACTUAL_VC0_SENDER_CHANNELS > 4) {
-                    tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                if constexpr (is_2d_fabric) {
+                    tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
                         outbound_to_receiver_channel_pointer_ch0,
@@ -2171,51 +2262,32 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         sender_channel_from_receiver_credits,
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
-                }
+                    tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch0,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                    if constexpr (ACTUAL_VC0_SENDER_CHANNELS > 4) {
+                        tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                            local_sender_channels,
+                            local_sender_channel_worker_interfaces,
+                            outbound_to_receiver_channel_pointer_ch0,
+                            remote_receiver_channels,
+                            channel_connection_established,
+                            local_sender_channel_free_slots_stream_ids,
+                            sender_channel_from_receiver_credits,
+                            inner_loop_perf_telemetry_collector,
+                            local_fabric_telemetry);
+                    }
 #if defined(FABRIC_2D_VC1_SERVICED)
-                tx_progress |= run_sender_channel_step<
-                    VC1_RECEIVER_CHANNEL,
-                    ACTUAL_VC0_SENDER_CHANNELS,
-                    ENABLE_FIRST_LEVEL_ACK_VC1>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch1,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector,
-                    local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<
-                    VC1_RECEIVER_CHANNEL,
-                    ACTUAL_VC0_SENDER_CHANNELS + 1,
-                    ENABLE_FIRST_LEVEL_ACK_VC1>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch1,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector,
-                    local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<
-                    VC1_RECEIVER_CHANNEL,
-                    ACTUAL_VC0_SENDER_CHANNELS + 2,
-                    ENABLE_FIRST_LEVEL_ACK_VC1>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch1,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector,
-                    local_fabric_telemetry);
-                if constexpr (ACTUAL_VC1_SENDER_CHANNELS > 3) {
                     tx_progress |= run_sender_channel_step<
                         VC1_RECEIVER_CHANNEL,
-                        ACTUAL_VC0_SENDER_CHANNELS + 3,
+                        ACTUAL_VC0_SENDER_CHANNELS,
                         ENABLE_FIRST_LEVEL_ACK_VC1>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
@@ -2226,46 +2298,92 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         sender_channel_from_receiver_credits,
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
-                }
-                rx_progress |= run_receiver_channel_step<
-                    1,
-                    ENABLE_FIRST_LEVEL_ACK_VC1,
-                    VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
-                    DownstreamSenderVC1T,
-                    decltype(local_relay_interface)>(
-                    local_receiver_channels,
-                    downstream_edm_noc_interfaces_vc1,
-                    local_relay_interface,
-                    receiver_channel_pointers_ch1,
-                    receiver_channel_1_trid_tracker,
-                    port_direction_table,
-                    receiver_channel_response_credit_senders,
-                    routing_table,
-                    local_fabric_telemetry);
+                    tx_progress |= run_sender_channel_step<
+                        VC1_RECEIVER_CHANNEL,
+                        ACTUAL_VC0_SENDER_CHANNELS + 1,
+                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch1,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                    tx_progress |= run_sender_channel_step<
+                        VC1_RECEIVER_CHANNEL,
+                        ACTUAL_VC0_SENDER_CHANNELS + 2,
+                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch1,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                    if constexpr (ACTUAL_VC1_SENDER_CHANNELS > 3) {
+                        tx_progress |= run_sender_channel_step<
+                            VC1_RECEIVER_CHANNEL,
+                            ACTUAL_VC0_SENDER_CHANNELS + 3,
+                            ENABLE_FIRST_LEVEL_ACK_VC1>(
+                            local_sender_channels,
+                            local_sender_channel_worker_interfaces,
+                            outbound_to_receiver_channel_pointer_ch1,
+                            remote_receiver_channels,
+                            channel_connection_established,
+                            local_sender_channel_free_slots_stream_ids,
+                            sender_channel_from_receiver_credits,
+                            inner_loop_perf_telemetry_collector,
+                            local_fabric_telemetry);
+                    }
+                    rx_progress |= run_receiver_channel_step<
+                        1,
+                        ENABLE_FIRST_LEVEL_ACK_VC1,
+                        VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
+                        DownstreamSenderVC1T,
+                        decltype(local_relay_interface)>(
+                        local_receiver_channels,
+                        downstream_edm_noc_interfaces_vc1,
+                        local_relay_interface,
+                        receiver_channel_pointers_ch1,
+                        receiver_channel_1_trid_tracker,
+                        port_direction_table,
+                        receiver_channel_response_credit_senders,
+                        routing_table,
+                        local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
+                }
             }
-        }
 
-        // Compute idle conditions and update heartbeats in one helper
-        if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 uint64_t loop_end_cycles = get_timestamp();
                 uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
                 update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
             }
-            update_telemetry(
-                local_sender_channel_free_slots_stream_ids,
-                tx_progress,
-                rx_progress,
-                local_fabric_telemetry,
-                fabric_telemetry);
-        }
+            // Compute idle conditions and update heartbeats in one helper
+            if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
+                update_telemetry(
+                    local_sender_channel_free_slots_stream_ids,
+                    tx_progress,
+                    rx_progress,
+                    local_fabric_telemetry,
+                    fabric_telemetry);
+            }
 
-        if constexpr (enable_context_switch) {
-            // shouldn't do noc counter sync since we are not incrementing them
-            if constexpr (IDLE_CONTEXT_SWITCHING) {
-                if (did_something) {
-                    did_nothing_count = 0;
+            if constexpr (enable_context_switch) {
+                // shouldn't do noc counter sync since we are not incrementing them
+                if constexpr (IDLE_CONTEXT_SWITCHING) {
+                    if (did_something) {
+                        did_nothing_count = 0;
+                    } else {
+                        if (did_nothing_count++ > SWITCH_INTERVAL) {
+                            did_nothing_count = 0;
+                            run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
+                        }
+                    }
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
@@ -2273,24 +2391,54 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             } else {
-                if (did_nothing_count++ > SWITCH_INTERVAL) {
-                    did_nothing_count = 0;
-                    run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
-                }
+                run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
-        } else {
-            run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
-        }
 
-        if constexpr (is_sender_channel_serviced[0]) {
-            close_perf_recording_window(inner_loop_perf_telemetry_collector);
-            if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
-                if (captured_an_event(inner_loop_perf_telemetry_collector) ||
-                    any_sender_channels_active(local_sender_channel_free_slots_stream_ids)) {
-                    write_perf_recording_window_results(
-                        inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
+            if constexpr (is_sender_channel_serviced[0]) {
+                close_perf_recording_window(inner_loop_perf_telemetry_collector);
+                if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
+                    if (captured_an_event(inner_loop_perf_telemetry_collector) ||
+                        any_sender_channels_active(local_sender_channel_free_slots_stream_ids)) {
+                        write_perf_recording_window_results(
+                            inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
+                    }
                 }
             }
+        }
+    };
+
+    uint64_t loop_start_cycles;
+
+    if constexpr (MY_ERISC_ID == 0) {
+        while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            switch (reinterpret_cast<volatile tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
+                case RouterCommand::RUN:
+                    state_manager_l1->state = RouterState::RUNNING;
+                    execute_main_loop();
+                    break;
+                case RouterCommand::PAUSE:
+                    // Signal erisc1 to pause before entering pause command handling
+                    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                        coordinated_context_switch_start_as_master(termination_signal_ptr);
+                    }
+                    execute_pause_command(state_manager_l1, termination_signal_ptr);
+                    // Signal erisc1 to resume after exiting pause command handling
+                    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                        coordinated_context_switch_finish_as_master(termination_signal_ptr);
+                    }
+                    break;
+                default:
+                    ASSERT(false); // illegal state transition
+                    // Wait that's illegal
+                    break;
+            };
+        }
+    } else {
+        // We are erisc1, a purely subordinate erisc. We never do anything specific to the state machine so we
+        // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it
+        // is paused, draining, retraining, etc.), we will enter a busy wait loop in the main run loop
+        while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            execute_main_loop();
         }
     }
 }
@@ -2522,7 +2670,7 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 
 // Initialize fabric telemetry structure in L1
 // This must be called early in kernel_main to ensure telemetry is properly initialized
-FORCE_INLINE void initialize_fabric_telemetry() {
+void initialize_fabric_telemetry() {
     // Get pointer to telemetry structure in L1
     volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
         reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
@@ -2537,7 +2685,13 @@ FORCE_INLINE void initialize_fabric_telemetry() {
     fabric_telemetry->static_info.mesh_id = routing_table_l1->my_mesh_id;
     fabric_telemetry->static_info.device_id = routing_table_l1->my_device_id;
     fabric_telemetry->static_info.direction = static_cast<uint8_t>(my_direction);
+    fabric_telemetry->static_info.version = FABRIC_TELEMETRY_VERSION;
     fabric_telemetry->static_info.fabric_config = 0;  // Reserved for future use
+
+    // Initialize neighbor info to sentinel values (will be populated during handshake)
+    // Using 0xFFFF/0xFF as sentinel to distinguish "not yet set" from valid value 0
+    fabric_telemetry->static_info.neighbor_mesh_id = 0xFFFF;
+    fabric_telemetry->static_info.neighbor_device_id = 0xFF;
 
     // Set supported_stats bitmask to enable all telemetry features
     fabric_telemetry->static_info.supported_stats = static_cast<DynamicStatistics>(
@@ -2547,11 +2701,11 @@ FORCE_INLINE void initialize_fabric_telemetry() {
     // Initialize router_state to STANDBY (will transition to ACTIVE when router starts)
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         // In dual-ERISC mode, each ERISC initializes its own entry
-        fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = RouterState::STANDBY;
+        fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = RouterState::INITIALIZING;
     } else {
         // In single-ERISC mode, initialize both entries (only [0] will be used)
-        fabric_telemetry->dynamic_info.erisc[0].router_state = RouterState::STANDBY;
-        fabric_telemetry->dynamic_info.erisc[1].router_state = RouterState::STANDBY;
+        fabric_telemetry->dynamic_info.erisc[0].router_state = RouterState::INITIALIZING;
+        fabric_telemetry->dynamic_info.erisc[1].router_state = RouterState::INITIALIZING;
     }
 }
 
@@ -2559,6 +2713,11 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
+
+    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
+    state_manager_l1->state = RouterState::INITIALIZING;
+
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
     // Initialize fabric telemetry early to ensure valid values before router starts
@@ -3094,10 +3253,27 @@ void kernel_main() {
     if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::sender_side_handshake(
-                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+                handshake_addr,
+                routing_table_l1->my_mesh_id,
+                routing_table_l1->my_device_id,
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
             erisc::datamover::handshake::receiver_side_handshake(
-                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+                handshake_addr,
+                routing_table_l1->my_mesh_id,
+                routing_table_l1->my_device_id,
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+        }
+
+        // After handshake completes, extract neighbor info and populate telemetry
+        {
+            volatile tt_l1_ptr auto* handshake_info =
+                reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
+            volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
+                reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(
+                    eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+            fabric_telemetry->static_info.neighbor_mesh_id = handshake_info->neighbor_mesh_id;
+            fabric_telemetry->static_info.neighbor_device_id = handshake_info->neighbor_device_id;
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
@@ -3265,6 +3441,12 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 #endif
+    if constexpr (MY_ERISC_ID == 0) {
+        const auto* routing_table_l1 =
+            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
+        state_manager_l1->state = RouterState::INITIALIZING;
+    }
 
     //////////////////////////////
     //////////////////////////////

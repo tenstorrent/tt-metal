@@ -56,9 +56,6 @@ struct DeepseekGroupedGateDeviceOperation {
     static void validate_on_program_cache_miss(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
-
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
@@ -66,7 +63,6 @@ struct DeepseekGroupedGateDeviceOperation {
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
     // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::reduction

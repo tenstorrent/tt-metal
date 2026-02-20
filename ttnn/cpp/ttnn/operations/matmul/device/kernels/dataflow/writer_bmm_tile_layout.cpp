@@ -24,7 +24,7 @@ void kernel_main() {
     uint32_t MtNt = get_arg_val<uint32_t>(11);  // if 0
     uint32_t batch = get_arg_val<uint32_t>(12);
 
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     // single-tile
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);

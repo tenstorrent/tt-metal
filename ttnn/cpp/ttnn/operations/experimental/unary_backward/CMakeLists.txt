@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_unary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::UnaryBackward ALIAS ttnn_op_experimental_unary_backward)
 
-target_precompile_headers(ttnn_op_experimental_unary_backward REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_unary_backward REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_unary_backward)
 
 set_target_properties(

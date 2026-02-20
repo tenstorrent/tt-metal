@@ -179,7 +179,7 @@ default() {
     fi
 
     # Build the command for each rank group
-    local base_mpirun_args="--tag-output --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_exclude docker0,lo"
+    local base_mpirun_args="--tag-output --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_exclude docker0,lo,tailscale0"
 
     # Add global MPI args to base
     if [[ ${#global_mpi_args[@]} -gt 0 ]]; then

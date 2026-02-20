@@ -24,11 +24,36 @@ on:
           - grok
           - unet shallow
           - qwen25_vl
+          - qwen3_vl
           - gemma3-small
           - dits
           - deepseek
           - gpt-oss
           - tttv2 modules
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
 
@@ -43,8 +68,10 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   t3000-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -53,4 +80,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_llmbox"
       model: ${{ inputs.model || 'all' }}

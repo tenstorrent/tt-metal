@@ -34,6 +34,7 @@ struct ReduceScatterDeviceOperation {
         const std::optional<uint32_t> chunks_per_sync;
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
+        const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
     };
 
     struct tensor_args_t {
@@ -75,9 +76,6 @@ struct ReduceScatterDeviceOperation {
     };
 
     using program_factory_t = std::variant<ReduceScatterProgram>;
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
@@ -100,5 +98,6 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel);
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim

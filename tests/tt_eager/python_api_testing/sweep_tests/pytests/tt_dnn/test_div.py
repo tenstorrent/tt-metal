@@ -16,7 +16,6 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.common.utility_functions import is_grayskull
 
 mem_configs = [
     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
@@ -47,9 +46,6 @@ class TestDiv:
         dst_mem_config,
         device,
     ):
-        if is_grayskull():
-            if rounding_mode in ["trunc", "floor"]:
-                pytest.skip("does not work for Grayskull -skipping")
         if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
             datagen_func = [
                 generation_funcs.gen_func_with_cast(

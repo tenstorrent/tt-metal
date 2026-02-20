@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
 
@@ -66,28 +66,18 @@ void bind_reduction_cumprod_operation(nb::module_& mod) {
             - Preallocated output for integer types is not supported
         )doc";
 
-    using OperationType = decltype(ttnn::cumprod);
-    bind_registered_operation(
+    ttnn::bind_function<"cumprod">(
         mod,
-        ttnn::cumprod,
         docstring,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               std::optional<DataType>& dtype,
-               const bool& reverse_order,
-               const std::optional<Tensor>& optional_out,
-               const std::optional<MemoryConfig>& memory_config) -> Tensor {
-                return self(input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
-            },
+        ttnn::overload_t(
+            &ttnn::cumprod,
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("reverse_order") = false,
             nb::arg("out") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

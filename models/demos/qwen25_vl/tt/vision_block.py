@@ -6,6 +6,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
 from models.demos.qwen25_vl.tt.vision_mlp import MLP
+from models.tt_transformers.tt.common import Mode
 
 
 class VisionBlock(LightweightModule):
@@ -93,7 +94,7 @@ class VisionBlock(LightweightModule):
         ), f"VisionBlock input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
 
-        attn_in = self.attention_norm(x, mode="prefill")
+        attn_in = self.attention_norm(x, mode=Mode.PREFILL)
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -107,9 +108,9 @@ class VisionBlock(LightweightModule):
         ttnn.deallocate(x)
 
         # Norms take fractured inputs and output replicated across devices
-        ff_in = self.ff_norm(h, mode="prefill")
+        ff_in = self.ff_norm(h, mode=Mode.PREFILL)
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in, mode="prefill")
+        ff_out = self.feed_forward.forward(ff_in, mode=Mode.PREFILL)
         ttnn.deallocate(ff_in)
         # ff_out and h are both fractured across devices
         out = ttnn.add(

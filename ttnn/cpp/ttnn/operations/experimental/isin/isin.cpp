@@ -12,7 +12,7 @@
 
 #include <enchantum/enchantum.hpp>
 
-namespace ttnn::operations::experimental {
+namespace ttnn::experimental {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 struct IsInPreprocessingResult {
@@ -114,7 +114,7 @@ Tensor process_isin_output(Tensor& output_tensor, const IsInPreprocessingResult&
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-Tensor IsInOperation::invoke(
+Tensor isin(
     const Tensor& elements,
     const Tensor& test_elements,
     bool assume_unique,
@@ -141,4 +141,4 @@ Tensor IsInOperation::invoke(
     return process_isin_output(output_tensor, is_in_preprocessing_result);
 }
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental

@@ -40,11 +40,6 @@ void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_miss(
         attributes.n_activated_experts);
 }
 
-void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 DeepseekGroupedGateDeviceOperation::spec_return_value_t DeepseekGroupedGateDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& scores = tensor_args.scores;
@@ -107,10 +102,5 @@ deepseek_grouped_gate(
 }  // namespace ttnn::prim
 
 namespace ttnn::operations::experimental::reduction {
-
-DeepseekGroupedGateDeviceOperation::program_factory_t DeepseekGroupedGateDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
 
 }  // namespace ttnn::operations::experimental::reduction

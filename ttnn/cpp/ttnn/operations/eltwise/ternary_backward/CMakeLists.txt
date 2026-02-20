@@ -1,7 +1,7 @@
 add_library(ttnn_op_eltwise_ternary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Ternary::Backward ALIAS ttnn_op_eltwise_ternary_backward)
 
-target_precompile_headers(ttnn_op_eltwise_ternary_backward REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_eltwise_ternary_backward REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_ternary_backward)
 
 target_sources(ttnn_op_eltwise_ternary_backward PRIVATE ternary_backward.cpp)

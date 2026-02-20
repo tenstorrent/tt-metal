@@ -117,7 +117,7 @@ class TtAttention(LightweightModule):
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
-                program_config=self.dense_out_program_config,
+                program_config=self.q_program_config,
                 compute_kernel_config=self.q_compute_kernel_config,
                 memory_config=self.q_memory_config,
             )

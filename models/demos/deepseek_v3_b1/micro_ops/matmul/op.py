@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 
-class MatmulSingleCore:
+class Matmul:
     """
     Single-core matmul implementation using ttnn.generic_op.
 
@@ -29,19 +29,35 @@ class MatmulSingleCore:
     where N is up to 4 tiles (128 elements).
     """
 
+    # Fused activation enum values (must match matmul.hpp FusedActivation enum)
+    ACTIVATION_NONE = 0
+    ACTIVATION_SIGMOID = 1
+    ACTIVATION_SILU = 2
+
     @staticmethod
-    def golden(input_a, input_b):
+    def golden(input_a, input_b, fused_activation=None):
         """
         PyTorch reference implementation of matmul for validation.
 
         Args:
             input_a: Input tensor A (torch.Tensor) [M, K]
             input_b: Input tensor B (torch.Tensor) [K, N]
+            fused_activation: Optional activation ("sigmoid" or None)
 
         Returns:
             Output tensor [M, N]
         """
-        return input_a @ input_b
+        import torch
+
+        result = input_a @ input_b
+        if fused_activation is not None:
+            if fused_activation.lower() == "sigmoid":
+                result = torch.sigmoid(result)
+            elif fused_activation.lower() == "silu":
+                result = torch.nn.functional.silu(result)
+            else:
+                raise ValueError(f"Unknown activation: {fused_activation}")
+        return result
 
     @staticmethod
     def op(
@@ -49,6 +65,8 @@ class MatmulSingleCore:
         input_b,
         output_tensor,
         fp32_dest_acc_en=False,
+        transpose=False,
+        fused_activation=None,
     ):
         """
         Execute single-core matmul operation using generic_op.
@@ -58,37 +76,54 @@ class MatmulSingleCore:
             input_b: Input tensor B [K, N] in L1 (N up to 4 tiles)
             output_tensor: Pre-allocated output tensor [1, N]
             fp32_dest_acc_en: Whether to enable FP32 accumulation
+            transpose: Whether to transpose input B
+            fused_activation: Optional fused activation ("sigmoid", "silu", or None)
 
         Returns:
             Output tensor with matmul result
         """
         # Some basic shape checks on input
         a_shape = input_a.shape
+        a_shard_shape = input_a.memory_config().shard_spec.shape
         b_shape = input_b.shape
+        b_shard_shape = input_b.memory_config().shard_spec.shape
         in0_tile = input_a.get_tile()
         in1_tile = input_b.get_tile()
+
+        # Get core grid from input tensor (single core)
+        all_cores = input_a.memory_config().shard_spec.grid
+
         assert (
-            a_shape[0] // in0_tile.tile_shape[0] == 1
-        ), f"M ({a_shape[0]}) must be a single tile with height same as tile_height ({in0_tile.tile_shape[0]})"
+            a_shard_shape[0] // in0_tile.tile_shape[0] == 1
+        ), f"M ({a_shard_shape[0]}) must be a single tile with height same as tile_height ({in0_tile.tile_shape[0]})"
         assert (
-            a_shape[1] % in0_tile.tile_shape[1] == 0
-        ), f"K ({a_shape[1]}) must be divisible by tile_width ({in0_tile.tile_shape[1]})"
-        assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
+            a_shard_shape[1] % in0_tile.tile_shape[1] == 0
+        ), f"K ({a_shard_shape[1]}) must be divisible by tile_width ({in0_tile.tile_shape[1]})"
+        assert (
+            a_shape[0] // a_shard_shape[0]
+        ) == all_cores.num_cores(), f"M ({a_shape[0]}) must be divisible by M ({a_shard_shape[0]}) and equal to number of cores ({all_cores.num_cores()})"
+        if transpose:
+            assert a_shape[1] == b_shape[1], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[1]})"
+            assert (
+                b_shape[0] // b_shard_shape[0]
+            ) == all_cores.num_cores(), f"K ({b_shape[0]}) must be divisible by K ({b_shard_shape[0]}) and equal to number of cores ({all_cores.num_cores()})"
+        else:
+            assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
+            assert (
+                b_shape[1] // b_shard_shape[1]
+            ) == all_cores.num_cores(), f"N ({b_shape[1]}) must be divisible by N ({b_shard_shape[1]}) and equal to number of cores ({all_cores.num_cores()})"
         num_tiles_k = a_shape[1] // in0_tile.tile_shape[1]
 
         # Some basic shape checks on output
         out_shape = output_tensor.shape
+        out_shard_shape = output_tensor.memory_config().shard_spec.shape
         out_tile = output_tensor.get_tile()
         assert (
             out_shape[0] // out_tile.tile_shape[0] == 1
         ), f"M ({out_shape[0]}) must be a single tile with height same as tile_height ({out_tile.tile_shape[0]})"
 
         # Calculate output width in tiles
-        out_w = out_shape[1] // out_tile.tile_shape[1]
-
-        # Get core grid from input tensor (single core)
-        all_cores = input_a.memory_config().shard_spec.grid
-        assert all_cores.num_cores() == 1, f"Only single core is supported"
+        out_w = out_shard_shape[1] // out_tile.tile_shape[1]
 
         # CB indices
         in0_cb = 0  # Input A
@@ -112,6 +147,16 @@ class MatmulSingleCore:
             ("matmul_out_w", out_w),
         ]
 
+        # Determine fused activation value
+        if fused_activation is None:
+            fused_activation_val = Matmul.ACTIVATION_NONE
+        elif fused_activation.lower() == "sigmoid":
+            fused_activation_val = Matmul.ACTIVATION_SIGMOID
+        elif fused_activation.lower() == "silu":
+            fused_activation_val = Matmul.ACTIVATION_SILU
+        else:
+            raise ValueError(f"Unknown activation: {fused_activation}. Supported: 'sigmoid', 'silu', or None")
+
         # Named compile-time args for TRISC
         trisc_named_compile_time_args = [
             ("matmul_in0", in0_cb),
@@ -119,6 +164,8 @@ class MatmulSingleCore:
             ("matmul_out", out_cb),
             ("matmul_k_num_tiles", num_tiles_k),
             ("matmul_out_w", out_w),
+            ("matmul_transpose", transpose),
+            ("matmul_fused_activation", fused_activation_val),
         ]
 
         # Unified kernel descriptor
@@ -146,7 +193,7 @@ class MatmulSingleCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[in0_cb_descriptor, in1_cb_descriptor, out_cb_descriptor],
         )
 

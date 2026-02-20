@@ -9,22 +9,12 @@
 
 namespace ttnn::operations::rand {
 
-RandDeviceOperation::program_factory_t RandDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void RandDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(operation_attributes.from < operation_attributes.to, "Rand: `from` argument must be < `to` argument");
 }
 
 void RandDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
-void RandDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }

@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 
 using std::uint32_t;
 
-namespace NAMESPACE {
 /**
  * @brief Main kernel function for multi-core matrix multiplication (BMM).
  *
@@ -35,7 +34,7 @@ namespace NAMESPACE {
  * Assumes that input tiles are provided in the correct order and that the reader is responsible for supplying
  * the appropriate tiles for each output tile computation.
  */
-void MAIN {
+void kernel_main() {
     uint32_t num_output_tiles = get_arg_val<uint32_t>(0);  // number of output tiles to produce
     uint32_t Kt = get_arg_val<uint32_t>(1);                // number of tiles in K dimension for dot product
 
@@ -81,4 +80,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

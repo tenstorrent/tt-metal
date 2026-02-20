@@ -6,9 +6,9 @@
 
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
 
-namespace ttnn::operations::reduction::sampling {
+namespace ttnn {
 
-Tensor ExecuteSampling::invoke(
+Tensor sampling(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
     const Tensor& k,
@@ -21,4 +21,4 @@ Tensor ExecuteSampling::invoke(
         input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
 }
 
-}  // namespace ttnn::operations::reduction::sampling
+}  // namespace ttnn

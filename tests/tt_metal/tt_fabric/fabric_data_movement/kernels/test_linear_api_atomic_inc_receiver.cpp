@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,13 +8,21 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "tests/tt_metal/tt_fabric/common/test_host_kernel_common.hpp"
+using tt::tt_fabric::fabric_router_tests::NocPacketType;
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
-constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(4));
+constexpr NocPacketType noc_packet_type = static_cast<NocPacketType>(get_compile_time_arg_val(4));
+static_assert(
+    noc_packet_type < static_cast<uint32_t>(NocPacketType::NOC_PACKET_TYPE_COUNT),
+    "Compile-time arg 4 (noc_packet_type) must be 0 (NOC_UNICAST_WRITE), 1 (NOC_UNICAST_INLINE_WRITE), 2 "
+    "(NOC_UNICAST_ATOMIC_INC), 3 (NOC_FUSED_UNICAST_ATOMIC_INC), 4 (NOC_UNICAST_SCATTER_WRITE), 5 "
+    "(NOC_MULTICAST_WRITE), 6 (NOC_MULTICAST_ATOMIC_INC), 7 (NOC_UNICAST_READ), 8 "
+    "(NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)");
 constexpr uint32_t num_send_dir = get_compile_time_arg_val(5);
 constexpr bool with_state = get_compile_time_arg_val(6) == 1;
 constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
@@ -39,7 +47,9 @@ void kernel_main() {
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
     *atomic_poll_addr = 0;
 
-    if constexpr (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC) {
+    if constexpr (
+        noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+        noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
         for (uint32_t i = 0; i < payload_size_words; i++) {
             start_addr[i] = 0;
         }
@@ -54,7 +64,9 @@ void kernel_main() {
         }
         WAYPOINT("FPD");
 
-        if constexpr (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC) {
+        if constexpr (
+            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
             bool data_written = false;
             for (uint32_t j = 0; j < payload_size_words; j++) {
                 if (start_addr[j] != 0) {

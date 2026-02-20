@@ -108,7 +108,15 @@ class Attention:
         self.scaling = config.scaling
 
     def __call__(
-        self, hidden_states, rope_mats, position_idx=None, page_table=None, kv_cache=None, is_decode=True, user_id=0
+        self,
+        hidden_states,
+        rope_mats,
+        position_idx=None,
+        page_table=None,
+        kv_cache=None,
+        is_decode=True,
+        user_id=0,
+        batch_size=1,
     ):
         """
         Forward pass - automatically dispatches to decode or prefill.
@@ -169,4 +177,5 @@ class Attention:
                 position_idx=position_idx,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
+                batch_size=batch_size,
             )

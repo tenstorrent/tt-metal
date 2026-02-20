@@ -11,7 +11,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
 class RMSNormSingleCore:
@@ -96,17 +96,15 @@ class RMSNormSingleCore:
 
         # Compute 1/sqrt(num_elements) for RMS reduction
         inv_sqrt_numel = 1.0 / math.sqrt(float(numel))
-        scalar_packed = float_to_bfloat16_packed(inv_sqrt_numel)
+        scalar_packed = float_to_uint32(inv_sqrt_numel)
 
         # Define circular buffer page size
         cb_page_size = tile_size
 
         # CB indices
         input_cb = 0
-        scalars_cb = 1
-        interm_cb = 2
-        gamma_cb = 3
-        output_cb = 4
+        gamma_cb = 1
+        output_cb = 2
 
         # Create tile descriptor for proper tile dimensions
         tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -117,32 +115,6 @@ class RMSNormSingleCore:
         # Update the tile descriptor in the format descriptor
         in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
-
-        # CB 1: Scalars (epsilon and reduction scalar)
-        scalars_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=scalars_cb,
-            data_format=data_format,
-            page_size=cb_page_size,
-            tile=tile_descriptor,
-        )
-        scalars_cb_descriptor = ttnn.CBDescriptor(
-            total_size=cb_page_size,
-            core_ranges=core_grid,
-            format_descriptors=[scalars_cb_format],
-        )
-
-        # CB 2: Intermediate buffer
-        interm_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=interm_cb,
-            data_format=data_format,
-            page_size=cb_page_size,
-            tile=tile_descriptor,
-        )
-        interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=num_tiles * cb_page_size,
-            core_ranges=core_grid,
-            format_descriptors=[interm_cb_format],
-        )
 
         # CB 3: Gamma (created from sharded tensor)
         gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor)
@@ -159,7 +131,6 @@ class RMSNormSingleCore:
         # Named compile-time args for NCRISC (reader)
         ncrisc_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_scalars_cb", scalars_cb),
             ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_num_tiles", num_tiles),
             ("rmsnorm_num_faces", num_faces),
@@ -168,8 +139,6 @@ class RMSNormSingleCore:
         # Named compile-time args for TRISC (compute)
         trisc_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_scalars_cb", scalars_cb),
-            ("rmsnorm_interm_cb", interm_cb),
             ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_output_cb", output_cb),
             ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
@@ -184,8 +153,7 @@ class RMSNormSingleCore:
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
             brisc_named_compile_time_args=[],
             trisc_named_compile_time_args=trisc_named_compile_time_args,
-            ncrisc_common_runtime_args=[scalar_packed],
-            trisc_common_runtime_args=[epsilon_packed],
+            trisc_common_runtime_args=[epsilon_packed, scalar_packed],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
@@ -204,8 +172,8 @@ class RMSNormSingleCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
-            cbs=[in_cb_descriptor, scalars_cb_descriptor, interm_cb_descriptor, gamma_cb_descriptor, out_cb_descriptor],
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
+            cbs=[in_cb_descriptor, gamma_cb_descriptor, out_cb_descriptor],
         )
 
         # Execute generic op

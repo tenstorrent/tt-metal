@@ -1,11 +1,24 @@
 name: "apc nightly debug run"
 
+run-name: "apc nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
+
 on:
   schedule:
     # Runs nightly at 12:00 AM UTC
     - cron: "0 0 * * *"
+    # Runs nightly at 1:00 AM UTC with watcher enabled
+    - cron: "0 1 * * *"
 
   workflow_dispatch:
+    inputs:
+      enable-lto:
+        default: false
+        type: boolean
+        description: "Enable Link Time Optimization (LTO)"
+      enable-watcher:
+        default: false
+        type: boolean
+        description: "Enable watcher"
 
 permissions:
   actions: read
@@ -17,13 +30,32 @@ permissions:
   checks: write
 
 jobs:
+  determine-watcher:
+    runs-on: ubuntu-latest
+    outputs:
+      enable-watcher: ${{ steps.check.outputs.enable-watcher }}
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event.schedule }}" == "0 1 * * *" || "${{ inputs.enable-watcher }}" == "true" ]]; then
+            echo "enable-watcher=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enable-watcher=false" >> "$GITHUB_OUTPUT"
+          fi
+
   nightly-debug:
-    name: apc nightly debug run (${{ matrix.version }})
+    name: apc nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    needs: determine-watcher
     strategy:
       matrix:
-        version: ["22.04", "24.04"]
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
-      version: ${{ matrix.version }}
+      platform: ${{ matrix.platform }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
+      run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
+      run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
+      run-t3000-apc-fast-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}

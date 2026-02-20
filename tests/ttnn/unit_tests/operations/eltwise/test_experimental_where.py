@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.utils_for_testing import assert_with_pcc, tt_dtype_to_torch_dtype
 
 
@@ -56,17 +57,23 @@ def _ttt_where_test_impl(
 
 
 def test_ttt_where_0d(device):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_0d with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, ())
 
 
 @pytest.mark.parametrize("h", [16, 32, 64, 65, 1024])
 def test_ttt_where_1d(device, h):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_1d with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, (h))
 
 
 @pytest.mark.parametrize("h", [0, 16, 32, 64, 65, 1024])
 @pytest.mark.parametrize("w", [0, 16, 32, 64, 65, 1024])
 def test_ttt_where_2d(device, h, w):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_2d with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, (h, w))
 
 
@@ -89,23 +96,31 @@ def test_ttt_where_5d(device, d5, d4, d3, h, w):
 
 @pytest.mark.parametrize("shape", [tuple([32] * i) for i in range(6)])
 def test_ttt_where_shapes(device, shape):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_shapes with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, shape)
 
 
 @pytest.mark.xfail(reason="Integer data types are not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32])
 def test_ttt_where_int_types(device, tt_dtype):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_float_types with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
 @pytest.mark.xfail(reason="ttnn.bfloat4_b data type is not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_ttt_where_float_types(device, tt_dtype):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_float_types with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
 @pytest.mark.xfail(reason="ROW_MAJOR_LAYOUT is not yet supported.")
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_ttt_where_layouts(device, layout):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_float_types with watcher enabled, github issue #37048")
     # Missing parameters in from_torch() for layout test coverage: tile, pad_value
     _ttt_where_test_impl(device, DEFAULT_SHAPE, layout=layout)

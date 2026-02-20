@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/tile_move_copy.h"
-namespace NAMESPACE {
-void MAIN {
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/tile_move_copy.h"
+
+void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
     uint32_t acc_to_dst = get_arg_val<uint32_t>(2);
@@ -89,4 +89,3 @@ void MAIN {
         cb_push_back(cb_out0, per_core_block_size);
     }
 }
-}  // namespace NAMESPACE

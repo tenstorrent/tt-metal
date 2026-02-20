@@ -137,8 +137,7 @@ The overall flow follows the standard pattern for unary compute kernels:
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
         constexpr auto cb_in0 = tt::CBIndex::c_0;

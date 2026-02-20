@@ -47,7 +47,7 @@ import csv
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import profiler, is_wormhole_b0, is_blackhole
 from pathlib import Path
 import os
 import numpy as np
@@ -360,19 +360,13 @@ def test_matmul_2d_host_perf(
                     fused_activation=None,
                 )
 
-                if is_grayskull():
-                    compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                        math_fidelity=math_fidelity,
-                        math_approx_mode=True,
-                    )
-                else:
-                    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                        math_fidelity=math_fidelity,
-                        math_approx_mode=True,
-                        fp32_dest_acc_en=False,
-                        packer_l1_acc=True,
-                        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
-                    )
+                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=math_fidelity,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                    throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+                )
 
                 if out_sharded:
                     out_mem_config = ttnn.MemoryConfig(

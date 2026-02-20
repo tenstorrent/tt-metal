@@ -8,7 +8,7 @@ from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, is_e75
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
 
@@ -192,9 +192,6 @@ def test_bert(
     model_config_str,
     model_location_generator,
 ):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
-
     # https://github.com/tenstorrent/tt-metal/issues/23275
     device.disable_and_clear_program_cache()
 

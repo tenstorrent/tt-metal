@@ -321,9 +321,27 @@ public:
                     if (expected > buffer_end) {
                         expected -= buffer_size;
                     }
+
+                    // Allow writer to be one page ahead if round_to_page_size is true (writer has advanced
+                    // into the next page but we round down to the page boundary). This can happen when we do
+                    // write_pages_to_dispatcher<1, true> and the final write fills a page. The later check at the end
+                    // of the command with round_to_page_size=false will check that all the data is eventually written
+                    // out.
+                    bool one_page_ahead = false;
+                    if (round_to_page_size) {
+                        uint32_t expected_plus_page = expected + buffer_page_size;
+                        if (expected_plus_page > buffer_end) {
+                            expected_plus_page -= buffer_size;
+                        }
+                        one_page_ahead = (adjusted_writer_ptr == expected_plus_page) ||
+                                         ((expected_plus_page == buffer_end) && (adjusted_writer_ptr == buffer_base));
+                    }
+
                     // It's possible the writer_ptr wrapped and the expected pointer is at the very end of the buffer so
                     // it hasn't wrapped yet.
-                    ASSERT((adjusted_writer_ptr == expected) || ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)));
+                    ASSERT(
+                        (adjusted_writer_ptr == expected) ||
+                        ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)) || one_page_ahead);
                     watch_released_ptr_ = expected;
                 }
             }
@@ -457,12 +475,12 @@ class CBReaderWithReleasePolicy : public CBReader<my_sem_id, cb_log_page_size, c
 public:
     FORCE_INLINE void init() {
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
-        this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
+        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
     // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
     // writer. Updates cmd_ptr on wrap-around.
-    // noc_nonposted_writes_num_issued[noc_index] must be updated before calling this function.
+    // noc_increment_nonposted_writes_issued() must be called before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
@@ -484,8 +502,8 @@ public:
     // handle the orphan data that would otherwise be lost and will then release old pages to writer.
     //
     // The argument to on_boundary is whether the next block is the first block in the circular buffer (in which case
-    // cmd_ptr is set to the base address after on_boundary is called).  noc_nonposted_writes_num_issued[noc_index] must
-    // be updated before on_boundary returns.
+    // cmd_ptr is set to the base address after on_boundary is called).
+    // noc_increment_nonposted_writes_issued() must be called before on_boundary returns.
     template <typename OnBoundaryFn>
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
@@ -517,14 +535,13 @@ private:
         // order. We should use transaction IDs instead in that case.
         if (released_prev_block_) {
             WAYPOINT("CBRW");
-            while (!wrap_ge(
-                NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT), this->block_noc_writes_to_clear_));
+            while (!noc_nonposted_writes_sent_at_count(noc_index, this->block_noc_writes_to_clear_));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
             released_prev_block_ = true;
         }
-        this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
+        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
     FORCE_INLINE void move_rd_to_next_block_and_release_pages() {

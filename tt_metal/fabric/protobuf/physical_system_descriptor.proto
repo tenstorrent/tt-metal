@@ -96,6 +96,30 @@ message EthernetFirmwareVersion {
     uint32 patch = 3;
 }
 
+// PCIe devices per tray for a specific host
+message PcieDevicesPerTray {
+    uint32 tray_id = 1;
+    repeated uint32 pcie_device_ids = 2;
+}
+
+// Map entry for host to PCIe devices per tray
+message HostPcieDevicesMap {
+    string host_name = 1;
+    repeated PcieDevicesPerTray pcie_devices_per_tray = 2;
+}
+
+// PCIe ID to ASIC location mapping entry
+message PcieIdToAsicLocation {
+    uint32 pcie_id = 1;
+    uint32 asic_location = 2;
+}
+
+// Map entry for host to PCIe ID to ASIC location mappings
+message HostPcieIdToAsicLocationMap {
+    string host_name = 1;
+    repeated PcieIdToAsicLocation pcie_id_to_asic_location = 2;
+}
+
 // Top-level Physical System Descriptor message
 message PhysicalSystemDescriptor {
     PhysicalConnectivityGraph system_graph = 1;
@@ -105,4 +129,6 @@ message PhysicalSystemDescriptor {
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
     uint32 target_device_type = 6;
     EthernetFirmwareVersion ethernet_firmware_version = 7;
+    repeated HostPcieDevicesMap pcie_devices_per_tray = 8;
+    repeated HostPcieIdToAsicLocationMap pcie_id_to_asic_location = 9;
 }

@@ -20,11 +20,17 @@ bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == Stora
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor) {
+CBDescriptor cb_descriptor_from_sharded_tensor(
+    uint8_t cb_index, const Tensor& tensor, uint32_t address_offset, uint32_t total_size) {
     TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to automatically create a CBDescriptor");
+    TT_FATAL(
+        (address_offset + total_size) <= tensor.buffer()->aligned_size_per_bank(),
+        "Address offset + total size exceeds buffer size");
+
+    uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
 
     return CBDescriptor{
-        .total_size = tensor.buffer()->aligned_size_per_bank(),
+        .total_size = effective_total_size,
         .core_ranges = tensor.shard_spec()->grid,
         .format_descriptors = {CBFormatDescriptor{
             .buffer_index = cb_index,
@@ -32,6 +38,7 @@ CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& t
             .page_size = tensor.buffer()->aligned_page_size(),
             .tile = TileDescriptor(tensor.tensor_spec().tile())}},
         .buffer = tensor.buffer(),
+        .address_offset = address_offset,
         .global_circular_buffer = nullptr};
 }
 

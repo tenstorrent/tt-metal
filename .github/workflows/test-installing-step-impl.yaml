@@ -1,0 +1,44 @@
+name: "[internal] Test INSTALLING.md install.sh step impl"
+
+
+on:
+  workflow_call:
+    inputs:
+      runner-label:
+        required: false
+        type: string
+        default: N150
+
+jobs:
+  install-and-run-mnist:
+    name: Install deps and run MNIST MLP
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    timeout-minutes: 15
+    steps:
+      - name: Prepare system
+        run: |
+          # The runners come with docker preinstalled but we want to
+          # simulate a completely blank system for our Podman install
+          sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
+
+      - name: Install TT dependencies via TT-Installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
+          chmod +x install.sh
+
+          timeout 600 bash ./install.sh \
+            --update-firmware=off \
+            --install-metalium-models-container \
+            --verbose \
+            --reboot-option=never \
+            --mode-non-interactive
+
+      - name: Run MNIST MLP via tt-metalium-models
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"

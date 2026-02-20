@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <functional>
+#include <regex>
 #include <string>
 #include <unordered_set>
 #include <variant>
@@ -31,6 +32,17 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
+static std::string regex_escape(const std::string& s) {
+    std::string result;
+    for (char c : s) {
+        if (std::string("\\^$.|?*+()[]{}").find(c) != std::string::npos) {
+            result += '\\';
+        }
+        result += c;
+    }
+    return result;
+}
+
 static void RunTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -90,7 +102,7 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                                     .noc = tt_metal::NOC::RISCV_0_default});
-                            risc = " brisc";
+                            risc = "BRISC";
                             break;
                         case 1:
                             assert_kernel = CreateKernel(
@@ -100,7 +112,7 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                                     .noc = tt_metal::NOC::RISCV_1_default});
-                            risc = "ncrisc";
+                            risc = "NCRISC";
                             break;
                         default: TT_THROW("Unsupported DM processor id {}", processor_id);
                     }
@@ -115,7 +127,7 @@ static void RunTest(
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                         logical_core,
                         ComputeConfig{.defines = {{fmt::format("TRISC{}", processor_id), "1"}}});
-                    risc = fmt::format("trisc{}", processor_id);
+                    risc = fmt::format("TRISC{}", processor_id);
                     break;
             }
             break;
@@ -160,20 +172,20 @@ static void RunTest(
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
     std::string expected;
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        const uint32_t line_num = 66;
-        expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
-            "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
-            "from a different file. Current kernel: {}.",
+        std::string before_line = fmt::format(
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line ",
             device->id(),
             (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,
             virtual_core.y,
-            risc,
-            line_num,
+            risc);
+        std::string after_line = fmt::format(
+            ". Note that file name reporting is not yet implemented, and the reported line number for the assert may "
+            "be from a different file. Current kernel: {}.",
             kernel);
+        expected = regex_escape(before_line) + "\\d+" + regex_escape(after_line);
     } else {
         std::string barrier;
         if (assert_type == dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped) {
@@ -205,7 +217,12 @@ static void RunTest(
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception.empty());
-    EXPECT_EQ(expected, MetalContext::instance().watcher_server()->exception_message());
+    if (assert_type == dev_msgs::DebugAssertTripped) {
+        EXPECT_TRUE(std::regex_match(exception, std::regex(expected)))
+            << "Expected pattern: " << expected << "\nActual: " << exception;
+    } else {
+        EXPECT_EQ(expected, exception);
+    }
 }
 }
 

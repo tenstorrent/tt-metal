@@ -40,19 +40,8 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
     const uint32_t Nt = input_tensor_b.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     constexpr uint32_t HALF_DST_MAX = 8;  // 8 is the max number of tiles for half DST (assuming out_subblock_h == 1)
     constexpr uint32_t HALF_DST_MAX_FP32 = 4;  // max dst tiles are 4 for fp32
-    uint32_t out_subblock_w;
-
-    std::visit(
-        [&](auto&& kernel_config_val) {
-            using T = std::decay_t<decltype(kernel_config_val)>;
-            if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                out_subblock_w =
-                    kernel_config_val.fp32_dest_acc_en ? std::min(Nt, HALF_DST_MAX_FP32) : std::min(Nt, HALF_DST_MAX);
-            } else {
-                out_subblock_w = std::min(Nt, HALF_DST_MAX);
-            }
-        },
-        kernel_config_val);
+    uint32_t out_subblock_w =
+        kernel_config_val.fp32_dest_acc_en ? std::min(Nt, HALF_DST_MAX_FP32) : std::min(Nt, HALF_DST_MAX);
 
     return ttnn::prim::group_attn_matmul(
         input_tensor_a,

@@ -32,12 +32,6 @@ static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... oth
     TT_FATAL(all_shapes_match, "Not all input shapes match tensor_a's shape");
 }
 
-WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    ZoneScopedN("WhereDeviceOperation::select_program_factory");
-    return ElementWiseMultiCoreWhereProgram{};
-}
-
 static void validate_memory_config(
     const WhereDeviceOperation::operation_attributes_t& attributes, const WhereDeviceOperation::tensor_args_t& args) {
     TT_FATAL(
@@ -106,11 +100,8 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
         std::holds_alternative<DeviceStorage>(args.false_value_tensor.storage()),
         "Unexpected type {} for false_value_tensor storage",
         tt::stl::get_active_type_name_in_variant(args.false_value_tensor.storage()));
-
-    auto program_factory = select_program_factory(attributes, args);
     return operation::hash_operation<WhereDeviceOperation>(
         attributes,
-        program_factory.index(),
         args.condition_tensor.memory_config(),
         args.condition_tensor.dtype(),
         args.true_value_tensor.memory_config(),

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,6 +38,8 @@ void py_module_types(nb::module_& m) {
     nb::class_<GraphNode>(m, "GraphNode");
     nb::class_<NodeId>(m, "NodeId");
     nb::class_<Tensor>(m, "Tensor");
+    nb::class_<ParallelismContext>(m, "ParallelismContext");
+    nb::class_<DistributedConfig>(m, "DistributedConfig");
 }
 
 void py_module(nb::module_& m) {
@@ -61,6 +63,10 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def_prop_ro(
+            "tensor",
+            [](const TensorPtr& self) -> TensorPtr { return self; },
+            "Returns self (enables uniform access with Parameter)");
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
@@ -295,6 +301,42 @@ void py_module(nb::module_& m) {
             "Initialize socket manager");
         py_auto_context.def(
             "get_socket_manager", &AutoContext::get_socket_manager, nb::rv_policy::reference, "Get socket manager");
+
+        // Parallelism context controls
+        py_auto_context.def(
+            "initialize_parallelism_context",
+            &AutoContext::initialize_parallelism_context,
+            nb::arg("config"),
+            "Initialize parallelism context with DistributedConfig");
+        py_auto_context.def(
+            "get_parallelism_context",
+            [](AutoContext& self) -> const ParallelismContext& { return self.get_parallelism_context(); },
+            nb::rv_policy::reference,
+            "Get parallelism context");
+    }
+
+    {
+        auto py_parallelism_context = static_cast<nb::class_<ParallelismContext>>(m.attr("ParallelismContext"));
+        py_parallelism_context.def(
+            "get_ddp_axis",
+            [](const ParallelismContext& self) -> std::optional<uint32_t> { return self.get_ddp_axis(); },
+            "Get DDP axis (mesh dimension for data parallelism)");
+        py_parallelism_context.def(
+            "get_tp_axis",
+            [](const ParallelismContext& self) -> std::optional<uint32_t> { return self.get_tp_axis(); },
+            "Get TP axis (mesh dimension for tensor parallelism)");
+        py_parallelism_context.def("get_ddp_size", &ParallelismContext::get_ddp_size, "Get number of DDP devices");
+        py_parallelism_context.def("get_tp_size", &ParallelismContext::get_tp_size, "Get number of TP devices");
+        py_parallelism_context.def("is_ddp_enabled", &ParallelismContext::is_ddp_enabled, "Check if DDP is enabled");
+        py_parallelism_context.def("is_tp_enabled", &ParallelismContext::is_tp_enabled, "Check if TP is enabled");
+    }
+
+    {
+        auto py_distributed_config = static_cast<nb::class_<DistributedConfig>>(m.attr("DistributedConfig"));
+        py_distributed_config.def(nb::init<>());
+        py_distributed_config.def(nb::init<bool, bool>(), nb::arg("enable_ddp") = false, nb::arg("enable_tp") = false);
+        py_distributed_config.def_rw("enable_ddp", &DistributedConfig::enable_ddp, "Enable data parallelism");
+        py_distributed_config.def_rw("enable_tp", &DistributedConfig::enable_tp, "Enable tensor parallelism");
     }
 
     // Module-level create_tensor functions for creating autograd tensors

@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+
+import ttnn
+from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
+    run_flash_mla_decode_impl,
+)
+
+
+@pytest.mark.parametrize(
+    "batch, seq_len, nh, nkv, kv_lora_rank, d_rope, q_num_cores",
+    # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope, number of cores to shard q on
+    [
+        (4, 1024, 128, 1, 512, 64, 64),  # DeepSeek V3 TG full DP
+        (2, 1024, 128, 1, 256, 64, 16),
+        (2, 1024, 128, 1, 256, 64, 32),
+        (8, 1024, 128, 1, 256, 64, 64),
+        (8, 1024, 16, 1, 256, 64, 64),
+        (8, 1024, 48, 1, 128, 64, 16),
+        (2, 1024, 8, 1, 128, 64, 0),
+        (2, 1024, 64, 1, 256, 0, 0),
+        (2, 1024, 64, 1, 32, 64, 0),
+        (16, 1024, 8, 1, 128, 32, 0),
+    ],
+)
+@pytest.mark.parametrize(
+    "q_dtype, dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat4_b),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_paged_attention",
+    [
+        # False,
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "block_size",
+    [
+        32,
+        128,
+    ],
+)
+@pytest.mark.parametrize(
+    "reuse_k",
+    [
+        # False,
+        True,
+    ],
+)
+def test_flash_mla_decode(
+    device,
+    batch,
+    seq_len,
+    nh,
+    nkv,
+    kv_lora_rank,
+    d_rope,
+    q_num_cores,
+    q_dtype,
+    dtype,
+    use_paged_attention,
+    block_size,
+    reuse_k,
+    function_level_defaults,
+    reset_seeds,
+):
+    run_flash_mla_decode_impl(
+        device,
+        batch,
+        seq_len,
+        nh,
+        nkv,
+        kv_lora_rank,
+        d_rope,
+        q_num_cores,
+        q_dtype,
+        dtype,
+        use_paged_attention,
+        block_size,
+        reuse_k,
+    )

@@ -10,11 +10,6 @@
 
 namespace ttnn::experimental::prim {
 
-NlpCreateHeadsFalcon7BDeviceOperation::program_factory_t NlpCreateHeadsFalcon7BDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return NlpCreateQkvHeadsFalcon7BProgramFactory{};
-}
-
 void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
@@ -40,11 +35,6 @@ void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Output memory config layout must be INTERLEAVED but got {}",
         operation_attributes.output_mem_config.memory_layout());
-}
-
-void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 NlpCreateHeadsFalcon7BDeviceOperation::spec_return_value_t NlpCreateHeadsFalcon7BDeviceOperation::compute_output_specs(

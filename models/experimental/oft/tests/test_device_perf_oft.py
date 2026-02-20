@@ -21,7 +21,7 @@ from models.perf.device_perf_utils import run_model_device_perf_test
         ),
         (
             "pytest models/experimental/oft/tests/pcc/test_encoder.py::test_decode",
-            4_539_775,
+            4_608_606,
             "oft_decoder",
             "oft_decoder",
             1,

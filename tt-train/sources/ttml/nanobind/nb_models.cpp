@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,7 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
-#include <optional>
-
+#include "autograd/tensor.hpp"
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
@@ -34,8 +33,10 @@ using namespace ttml::models;
 void py_module_types(nb::module_& m, nb::module_& m_modules) {
     ttml::nanobind::modules::py_module_types(m_modules);
 
-    ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m);
-    ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m);
+    ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m).def_static(
+        "from_string", [](const std::string& s) { return models::common::transformer::read_runner_type(s); });
+    ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m).def_static(
+        "from_string", [](const std::string& s) { return models::common::transformer::read_weight_tying_type(s); });
 
     // Export KvCacheConfig class
     {
@@ -149,6 +150,28 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
 void py_module(nb::module_& m, nb::module_& m_modules) {
     ttml::nanobind::modules::py_module(m_modules);
+
+    m.def(
+        "memory_efficient_runner",
+        [](nb::typed<
+               nb::callable,
+               ttml::autograd::TensorPtr(const ttml::autograd::TensorPtr&, const ttml::autograd::TensorPtr&)>
+               fw_callable,
+           const ttml::autograd::TensorPtr& input,
+           const ttml::autograd::TensorPtr& mask) {
+            auto fw_impl = [fw_callable](
+                               const ttml::autograd::TensorPtr& model_input,
+                               const ttml::autograd::TensorPtr& model_mask) {
+                nb::gil_scoped_acquire guard;
+                nb::object tensor_obj = fw_callable(model_input, model_mask);
+                return nb::cast<autograd::TensorPtr>(tensor_obj);
+            };
+            return models::common::transformer::memory_efficient_runner(fw_impl, input, mask);
+        },
+        nb::arg("forward_impl"),
+        nb::arg("input"),
+        nb::arg("mask"),
+        "Memory-efficient forward/backward runner with gradient checkpointing.");
 
     {
         auto py_base_transformer =

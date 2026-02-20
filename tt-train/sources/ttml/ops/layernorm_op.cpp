@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,6 @@ autograd::TensorPtr layernorm_moreh(
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ std::nullopt);
 
-
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
@@ -78,7 +77,9 @@ autograd::TensorPtr layernorm_moreh(
 }
 
 autograd::TensorPtr layernorm(
-    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, std::optional<autograd::TensorPtr> beta_opt) {
+    const auto& beta_val = beta_opt.has_value() ? beta_opt.value()->get_value() : core::zeros_like(gamma->get_value());
+
     auto tensor_shape = tensor->get_value().logical_shape();
     auto mean = core::empty(
         ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
@@ -86,17 +87,19 @@ autograd::TensorPtr layernorm(
         tensor->get_value().memory_config());
     auto rstd = ttnn::empty_like(mean);
 
-    auto out_tensors = ttml::metal::layernorm_fw(
-        tensor->get_value(), gamma->get_value(), beta->get_value(), 1e-6F, /* return_mean_std */ true);
+    auto out_tensors =
+        ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta_val, 1e-6F, /* return_mean_std */ true);
 
     auto out = autograd::create_tensor(out_tensors[0].value());
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
-    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
+    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta_opt]() {
         auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
-        beta->add_grad(res[2].value());
+        if (beta_opt.has_value()) {
+            beta_opt.value()->add_grad(res[2].value());
+        }
     };
 
     auto links = autograd::get_links(tensor);
@@ -106,7 +109,7 @@ autograd::TensorPtr layernorm(
 }
 
 autograd::TensorPtr composite_layernorm(
-    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, std::optional<autograd::TensorPtr> beta_opt) {
     auto tensor_shape = tensor->get_value().logical_shape();
 
     auto shape = ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
@@ -136,22 +139,18 @@ autograd::TensorPtr composite_layernorm(
     auto rstd = ttnn::rsqrt(ttnn::add(variance, eps));
 
     auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
-    auto output = ttnn::add(ttnn::multiply(normalized_tensor, gamma->get_value()), beta->get_value());
+
+    auto output = ttnn::multiply(normalized_tensor, gamma->get_value());
+    if (beta_opt.has_value()) {
+        output = ttnn::add(output, beta_opt.value()->get_value());
+    }
     auto out = autograd::create_tensor(output);
 
-    autograd::GradFunction grad = [tensor, out, gamma, beta, mean, rstd]() {
+    autograd::GradFunction grad = [tensor, out, gamma, beta_opt, mean, rstd]() {
         auto dout = out->get_grad();
 
         // recalculate normalized tensor to save memory and avoid storing it
         auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
-
-        auto dbeta = ttnn::moreh_sum(
-            dout,
-            /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output */ std::nullopt,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
         auto dgamma = ttnn::moreh_sum(
             ttnn::multiply(dout, normalized_tensor),
@@ -197,7 +196,18 @@ autograd::TensorPtr composite_layernorm(
 
         tensor->add_grad(dtensor);
         gamma->add_grad(dgamma);
-        beta->add_grad(dbeta);
+
+        if (beta_opt.has_value()) {
+            auto dbeta = ttnn::moreh_sum(
+                dout,
+                /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
+                /* keep_dim */ true,
+                /* output */ std::nullopt,
+                /* output_mem_config */ std::nullopt,
+                /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+
+            beta_opt.value()->add_grad(dbeta);
+        }
     };
 
     auto links = autograd::get_links(tensor);

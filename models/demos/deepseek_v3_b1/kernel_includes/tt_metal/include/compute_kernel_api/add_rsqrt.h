@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_add_rsqrt.h"
 #endif

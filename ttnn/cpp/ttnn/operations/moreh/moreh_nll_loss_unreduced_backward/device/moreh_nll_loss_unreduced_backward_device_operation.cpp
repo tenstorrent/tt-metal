@@ -7,13 +7,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
-
-MorehNllLossUnreducedBackwardDeviceOperation::program_factory_t
-MorehNllLossUnreducedBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return Factory{};
-}
-
 void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
@@ -75,11 +68,6 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
 }
 
 void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
-void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }

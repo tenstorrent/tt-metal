@@ -140,7 +140,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
 
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
         ends[-1] = ttnn_output.shape[-1]
-        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+        ttnn.experimental.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)
@@ -211,7 +211,7 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
 
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
         ends[-1] = ttnn_output.shape[-1]
-        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+        ttnn.experimental.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)
@@ -281,7 +281,7 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
         )
 
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
-        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+        ttnn.experimental.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)
