@@ -1212,15 +1212,29 @@ Tensor pad_impl(
         return output_buffer;
     };
 
+    // Check if input_tensor_start has any non-zero values
+    bool has_offset = false;
+    for (auto i = 0; i < input_tensor_start.rank(); i++) {
+        if (input_tensor_start[i] != 0) {
+            has_offset = true;
+            break;
+        }
+    }
+
+    // When data is placed at a non-zero offset, we must set logical_shape=padded_shape
+    // to avoid coordinate mismatches in the encode/decode system.
+    // When offset is zero, maintain the logical/physical distinction for backward compatibility.
+    const auto& result_logical_shape = has_offset ? output_padded_shape : tensor.logical_shape();
+
     return Tensor(
         tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
         TensorSpec(
-            output_padded_shape,
+            result_logical_shape,
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
                 PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
                 MemoryConfig{},
-                output_padded_shape,
+                result_logical_shape,
                 output_padded_shape)),
         tensor.tensor_topology());
 }
