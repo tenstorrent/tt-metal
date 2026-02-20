@@ -154,6 +154,23 @@ HostTensor unpad(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end);
 
+HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
+
+HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
+
+// ======================================================================================
+//                                 Runtime Tensor Creation Functions
+// ======================================================================================
+
+// Creations, these should be static factory functions of HostTensor and DeviceTensor
+
+tt::tt_metal::DeviceTensor allocate_tensor_on_device(
+    const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+
+// ======================================================================================
+//                                  TTNN Tensor Only Functions
+// ======================================================================================
+
 // ======================================================================================
 //                                         Print
 // ======================================================================================
