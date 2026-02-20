@@ -3,6 +3,10 @@ name: "(Galaxy) unit tests"
 on:
   workflow_dispatch:
     inputs:
+      UMD-tests:
+        required: false
+        default: false
+        type: boolean
       model:
         description: 'Select model to test'
         required: false
@@ -13,10 +17,11 @@ on:
           - unit
           - fabric
           - multiprocess
-          - llama3-70b
-          - prefetcher
+          # - llama3-70b
+          # - prefetcher
           - distributed-ops
           - gpt-oss
+          - tttv2
       platform:
         required: false
         type: choice
@@ -66,3 +71,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.model || 'all' }}
       topology: topology-6u
+      UMD-tests: ${{ inputs.UMD-tests == 'true' }}

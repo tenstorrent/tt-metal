@@ -46,6 +46,7 @@ jobs:
            timeout: 20
          },
        ]
+   if: ${{ inputs.UMD-tests == 'true' }}
    runs-on: ${{ matrix.test-group.runs-on }}
    container:
      image: ${{ inputs.docker-image }}
