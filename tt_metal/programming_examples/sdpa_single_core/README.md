@@ -18,7 +18,7 @@ Binary output: `build/programming_examples/metal_example_sdpa_single_core`
 ./build/programming_examples/metal_example_sdpa_single_core
 ```
 
-Runs with hardcoded defaults: `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=3, num_k_chunks=5, subblock_h=1, mm_throttle_level=1`.
+Runs with hardcoded defaults: `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=1, num_k_chunks=5, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0`.
 
 ### Test mode (file-based I/O)
 
@@ -27,7 +27,7 @@ Runs with hardcoded defaults: `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_
     --test <dir> \
     --Sq_chunk_t 7 --Sk_chunk_t 16 --head_dim_t 4 \
     --num_q_chunks 1 --num_k_chunks 5 \
-    --subblock_h 1 --mm_throttle_level 0
+    --subblock_h 1 --mm_throttle_level 0 --exp_approx_mode 0
 ```
 
 Reads `<dir>/q.bin`, `k.bin`, `v.bin` (raw bfloat16), tilizes, runs the kernel, untilizes output, and writes `<dir>/device_output.bin`.
@@ -43,7 +43,7 @@ Reads `<dir>/q.bin`, `k.bin`, `v.bin` (raw bfloat16), tilizes, runs the kernel, 
 
 Where `Sq = num_q_chunks * Sq_chunk_t * 32`, `Sk = num_k_chunks * Sk_chunk_t * 32`, `d = head_dim_t * 32`.
 
-**CLI parameter defaults** (when omitted): `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=3, num_k_chunks=5, subblock_h=1, mm_throttle_level=0`.
+**CLI parameter defaults** (when omitted): `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=3, num_k_chunks=5, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0`.
 
 ## Python Correctness Tests
 
@@ -92,7 +92,7 @@ Then point your IDE launch configuration at the generated directory:
         "--test", "${workspaceFolder}/tt_metal/programming_examples/sdpa_single_core/test_inputs/1q_5k-random",
         "--Sq_chunk_t", "7", "--Sk_chunk_t", "16", "--head_dim_t", "4",
         "--num_q_chunks", "1", "--num_k_chunks", "5",
-        "--subblock_h", "1", "--mm_throttle_level", "0"
+        "--subblock_h", "1", "--mm_throttle_level", "0", "--exp_approx_mode", "0"
     ]
 }
 ```
