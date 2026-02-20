@@ -89,19 +89,29 @@ void bind_slice(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()),
         // Overload 3: SmallVector<int> version (int32_t template parameter)
         ttnn::overload_t(
-            static_cast<ttnn::Tensor (*)(
-                const ttnn::Tensor&,
-                const ttnn::SmallVector<int32_t>&,
-                const ttnn::SmallVector<int32_t>&,
-                const ttnn::SmallVector<int32_t>&,
-                const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&,
-                const std::optional<float>&,
-                const std::optional<CoreRangeSet>&)>(&ttnn::slice<int32_t>),
+            +[](const ttnn::Tensor& input_tensor,
+                const ttnn::SmallVector<int>& slice_start,
+                const ttnn::SmallVector<int>& slice_end,
+                const std::optional<ttnn::SmallVector<int>>& step,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<Tensor>& optional_output_tensor,
+                const std::optional<float>& pad_value,
+                const std::optional<CoreRangeSet>&& sub_core_grids) {
+                const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+                return ttnn::slice(
+                    input_tensor,
+                    slice_start,
+                    slice_end,
+                    step_value,
+                    memory_config,
+                    optional_output_tensor,
+                    pad_value,
+                    sub_core_grids);
+            },
             nb::arg("input_tensor"),
             nb::arg("slice_start"),
             nb::arg("slice_end"),
-            nb::arg("slice_step"),
+            nb::arg("slice_step") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),

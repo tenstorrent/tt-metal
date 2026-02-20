@@ -39,7 +39,11 @@ void bind_expand(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::expand,
+            +[](const ttnn::Tensor& input_tensor,
+                const ttnn::SmallVector<int32_t>& output_shape,
+                const std::optional<ttnn::MemoryConfig>& memory_config) {
+                return ttnn::expand(input_tensor, output_shape, memory_config);
+            },
             nb::arg("input_tensor"),
             nb::arg("output_shape"),
             nb::kw_only(),
