@@ -177,7 +177,7 @@ TEST_F(GalaxyRingShiftTest, ForwardAlongColumns) {
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongRows) {
     // batch=4 sharded across 4 rows -> 1 per device
-    TestRingShift(4, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward);
+    TestRingShift(8, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardBig) {

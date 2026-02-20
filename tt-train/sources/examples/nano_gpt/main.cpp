@@ -461,12 +461,9 @@ int main(int argc, char **argv) {
         }
     }
     // Create mask tensor - shard along sequence dim if CP is enabled
-    if (ttml::autograd::ctx().is_parallelism_context_initialized()) {
-        const auto &pctx_mask = ttml::autograd::ctx().get_parallelism_context();
-        if (pctx_mask.is_cp_enabled() && pctx_mask.get_cp_size() > 1) {
-            // TODO: only causal mask is supported for now
-            cached_data.masks_tensor = std::nullopt;
-        }
+    if (device_config.enable_cp) {
+        // TODO: only causal mask is supported in cp mode for now
+        cached_data.masks_tensor = std::nullopt;
     } else {
         cached_data.masks_tensor = ttml::autograd::create_tensor(
             ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
