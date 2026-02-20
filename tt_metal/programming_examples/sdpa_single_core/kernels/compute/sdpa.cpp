@@ -24,6 +24,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/sdpa_sub_custom.h"
 #include "api/compute/matmul.h"
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/reduce.h"
@@ -577,6 +578,7 @@ template <
     uint32_t scale_fp32,
     uint32_t SBH,
     uint32_t SBW,
+    bool use_custom_sub = false,
     bool do_reduce = true,
     int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_no_push(
@@ -588,7 +590,14 @@ void sub_exp_block_bcast_cols_no_push(
     // Initialize operation
     {
         SDPA_DeviceZoneScopedN_1("SUB_BCAST_INIT");
-        sub_bcast_cols_init_short(inout0_cb, in1_cb);
+#ifdef ARCH_BLACKHOLE
+        if constexpr (use_custom_sub) {
+            sub_bcast_cols_init_short_custom<SBW>(inout0_cb, in1_cb);
+        } else
+#endif
+        {
+            sub_bcast_cols_init_short(inout0_cb, in1_cb);
+        }
     }
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
@@ -603,10 +612,19 @@ void sub_exp_block_bcast_cols_no_push(
         SDPA_DeviceZoneScopedN_1("SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < SBH; i++) {
-            for (uint32_t j = 0; j < SBW; j++) {
-                uint32_t in0_tile_index =
-                    (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
-                sub_tiles_bcast_cols(inout0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (use_custom_sub) {
+                uint32_t in0_tile_index = (global_row_base + i) * cols + global_col_base;
+                sub_tiles_bcast_cols_custom<SBW>(inout0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index);
+                dst_index += SBW;
+            } else
+#endif
+            {
+                for (uint32_t j = 0; j < SBW; j++) {
+                    uint32_t in0_tile_index =
+                        (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
+                    sub_tiles_bcast_cols(inout0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
+                }
             }
         }
         tile_regs_commit();
@@ -963,7 +981,7 @@ void sdpa_inner_loop(
                     uint32_t prev_q_subblock = q_subblock - 1;
                     MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
                     // SDPA_DeviceZoneScopedN_5("SUB EXP");
-                    sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                    sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                         alias_cur_max, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
                 }
 
