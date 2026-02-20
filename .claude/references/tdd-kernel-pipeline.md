@@ -9,7 +9,7 @@ This reference enables the orchestrator agent to run a stage-gated TDD pipeline 
 Before using this pipeline, you MUST have:
 1. A functional spec (`*_spec.md`) in the operation directory
 2. A kernel design document (`kernel_design.md`) in the operation directory
-3. Stub kernel files created by the factory-builder or generic-op-builder
+3. Stub kernel files created by the generic-op-builder
 4. A working `__init__.py` that exports the operation function
 
 ## CLI TOOL

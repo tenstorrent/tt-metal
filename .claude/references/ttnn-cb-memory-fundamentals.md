@@ -1,6 +1,6 @@
 # CB and Memory Fundamentals
 
-Shared reference for ttnn-factory-builder and ttnn-kernel-writer agents.
+Shared reference for ttnn-kernel-writer and other kernel-related agents.
 
 ---
 

@@ -108,17 +108,7 @@ Reference when you need to understand how tensors could be sharded between cores
 
 ## Creating New TTNN Operations
 
-Two workflows are available for creating new TTNN operations:
-
-### Standard C++ Workflow
-For production operations requiring full C++ TTNN registration:
-`ttnn/experimental/claude_ttnn_agents/references/ttnn-operation-workflow.md`
-
-Pipeline: analyzer → planner → scaffolder → factory-builder → kernel-designer → kernel-writer
-
-### Generic Op Workflow (Python-based) — use `/create-op` skill
-For rapid prototyping using `ttnn.generic_op()` and ProgramDescriptor APIs.
-Invoke with `/create-op` — the skill encodes the full pipeline:
+Use the `/create-op` skill to create new TTNN operations using the Python-based generic_op infrastructure with `ttnn.generic_op()` and ProgramDescriptor APIs.
 
 Pipeline: analyzer → planner → kernel-designer → generic_op_builder → TDD kernel-writer
 
@@ -132,4 +122,3 @@ Tests: `tests/ttnn/unit_tests/operations/{op_name}/`
 
 ### Additional Resources
 - `ttnn/experimental/claude_ttnn_agents/QUICK_START.md` - End-to-end workflow example
-- `ttnn/experimental/claude_ttnn_agents/subagent_breakdown.md` - Detailed agent breakdown (Standard C++ workflow)

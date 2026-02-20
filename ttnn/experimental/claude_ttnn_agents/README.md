@@ -19,8 +19,7 @@ This package contains Claude Code agents for creating new TTNN operations.
 |-------|---------|
 | ttnn-operation-analyzer | Deep architectural analysis of reference operations |
 | ttnn-operation-planner | Design new operation spec (derivative or hybrid mode) |
-| ttnn-operation-scaffolder | Build Stages 1-3 (API, validation, TTNN registration) |
-| ttnn-factory-builder | Build Stages 4-6 (device op, program factory, stub kernels) |
+| ttnn-generic-op-builder | Create Python infrastructure using generic_op + ProgramDescriptor |
 | ttnn-kernel-designer | Design kernel implementation strategy (helper vs raw calls) |
 | ttnn-kernel-writer | Implement kernels following the design document |
 | ttnn-riscv-debugger | Debug kernel issues (hangs, CB deadlocks, wrong output) |
@@ -32,16 +31,16 @@ This is a **highly experimental** system for generating TTNN operations using AI
 
 ### Overview
 
-Creating a new TTNN operation from existing reference(s) involves eight phases:
+Creating a new TTNN operation from existing reference(s) involves six phases:
 
 ```
-Reference Op(s) -> Analyze -> Plan -> Scaffold -> Build Factory -> Design Kernels -> Write Kernels -> Test
-                  (Phase 1)  (Phase 2) (Phase 3)   (Phase 4)       (Phase 5)        (Phase 6)     (Phase 7)
-                                  |                    |                |
-                            USER REVIEW          USER REVIEW       USER REVIEW
-                                                                       |
-                                                                ttnn-riscv-debugger
-                                                                  (if issues)
+Reference Op(s) -> Analyze -> Plan -> Design Kernels -> Build Infrastructure -> Write Kernels -> Test
+                  (Phase 1)  (Phase 2)   (Phase 3a)        (Phase 3b)           (Phase 4)     (Phase 5)
+                                  |                              |                   |
+                            USER REVIEW                    USER REVIEW          USER REVIEW
+                                                                                     |
+                                                                              ttnn-riscv-debugger
+                                                                                (if issues)
 ```
 
 ### Planning Modes
@@ -93,39 +92,7 @@ to plan a new operation that tilizes input, reduces along width, and untilizes o
 
 **IMPORTANT**: Review this spec carefully! Iterate with Claude if needed. The spec is the contract for all downstream agents.
 
-### Phase 3: Scaffold the Operation
-
-Once the spec is finalized, build the scaffolding (Stages 1-3):
-
-```
-"Please use the ttnn-operation-scaffolder agent with the spec at
-ttnn/cpp/ttnn/operations/reduction/my_op/my_op_spec.md"
-```
-
-**Output**:
-- Python API and C++ pybind
-- Device operation with validation
-- TTNN operation registration
-- Stage 1-3 tests in `test_dev/`
-
-### Phase 4: Build Program Factory
-
-Build the program factory and stub kernels (Stages 4-6):
-
-```
-"Please use the ttnn-factory-builder agent with the spec at
-ttnn/cpp/ttnn/operations/reduction/my_op/my_op_spec.md"
-```
-
-**Output**:
-- Complete device operation
-- Program factory with circular buffers
-- **Stub kernels** (compile and pass data through, but produce garbage output)
-- Stage 4-6 tests
-
-**Note**: Stub kernels verify infrastructure works (no hangs). Correctness comes in Phase 6.
-
-### Phase 5: Design Kernel Implementation
+### Phase 3: Design Kernel Implementation
 
 Design how kernels should be implemented:
 
@@ -142,7 +109,7 @@ ttnn/cpp/ttnn/operations/reduction/my_op/my_op_spec.md"
 
 **IMPORTANT**: Review the kernel design before proceeding. The design determines which helper functions vs raw calls are used.
 
-### Phase 6: Write Kernels
+### Phase 4: Write Kernels
 
 Implement kernels following the design document:
 
@@ -156,7 +123,7 @@ ttnn/cpp/ttnn/operations/reduction/my_op/kernel_design.md"
 - Stage 7 correctness tests
 - Verification against PyTorch reference
 
-### Phase 7: Test & Debug
+### Phase 5: Test & Debug
 
 Run tests to verify correctness:
 
@@ -173,7 +140,7 @@ Test: pytest .../test_dev/test_stage7_kernel_correctness.py
 Operation analysis: .../my_op_analysis.md"
 ```
 
-### Phase 8: Performance Analysis (Optional)
+### Phase 6: Performance Analysis (Optional)
 
 For performance optimization of existing operations:
 
@@ -206,14 +173,14 @@ you made (eg. if you had any open questions).
 This prompt resulted in:
 - Analysis of tilize and untilize reference operations
 - A functional spec combining tilize (input) + reduce (compute) + untilize (output)
-- Complete scaffolding with validation
-- Program factory with circular buffers
+- Kernel design document mapping phases to helpers
+- Python infrastructure with generic_op and ProgramDescriptor
 - Working kernels using the kernel helper library
 - Passing tests verified against PyTorch
 
 **Note**: The "FULLY AUTOMATED" directive can be omitted if you prefer to review and provide feedback at each stage. The default workflow includes user review checkpoints at:
 - Phase 2 (spec review)
-- Phase 5 (kernel design review)
+- Phase 3 (kernel design review)
 
 ## Tips
 
@@ -225,8 +192,6 @@ This prompt resulted in:
 - **Use the debugger agent**: For kernel hangs or CB issues, invoke `ttnn-riscv-debugger` with the symptom and operation analysis
 - **Use the pipeline analyzer**: For performance issues, use `ttnn-pipeline-analyzer` to understand blocking and overlap behavior
 
-See `subagent_breakdown.md` for additional technical details.
-
 ## Reference Documents
 
 The agents use several reference documents in `.claude/references/`:
@@ -234,7 +199,7 @@ The agents use several reference documents in `.claude/references/`:
 | Document | Purpose |
 |----------|---------|
 | ttnn-cb-memory-fundamentals.md | CB page concepts, sync rules, tilize/untilize patterns |
-| factory-builder-stages.md | TDD cycles, test templates, implementation code |
+| ttnn-generic-op-workflow.md | Generic op pipeline workflow and routing |
 | ttnn-pipeline-analysis-methodology.md | Pipeline analysis methodology and case studies |
 | ttnn-riscv-debugger-reference.md | Watcher/DPRINT usage for debugging |
 | cb-debugging-strategy.md | CB deadlock debugging playbook |
@@ -277,11 +242,10 @@ These helpers encapsulate CB management, DST register handling, and init/uninit 
 |-------|--------|-------|
 | ttnn-operation-analyzer | Implemented | Opus |
 | ttnn-operation-planner | Implemented | Opus |
-| ttnn-operation-scaffolder | Implemented | Sonnet |
-| ttnn-factory-builder | Implemented | Sonnet |
+| ttnn-generic-op-builder | Implemented | Sonnet |
 | ttnn-kernel-designer | Implemented | Opus |
 | ttnn-kernel-writer | Implemented | Opus |
 | ttnn-riscv-debugger | Implemented | Opus |
 | ttnn-pipeline-analyzer | Implemented | Opus |
 
-All 8 agents are fully implemented and operational.
+All 7 agents are fully implemented and operational.

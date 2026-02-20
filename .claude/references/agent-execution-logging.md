@@ -56,31 +56,6 @@ tests: {PASSED|FAILED|SKIPPED}
 
 ### Examples
 
-**Stage completion commit:**
-```
-[ttnn-factory-builder] stage 4-6: CB config and stub kernels
-
-- Configured 5 circular buffers (c_0, c_1, c_2, c_3, c_16)
-- Created reader/compute/writer stub kernels
-- Single-core work distribution
-
-operation: reduce_avg_w_rm
-build: PASSED
-tests: stage4=PASS, stage5=PASS, stage6=PASS
-```
-
-**Build fix commit:**
-```
-[ttnn-operation-scaffolder] build-fix: launch_on_device -> launch
-
-- Fixed API call in device_operation.cpp line 116
-- Changed ttnn::device_operation::detail::launch_on_device to ttnn::device_operation::launch
-
-operation: reduce_avg_w_rm
-build: PASSED
-tests: SKIPPED
-```
-
 **Kernel implementation commit:**
 ```
 [ttnn-kernel-writer] stage 7: implement tilize+reduce+untilize kernels
@@ -204,9 +179,8 @@ mkdir -p {operation_path}/agent_logs
 
 **Parameters:**
 - `operation_path`: The operation directory. Path depends on workflow:
-  - Generic op workflow: `ttnn/ttnn/operations/{operation_name}` (see `ttnn-generic-op-workflow.md`)
-  - Standard C++ workflow: `ttnn/cpp/ttnn/operations/{category}/{operation_name}`
-- `agent_name`: e.g., `ttnn-operation-scaffolder`, `ttnn-generic-op-builder`
+  - `ttnn/ttnn/operations/{operation_name}` (see `ttnn-generic-op-workflow.md`)
+- `agent_name`: e.g., `ttnn-generic-op-builder`, `ttnn-kernel-writer`
 - `operation_name`: e.g., `my_op`
 - `predecessor_agent`: e.g., `ttnn-operation-planner` or `""` if first agent
 - `input_file_path`: e.g., `my_op_spec.md`
@@ -293,21 +267,6 @@ At end of execution:
 
 ## Agent-Specific Event Types
 
-### ttnn-operation-scaffolder
-
-No additional event types beyond common ones. Uses `action/result` with `type":"script_run"`.
-
-### ttnn-factory-builder
-
-| Event | Purpose | Example |
-|-------|---------|---------|
-| `cb_config` | CB configuration decisions | `{"event":"cb_config","cb_id":"c_0","page_size":2048,"num_pages":2,"purpose":"input"}` |
-| `work_distribution` | Work split calculations | `{"event":"work_distribution","grid":"8x8","total_tiles":256,"tiles_per_core":4}` |
-| `tdd_cycle` | TDD phase tracking | `{"event":"tdd_cycle","stage":4,"phase":"RED","result":"FAIL","expected":true}` |
-| `cb_audit` | CB sync verification | `{"event":"cb_audit","cb_id":"c_0","producer":"reader","push_count":"N","consumer":"compute","pop_count":"N","balanced":true}` |
-| `cb_sync_summary` | Final CB balance check | `{"event":"cb_sync_summary","total_cbs":2,"all_balanced":true}` |
-| `hang_debug` | Debugging hangs | `{"event":"hang_debug","symptom":"timeout","diagnosis":"CB sync mismatch"}` |
-
 ### ttnn-kernel-writer
 
 | Event | Purpose | Example |
@@ -352,33 +311,6 @@ Include ALL sections from the template, with special attention to:
 
 ## Agent-Specific Log Sections (Section 2a)
 
-### For ttnn-operation-scaffolder
-
-**Script Execution Log:**
-| Script | Arguments | Result | Output Summary |
-|--------|-----------|--------|----------------|
-| generate_files.py | {args} | {SUCCESS/FAIL} | {brief output} |
-| integrate_build.py | {args} | {SUCCESS/FAIL} | {brief output} |
-| verify_scaffolding.sh | {args} | {SUCCESS/FAIL} | {checks passed} |
-
-### For ttnn-factory-builder
-
-**CB Configuration Audit:**
-| CB ID | Index | Page Size | Num Pages | Purpose | Source |
-|-------|-------|-----------|-----------|---------|--------|
-| cb_in | c_0 | {bytes} | {count} | {purpose} | {Spec/Inferred} |
-
-**CB Sync Verification (CRITICAL):**
-| CB | Producer | Push Operation | Consumer | Pop Operation | Balanced? |
-|----|----------|----------------|----------|---------------|-----------|
-| c_0 | Reader | cb_push_back x N | Compute | cb_pop_front x N | YES/NO |
-
-**Work Distribution:**
-| Parameter | Value | Source |
-|-----------|-------|--------|
-| Core grid | {rows x cols} | {Spec/Calculated} |
-| Total work units | {count} | |
-
 ### For ttnn-kernel-writer
 
 **Design Compliance:**
@@ -405,38 +337,15 @@ Include ALL sections from the template, with special attention to:
 
 ## Example Breadcrumb Sequences (If Enabled)
 
-### Successful Run (scaffolder)
+### Successful Run (generic-op-builder)
 ```jsonl
-{"ts":"...","event":"start","agent":"ttnn-operation-scaffolder","operation":"my_op"}
+{"ts":"...","event":"start","agent":"ttnn-generic-op-builder","operation":"my_op"}
 {"ts":"...","event":"input_parse","field":"operation_name","value":"my_op","confidence":"HIGH"}
-{"ts":"...","event":"action","type":"script_run","script":"generate_files.py","args":["--force"]}
-{"ts":"...","event":"result","type":"script_run","script":"generate_files.py","success":true}
-{"ts":"...","event":"action","type":"build","command":"./build_metal.sh -b Debug"}
-{"ts":"...","event":"result","type":"build","success":true}
-{"ts":"...","event":"action","type":"git_commit","message":"[ttnn-operation-scaffolder] stage 1-3: scaffolding complete"}
+{"ts":"...","event":"action","type":"test","command":"pytest test_my_op.py"}
+{"ts":"...","event":"result","type":"test","success":true}
+{"ts":"...","event":"action","type":"git_commit","message":"[ttnn-generic-op-builder] stubs: my_op infrastructure"}
 {"ts":"...","event":"result","type":"git_commit","success":true,"commit_sha":"abc1234"}
-{"ts":"...","event":"test","stage":1,"result":"PASS"}
-{"ts":"...","event":"test","stage":2,"result":"PASS"}
-{"ts":"...","event":"test","stage":3,"result":"PASS"}
-{"ts":"...","event":"complete","final_status":"SUCCESS","stages_completed":[1,2,3],"final_commit":"abc1234"}
-```
-
-### Run with Error Recovery (factory-builder)
-```jsonl
-{"ts":"...","event":"start","agent":"ttnn-factory-builder","operation":"reduce_op"}
-{"ts":"...","event":"cb_config","cb_id":"c_0","page_size":2048,"num_pages":2,"purpose":"input"}
-{"ts":"...","event":"action","type":"build","command":"./build_metal.sh -b Debug"}
-{"ts":"...","event":"result","type":"build","success":true}
-{"ts":"...","event":"action","type":"git_commit","message":"[ttnn-factory-builder] stage 5: initial CB config"}
-{"ts":"...","event":"result","type":"git_commit","success":true,"commit_sha":"def5678"}
-{"ts":"...","event":"tdd_cycle","stage":6,"phase":"GREEN_ATTEMPT","result":"TIMEOUT"}
-{"ts":"...","event":"hang_debug","symptom":"timeout","diagnosis":"CB sync mismatch"}
-{"ts":"...","event":"hypothesis","id":"H1","description":"Compute pops fewer tiles than reader pushes","confidence":"HIGH"}
-{"ts":"...","event":"recovery","hypothesis_id":"H1","action":"Fixed compute to consume all inputs","file":"compute.cpp"}
-{"ts":"...","event":"action","type":"git_commit","message":"[ttnn-factory-builder] fix: CB sync for shape-changing op"}
-{"ts":"...","event":"result","type":"git_commit","success":true,"commit_sha":"ghi9012"}
-{"ts":"...","event":"tdd_cycle","stage":6,"phase":"GREEN","result":"PASS"}
-{"ts":"...","event":"complete","final_status":"SUCCESS","stages_completed":[4,5,6],"final_commit":"ghi9012"}
+{"ts":"...","event":"complete","final_status":"SUCCESS","stages_completed":[],"final_commit":"abc1234"}
 ```
 
 ---

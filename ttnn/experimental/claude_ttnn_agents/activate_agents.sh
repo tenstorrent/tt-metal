@@ -55,11 +55,9 @@ if [ -d "$SCRIPT_DIR/references/logging" ]; then
     done
 fi
 
-# Copy workflow documentation
-echo "Installing workflow documentation..."
-if [ -f "$SCRIPT_DIR/subagent_breakdown.md" ]; then
-    cp "$SCRIPT_DIR/subagent_breakdown.md" "$REPO_ROOT/.claude/"
-    echo "  - subagent_breakdown.md"
+if [ -d "$SCRIPT_DIR/references/generic_op_template" ]; then
+    cp -r "$SCRIPT_DIR/references/generic_op_template" "$REPO_ROOT/.claude/references/"
+    echo "  - generic_op_template/"
 fi
 
 # Copy skills (user-invocable slash commands)
@@ -198,5 +196,5 @@ echo ""
 echo "To use the agents, restart Claude Code in the repository root."
 echo "The agents will be available via the Task tool."
 echo ""
-echo "See .claude/subagent_breakdown.md for detailed workflow documentation."
+echo "See the README.md for detailed workflow documentation."
 echo ""

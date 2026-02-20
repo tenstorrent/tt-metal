@@ -4,7 +4,7 @@ This reference contains the mandatory routing and workflow for creating new TTNN
 
 ## Overview
 
-This workflow uses the **generic_op** infrastructure which bypasses C++ TTNN scaffolding entirely, producing Python orchestration code, ProgramDescriptor APIs, and stub kernel files. This is ideal for:
+This workflow uses the **generic_op** infrastructure, producing Python orchestration code, ProgramDescriptor APIs, and stub kernel files. This is ideal for:
 - Rapid prototyping without CMake/nanobind overhead
 - Custom operations that don't require C++ TTNN registration
 - Operations using `ttnn.generic_op()` and ProgramDescriptor
@@ -310,7 +310,7 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
 - Stub kernel files (reader, compute, writer)
 - CB configuration in Python
 
-**Key Feature**: Bypasses C++ scaffolding for rapid iteration.
+**Key Feature**: Python-based for rapid iteration.
 
 ### ttnn-kernel-designer
 **Purpose**: Design kernel implementation strategy by mapping computation phases to helpers or raw calls.
@@ -377,18 +377,6 @@ analyzer_n ─┘                                                        │
 
 ---
 
-## Comparison with Standard Workflow
-
-| Aspect | Standard Workflow | Generic Op Workflow |
-|--------|-------------------|---------------------|
-| C++ Scaffolding | Yes (scaffolder + factory-builder) | No (generic_op_builder) |
-| Build Required | Yes (CMake/nanobind) | No (Python-only) |
-| Stages 1-6 | Sequential (scaffolder → factory-builder) | Parallel (generic_op_builder \|\| designer) |
-| Kernel Design | After factory-builder | Parallel with generic_op_builder |
-| Best For | Production operations | Prototyping, custom ops |
-
----
-
 ## Troubleshooting
 
 ### Phase 3 Sync Issues
@@ -416,6 +404,4 @@ Invoke `ttnn-riscv-debugger` with:
 
 ## Additional Resources
 
-- `.claude/subagent_breakdown.md` - Detailed workflow breakdown
-- `.claude/references/ttnn-operation-workflow.md` - Standard C++ workflow
 - https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html - Official docs

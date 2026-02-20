@@ -299,7 +299,7 @@ Use `void kernel_main() {}`. NOT the deprecated `namespace NAMESPACE { void MAIN
 
 ### Testing
 - Use `dev-test.sh` for TDD stages (real kernels can hang — needs watcher + timeout)
-- Use plain `pytest` for builder/scaffolder phases (stub kernels can't hang)
+- Use plain `pytest` for builder phases (stub kernels can't hang)
 - If pytest hangs: `pkill -9 -f pytest || true` then `tt-smi -r`
 
 ### allocate_tensor_on_device

@@ -9,7 +9,7 @@ First read: `.claude/references/logging/common.md`
 ## Agent Identity
 
 - **Agent name**: `ttnn-kernel-designer`
-- **Predecessor**: `ttnn-factory-builder`
+- **Predecessor**: `ttnn-operation-planner`
 - **Produces**: Kernel Design Document
 
 ---

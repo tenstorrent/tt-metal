@@ -209,7 +209,7 @@ This agent produces **structural analysis** for understanding and recreating ope
 - Execution simulation or Gantt charts
 - Performance calculations (throughput, efficiency)
 
-The output (`{op}_analysis.md`) is consumed by downstream agents (`ttnn-operation-planner`, `ttnn-factory-builder`) for the "create new operation" workflow.
+The output (`{op}_analysis.md`) is consumed by downstream agents (`ttnn-operation-planner`) for the "create new operation" workflow.
 
 ---
 
