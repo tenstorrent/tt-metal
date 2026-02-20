@@ -18,17 +18,21 @@
 #endif
 
 void kernel_main() {
+    DPRINT << "Starting fused Broadcast + RMSNorm kernel" << ENDL();
     constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
 
-// -----------------------
-// NCRISC: Broadcast reader + RMSNorm reader
-// -----------------------
-#if defined(COMPILE_FOR_NCRISC)
 #if defined(ENABLE_SOCKET_READER)
     constexpr bool use_socket = true;
 #else
     constexpr bool use_socket = false;
 #endif
+
+    DPRINT << "use socket: " << (uint32_t)use_socket << ", skip_ccl: " << (uint32_t)skip_ccl << ENDL();
+    // -----------------------
+    // NCRISC: Broadcast reader + RMSNorm reader
+    // -----------------------
+
+#if defined(COMPILE_FOR_NCRISC)
 
 #if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
@@ -131,12 +135,17 @@ void kernel_main() {
 
 #endif
 
-    // CCL Broadcast (reader only when socket is enabled with skip_ccl)
-#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
+// CCL Broadcast (reader only when socket is enabled with skip_ccl)
+#if defined(COMPILE_FOR_NCRISC) && (!defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER))
     deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
     if constexpr (!skip_ccl || use_socket) {
         bcast(bcast_args);
     }
+#endif
+
+#if defined(COMPILE_FOR_BRISC) && !defined(SKIP_CCL)
+    deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
+    bcast(bcast_args);
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)

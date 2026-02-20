@@ -188,6 +188,9 @@ class BroadcastRMSNorm:
                 input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
                 shard_grid_start = input_shard_grid.bounding_box().start
                 worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
+                print(
+                    f"Device at {coord} has worker core {worker_core}, is_sender: {is_sender}, is_secondary_sender: {is_secondary_sender}, is_receiver: {is_receiver}"
+                )
                 worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
 
                 # Get physical core for NOC addressing
@@ -365,8 +368,10 @@ class BroadcastRMSNorm:
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
                 kernel_defines = []
                 if skip_ccl:
+                    print("Running in skip_ccl mode: CCL broadcast will be skipped, running RMSNorm only")
                     kernel_defines.append(("SKIP_CCL", "1"))
                 if use_socket:
+                    print("Running with socket: enabling socket reader path in kernel")
                     kernel_defines.append(("ENABLE_SOCKET_READER", "1"))
 
                 # Unified kernel descriptor for fused op

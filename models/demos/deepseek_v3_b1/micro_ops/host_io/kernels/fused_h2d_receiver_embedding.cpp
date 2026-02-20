@@ -124,6 +124,8 @@ void kernel_main() {
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     }
 
+    DPRINT << "Starting fused H2D receiver + embedding reader kernel" << ENDL();
+
     auto embedding_accessor = TensorAccessor(embedding_args, embedding_addr, embedding_page_size);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
@@ -194,6 +196,8 @@ void kernel_main() {
                 receiver_socket.read_ptr,
                 token_page_size);
             noc_async_read_barrier();
+            DPRINT << "Read token page from host into L1, token_id: "
+                   << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr) << ENDL();
         }
 
         // TODO: Add and assert that token id is within vocab size

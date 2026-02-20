@@ -175,15 +175,21 @@ def test_broadcast_rms_single_device(
         fp32_dest_acc_en=fp32_dest_acc_en,
         socket=recv_socket if use_socket else None,
     )
+    logger.info("Fused operation completed")
     if use_socket:
         token_size_datums = token_page_size // 4
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
         torch_token[0, 0] = 0
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        logger.info("Writing token to H2D socket to trigger data transfer")
         h2d_socket.write_tensor(token_tensor)
+        logger.info("Waiting for data to be available on D2H socket")
         host_io.terminate()
+        logger.info("Host IO terminated, data should be available on D2H socket")
     else:
+        logger.info("No socket used, synchronizing device to ensure operation completion")
         ttnn.synchronize_device(mesh_device)
+        logger.info("Device synchronized")
 
     # Convert result back to torch
     output_tensor_torch = ttnn.to_torch(result, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))

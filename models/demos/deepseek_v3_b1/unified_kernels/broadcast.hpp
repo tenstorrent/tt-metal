@@ -141,15 +141,23 @@ struct Broadcast {
             // ================================================================
             if constexpr (IsWorkerCore) {
                 if (CTArgs::is_sender) {
+                    DPRINT << "Sender core for bcast" << ENDL();
                     uint32_t num_pages_to_read =
                         std::min(args.tile_id_end - args.tile_id_start, CTArgs::packet_size_in_pages);
+                    DPRINT << "num pages to read: " << num_pages_to_read << ENDL();
 #if defined(ENABLE_SOCKET_READER)
                     {
+                        DPRINT << "socket reader path: waiting for pages to be available in socket..." << ENDL();
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
+                        DPRINT << "socket page size: " << args.socket_page_size
+                               << ", num pages: " << args.socket_num_pages << ENDL();
                         set_receiver_socket_page_size(recv, args.socket_page_size);
-                        socket_wait_for_pages(recv, args.socket_num_pages);
                         assign_local_cb_to_socket(recv, CTArgs::cb0_id);
+                        socket_wait_for_pages(recv, args.socket_num_pages);
+                        DPRINT << "pages are available in socket, reading data..." << ENDL();
                         cb_push_back(CTArgs::cb0_id, num_pages_to_read);
+                        DPRINT << "reader pushed to cb: " << CTArgs::cb0_id << ", num pages: " << num_pages_to_read
+                               << ENDL();
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv);
                         update_socket_config(recv);
@@ -164,6 +172,8 @@ struct Broadcast {
                     cb_push_back(CTArgs::cb0_id, num_pages_to_read);
 #endif
                 }
+
+                DPRINT << "reader done" << ENDL();
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
