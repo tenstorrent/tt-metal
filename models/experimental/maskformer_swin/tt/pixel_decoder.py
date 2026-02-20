@@ -61,7 +61,9 @@ class MaskFormerPixelDecoder:
         self._prefer_moreh_group_norm = os.environ.get("MASKFORMER_TT_USE_MOREH_GROUP_NORM", "0").strip() != "0"
         # Cache conv2d prepared weights across forwards to avoid repeated host-side preparation.
         # Stable on N300 for this model; set to 0 explicitly for A/B validation.
-        self._cache_conv2d_weights = os.environ.get("MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS", "1").strip() != "0"
+        self._cache_conv2d_weights = (
+            os.environ.get("MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS", "1").strip() != "0"
+        )
         self._debug_group_norm = os.environ.get("MASKFORMER_TT_DEBUG_GROUP_NORM", "0").strip() == "1"
         self._debug_conv2d = os.environ.get("MASKFORMER_TT_DEBUG_CONV2D", "0").strip() == "1"
         self._debug_seen_conv2d_sites: set[str] = set()
@@ -420,10 +422,7 @@ class MaskFormerPixelDecoder:
             if x.storage_type() != ttnn.StorageType.DEVICE:
                 if self._debug_conv2d:
                     try:
-                        print(
-                            "[maskformer][pixel_decoder] conv2d pre to_device "
-                            f"key={site} {_tensor_info('x', x)}"
-                        )
+                        print("[maskformer][pixel_decoder] conv2d pre to_device " f"key={site} {_tensor_info('x', x)}")
                     except Exception:
                         pass
                 x = ttnn.to_device(x, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -480,7 +479,11 @@ class MaskFormerPixelDecoder:
 
         log_exit = log_enter or (
             self._debug_conv2d
-            and (not _is_device_tensor(out) or not _is_device_tensor(prepared_weight) or not _is_device_tensor(prepared_bias))
+            and (
+                not _is_device_tensor(out)
+                or not _is_device_tensor(prepared_weight)
+                or not _is_device_tensor(prepared_bias)
+            )
         )
         if log_exit:
             try:
@@ -582,7 +585,9 @@ class MaskFormerPixelDecoder:
                 cached = self._native_gn_params_cache.get(cache_key)
                 if cached is None:
                     if not hasattr(ttnn, "determine_expected_group_norm_sharded_config_and_grid_size"):
-                        raise RuntimeError("ttnn.determine_expected_group_norm_sharded_config_and_grid_size unavailable.")
+                        raise RuntimeError(
+                            "ttnn.determine_expected_group_norm_sharded_config_and_grid_size unavailable."
+                        )
                     if not hasattr(ttnn, "create_group_norm_input_mask") or not hasattr(
                         ttnn, "create_group_norm_weight_bias_rm"
                     ):
@@ -806,9 +811,7 @@ class MaskFormerPixelDecoder:
                 x = ttnn.to_device(x, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if log_enter:
             try:
-                print(
-                    f"[maskformer][pixel_decoder] group_norm exit name={site} impl=manual {_tensor_info('out', x)}"
-                )
+                print(f"[maskformer][pixel_decoder] group_norm exit name={site} impl=manual {_tensor_info('out', x)}")
             except Exception:
                 pass
         return x

@@ -701,7 +701,10 @@ class MaskFormerSwinBackbone:
         # Stage loop
         for stage_idx, stage in enumerate(self._stages):
             if debug:
-                print(f"[maskformer][backbone] stage {stage_idx} begin x_shape={tuple(int(s) for s in x.shape)}", flush=True)
+                print(
+                    f"[maskformer][backbone] stage {stage_idx} begin x_shape={tuple(int(s) for s in x.shape)}",
+                    flush=True,
+                )
             # Blocks
             for block_idx, block in enumerate(stage["blocks"]):
                 shift = 0 if (block_idx % 2 == 0) else window // 2
@@ -1221,9 +1224,7 @@ class MaskFormerSwinBackbone:
         ttnn.deallocate(ctx_seq)
 
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
-        out = ttnn.reshape(
-            out, (B, num_windows_h, num_windows_w, window, window, C), memory_config=act_mem_cfg
-        )
+        out = ttnn.reshape(out, (B, num_windows_h, num_windows_w, window, window, C), memory_config=act_mem_cfg)
         out = ttnn.permute(out, (0, 1, 3, 2, 4, 5), memory_config=act_mem_cfg)
         out = ttnn.reshape(out, (B, Hp, Wp, C), memory_config=act_mem_cfg)
         _attn_mark("out proj end")
