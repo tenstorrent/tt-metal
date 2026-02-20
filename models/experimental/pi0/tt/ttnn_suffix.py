@@ -85,6 +85,8 @@ class SuffixEmbeddingTTNN:
         self._att_mask_pattern = att_mask_ttnn
         self._att_mask_suffix_len = suffix_len
 
+        self.indices = ttnn.arange(0, 512, 1, device=device, dtype=ttnn.float32)
+
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:
         """
         Embed noisy actions using ttnn.linear.
@@ -142,6 +144,7 @@ class SuffixEmbeddingTTNN:
             min_period=4e-3,
             max_period=4.0,
             device=self.device,
+            indices=self.indices,
         )
 
     def fuse_action_time(
@@ -245,13 +248,7 @@ class SuffixEmbeddingTTNN:
         suffix_len = suffix_embs.shape[1]
 
         # Padding mask: all ones (no padding)
-        suffix_pad_masks = ttnn.ones(
-            (batch_size, suffix_len),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        suffix_pad_masks = None
 
         # OPTIMIZATION: Use pre-computed attention mask pattern (no transfer per step!)
         # Pattern is pre-computed in __init__, just repeat for batch_size

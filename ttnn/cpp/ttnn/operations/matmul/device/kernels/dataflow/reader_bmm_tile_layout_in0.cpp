@@ -34,7 +34,7 @@ void kernel_main() {
 
     constexpr auto in0_args = TensorAccessorArgs<10>();
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t one_tile = 1;
 #ifdef IN0_SHARDED
     const uint32_t in0_num_tiles = batch * num_blocks * in0_block_h * in0_block_w;
@@ -55,7 +55,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifdef INTERMEDIATE_CB_READ
-            constexpr uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+            constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
             cb_reserve_back(in0_intermediate_cb_index, one_tile);
             uint32_t l1_write_addr_helper = get_write_ptr(in0_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ

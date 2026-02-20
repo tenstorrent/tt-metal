@@ -36,6 +36,7 @@
 #include "../../../unified_kernels/create_q_heads.hpp"
 #include "../../../unified_kernels/rope.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
+#include "../../../unified_kernels/kv_cache_update.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -216,13 +217,9 @@ void kernel_main() {
     constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
 
     // Reader args: CB indices for sharded input signaling
-    deepseek_b1_ops::Rope::ReaderArgs krope_args{
-        .in_cb = krope_input_cb,
-        .cos_cb = krope_cos_cb,
-        .sin_cb = krope_sin_cb,
-        .trans_mat_cb = krope_trans_mat_cb,
-    };
+    deepseek_b1_ops::Rope::ReaderArgs krope_args{};
 
+    deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -386,6 +383,17 @@ void kernel_main() {
 
     // Writer args (empty - no-op)
     deepseek_b1_ops::Rope::WriterArgs krope_args{};
+
+    deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(15),
+        .position_id = get_common_arg_val<uint32_t>(16),
+        .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
+        .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
+        .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
+        .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
+        .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
+    };
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
 // Named compile-time args: rmsnorm compute, matmul compute
@@ -400,18 +408,21 @@ void kernel_main() {
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm2_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm2_output_cb")>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-        get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb"),
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
     };
@@ -451,11 +462,8 @@ void kernel_main() {
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
-        get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
-        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
-        get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
-        get_common_arg_val<uint32_t>(0),                       // epsilon (same as rmsnorm1)
-        get_common_arg_val<float>(2),                          // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),     // scalar (1/sqrt(1536))
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -528,13 +536,13 @@ void kernel_main() {
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_output_cb")>;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
-        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
     };
@@ -563,6 +571,13 @@ void kernel_main() {
         .sin_interm_cb = krope_sin_interm_cb,
         .out_cb = krope_output_cb,
     };
+
+    deepseek_b1_ops::KVCacheUpdate::ComputeArgs kv_cache_update_args{
+        .kv_cache_input_cb = get_common_arg_val<uint32_t>(4),
+        .kv_cache_output_cb = get_common_arg_val<uint32_t>(5),
+        .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(6),
+    };
+
     // Full init, CBs don't matter
     compute_kernel_hw_startup(0, 0, 0);
 #endif
@@ -827,7 +842,7 @@ void kernel_main() {
         }
     }
     {
-        // ========================================================================o
+        // ========================================================================
         // KV Cache Branch - Matmul
         // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
         // ========================================================================
@@ -862,6 +877,15 @@ void kernel_main() {
             DeviceZoneScopedN("K_ROPE");
             deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
             krope(krope_args);
+        }
+        // ========================================================================
+        // KV Cache Update: Write results to DRAM interleaved tensor
+        // BRISC handles writing from output CBs to DRAM
+        // ========================================================================
+        {
+            DeviceZoneScopedN("KV_CACHE_UPDATE");
+            deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
+            kv_cache_update(kv_cache_update_args);
         }
     }
 }
