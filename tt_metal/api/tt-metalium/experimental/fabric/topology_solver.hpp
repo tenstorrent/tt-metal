@@ -65,6 +65,13 @@ public:
     const std::vector<NodeId>& get_neighbors(const NodeId& node) const;
 
     /**
+     * @brief Get read-only access to the adjacency map
+     *
+     * @return const AdjacencyMap& Read-only reference to the internal adjacency map
+     */
+    const AdjacencyMap& get_adjacency_map() const;
+
+    /**
      * @brief Print adjacency map for debugging
      *
      * Prints the graph structure showing each node and its neighbors.

@@ -444,6 +444,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // Get valid groupings map from MGD and PGD
     auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor);
 
+    // Get groupings for mesh level mappings
+
     // TODO: continue implementing here
     PhysicalMultiMeshGraph result;
 
