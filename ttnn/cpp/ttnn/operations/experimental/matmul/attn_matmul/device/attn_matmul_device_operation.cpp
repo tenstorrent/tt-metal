@@ -11,12 +11,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-AttnMatmulDeviceOperation::program_factory_t AttnMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return AttnMatmulProgramFactory{};
-}
-
 void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]
@@ -118,12 +112,8 @@ tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
         std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_b.storage()),
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_b.storage()));
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         args,
-        program_factory.index(),
         args.transpose_hw,
         args.output_mem_config,
         args.output_dtype,

@@ -10,6 +10,19 @@ Automatically extracts real-world operation configurations from model tests and 
 - ✅ Simple 2-step integration into sweep tests
 - ✅ Captures shapes, dtypes, layouts, and exact shard specs
 
+## New Simple Tracer (Updated Jan 2026)
+
+The tracer has been updated to use the new `--trace-params` flag instead of graph tracing. This provides:
+- ✅ Simpler implementation (no C++ graph tracing dependencies)
+- ✅ Individual JSON files per operation for easier debugging
+- ✅ Works with both pytest tests and standalone Python scripts
+
+**How it works:**
+1. Runs your test/script with `--trace-params` flag
+2. Collects individual operation JSON files from `generated/ttnn/reports/operation_parameters/`
+3. Filters valid operations (from `Allops.txt`)
+4. Merges into master JSON with deduplication and source tracking
+
 ### Currently Traced Models
 
 The following models have been traced and their configurations are available in `ttnn_operations_master.json`:
@@ -76,7 +89,7 @@ These traced configurations provide real-world operation patterns from productio
 
 ### Key Files
 
-- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [graph tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
+- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [operation tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/operation-tracing.md)
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
@@ -237,6 +250,17 @@ python model_tracer/generic_ops_tracer.py models/experimental/some_model/run_inf
 
 # Keep trace files (default: auto-deleted after adding to master)
 python model_tracer/generic_ops_tracer.py <test_path> --store
+
+# Import traces from another machine
+# 1. On Machine A: Trace with --store to keep JSON files
+python model_tracer/generic_ops_tracer.py test.py --store
+# This creates: generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/
+
+# 2. Copy trace directory to Machine B
+# scp -r generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/ machine_b:/tmp/traces/
+
+# 3. On Machine B: Import the traces
+python model_tracer/generic_ops_tracer.py --from-trace-dir /tmp/traces/<test_name>_<timestamp>
 ```
 
 **Detection Logic:**
@@ -287,11 +311,11 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 ```bash
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name model_traced.pad_model_traced
+  --module-name model_traced.add_model_traced
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name model_traced.pad_model_traced \
+  --module-name model_traced.add_model_traced \
   --suite model_traced \
   --vector-source vectors_export \
   --result-dest results_export
