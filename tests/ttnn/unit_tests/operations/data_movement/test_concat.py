@@ -362,8 +362,8 @@ def test_concat_1d(device, layout, dim, input_shapes):
     "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
     [
         # 2 tensors - basic ND sharding concat
-        (2, [3, 128, 160], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        #        (2, [3, 128, 160], [3, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on height dim
+        #        (2, [3, 128, 160], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (2, [3, 128, 160], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on height dim
         #        (2, [3, 128, 160], [3, 128, 32], 2, ttnn.TILE_LAYOUT),  # concat on width dim
         #        (2, [3, 4, 5], [1, 1, 5], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on batch
         #        (2, [3, 4, 5], [3, 1, 5], 1, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on height
@@ -423,9 +423,11 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
         assert mem_config.nd_shard_spec is not None, "Input tensor should use ND sharding"
         assert mem_config.shard_spec is None, "Input tensor should NOT use legacy sharding"
         # verify the shard shape matches initial setup
-        assert mem_config.nd_shard_spec.shard_shape == ttnn.Shape(
-            shard_shape
-        ), f"Shard shape mismatch: expected {shard_shape}, got {mem_config.nd_shard_spec.shard_shape}"
+        expected_shape = ttnn.Shape(shard_shape)
+        actual_shape = mem_config.nd_shard_spec.shard_shape
+        assert (
+            actual_shape == expected_shape
+        ), f"Shard shape mismatch: expected {list(expected_shape)}, got {list(actual_shape)}"
 
     # Compute output shard shape (adjust for concat dimension): same grid and layout as inputs,
     # output shard shape = sum of input shard shapes along concat_dim (mirrors device op logic).
