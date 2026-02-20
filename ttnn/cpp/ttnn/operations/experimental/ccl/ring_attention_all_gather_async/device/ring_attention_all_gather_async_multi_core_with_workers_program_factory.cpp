@@ -160,6 +160,14 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     /* All gather fusion */
     const bool fuse_op = fused_op_signaler.has_value();
+    log_info(tt::LogOp, "Ring attn input_tensors size: {}", input_tensor.size());
+    log_info(tt::LogOp, "Ring attn output_tensor size: {}", output_tensor.size());
+    for (int i = 0; i < input_tensor.size(); i++) {
+        log_info(tt::LogOp, "input_tensors at i = {} shape = {}", i, input_tensor[i].logical_shape());
+    }
+    for (int i = 0; i < output_tensor.size(); i++) {
+        log_info(tt::LogOp, "output_tensors at i = {} shape = {}", i, output_tensor[i].logical_shape());
+    }
 
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
@@ -240,6 +248,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
+    /// needs fixing
     const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
     const auto input_tensor_shape = input_tensor[0].padded_shape();
     const auto output_tensor_shape = output_tensor[0].padded_shape();

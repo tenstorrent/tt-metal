@@ -1526,7 +1526,7 @@ void sdpa_inner_loop(
 
         uint32_t processed_k_chunks = 0;
 
-        DPRINT << "Q CHUNK: " << q_iter << " K chunks: " << k_chunk_end << ENDL();
+        // DPRINT << "Q CHUNK: " << q_iter << " K chunks: " << k_chunk_end << ENDL();
         for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;

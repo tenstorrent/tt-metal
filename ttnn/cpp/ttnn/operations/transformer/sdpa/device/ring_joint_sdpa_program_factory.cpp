@@ -597,6 +597,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
+    // probably gonna need some help here :)
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
     uint32_t v_addr = input_tensor_v.buffer()->address();

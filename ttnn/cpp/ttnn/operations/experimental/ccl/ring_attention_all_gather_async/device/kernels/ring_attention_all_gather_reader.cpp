@@ -7,6 +7,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/debug/dprint.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -64,9 +65,13 @@ void kernel_main() {
     const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     // Push out our local slice
 
+    DPRINT << "AG reader, num inputs: " << num_inputs << ENDL();
+
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
     uint32_t output_tile_id_start = 0;
+    // Read local slice to our buffers, before sending them over
+    DPRINT << "AG reader, reading local slice, tiles_to_read: " << tiles_to_read << ENDL();
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {

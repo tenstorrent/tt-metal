@@ -98,7 +98,7 @@ void kernel_main() {
             (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
 
         if (!ring_iter_does_work) {
-            DPRINT << "SKIPPING WORK FOR: " << rind_index << ENDL();
+            // DPRINT << "SKIPPING WORK FOR: " << rind_index << ENDL();
             continue;
         }
 
@@ -172,5 +172,5 @@ void kernel_main() {
             cb_out,
             causality);
     }
-    DPRINT << "COMPUTE EXIT FOR: " << rind_index << ENDL();
+    // DPRINT << "COMPUTE EXIT FOR: " << rind_index << ENDL();
 }

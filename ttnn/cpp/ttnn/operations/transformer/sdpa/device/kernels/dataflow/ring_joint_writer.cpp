@@ -146,7 +146,7 @@ void kernel_main() {
         const bool ring_iter_does_work =
             (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
         if (!ring_iter_does_work) {
-            DPRINT << "SKIPPING WRITE" << ENDL();
+            // DPRINT << "SKIPPING WRITE" << ENDL();
             continue;
         }
 
@@ -272,5 +272,5 @@ void kernel_main() {
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
-    DPRINT << "WRITER EXIT" << ENDL();
+    // DPRINT << "WRITER EXIT" << ENDL();
 }

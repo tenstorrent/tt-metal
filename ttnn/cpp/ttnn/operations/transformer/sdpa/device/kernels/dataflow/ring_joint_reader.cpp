@@ -152,9 +152,9 @@ void kernel_main() {
             (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
 
         uint32_t KV_chunks_processed_in_iter = 0;
-        DPRINT << "RING ITER: " << ring_id << ENDL();
+        // DPRINT << "RING ITER: " << ring_id << ENDL();
         if (!ring_iter_does_work) {
-            DPRINT << "SKIPPING WORK FOR: " << rind_index << ENDL();
+            //  DPRINT << "SKIPPING WORK FOR: " << rind_index << ENDL();
             continue;
         }
 
@@ -224,9 +224,9 @@ void kernel_main() {
                     if (ring_iter == 0) {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                        DPRINT << "Q CHUNK: " << q_chunk << " K: [" << nb << ", " << nq << ", "
-                               << local_k_row_start_tile << ", " << local_k_row_start_tile + Sk_chunk_t << "]"
-                               << ENDL();
+                        // DPRINT << "Q CHUNK: " << q_chunk << " K: [" << nb << ", " << nq << ", "
+                        //        << local_k_row_start_tile << ", " << local_k_row_start_tile + Sk_chunk_t << "]"
+                        //        << ENDL();
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
@@ -312,7 +312,7 @@ void kernel_main() {
             cb_push_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_v_in, k_chunk_tiles);
         }
-        DPRINT << "READER STEP: " << ring_iter << ENDL();
+        // DPRINT << "READER STEP: " << ring_iter << ENDL();
     }
-    DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
+    // DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
 }
