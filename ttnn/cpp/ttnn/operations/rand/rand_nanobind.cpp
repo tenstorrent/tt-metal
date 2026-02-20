@@ -44,7 +44,7 @@ void bind_rand_operation(nb::module_& mod) {
 
     ttnn::bind_function<"rand">(
         mod,
-        doc,
+        doc.c_str(),
         ttnn::overload_t(
             &ttnn::rand,
             nb::arg("shape"),

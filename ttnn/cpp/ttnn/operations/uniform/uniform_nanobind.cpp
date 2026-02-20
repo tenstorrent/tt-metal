@@ -53,7 +53,7 @@ void bind_uniform_operation(nb::module_& mod) {
 
     ttnn::bind_function<"uniform">(
         mod,
-        doc,
+        doc.c_str(),
         ttnn::overload_t(
             &ttnn::uniform,
             nb::arg("input"),

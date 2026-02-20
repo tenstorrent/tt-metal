@@ -54,7 +54,7 @@ void bind_bernoulli_operation(nb::module_& mod) {
 
     ttnn::bind_function<"bernoulli">(
         mod,
-        doc,
+        doc.c_str(),
         ttnn::overload_t(
             &ttnn::bernoulli,
             nb::arg("input"),

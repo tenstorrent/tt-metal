@@ -51,7 +51,7 @@ void bind_generic_operation(nb::module_& mod) {
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
-    ttnn::bind_function<"generic_op">(mod, doc, mesh_program_overload, program_overload);
+    ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload);
 }
 
 }  // namespace ttnn::operations::generic

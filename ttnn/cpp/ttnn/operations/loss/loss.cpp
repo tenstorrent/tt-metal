@@ -52,6 +52,7 @@ Tensor loss_function(
 }
 
 }  // namespace loss_utils
+}  // namespace ttnn::operations::loss
 
 namespace ttnn {
 
