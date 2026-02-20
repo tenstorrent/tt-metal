@@ -117,21 +117,21 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        HF_HUB_CACHE: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '') || '/mnt/MLPerf/huggingface/hub' }}
+        HF_HUB_CACHE: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '') || '/mnt/MLPerf/huggingface/hub' }}
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        HTTP_PROXY: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && env.HTTP_PROXY) || '' }}
-        HTTPS_PROXY: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && env.HTTPS_PROXY) || '' }}
-        NO_PROXY: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && env.NO_PROXY) || '' }}
+        HTTP_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.HTTP_PROXY) || '' }}
+        HTTPS_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.HTTPS_PROXY) || '' }}
+        NO_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.NO_PROXY) || '' }}
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - ${{ (!contains(matrix.test-group.runs_on[0], 'viommu') && !contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-        - ${{ (!contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || '/no_mlperf' }}
-        - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(matrix.test-group.runs_on[0], 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:ro', contains(matrix.test-group.runs_on[0], 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
+        - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && !contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || '/no_mlperf' }}
+        - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:ro', contains(join(matrix.test-group.runs_on, ' '), 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
       options: >-
         --device /dev/tenstorrent
-        ${{ contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '-e TT_GH_CI_INFRA=1' || '' }}
-        ${{ !contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '--cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys' || '' }}
+        ${{ contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '-e TT_GH_CI_INFRA=1' || '' }}
+        ${{ !contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '--cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys' || '' }}
     defaults:
       run:
         shell: bash
@@ -152,12 +152,12 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
-        if: ${{ contains(matrix.test-group.runs_on[0], 'pipeline-perf') || contains(matrix.test-group.runs_on[0], 'bare-metal') }}
+        if: ${{ contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal') }}
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
       - name: Download model weights from LFC
-        if: ${{ contains(matrix.test-group.runs_on[0], 'yyz2-lfc') && contains(matrix.test-group.name, 'llama') }}
+        if: ${{ contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && contains(matrix.test-group.name, 'llama') }}
         timeout-minutes: 15
         run: |
           set -e
@@ -173,11 +173,11 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           # For single-card wormhole tests, source the test functions
-          if [[ "${{ matrix.test-group.sku }}" =~ ^wh_n(150|300) ]]; then
+          if [[ "${{ matrix.test-group.sku }}" =~ ^wh_n150 || "${{ matrix.test-group.sku }}" =~ ^wh_n300 ]]; then
             source tests/scripts/single_card/run_single_card_demo_tests.sh
           fi
           # For T3000 tests, source the test functions
-          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" ]]; then
+          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" || "${{ matrix.test-group.sku }}" == "wh_llmbox_perf_release" ]]; then
             source tests/scripts/t3000/run_t3000_demo_tests.sh
           fi
           # Execute the command
@@ -221,7 +221,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
       - name: Disable Performance mode
-        if: ${{ (contains(matrix.test-group.runs_on[0], 'pipeline-perf') || contains(matrix.test-group.runs_on[0], 'bare-metal')) && always() }}
+        if: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal')) && always() }}
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
