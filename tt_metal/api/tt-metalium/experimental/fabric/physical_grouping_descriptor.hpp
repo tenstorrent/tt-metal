@@ -40,10 +40,15 @@ struct GroupingItemInfo {
 
     ItemType type;
     uint32_t asic_location = 0;  // Only valid if type == ASIC_LOCATION
+    uint32_t tray_id = 0;        // Tray ID (1-4) if available, 0 otherwise
+
     std::string grouping_name;   // Only valid if type == GROUPING_REF
     std::vector<CornerOrientation>
         corners;  // Corner orientations (can have multiple, e.g., 1D endpoints have 2, 1x1 has all 4)
     // Note: Counts are represented by having multiple items. Use items.size() to get the count.
+    std::vector<std::string> grouping_path;  // Path through grouping hierarchy using grouping names
+                                             // Includes ASIC location at the end (e.g., ["MESH", "hosts_0",
+                                             // "tray_1", "ASIC_LOCATION_1"])
 };
 
 // Grouping information
@@ -111,24 +116,9 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>* errors_out = nullptr) const;
 
-    // Node metadata for flattened mesh nodes
-    // Generic enough to be used throughout the flattened mesh representation
-    struct FlattenedMeshNodeInfo {
-        uint32_t unique_id;                      // Sequential unique ID assigned during flattening
-        uint32_t asic_location = 0;              // ASIC location (1-8) if available, 0 otherwise
-        uint32_t tray_id = 0;                    // Tray ID (1-4) if available, 0 otherwise
-        std::vector<std::string> grouping_path;  // Path through grouping hierarchy using grouping names
-                                                 // Includes ASIC location at the end (e.g., ["MESH", "hosts_0",
-                                                 // "tray_1", "ASIC_LOCATION_1"])
-
-        // Comparison operators for use in maps/sets
-        bool operator==(const FlattenedMeshNodeInfo& other) const { return unique_id == other.unique_id; }
-        bool operator<(const FlattenedMeshNodeInfo& other) const { return unique_id < other.unique_id; }
-    };
-
-    // Build flattened adjacency graph forming one uniform mesh
-    // Returns graph with FlattenedMeshNodeInfo as node type
-    AdjacencyGraph<FlattenedMeshNodeInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
+    // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
+    // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
+    std::vector<GroupingInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
 
 private:
     // Data members
