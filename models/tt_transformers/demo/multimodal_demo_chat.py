@@ -65,7 +65,7 @@ def test_multimodal_demo_chat(
         processor = AutoProcessor.from_pretrained(ckpt_dir)
         tokenizer = processor.tokenizer
         generator = Generator([model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
-        # ovde se init generator
+        # call warmup_model_prefill and warmup_model_decode when vision warmup is implemented
 
     # image understanding
     dialogs = []

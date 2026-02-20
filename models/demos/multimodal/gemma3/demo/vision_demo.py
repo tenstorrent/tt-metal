@@ -247,7 +247,7 @@ def test_multimodal_demo_text(
     )
 
     generator = Generator(model, model_args, mesh_device)
-    # add vision warmup calls when vision warmup is implemented
+    # call warmup_model_prefill and warmup_model_decode when vision warmup is implemented
 
     xattn_caches = [None for i, model in enumerate(generator.model)]
 
