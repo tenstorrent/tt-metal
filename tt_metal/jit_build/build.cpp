@@ -77,7 +77,7 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
     if (ec) {
-        std::filesystem::copy_file(target, link);
+        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
     }
 }
 
@@ -494,11 +494,20 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
-size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* settings) const {
+std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
+    const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
+    TT_FATAL(
+        this->srcs_.size() <= kMaxBuildBitset,
+        "Number of source files ({}) exceeds kMaxBuildBitset ({})",
+        this->srcs_.size(),
+        kMaxBuildBitset);
+
+    std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (need_compile(out_dir, this->objs_[i])) {
+            compiled.set(i);
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
@@ -510,7 +519,7 @@ size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* set
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
-    return events.size();
+    return compiled;
 }
 
 bool JitBuildState::need_link(const string& out_dir) const {
@@ -554,6 +563,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 
     // Append common args provided by the build state
     cmd += lflags;
+    cmd += this->extra_link_objs_;
     cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     jit_build::utils::FileRenamer elf_file(elf_name);
@@ -626,20 +636,30 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
     }
 }
 
-void JitBuildState::build(const JitBuildSettings* settings) const {
+void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
-    string out_dir = (settings == nullptr)
-                         ? this->out_path_ + this->target_name_ + "/"
-                         : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
-    size_t num_objs = this->objs_.size();
-    std::vector<bool> compiled(num_objs, true);
+    auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
+    std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
+
+    // If no link targets are provided, use the current build state as the only link target
+    const JitBuildState* self = this;
+    if (link_targets.empty()) {
+        link_targets = std::span<const JitBuildState* const>(&self, 1);
+    }
+    const size_t num_objs = this->objs_.size();
 
     fs::create_directories(out_dir);
-    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
-        std::string link_objs = this->extra_link_objs_ + " ";
+    auto compiled = compile(out_dir, settings);
+
+    string link_objs;
+    // Populate link_objs once only when anything needs to be linked
+    auto populate_link_objs = [&] {
+        if (!link_objs.empty()) {
+            return;
+        }
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
-            if (!fs::exists(temp_obj)) {
+            if (!compiled.test(i)) {
                 // If reusing up-to-date .o files, we should give them temporary names for linking because:
                 // 1. There is no guarantee that another process will not rename its compiled object to this .o during
                 //    our linking.
@@ -647,22 +667,32 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
                 hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
-                compiled[i] = false;
             }
             link_objs += temp_obj;
             link_objs += " ";
         }
-        link(out_dir, settings, link_objs);
-        if (this->is_fw_) {
-            weaken(out_dir);
+    };
+
+    for (const auto* target : link_targets) {
+        string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
+        fs::create_directories(target_out_dir);
+        if (compiled.any() || target->need_link(target_out_dir)) {
+            populate_link_objs();
+            target->link(target_out_dir, settings, link_objs);
+            if (target->is_fw_) {
+                target->weaken(target_out_dir);
+            }
         }
+    }
+
+    if (!link_objs.empty()) {
         // Rename the temporary .o and .dephash files after linking is done.
         fs::path src_path = out_dir;
         fs::path dst_path = out_dir;
         for (size_t i = 0; i < num_objs; ++i) {
             src_path.replace_filename(this->temp_objs_[i]);
             dst_path.replace_filename(this->objs_[i]);
-            if (compiled[i]) {
+            if (compiled.test(i)) {
                 fs::rename(src_path, dst_path);
                 src_path += ".dephash";
                 dst_path += ".dephash";
@@ -678,45 +708,18 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     extract_zone_src_locations(out_dir);
 }
 
-void JitBuildState::link_to_processor(
-    const JitBuildState& processor_build_state, const JitBuildSettings* settings) const {
-    TT_ASSERT(!this->is_fw_);
-    TT_ASSERT(!processor_build_state.is_fw_);
-    TT_ASSERT(settings != nullptr);
-
-    TT_ASSERT(this->core_type_ == processor_build_state.core_type_);
-    TT_ASSERT(this->processor_class_ == processor_build_state.processor_class_);
-
-    const string orig_processor_out_dir =
-        processor_build_state.out_path_ + settings->get_full_kernel_name() + processor_build_state.target_name_ + "/";
-    TT_ASSERT(fs::exists(orig_processor_out_dir));
-
-    const string out_dir = this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
-
-    fs::create_directories(out_dir);
-
-    string link_objs;
-    for (const string& obj : processor_build_state.objs_) {
-        const string obj_path = orig_processor_out_dir + obj;
-        TT_ASSERT(fs::exists(obj_path));
-        link_objs += obj_path + " ";
-    }
-    for (const auto& obj : tt_metal::MetalContext::instance().hal().get_jit_build_query().link_objs(
-             {.is_fw = processor_build_state.is_fw_,
-              .core_type = processor_build_state.core_type_,
-              .processor_class = processor_build_state.processor_class_,
-              .processor_id = static_cast<uint32_t>(processor_build_state.processor_id_)})) {
-        link_objs += this->env_.root_ + obj + " ";
-    }
-
-    link(out_dir, settings, link_objs);
-}
-
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
     build.build(settings);
     write_successful_jit_build_marker(build, settings);
+}
+
+void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
+    TT_ASSERT(!targets.empty());
+    const JitBuildState& primary = *targets[0];
+    primary.build(settings, targets);
+    write_successful_jit_build_marker(primary, settings);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
@@ -730,14 +733,6 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
     for (const auto& build : build_subset) {
         write_successful_jit_build_marker(build, settings);
     }
-}
-
-void jit_link_additional_processor(
-    const JitBuildState& orig_processor_build_state,
-    const JitBuildState& additional_processor_build_state,
-    const JitBuildSettings* additional_processor_settings) {
-    additional_processor_build_state.link_to_processor(orig_processor_build_state, additional_processor_settings);
-    write_successful_jit_build_marker(additional_processor_build_state, additional_processor_settings);
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
