@@ -1281,6 +1281,7 @@ class UnarySFPUGolden:
             MathOperation.ReluMax: self._relu_max,
             MathOperation.ReluMin: self._relu_min,
             MathOperation.ReduceColumn: self._reduce_columns,
+            MathOperation.ReduceRow: self._reduce_rows,
         }
         self.data_format = None
         self.dest_acc = DestAccumulation.No
@@ -1305,8 +1306,8 @@ class UnarySFPUGolden:
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
 
-        # Special handling for SumColumns which needs to process the entire tensor
-        if operation == MathOperation.ReduceColumn:
+        # Special handling for Column and Row reduction which needs to process the entire tensor
+        if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
             return self.ops[operation](operand1, reduce_pool)
 
         # determine the data format for dst
@@ -1587,6 +1588,22 @@ class UnarySFPUGolden:
         # Construct golden tensor: first row is column max, others are zero
         reduced_tile_tensor = torch.zeros_like(x)
         reduced_tile_tensor[0, :] = reduced_tile
+        return reduced_tile_tensor
+
+    def _reduce_rows(self, x, reduce_pool: ReducePool):
+        """Reduce rows across tiles, computing sum, average, or max."""
+        if reduce_pool == ReducePool.Max:
+            reduced_tile = torch.max(x, dim=1).values
+        elif reduce_pool == ReducePool.Sum:
+            reduced_tile = torch.sum(x, dim=1)
+        else:
+            raise ValueError(
+                f"Unsupported reduce pool type for row reduction: {reduce_pool}"
+            )
+
+        # Construct golden tensor: first column is row max, others are zero
+        reduced_tile_tensor = torch.zeros_like(x)
+        reduced_tile_tensor[:, 0] = reduced_tile
         return reduced_tile_tensor
 
 

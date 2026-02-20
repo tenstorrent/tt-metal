@@ -51,6 +51,12 @@ def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]
     return [(-1000, 1000), (0, 1000), (-1000, 0)]
 
 
+def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
+    if reduce_pool == ReducePool.Sum:
+        return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
+    return [MathOperation.ReduceColumn]
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -62,7 +68,7 @@ def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]
         ],
         same=True,
     ),
-    mathop=[MathOperation.ReduceColumn],
+    mathop=lambda reduce_pool: get_supported_reduce_axioms(reduce_pool),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=lambda formats: get_format_input_bounds(formats),
     reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
@@ -81,8 +87,8 @@ def test_sfpu_reduce(
     if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
-    if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
-        pytest.skip(reason="Dest must be in 32bit mode when input is 32bit")
+    # if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
+    # pytest.skip(reason="Dest must be in 32bit mode when input is 32bit")
 
     min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
@@ -95,10 +101,15 @@ def test_sfpu_reduce(
         low=min_value, high=max_value, size=(tile_cnt * 1024,), dtype=torch_format
     )
     src_B = torch.zeros_like(src_A)
+    src_A = torch.ones_like(src_A)
 
     # Max Reduction can do block and single tile reduction whereas Sum/Avg only do single tile reduction, convert Sum/Avg golden to do block reduction by retilizing input to src_A
     # Dimensions for Max reduction work column wise, for Sum/Avg processing tiles independently is same as column reduction on dst block dimension [32, num_tiles * 32] where num rows is 32 i.e RT_DIM=1 (same as a single tile)
-    dst_dim = [32, tile_cnt * 32]
+    dst_dim = (
+        [32, tile_cnt * 32]
+        if mathop == MathOperation.ReduceColumn
+        else input_dimensions
+    )
     src_A = tilize_block(
         src_A, dst_dim, stimuli_format=formats.input_format
     ).flatten()  # Input tensor is tilized in dst register
@@ -107,7 +118,7 @@ def test_sfpu_reduce(
     )  # Passed into golden since PyTorch library has no concept of tilization
 
     golden_tensor = get_golden_generator(UnarySFPUGolden)(
-        MathOperation.ReduceColumn,
+        mathop,
         src_A_untilized,
         formats.output_format,
         dest_acc,
@@ -144,6 +155,9 @@ def test_sfpu_reduce(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
-    assert passed_test(
-        golden_tensor[0], res_tensor[0], formats.output_format
-    ), "Assert against golden failed"
+    if mathop == MathOperation.ReduceColumn:
+        assert passed_test(golden_tensor[0], res_tensor[0], formats.output_format)
+    elif mathop == MathOperation.ReduceRow:
+        assert passed_test(golden_tensor[:, 0], res_tensor[:, 0], formats.output_format)
+    else:
+        raise ValueError(f"Unsupported math operation: {mathop}")

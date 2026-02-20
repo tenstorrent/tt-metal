@@ -129,7 +129,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     // Run the SFPU reduce SDPA calculation
                     // This is the core computation we want to measure
 
-                    _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(block_height);
+                    _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(1, block_height);
 
                     // Clear the valid flag for source A
                     TTI_CLEARDVALID(1, 0);
@@ -165,7 +165,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
                     // Call the SFPU SDPA reduce function
                     const std::uint32_t block_height = BLOCK_RT_DIM;
-                    _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(block_height);
+                    _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(1, block_height);
 
                     _llk_math_eltwise_unary_sfpu_done_();
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
