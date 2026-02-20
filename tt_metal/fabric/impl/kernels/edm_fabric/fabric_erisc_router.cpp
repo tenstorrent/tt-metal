@@ -855,6 +855,7 @@ FORCE_INLINE void receiver_forward_packet(
         if (not_last_destination_device) {
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+            channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
         }
         if (start_distance_is_terminal_value) {
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);

@@ -112,6 +112,49 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
 }
 
 // ============================================================================
+// Helper: Clear capture buffers on all active ETH cores for a device.
+// Writes a zeroed CaptureResults struct (with min_packet_size sentinel 0xFFFF)
+// to each core's L1 capture address, matching the device-side reset() behavior.
+// ============================================================================
+void clear_capture_on_device(BaseFabricFixture* fixture, ChipId physical_chip_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+    auto buffer_map = builder_ctx.get_telemetry_and_metadata_buffer_map();
+    if (!buffer_map.channel_trimming_capture.is_enabled()) {
+        return;
+    }
+
+    size_t capture_addr = buffer_map.channel_trimming_capture.l1_address;
+    size_t capture_size = buffer_map.channel_trimming_capture.size_bytes;
+
+    // Build a reset capture struct matching device-side reset()
+    CaptureResults reset_data{};
+    reset_data.sender_channel_min_packet_size_seen_bytes_by_vc.fill(0xFFFF);
+
+    std::vector<uint32_t> raw(capture_size / sizeof(uint32_t), 0);
+    std::memcpy(raw.data(), &reset_data, std::min(capture_size, sizeof(reset_data)));
+
+    const auto logical_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
+    const auto& device = fixture->get_device(physical_chip_id);
+    for (const auto& logical_core : logical_cores) {
+        tt_metal::detail::WriteToDeviceL1(
+            device->get_devices()[0], logical_core, capture_addr, raw, CoreType::ETH);
+    }
+}
+
+// ============================================================================
+// Helper: Clear capture buffers on ALL devices in the mesh.
+// ============================================================================
+void clear_all_capture_buffers(BaseFabricFixture* fixture) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
+    for (uint32_t i = 0; i < mesh_shape.mesh_size(); i++) {
+        ChipId phys = control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(MeshId{0}, i));
+        clear_capture_on_device(fixture, phys);
+    }
+}
+
+// ============================================================================
 // Helper: Run the real exporter, import the YAML back, and verify that
 // every capture read from L1 matches the imported data.
 // ============================================================================
@@ -326,53 +369,71 @@ struct MeshPathResult {
     bool found;
 };
 
-MeshPathResult find_mesh_path_with_hops(uint32_t num_hops) {
+MeshPathResult find_1d_path_with_hops(uint32_t num_hops) {
+    // Walk the 1D chain from chip 0 using get_forwarding_direction to determine
+    // the actual forward direction at each hop. In 1D mode, get_forwarding_link_indices
+    // returns links for ANY destination (all traffic goes "forward"), so we can't use
+    // it to distinguish neighbors. Instead, we ask for the forwarding direction towards
+    // an unvisited chip, then get the neighbor in that direction.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
     uint32_t num_chips = mesh_shape.mesh_size();
 
-    // For each candidate source, try to find a destination `num_hops` away by following
-    // the routing path hop-by-hop. Each hop may use a different direction (e.g., on a 2x2
-    // mesh in 1D mode, the chain snakes E→S→W).
-    for (uint32_t src_id = 0; src_id < num_chips; src_id++) {
-        for (uint32_t dst_id = 0; dst_id < num_chips; dst_id++) {
-            if (src_id == dst_id) {
-                continue;
-            }
-            FabricNodeId src_node(MeshId{0}, src_id);
-            FabricNodeId dst_node(MeshId{0}, dst_id);
+    FabricNodeId current(MeshId{0}, 0);
+    std::vector<FabricNodeId> path = {current};
 
-            // Walk the forwarding path from src toward dst, hop by hop
-            std::vector<FabricNodeId> path;
-            path.push_back(src_node);
-            FabricNodeId current = src_node;
-            bool valid = true;
-
-            for (uint32_t hop = 0; hop < num_hops; hop++) {
-                auto fwd_dir = control_plane.get_forwarding_direction(current, dst_node);
-                if (!fwd_dir.has_value()) {
-                    valid = false;
-                    break;
-                }
-                auto neighbors = control_plane.get_intra_chip_neighbors(current, *fwd_dir);
-                if (neighbors.empty()) {
-                    valid = false;
-                    break;
-                }
-                current = FabricNodeId(MeshId{0}, neighbors[0]);
-                path.push_back(current);
-            }
-
-            if (valid && path.size() == num_hops + 1 && current == dst_node) {
-                // Use the first hop's direction as the overall direction for logging
-                auto first_dir = control_plane.get_forwarding_direction(src_node, dst_node);
-                return MeshPathResult{
-                    src_node, dst_node, path, first_dir.value_or(RoutingDirection::E), true};
+    for (uint32_t hop = 0; hop < num_hops; hop++) {
+        // Find the furthest unvisited chip to use as a forwarding target.
+        // Using the LAST unvisited chip avoids picking a direct neighbor, which would
+        // cause get_forwarding_direction to return the 2D shortest-path direction
+        // instead of the 1D chain forward direction.
+        FabricNodeId target(MeshId{0}, 0);
+        bool found_target = false;
+        for (int i = num_chips - 1; i >= 0; i--) {
+            bool visited = std::any_of(path.begin(), path.end(), [&](const FabricNodeId& n) {
+                return n.chip_id == static_cast<uint32_t>(i);
+            });
+            if (!visited) {
+                target = FabricNodeId(MeshId{0}, static_cast<uint32_t>(i));
+                found_target = true;
+                break;
             }
         }
+        if (!found_target) {
+            log_warning(tt::LogTest, "find_1d_path_with_hops: no unvisited chip at hop {}", hop);
+            return MeshPathResult{current, current, {}, RoutingDirection::E, false};
+        }
+
+        // Get the forward direction from current towards the target
+        auto fwd_dir = control_plane.get_forwarding_direction(current, target);
+        if (!fwd_dir.has_value()) {
+            log_warning(
+                tt::LogTest,
+                "find_1d_path_with_hops: no forwarding direction from chip_id={} to chip_id={} at hop {}",
+                current.chip_id,
+                target.chip_id,
+                hop);
+            return MeshPathResult{current, current, {}, RoutingDirection::E, false};
+        }
+
+        // Get the actual neighbor in the forward direction
+        auto neighbors = control_plane.get_intra_chip_neighbors(current, *fwd_dir);
+        if (neighbors.empty()) {
+            log_warning(
+                tt::LogTest,
+                "find_1d_path_with_hops: no neighbor in direction {} from chip_id={} at hop {}",
+                static_cast<int>(*fwd_dir),
+                current.chip_id,
+                hop);
+            return MeshPathResult{current, current, {}, RoutingDirection::E, false};
+        }
+
+        FabricNodeId next(current.mesh_id, neighbors[0]);
+        path.push_back(next);
+        current = next;
     }
 
-    return MeshPathResult{FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), {}, RoutingDirection::E, false};
+    return MeshPathResult{path.front(), path.back(), path, RoutingDirection::E, true};
 }
 
 // ============================================================================
@@ -581,8 +642,10 @@ protected:
 
 // Test 1: 1-hop unicast — verify both source and destination routers recorded traffic
 TEST_F(Fabric1DChannelTrimmingFixture, UnicastSenderAndReceiverChannelUsed) {
+    clear_all_capture_buffers(this);
+
     // Use mesh coordinates to find a 1-hop neighbor pair (any direction on the chain)
-    auto path_result = find_mesh_path_with_hops(1);
+    auto path_result = find_1d_path_with_hops(1);
     if (!path_result.found) {
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
     }
@@ -653,10 +716,10 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastSenderAndReceiverChannelUsed) {
 
             EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[0], 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                << ") receiver channel 0 should record forwarding to sender channel 1 (bit 1)";
+                << ") VC0 should not show forwarding-to on 1-hop endpoint";
             EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[1], 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                << ") VC 1 should not show forwarding-to (no VC1 traffic in 1D)";
+                << ") VC1 should not show forwarding-to (no VC1 traffic in 1D)";
 
             found_receiver_forwarding = true;
         }
@@ -673,8 +736,10 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastSenderAndReceiverChannelUsed) {
 
 // Test 2: 2-hop unicast — verify intermediate router forwarding
 TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
+    clear_all_capture_buffers(this);
+
     // Use mesh coordinates to find a 2-hop path (scans all positions and directions)
-    auto path_result = find_mesh_path_with_hops(2);
+    auto path_result = find_1d_path_with_hops(2);
     if (!path_result.found) {
         GTEST_SKIP() << "No 2-hop path found on the mesh (need >=3 devices in some direction)";
     }
@@ -755,8 +820,8 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
         sender_and_receiver_channels_active_on_different_routers = sender_and_receiver_channels_active_on_different_routers &&
             !((cap.capture.receiver_channel_data_forwarded_bitfield_by_vc != 0) && (cap.capture.sender_channel_used_bitfield_by_vc != 0));
     }
-    EXPECT_TRUE(num_routers_with_intermediate_sender_activity == 1) << "Expected to find exactly one router with sender activity on intermediate device";
-    EXPECT_TRUE(num_routers_with_intermediate_receiver_activity == 1) << "Expected to find exactly one router with receiver activity on intermediate device";
+    EXPECT_EQ(num_routers_with_intermediate_sender_activity, 1) << "Expected to find exactly one router with sender activity on intermediate device";
+    EXPECT_EQ(num_routers_with_intermediate_receiver_activity, 1) << "Expected to find exactly one router with receiver activity on intermediate device";
     EXPECT_TRUE(sender_and_receiver_channels_active_on_different_routers) << "Sender and receiver channels should be active on different routers";
 
     // --- Destination router validation ---
@@ -786,7 +851,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
 
             EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[0], 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                << ") receiver channel 0 should record forwarding to sender channel 1 (bit 1)";
+                << ") VC0 should not show forwarding-to on 2-hop endpoint";
             EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[1], 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
                 << ") VC1 should not show forwarding-to (no VC1 traffic in 1D)";
@@ -803,12 +868,14 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
 
 // Test 3: 1-hop unicast — verify min/max packet size tracking
 TEST_F(Fabric1DChannelTrimmingFixture, UnicastPacketSizeTracking) {
-    auto path_result = find_mesh_path_with_hops(1);
+    clear_all_capture_buffers(this);
+
+    auto path_result = find_1d_path_with_hops(1);
     if (!path_result.found) {
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
     }
 
-    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1, /*num_packets=*/10);
+    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
     if (result.skipped) {
         GTEST_SKIP() << "No forwarding links between selected nodes";
     }
@@ -870,14 +937,13 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastPacketSizeTracking) {
             EXPECT_TRUE(has_noc_send_type)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
                 << ") should show NocSendType activity (local delivery)";
-            // Endpoint — no sender transmission
+            // Endpoint — no sender transmission (receiver delivers locally, doesn't originate traffic)
             EXPECT_EQ(cap.capture.sender_channel_used_bitfield_by_vc, 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
                 << ") should not show sender channel activity (endpoint)";
-            // In 1D, the receiver channel always records its forwarding path to sender channel 1
             EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[0], 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
-                << ") receiver channel 0 should record forwarding to sender channel 1 (bit 1)";
+                << ") VC0 should not show forwarding-to on 1-hop endpoint";
             EXPECT_EQ(cap.capture.sender_channel_forwarded_to_bitfield_by_vc[1], 0)
                 << "Destination router eth core (chan " << static_cast<int>(cap.channel_id)
                 << ") VC1 should not show forwarding-to (no VC1 traffic in 1D)";
@@ -899,6 +965,8 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastPacketSizeTracking) {
 
 // Test 4: Exercise each directional channel (E/W/N/S)
 TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
+    clear_all_capture_buffers(this);
+
     std::vector<RoutingDirection> directions = {
         RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S};
     std::vector<RoutingDirection> exercised_directions;
@@ -990,6 +1058,8 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
 
 // Test 5: Verify forwarding relationships in 2D (sender_channel_forwarded_to_bitfield)
 TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
+    clear_all_capture_buffers(this);
+
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
     uint32_t num_chips = mesh_shape.mesh_size();
