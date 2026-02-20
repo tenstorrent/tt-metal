@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -26,7 +25,7 @@ def create_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser("Generate DeepSeek-V3 TT-NN cache")
     p.add_argument("--model-path", type=str, required=True, help="Path to local HF DeepSeek-V3 model (safetensors)")
     p.add_argument("--cache-dir", type=str, required=True, help="Destination cache directory")
-    p.add_argument("--temp-cache-dir", type=str, required=True, help="Destination cache directory")
+    p.add_argument("--temp-cache-dir", type=str, required=True, help="Temporary cache directory to be written to")
     p.add_argument(
         "--archive-dir",
         type=str,
@@ -56,6 +55,7 @@ def move_cache(temp_cache_dir: Path, cache_dir: Path, archive_dir: Optional[Path
         # moves from temp_cache_dir to cache_dir
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
+    shutil.rmtree(str(temp_cache_dir))
 
 
 def main() -> None:
@@ -86,24 +86,27 @@ def main() -> None:
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
-    with tempfile.TemporaryDirectory(dir=str(cache_dir)) as _tmp:
-        temp_cache_dir = Path(_tmp)
-        try:
-            logger.info(f"Generating cache in {temp_cache_dir}")
-            gen = DeepseekGenerator(
-                mesh_device=mesh_device,
-                model_path=model_path,
-                cache_dir=temp_cache_dir,
-                override_num_layers=args.override_num_layers,
-            )
-            logger.info(f"Cache was generated in {temp_cache_dir}")
-        finally:
-            ttnn.synchronize_device(mesh_device)
-            for submesh in mesh_device.get_submeshes():
-                ttnn.close_mesh_device(submesh)
-            ttnn.close_mesh_device(mesh_device)
-            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    try:
+        logger.info(f"Generating cache in {temp_cache_dir}")
+        gen = DeepseekGenerator(
+            mesh_device=mesh_device,
+            model_path=model_path,
+            cache_dir=temp_cache_dir,
+            override_num_layers=args.override_num_layers,
+        )
+        logger.info(f"Cache was generated in {temp_cache_dir}")
+    finally:
+        ttnn.synchronize_device(mesh_device)
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
+    if ttnn.distributed_context_is_initialized():
+        logger.info("Waiting for all hosts to finish cache generation and validation before moving files")
+        ttnn.distributed_context_barrier()
+
+    if not ttnn.distributed_context_is_initialized() or ttnn.distributed_context_get_rank() == 0:
         move_cache(temp_cache_dir, cache_dir, archive_dir)
 
     logger.info("Cache generation complete.")
