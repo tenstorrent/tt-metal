@@ -116,6 +116,10 @@ class _SharedExpertContext:
     gu_weights_cb: int
     gu_out_cb: int
 
+    # Weight buffer addresses for overlapped tensor support
+    gu_weights_address: int
+    down_weights_address: int
+
     # Derived sizes
     act_mcast_data_size_bytes: int
     act_mcast_is_part_of_receiver_grid: bool
@@ -443,6 +447,8 @@ class SharedExpertOp:
             residual_add_out_cb=residual_add_out_cb,
             gu_weights_cb=gu_weights_cb,
             gu_out_cb=gu_out_cb,
+            gu_weights_address=gate_up_weights_tensor.buffer_address(),
+            down_weights_address=down_weights_tensor.buffer_address(),
             act_mcast_data_size_bytes=act_mcast_data_size_bytes,
             act_mcast_is_part_of_receiver_grid=act_mcast_is_part_of_receiver_grid,
             mcast_data_size_bytes=mcast_data_size_bytes,
@@ -606,6 +612,7 @@ class SharedExpertOp:
             ("gu_out_cb", ctx.gu_out_cb),
             ("gu_k_per_core", ctx.k_per_core),
             ("gu_act_total_tiles", ctx.K_gate_tiles),
+            ("gu_weights_address", ctx.gu_weights_address),
             # Gated reduce
             ("gated_reduce_group1_cb", ctx.group1_cb),
             ("gated_reduce_group2_cb", ctx.group2_cb),
@@ -619,6 +626,7 @@ class SharedExpertOp:
             ("matmul_out", ctx.matmul_out_cb),
             ("matmul_k_num_tiles", ctx.K_down_tiles),
             ("matmul_out_w_per_core", ctx.out_w_per_core),
+            ("matmul_in1_address", ctx.down_weights_address),
             # Residual add step
             ("residual_add_in0", ctx.matmul_out_cb),
             ("residual_add_in1", ctx.residual_mcast_dst_cb),

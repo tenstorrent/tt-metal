@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -72,6 +73,7 @@ struct KNSlicedMatmul {
         uint32_t k_offset;         // tile offset into act_cb
         uint32_t k_per_core;       // K tiles this core processes
         uint32_t act_total_tiles;  // total tiles in act_cb (for wait/pop)
+        uint32_t weights_address = 0;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -114,6 +116,10 @@ struct KNSlicedMatmul {
             // Wait for all activation tiles and weight tiles
             cb_wait_front(args.act_cb, args.act_total_tiles);
             cb_wait_front(args.weights_cb, args.k_per_core);
+
+            if (args.weights_address != 0) {
+                UNPACK(({ set_local_cb_rd_ptr(args.weights_cb, args.weights_address); }));
+            }
 
             // Reserve output tile
             cb_reserve_back(args.out_cb, out_w);

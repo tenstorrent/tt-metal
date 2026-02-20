@@ -711,12 +711,14 @@ class PostSDPA:
                     ("matmul1_out", matmul1_out_cb),
                     ("matmul1_k_num_tiles", matmul1_k_num_tiles),
                     ("matmul1_out_w_per_core", matmul1_out_w_per_core),
+                    ("matmul1_in1_address", weights1_tensor.buffer_address()),
                     # Matmul2
                     ("matmul2_in0", matmul2_in0_cb),
                     ("matmul2_in1", matmul2_in1_cb),
                     ("matmul2_out", matmul2_out_cb),
                     ("matmul2_k_num_tiles", matmul2_k_num_tiles),
                     ("matmul2_out_w_per_core", matmul2_out_w_per_core),
+                    ("matmul2_in1_address", weights2_tensor.buffer_address()),
                     # CCL receiver compute (reduction)
                     ("ccl_receiver_cb_in0", ccl_remote_data_cb),
                     ("ccl_receiver_cb_in1", gather2_dst_cb),  # Local data

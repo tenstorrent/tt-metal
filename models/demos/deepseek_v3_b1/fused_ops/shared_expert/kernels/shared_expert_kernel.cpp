@@ -308,6 +308,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gu_k_offset"),
         get_named_compile_time_arg_val("gu_k_per_core"),
         get_named_compile_time_arg_val("gu_act_total_tiles"),
+        get_named_compile_time_arg_val("gu_weights_address"),
     };
 
     // Down proj matmul CTArgs
@@ -318,6 +319,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_in1"),
         get_named_compile_time_arg_val("matmul_out"),
         get_named_compile_time_arg_val("matmul_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul_in1_address"),
     };
 
     // Output gather compute args (no-op)

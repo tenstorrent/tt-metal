@@ -512,6 +512,7 @@ class GatedLocalReduceDownProjOp:
             ("matmul_out", ctx.matmul_out_cb),
             ("matmul_k_num_tiles", ctx.k_num_tiles),
             ("matmul_out_w_per_core", ctx.out_w_per_core),
+            ("matmul_in1_address", ctx.weights_tensor.buffer_address()),
             # Residual add step
             ("residual_add_in0", ctx.matmul_out_cb),
             ("residual_add_in1", ctx.residual_add_mcast_dst_cb),

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -81,6 +82,7 @@ struct Matmul {
         uint32_t in1;
         uint32_t out;
         uint32_t k_num_tiles;
+        uint32_t in1_address = 0;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -122,6 +124,10 @@ struct Matmul {
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
             cb_wait_front(args.in0, args.k_num_tiles);
             cb_wait_front(args.in1, args.k_num_tiles * out_w);
+
+            if (args.in1_address != 0) {
+                UNPACK(({ set_local_cb_rd_ptr(args.in1, args.in1_address); }));
+            }
 
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);

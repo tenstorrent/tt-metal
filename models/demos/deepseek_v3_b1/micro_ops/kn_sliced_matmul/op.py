@@ -73,6 +73,7 @@ class KNSlicedMatmulOp:
             ("k_per_core", k_per_core),
             ("act_total_tiles", act_total_tiles),
             ("out_w", out_w),
+            ("weights_address", weights_tensor.buffer_address()),
         ]
 
         per_core_descs = []

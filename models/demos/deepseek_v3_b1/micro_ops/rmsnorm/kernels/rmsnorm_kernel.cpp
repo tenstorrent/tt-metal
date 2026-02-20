@@ -65,6 +65,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         .epsilon = get_common_arg_val<uint32_t>(0),  // epsilon
         .scalar = get_common_arg_val<float>(1),      // scalar (1/sqrt(num_elements))
+        .gamma_address = get_common_arg_val<uint32_t>(2),
     };
     // Full init, CBs don't matter
     compute_kernel_hw_startup(0, 0, 0);

@@ -126,6 +126,7 @@ class _MlpRoutedExpertContext:
     rmsnorm_gamma_cb_descriptor: Any
     rmsnorm_epsilon_packed: int
     rmsnorm_scalar_packed: int
+    rmsnorm_gamma_address: int
     rmsnorm_num_tiles: int
     rmsnorm_gamma_num_pages: int
 
@@ -703,6 +704,7 @@ class MlpRoutedExpertOp:
             rmsnorm_gamma_cb_descriptor=rmsnorm_gamma_cb_descriptor,
             rmsnorm_epsilon_packed=rmsnorm_epsilon_packed,
             rmsnorm_scalar_packed=rmsnorm_scalar_packed,
+            rmsnorm_gamma_address=rmsnorm_gamma_tensor.buffer_address(),
             rmsnorm_num_tiles=rmsnorm_num_tiles,
             rmsnorm_gamma_num_pages=rmsnorm_gamma_num_pages,
             # Per-core values
@@ -1664,6 +1666,7 @@ class MlpOp:
                     trisc_common_runtime_args=[
                         routed_ctx.rmsnorm_epsilon_packed,
                         routed_ctx.rmsnorm_scalar_packed,
+                        routed_ctx.rmsnorm_gamma_address,
                     ],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,

@@ -117,6 +117,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_matmul_in1"),
         get_named_compile_time_arg_val("dkv_matmul_out"),
         get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
+        get_named_compile_time_arg_val("dkv_matmul_in1_address"),
     };
 
     // Gather compute args (no-op for TRISC)
@@ -135,6 +136,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(1),     // scalar (1/sqrt(512))
+        get_common_arg_val<uint32_t>(2),  // gamma_address
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::

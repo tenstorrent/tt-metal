@@ -166,6 +166,7 @@ class KVCacheBranch:
             ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
+            ("dkv_matmul_in1_address", dkv_matmul_weights_tensor.buffer_address()),
         ]
 
         # KV RMSNorm
@@ -450,6 +451,7 @@ class KVCacheBranch:
             trisc_common_runtime_args=[
                 epsilon_packed,
                 kv_scalar_packed,
+                gamma_tensor.buffer_address(),
             ],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,

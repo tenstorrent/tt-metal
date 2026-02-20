@@ -42,6 +42,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("k_offset"),
         get_named_compile_time_arg_val("k_per_core"),
         get_named_compile_time_arg_val("act_total_tiles"),
+        get_named_compile_time_arg_val("weights_address"),
     };
     deepseek_b1_ops::KNSlicedMatmul::Op<KNSlicedMatmulCTArgs, true, /*pop_act=*/true, /*pop_weights=*/false> matmul;
     // Full init, CBs don't matter

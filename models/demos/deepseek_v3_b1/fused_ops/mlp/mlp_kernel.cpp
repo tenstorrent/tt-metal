@@ -658,6 +658,7 @@ void kernel_main() {
             deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
                 get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 0),
                 get_common_arg_val<float>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 1),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 2),
             };
 
 #ifdef ENABLE_REDUCE_TO_ONE
@@ -688,6 +689,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_gu_k_offset"),
                 get_named_compile_time_arg_val("shared_gu_k_per_core"),
                 get_named_compile_time_arg_val("shared_gu_act_total_tiles"),
+                get_named_compile_time_arg_val("shared_gu_weights_address"),
             };
 
             // Gather (compute — no-op for TRISC)
@@ -717,6 +719,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_down_matmul_in1"),
                 get_named_compile_time_arg_val("shared_down_matmul_out"),
                 get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles"),
+                get_named_compile_time_arg_val("shared_down_matmul_in1_address"),
             };
 
             // Residual Add (compute)

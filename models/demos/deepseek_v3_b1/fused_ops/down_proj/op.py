@@ -347,6 +347,7 @@ class DownProj:
             ("matmul_out", matmul_out_cb),
             ("matmul_k_num_tiles", k_num_tiles),
             ("matmul_out_w_per_core", out_w_per_core),
+            ("matmul_in1_address", weights_tensor.buffer_address()),
             # Residual add step
             ("residual_add_in0", matmul_out_cb),
             ("residual_add_in1", residual_add_mcast_dst_cb),

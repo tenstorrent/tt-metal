@@ -143,6 +143,7 @@ class _MoeRoutedExpertContext:
     rmsnorm_gamma_cb_descriptor: Any
     rmsnorm_epsilon_packed: int
     rmsnorm_scalar_packed: int
+    rmsnorm_gamma_address: int
     rmsnorm_num_tiles: int
     rmsnorm_gamma_num_pages: int
 
@@ -1279,6 +1280,7 @@ class MoeRoutedExpertOp:
             rmsnorm_gamma_cb_descriptor=rmsnorm_gamma_cb_descriptor,
             rmsnorm_epsilon_packed=rmsnorm_epsilon_packed,
             rmsnorm_scalar_packed=rmsnorm_scalar_packed,
+            rmsnorm_gamma_address=rmsnorm_gamma_tensor.buffer_address(),
             rmsnorm_num_tiles=rmsnorm_num_tiles,
             rmsnorm_gamma_num_pages=rmsnorm_gamma_num_pages,
             # Per-core values
@@ -1516,6 +1518,7 @@ class MoeRoutedExpertOp:
             ("gate_mm_k_num_tiles", ctx.gate_mm_params["k_num_tiles"]),
             ("gate_mm_out_w", ctx.gate_mm_params["out_w"]),
             ("gate_mm_fused_activation", ctx.gate_mm_params["fused_activation"]),
+            ("gate_mm_in1_address", ctx.gate_mm_params["in1_buf_addr"]),
             # Gate compute
             ("gate_input_cb", ctx.gate_params["input_cb"]),
             ("gate_bias_cb", ctx.gate_params["bias_cb"]),
@@ -1777,6 +1780,7 @@ class MoeSharedExpertOp:
             "weights_num_pages": weights_num_pages,
             "cb_weights_descriptor": cb_weights_descriptor,
             "cb_out_descriptor": cb_out_descriptor,
+            "weights_buf_addr": weights_tensor.buffer_address(),
         }
 
     @staticmethod
@@ -2394,6 +2398,7 @@ class MoeSharedExpertOp:
             ("shared_gu_out_cb", shared_ctx.gu_out_cb),
             ("shared_gu_k_per_core", shared_ctx.gu_matmul_params["k_per_core"]),
             ("shared_gu_act_total_tiles", shared_ctx.gu_matmul_params["act_total_tiles"]),
+            ("shared_gu_weights_address", shared_ctx.gu_matmul_params["weights_buf_addr"]),
             # Gated reduce
             ("shared_gated_reduce_group1_cb", shared_ctx.group1_cb),
             ("shared_gated_reduce_group2_cb", shared_ctx.group2_cb),
@@ -2407,6 +2412,7 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_out", shared_ctx.down_matmul_params["out_cb"]),
             ("shared_down_matmul_k_num_tiles", shared_ctx.down_matmul_params["k_num_tiles"]),
             ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
+            ("shared_down_matmul_in1_address", shared_ctx.down_matmul_params["in1_buf_addr"]),
             # Residual add
             ("shared_residual_add_in0", shared_ctx.down_matmul_params["out_cb"]),  # matmul output
             ("shared_residual_add_in1", shared_ctx.residual_cb),  # residual (pre-loaded bias)
@@ -2783,6 +2789,8 @@ class MoeOp:
             # CB descriptors
             "weights_cb_descriptor": weights_cb_descriptor,
             "output_cb_descriptor": output_cb_descriptor,
+            # Weight buffer address for overlapped tensor support
+            "in1_buf_addr": weights_tensor.buffer_address(),
         }
 
     @staticmethod
@@ -3441,6 +3449,7 @@ class MoeOp:
                     trisc_common_runtime_args=[
                         routed_ctx.rmsnorm_epsilon_packed,
                         routed_ctx.rmsnorm_scalar_packed,
+                        routed_ctx.rmsnorm_gamma_address,
                     ],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,

@@ -484,6 +484,8 @@ def setup_sram_matmul(
         # CB descriptors
         "weights_cb_descriptor": weights_cb_descriptor,
         "output_cb_descriptor": output_cb_descriptor,
+        # Weight buffer address for overlapped tensor support
+        "in1_buf_addr": weights_tensor.buffer_address(),
     }
 
 
@@ -1506,6 +1508,7 @@ class MoeRoutedExpert:
             ("gate_mm_k_num_tiles", gate_mm_params["k_num_tiles"]),
             ("gate_mm_out_w", gate_mm_params["out_w"]),
             ("gate_mm_fused_activation", gate_mm_params["fused_activation"]),
+            ("gate_mm_in1_address", gate_mm_params["in1_buf_addr"]),
             # Gate compute args (sender core)
             ("gate_input_cb", gate_params["input_cb"]),
             ("gate_bias_cb", gate_params["bias_cb"]),

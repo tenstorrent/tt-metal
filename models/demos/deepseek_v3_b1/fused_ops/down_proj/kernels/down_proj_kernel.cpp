@@ -169,6 +169,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_in1"),
         get_named_compile_time_arg_val("matmul_out"),
         get_named_compile_time_arg_val("matmul_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul_in1_address"),
     };
 
     // Gather compute args (no-op for TRISC)

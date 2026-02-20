@@ -66,3 +66,14 @@ FORCE_INLINE void setup_sharded_buffer(uint32_t cb_id, uint32_t num_tiles) {
 #endif
 
 }  // namespace unified_kernels
+
+// ============================================================================
+// CB pointer manipulation (TRISC only)
+// ============================================================================
+
+#if defined(COMPILE_FOR_TRISC)
+FORCE_INLINE void set_local_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    local_cb.fifo_rd_ptr = byte_address / L1_ALIGNMENT;
+}
+#endif

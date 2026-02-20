@@ -417,6 +417,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
+        get_common_arg_val<uint32_t>(7),  // gamma_address
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -443,6 +444,7 @@ void kernel_main() {
         k_offset,
         get_named_compile_time_arg_val("matmul_k_per_core"),
         get_named_compile_time_arg_val("matmul_act_total_tiles"),
+        get_named_compile_time_arg_val("matmul_in1_address"),
     };
 
     // Gather reduce compute args
@@ -456,6 +458,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
         get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
         get_common_arg_val<float>(2),     // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(8),  // gamma_address
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -468,6 +471,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul2_in1_address"),
     };
 
     // Mcast2 compute args (no-op for TRISC)
@@ -483,6 +487,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul3_in1"),
         get_named_compile_time_arg_val("matmul3_out"),
         get_named_compile_time_arg_val("matmul3_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul3_in1_address"),
     };
 
     // Qrope CTArgs type alias
@@ -519,6 +524,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_matmul_in1"),
         get_named_compile_time_arg_val("dkv_matmul_out"),
         get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
+        get_named_compile_time_arg_val("dkv_matmul_in1_address"),
     };
 
     // Gather compute args (no-op for TRISC)
@@ -537,6 +543,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
+        get_common_arg_val<uint32_t>(9),  // gamma_address
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::

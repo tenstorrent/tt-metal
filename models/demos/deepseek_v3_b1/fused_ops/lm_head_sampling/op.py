@@ -337,6 +337,7 @@ class LMHeadSampling:
                     ("matmul_out", matmul_out_cb),
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
+                    ("matmul_in1_address", vocab_tensor_device.buffer_address()),
                 ]
 
                 # ================================================================

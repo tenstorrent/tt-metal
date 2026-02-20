@@ -67,6 +67,7 @@ void kernel_main() {
         .in1 = in1_cb,
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
+        .in1_address = get_named_compile_time_arg_val("matmul_in1_address"),
     };
     // Full init, CBs don't matter
     compute_kernel_hw_startup(0, 0, 0);

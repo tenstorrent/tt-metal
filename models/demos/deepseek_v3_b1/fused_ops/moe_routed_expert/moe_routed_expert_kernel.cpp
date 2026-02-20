@@ -475,6 +475,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_mm_in1"),
         get_named_compile_time_arg_val("gate_mm_out"),
         get_named_compile_time_arg_val("gate_mm_k_num_tiles"),
+        get_named_compile_time_arg_val("gate_mm_in1_address"),
     };
 
     // ------------------------------------------------------------------------

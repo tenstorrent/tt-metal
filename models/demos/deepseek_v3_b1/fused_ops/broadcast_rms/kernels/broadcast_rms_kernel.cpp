@@ -103,6 +103,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::ComputeArgs rms_args{
         get_common_arg_val<uint32_t>(0),  // epsilon (common runtime arg 0)
         get_common_arg_val<float>(1),     // scalar (1/N)
+        get_common_arg_val<uint32_t>(2),  // gamma_address
     };
 
 #if !defined(SKIP_CCL)

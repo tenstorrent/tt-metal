@@ -1707,9 +1707,12 @@ class PreSDPA:
                     scalar_packed,  # idx 1
                     scalar2_packed,  # idx 2
                     kv_scalar_packed,  # idx 3
-                    kv_cache_input_cb,
-                    kv_cache_output_cb,
-                    kv_cache_intermed_cb,
+                    kv_cache_input_cb,  # idx 4
+                    kv_cache_output_cb,  # idx 5
+                    kv_cache_intermed_cb,  # idx 6
+                    gamma_tensor_device.buffer_address(),  # idx 7: rmsnorm gamma_address
+                    rmsnorm2_gamma_tensor_device.buffer_address(),  # idx 8: rmsnorm2 gamma_address
+                    dkv_rmsnorm_gamma_tensor_device.buffer_address(),  # idx 9: kv_rmsnorm gamma_address
                 ]
 
                 unified_kernel = UnifiedKernelDescriptor(
@@ -1760,6 +1763,7 @@ class PreSDPA:
                     + matmul2_trisc_named_compile_time_args
                     + [("matmul2_in1_address", matmul2_weights_addr)]
                     + matmul3_trisc_named_compile_time_args
+                    + [("matmul3_in1_address", matmul3_weights_tensor_device.buffer_address())]
                     + qrope_trisc_named_compile_time_args
                     + create_q_heads_trisc_named_compile_time_args
                     + dkv_matmul_trisc_named_compile_time_args

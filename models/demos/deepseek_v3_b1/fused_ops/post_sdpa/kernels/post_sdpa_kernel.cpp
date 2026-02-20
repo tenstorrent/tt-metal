@@ -290,6 +290,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul1_in1"),
         get_named_compile_time_arg_val("matmul1_out"),
         get_named_compile_time_arg_val("matmul1_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul1_in1_address"),
     };
 
     // Gather1 compute args (no-op)
@@ -307,6 +308,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul2_in1_address"),
     };
 
     // Gather2 compute args (no-op)

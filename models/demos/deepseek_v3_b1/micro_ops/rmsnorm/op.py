@@ -153,7 +153,7 @@ class RMSNormSingleCore:
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
             brisc_named_compile_time_args=[],
             trisc_named_compile_time_args=trisc_named_compile_time_args,
-            trisc_common_runtime_args=[epsilon_packed, scalar_packed],
+            trisc_common_runtime_args=[epsilon_packed, scalar_packed, gamma_tensor.buffer_address()],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,

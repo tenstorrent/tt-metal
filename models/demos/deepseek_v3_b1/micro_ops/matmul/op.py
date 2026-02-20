@@ -166,6 +166,7 @@ class Matmul:
             ("matmul_out_w", out_w),
             ("matmul_transpose", transpose),
             ("matmul_fused_activation", fused_activation_val),
+            ("matmul_in1_address", input_b.buffer_address()),
         ]
 
         # Unified kernel descriptor
