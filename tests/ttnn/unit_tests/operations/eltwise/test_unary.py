@@ -381,13 +381,6 @@ def test_sigmoid(device, h, w, vector_mode, approx_mode, layout):
     )
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_not(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.logical_not, layout=layout)
-
-
 def run_unary_test_range(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, pcc=0.9999):
     torch.manual_seed(0)
     low = -100
@@ -2121,3 +2114,20 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
             )
     else:
         assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-05, atol=atol)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat8_b)],
+)
+def test_unary_logical_not(device, torch_dtype, ttnn_dtype):
+    input_shape = (1, 1, 32, 32)
+    in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-100, 100)
+    in_data[..., ::5] = 0  # every 5th element is zero
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.logical_not(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.logical_not)
+    golden_tensor = golden_function(in_data, device=device)
+    assert torch.equal(output_tensor, golden_tensor)
