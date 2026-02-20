@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN Post SDPA Fused Op Test with optional SDPA Reduce-to-All and CCL All-Reduce
+TTNN Post SDPA Fused Op Test with optional SDPA Reduce-to-All and TP All-Reduce
 
 Tests the full post_sdpa fused operation which implements:
 
@@ -18,7 +18,7 @@ Post-SDPA phases:
 - Mcast: Broadcast [1, 8192] to 120 cores (12x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
 - Gather2: Collect to [1, 7168] on gather core (11, 9)
-- CCL All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
+- TP All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 
 The mcast grid (12x10=120 cores) includes 8 inactive cores (row 9 cols 4-11)
 that receive mcast data but skip matmul2 via is_matmul2_core=false.
@@ -26,8 +26,8 @@ that receive mcast data but skip matmul2 via is_matmul2_core=false.
 Core Layout:
 - SDPA Workers: (2,8)-(5,8), (2,9)-(5,9) = 8 cores
 - SDPA Forwarders: (6,9), (7,9) = 2 cores
-- CCL Receiver = Gather core (11, 9): already has local data after Gather2
-- CCL Sender = Adjacent core (10, 9): reads from gather core, sends via fabric
+- TP All-Reduce Receiver = Gather core (11, 9): already has local data after Gather2
+- TP All-Reduce Sender = Adjacent core (10, 9): reads from gather core, sends via fabric
 
 Full operation: [1, 512] @ [512, 8192] @ [8192, 7168] -> [1, 7168] per device,
 then all-reduce across devices with optional residual add.
@@ -181,11 +181,11 @@ def test_post_sdpa(
     n1_per_core = intermediate // num_matmul1_cores  # 8192 / 64 = 128
     n2_per_core = output_size // num_matmul2_cores  # 7168 / 112 = 64
 
-    logger.info(f"Testing full post_sdpa fused op with CCL all-reduce:")
+    logger.info(f"Testing full post_sdpa fused op with TP All-Reduce:")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
     logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (12x10 grid)")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
-    logger.info(f"  CCL All-Reduce: [{M}, {output_size}] across {num_devices} devices")
+    logger.info(f"  TP All-Reduce: [{M}, {output_size}] across {num_devices} devices")
     logger.info(f"  Output: [{M}, {output_size}] (fuse_residual_add={fuse_residual_add})")
 
     # Create core grids
@@ -668,7 +668,7 @@ def test_post_sdpa_with_sdpa_phase(
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
     logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (12x10 grid)")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
-    logger.info(f"  CCL All-Reduce: [{M}, {output_size}] across {num_devices} devices")
+    logger.info(f"  TP All-Reduce: [{M}, {output_size}] across {num_devices} devices")
 
     # Create core grids
     matmul1_grid = ttnn.CoreRangeSet(
