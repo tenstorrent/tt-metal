@@ -31,7 +31,8 @@ from transformers import AutoTokenizer  # This replaces the llama31_8b tokenizer
 TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers (6U Galaxy configuration)
-# NOTE: Ongoing regression in throughput for 64L, so thresholds are being lowered from 58-65 t/s/u to 30-40 t/s/u
+# FIXME: Ongoing regression in throughput for 64L, so thresholds are being lowered from 58-65 t/s/u to 30-40 t/s/u
+# Issue https://github.com/tenstorrent/tt-metal/issues/38054
 TSU_THRESHOLDS = {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 64: {"min": 30, "max": 40}}
 
 
