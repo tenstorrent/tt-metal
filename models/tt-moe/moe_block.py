@@ -67,6 +67,8 @@ class MoEBlock:
         self.num_experts_per_tok = self.model_params["num_experts_per_tok"]
         self.hidden_size = self.model_params["hidden_size"]
         self.intermediate_size = self.model_params["intermediate_size"]
+        # For DeepSeek: moe_intermediate_size is for routed experts, intermediate_size is for shared expert
+        self.moe_intermediate_size = self.model_params.get("moe_intermediate_size", self.intermediate_size)
 
         # Derive expert distribution
         self.num_devices = mesh_device.get_num_devices()
@@ -142,7 +144,7 @@ class MoEBlock:
                     "n_group": 8,  # Default for DeepSeek
                     "topk_group": 3,  # Default for DeepSeek
                     "routed_scaling_factor": 1.0,
-                    "memory_config": "L1_MEMORY_CONFIG",
+                    "memory_config": "L1_MEMORY_CONFIG",  # Router expects string
                     "compute_kernel_config": "HIFI2",
                 }
             )
@@ -172,15 +174,16 @@ class MoEBlock:
                 "n_routed_experts": self.num_experts,
                 "num_experts": self.num_experts,
                 "hidden_size": self.hidden_size,
-                "intermediate_size": self.intermediate_size,
+                "intermediate_size": self.moe_intermediate_size,  # Use MoE-specific intermediate size
                 "num_experts_per_device": self.num_experts_per_device,
                 "dispatch_cluster_axis": self.ep_axis,
                 "activation": experts_config.get("activation", "swiglu"),
                 "use_quantized_weights": experts_config.get("quantized", False),
                 "matmul_type": experts_config.get("matmul_type", "dense"),  # Configurable matmul type
                 "sparsity_block_size": self.config["model_params"].get("sparsity_block_size", 32),
-                "memory_config": "L1_MEMORY_CONFIG",  # Default for decode
-                "output_memory_config": "L1_MEMORY_CONFIG",
+                "input_memory_config": ttnn.L1_MEMORY_CONFIG,  # Default for decode
+                "memory_config": ttnn.L1_MEMORY_CONFIG,  # Default for decode
+                "output_memory_config": ttnn.L1_MEMORY_CONFIG,
             }
 
             # Add activation parameters if present (for GPT-OSS clamped SwiGLU)
@@ -204,9 +207,10 @@ class MoEBlock:
         if self.shared_expert_enabled:
             self.shared_expert_config = {
                 "hidden_size": self.hidden_size,
-                "intermediate_size": self.intermediate_size,
+                "moe_intermediate_size": self.moe_intermediate_size,  # SharedExpert uses moe_intermediate_size
+                "intermediate_size": self.moe_intermediate_size,  # Also provide as fallback
                 "use_quantized_weights": experts_config.get("quantized", False),
-                "memory_config": "L1_MEMORY_CONFIG",
+                "memory_config": ttnn.L1_MEMORY_CONFIG,
             }
 
             if experts_config.get("quantized", False):
@@ -453,47 +457,62 @@ class MoEBlock:
         if mode == "prefill" and self._should_chunk_prefill(x):
             return self._forward_chunked_prefill(x)
 
-        # All-gather if tensor parallel
-        x_was_gathered = False
+        # Move TP operations OUTSIDE of the expert paths so both operate on gathered tensors
+        # This allows us to add their outputs at the same size
+
+        # Step 1: All-gather if tensor parallel (both paths need full-size input)
+        x_gathered = x
+        needs_reduce_scatter = False
+        logger.debug(f"[MoE Forward] Input shape: {x.shape}")
         if self.tp_enabled and self._is_tp_sharded(x):
-            x = self._all_gather(x, mode)
-            x_was_gathered = True
+            x_gathered = self._all_gather(x, mode)
+            needs_reduce_scatter = True
+            logger.debug(f"[MoE Forward] After all-gather shape: {x_gathered.shape}")
 
-        # Router forward
-        # Both routers now return (weights, indices) consistently
-        weights, indices = self.router.forward(x, mode)
-
-        # Prepare weights for experts
-        weights_prepared = self._prepare_expert_weights(weights)
-
-        # Run experts
-        outputs = []
-
-        # Distributed experts
+        # Step 2: MoE forward (now operates on gathered tensor, NO reduce-scatter yet)
         if self.distributed_expert_enabled:
-            moe_output = self._forward_moe(x, indices, weights_prepared, mode)
-            outputs.append(moe_output)
+            # Router forward
+            weights, indices = self.router.forward(x_gathered, mode)
+            weights_prepared = self._prepare_expert_weights(weights)
 
-        # Shared expert (if enabled and parallel)
-        if self.shared_expert_enabled and self.shared_parallel:
-            shared_output = SharedExpert.forward_decode(x, self.shared_expert_decode_config)
-            outputs.append(shared_output)
+            # MoE forward - operates on gathered tensor
+            moe_output = self._forward_moe(x_gathered, indices, weights_prepared, mode)
+            logger.debug(f"[MoE Forward] MoE output shape: {moe_output.shape}")
 
-        # Combine outputs
-        if len(outputs) > 1:
-            output = ttnn.add(outputs[0], outputs[1])
-            for out in outputs[:-1]:
-                ttnn.deallocate(out)
+            ttnn.deallocate(weights_prepared)
         else:
-            output = outputs[0]
+            moe_output = None
 
-        # Reduce-scatter if we gathered
-        if x_was_gathered:
+        # Step 3: Shared expert forward (also operates on gathered tensor)
+        if self.shared_expert_enabled and self.shared_parallel:
+            # Pass gathered tensor to SharedExpert (same size as MoE input)
+            logger.debug(f"[MoE Forward] Calling SharedExpert with input shape: {x_gathered.shape}")
+            shared_output = SharedExpert.forward_decode(x_gathered, self.shared_expert_decode_config)
+            logger.debug(f"[MoE Forward] SharedExpert output shape: {shared_output.shape}")
+        else:
+            shared_output = None
+
+        # Step 4: Combine outputs (both are full-size, so can be added)
+        if moe_output is not None and shared_output is not None:
+            # Both outputs are at full gathered size - can add directly
+            logger.debug(f"[MoE Forward] Before add - MoE: {moe_output.shape}, Shared: {shared_output.shape}")
+            output = ttnn.add(moe_output, shared_output)
+            ttnn.deallocate(moe_output)
+            ttnn.deallocate(shared_output)
+        elif moe_output is not None:
+            output = moe_output
+        elif shared_output is not None:
+            output = shared_output
+        else:
+            raise ValueError("No experts enabled - at least one of MoE or SharedExpert must be enabled")
+
+        # Step 5: Reduce-scatter the combined output if we gathered initially
+        if needs_reduce_scatter:
             output = self._reduce_scatter(output, mode)
-            ttnn.deallocate(x)
+            ttnn.deallocate(x_gathered)
 
         # Cleanup
-        ttnn.deallocate(weights_prepared)
+        ttnn.deallocate(weights_prepared) if "weights_prepared" in locals() else None
 
         return output
 
@@ -584,7 +603,13 @@ class MoEBlock:
         # 3. Modify the router to output indices in a compatible format
         #
         # This issue only affects GPT-OSS; DeepSeek works correctly.
-        if len(x.shape) == 3:
+        if len(x.shape) == 4:
+            # 4D format: [batch, 1, seq, hidden] or similar
+            batch_size_per_device = x.shape[0]
+            seq_len = x.shape[2]
+            hidden_size = x.shape[3]
+            is_gpt_oss_format = False
+        elif len(x.shape) == 3:
             # Check if middle dimension is 1 (GPT-OSS format: [batch*seq, 1, hidden])
             if x.shape[1] == 1:
                 # GPT-OSS format: already flattened with padding dimension
@@ -613,7 +638,10 @@ class MoEBlock:
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
         # Reshape based on input format
-        if len(x.shape) == 2:
+        if len(x.shape) == 4:
+            # Already 4D, no reshape needed
+            pass  # x_rm already has the right shape
+        elif len(x.shape) == 2:
             # 2D format needs reshaping to 4D
             x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
         elif is_gpt_oss_format:
@@ -662,7 +690,7 @@ class MoEBlock:
                 x_chunk,  # Original input, not dispatch_output
                 indices_chunk,
                 weights_chunk,
-                self.distributed_expert_config,
+                self.distributed_expert_decode_config,  # Use decode config which has the weights
                 self.expert_mapping_tensors,
                 self.mesh_device,
             )
