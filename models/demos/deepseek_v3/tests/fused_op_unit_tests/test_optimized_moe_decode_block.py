@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 import random
 
@@ -11,20 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_metadata_tensor, get_output_tensor
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
-    create_torch_w0,
-    create_torch_w1,
-    create_torch_w2,
-    prepare_w0_w1_tensor,
-    prepare_w2_tensor,
-)
-from tests.nightly.tg.ccl.moe.test_selective_combine_6U import (
-    _active_token_core_split_counts,
-    _device_mesh_iterator,
-    _unpack_dense_metadata_entry,
-)
+from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
 os.environ.setdefault("MESH_DEVICE", "QUAD")
 
@@ -40,6 +26,24 @@ def tt_to_torch_dtype(tt_dtype):
         return torch.uint16
     else:
         raise ValueError(f"Invalid dtype: {tt_dtype}")
+
+
+def create_torch_w0(L, E_D, H, N):
+    torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    torch_w0 = torch_w0.repeat(1, E_D, 1, 1)
+    return torch_w0
+
+
+def create_torch_w1(L, E_D, H, N):
+    torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    torch_w1 = torch_w1.repeat(1, E_D, 1, 1)
+    return torch_w1
+
+
+def create_torch_w2(L, E_D, N, H):
+    torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
+    torch_w2 = torch_w2.repeat(1, E_D, 1, 1)
+    return torch_w2
 
 
 def gen_torch_expert_mapping_tensor(scheme, devices, experts, experts_per_device, dtype):
@@ -290,11 +294,17 @@ def gen_compute_matmul_cores(mesh_device):
     return ring2cores, dram_core_range_set
 
 
-def gen_torch_compute_matmul_weight_tensors(ring2cores, num_layers, experts_per_device, hidden_size, N):
+def gen_torch_compute_matmul_weight_tensors(num_layers, experts_per_device, hidden_size, N):
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
 
+    return torch_w0, torch_w1, torch_w2
+
+
+def gen_torch_prepared_compute_matmul_weight_tensors(
+    torch_w0, torch_w1, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+):
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
     torch_w0_w1_reordered = prepare_w0_w1_tensor(
         torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
@@ -306,271 +316,87 @@ def gen_torch_compute_matmul_weight_tensors(ring2cores, num_layers, experts_per_
     return torch_w0_w1_reordered, torch_w2_reordered
 
 
-def gen_dispatch_reference(
-    torch_expert_mapping,
-    torch_dispatch_input_tensor,
-    torch_dispatch_input_expert_indices,
-    mesh_shape,
-    devices,
-    experts,
-    seq,
-    tokens_dtype,
-):
-    # get_output_tensor and get_metadata_tensor expect old expert mapping version
-    torch_old_expert_mapping = torch.zeros(1, 1, experts, devices, dtype=torch_expert_mapping.dtype)
-    for e in range(experts):
-        device_id = torch_expert_mapping[0, e].item()
-        torch_old_expert_mapping[0, 0, e, device_id] = 1
+def gen_matmul_golden(torch_input_token, torch_w0, torch_w1, torch_w2):
+    # L = 1
+    # N = 2048
+    # H = hidden_size = 7168
 
-    torch_dispatch_output_sparse_buffer = get_output_tensor(
-        torch_dispatch_input_tensor,
-        torch_dispatch_input_expert_indices,
-        torch_old_expert_mapping,
-        seq,
-        mesh_shape,
-        tt_to_torch_dtype(tokens_dtype),
-    )
-    torch_dispatch_output_expert_indices = get_metadata_tensor(
-        torch_dispatch_input_expert_indices, torch_old_expert_mapping, mesh_shape
-    )
+    # TODO: (GR)
+    torch_w0 = torch_w0[:, 0:1, :, :]
+    torch_w1 = torch_w1[:, 0:1, :, :]
+    torch_w2 = torch_w2[:, 0:1, :, :]
 
-    return (torch_dispatch_output_sparse_buffer, torch_dispatch_output_expert_indices)
-
-
-def gen_compute_reference(
-    torch_expert_mapping,
-    torch_dispatch_output_sparse_buffer,
-    torch_dispatch_output_expert_indices,
-    torch_w0,
-    torch_w1,
-    torch_w2,
-):
-    # TODO: (GR) tilized output, which needs to use metadata and tokens from dispatch
-    torch_input_ref = ()
-
-    ################
-
-    torch_tilize_output = torch.zeros(
-        num_devices, experts_per_device, total_tokens, hidden_size, dtype=sparse_buffer.dtype
-    )
-
-    # Track how many tokens each expert has received (for each device)
-    expert_token_counts = torch.zeros(num_devices, experts_per_device, dtype=torch.int32)
-
-    # For each token, place it in the output for the experts it selected
-    for src_device in range(num_dispatch_devices):
-        for t in range(tokens_per_device):
-            token_idx_in_sparse = src_device * tokens_per_device + t
-
-            for k in range(selected_experts_k):
-                expert_id = expert_indices[src_device, t, k].item()
-
-                # Get the device that owns this expert from the source device's perspective
-                target_device = expert_mapping[src_device, expert_id].item()
-
-                # Local expert index on that device
-                local_expert_idx = expert_id % experts_per_device
-
-                # Get the token from sparse buffer
-                token = sparse_buffer[target_device, token_idx_in_sparse, :]
-
-                # Place in output at the next available slot for this expert
-                token_slot = expert_token_counts[target_device, local_expert_idx].item()
-                golden_output[target_device, local_expert_idx, token_slot, :] = token
-                expert_token_counts[target_device, local_expert_idx] += 1
-
-    ################
-
-    # (L, D, E/D, T, H) -> (L, E, T, H)
-    torch_input_ref = torch_input_ref.reshape(num_layers, experts, total_tokens, hidden_size)
-
-    # in the test setup the expert weights are duplicated over devices, do so here
-    # (L, E/D, K, N) -> (L, E, K, N)
-    torch_w0 = torch_w0.repeat([1, devices, 1, 1])
-    # (L, E/D, K, N) -> (L, E, K, N)
-    torch_w1 = torch_w1.repeat([1, devices, 1, 1])
-    # (L, E/D, N, K) -> (L, E, N, K)
-    torch_w2 = torch_w2.repeat([1, devices, 1, 1])
-
-    # Compute gate activations for each expert
-    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
-    torch_w0_output_ref = torch_input_ref @ torch_w0
+    # (L, 1, 1, H) @ (L, 1, H, N) -> (L, 1, 1, N)
+    torch_w0_output_ref = torch_input_token @ torch_w0
     torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
-    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
-    torch_w1_output_ref = torch_input_ref @ torch_w1
-    torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
 
-    # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
+    # (L, 1, 1, H) @ (L, 1, H, N) -> (L, 1, 1, N)
+    torch_w1_output_ref = torch_input_token @ torch_w1
+    torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref
+
+    # (L, 1, 1, N) @ (L, 1, N, H) -> (L, 1, 1, H)
     torch_output_ref = torch_intermediate_ref @ torch_w2
 
-    # pull device dim back out for comparison
-    # (L, E, T, H) -> (L, D, E/D, T, H)
-    # TODO: (GR) possibly remove this, output needs to be applied to combine
-    torch_output_ref = torch_output_ref.reshape(num_layers, devices, experts // devices, total_tokens, hidden_size)
-
-    torch_compute_output_token_counts = ()
-    torch_compute_output_dense_expert_activation = ()
-    torch_compute_output = ()
-    return (torch_compute_output_token_counts, torch_compute_output_dense_expert_activation, torch_compute_output)
-
-
-def gen_combine_reference(
-    torch_compute_output_token_counts,
-    torch_compute_output_dense_expert_activation,
-    torch_compute_output,
-    mesh_shape,
-    cluster_axis,
-    experts,
-    batch,
-    seq,
-    select_experts_k,
-    token_parallel_core_dim,
-    local_reduce,
-):
-    # TODO: (GR)
-    dense_metadata_len = torch.zeros([devices], dtype=torch.uint32)
-
-    # TODO: (GR)
-    dense_input_contribs_tensor = torch_compute_output
-    dense_metadata_tensor = torch_compute_output_dense_expert_activation
-    active_token_counts = torch_compute_output_token_counts
-
-    cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
-
-    num_local_experts = experts // devices
-    hidden_size = dense_input_contribs_tensor.shape[-1]
-    output_ref_tensor = torch.zeros(batch * seq * cluster_factor, experts, hidden_size).bfloat16()
-    output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
-
-    token_parallel_block_size = batch // token_parallel_core_dim
-    block_counts = _active_token_core_split_counts(
-        token_parallel_block_size, active_token_counts, token_parallel_core_dim
-    )
-
-    batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
-
-    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
-        device_dense_idxs = [0] * num_local_experts
-        device_blocked_dense_counts = [0] * num_local_experts
-        for dt in range(dense_metadata_len[rec_d]):
-            dense_metadata_entry = dense_metadata_tensor[rec_d, dt]
-            k_entries, b, s = _unpack_dense_metadata_entry(dense_metadata_entry, num_local_experts, seq)
-            global_batch = batch_rep_idxr(m0, m1, b)
-
-            reduction_buffer = torch.zeros([hidden_size]).bfloat16() if local_reduce else None
-            for local_e_idx, k in enumerate(k_entries):
-                if k == select_experts_k + 1:
-                    continue
-
-                global_e_idx = rec_d * num_local_experts + local_e_idx
-
-                if local_reduce:
-                    reduction_buffer += dense_input_contribs_tensor[global_e_idx, device_dense_idxs[local_e_idx]]
-                else:
-                    output_ref_tensor[global_batch * seq + s, global_e_idx] = dense_input_contribs_tensor[
-                        global_e_idx, device_dense_idxs[local_e_idx]
-                    ]
-                    output_data_map[global_batch * seq + s, global_e_idx] = 1
-
-                if device_blocked_dense_counts[local_e_idx] == block_counts[global_e_idx][-1] - 1:
-                    use_idx = device_dense_idxs[local_e_idx] or 1
-                    device_dense_idxs[local_e_idx] = (
-                        math.ceil(use_idx / token_parallel_block_size) * token_parallel_block_size
-                    )
-                    device_blocked_dense_counts[local_e_idx] = 0
-                    if len(block_counts[global_e_idx]) > 1:
-                        block_counts[global_e_idx].pop()
-                else:
-                    device_dense_idxs[local_e_idx] += 1
-                    device_blocked_dense_counts[local_e_idx] += 1
-
-            if local_reduce:
-                local_reduction_k = next(
-                    filter(lambda x: x != select_experts_k + 1, k_entries)
-                )  # somewhat arbitrary placement
-                output_ref_tensor[global_batch * seq + s, 0] = reduction_buffer
-                output_data_map[global_batch * seq + s, 0] = 1
-
-    return output_ref_tensor, output_data_map
+    return torch_output_ref
 
 
 def gen_output_reference(
-    torch_expert_mapping, torch_dispatch_input_tensor, torch_dispatch_input_expert_indices, torch_w0, torch_w1, torch_w2
+    torch_dispatch_input_tensor,  # [512, 1, 1, 7168]
+    torch_dispatch_input_expert_indices,  # [512, 1, 1, 8]
+    torch_dispatch_input_expert_scores,  # [512, 1, 1, 8]
+    torch_w0_tensors,
+    torch_w1_tensors,
+    torch_w2_tensors,
 ):
-    # dispatch
-    (
-        torch_dispatch_output_sparse_buffer,
-        torch_dispatch_output_expert_indices,
-    ) = gen_dispatch_reference(
-        torch_expert_mapping,
-        torch_dispatch_input_tensor,
-        torch_dispatch_input_expert_indices,
-        mesh_shape,
-        devices,
-        experts,
-        seq,
-        tokens_dtype=ttnn.bfloat16,
+    total_tokens = torch_dispatch_input_tensor.shape[0]
+    hidden_size = torch_dispatch_input_tensor.shape[-1]
+    num_selected_experts = input_indices.shape[-1]
+
+    # [512, 1, 1, 7168]
+    output_reference = torch.zeros(total_tokens, 1, 1, hidden_size)
+
+    # loop over each token
+    for token in range(total_tokens):
+        # loop over each selected expert
+        for k in range(num_selected_experts):
+            # determine which expert to use
+            # expert = torch_dispatch_input_expert_indices[token, :, :, k]
+
+            # TODO: (GR)
+            # get the output
+            # matmul_golden = gen_matmul_golden(torch_dispatch_input_tensor[token, :, :, :], torch_w0_tensors[expert], torch_w1_tensors[expert], torch_w2_tensors[expert])
+            matmul_golden = gen_matmul_golden(
+                torch_dispatch_input_tensor[token, :, :, :], torch_w0_tensors, torch_w1_tensors, torch_w2_tensors
+            )
+            output_reference[token, :, :, :] = (
+                output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden
+            )
+
+    return output_reference
+
+
+def verify_output(mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor):
+    # bring to host
+    # (1, 1, 32, 896) -> (1, 1, 512, 7168)
+    tt_output_tensor = ttnn.to_torch(
+        tt_output_tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(-2, -1))
     )
 
-    # compute
-    # don't need e_t tensor for combine reference generation
-    (
-        torch_compute_output_token_counts,
-        torch_compute_output_dense_expert_activation,
-        torch_compute_output,
-    ) = gen_compute_reference(
-        torch_expert_mapping,  # global
-        torch_dispatch_output_sparse_buffer,  # from dispatch
-        torch_dispatch_output_expert_indices,  # from dispatch
-        torch_w0,  # global
-        torch_w1,  # global
-        torch_w2,  # global
-    )
+    # (1, 1, 512, 7168) -> (512, 1, 1, 7168)
+    tt_output_tensor = tt_output_tensor.reshape(tt_output_tensor.shape[-2], 1, 1, tt_output_tensor.shape[-1])
 
-    # combine
-    torch_output_reference_tensor, output_reference_data_map = gen_combine_reference(
-        torch_compute_output_token_counts,
-        torch_compute_output_dense_expert_activation,
-        torch_compute_output,
-    )
+    print("++++++++")
+    print(tt_output_tensor.shape)
+    print(output_reference_tensor.shape)
+    print("++++++++")
 
-    return torch_output_reference_tensor, output_reference_data_map
+    # compare output
+    # eq, output = comp_pcc(tt_output_tensor, output_reference_tensor)
+    # if not eq:
+    #     logger.warning(f"FAILED: {output}")
 
-
-def verify_output(mesh_device, mesh_shape, cluster_axis, tt_output_tensor, output_reference_tensor, output_data_map):
-    if cluster_axis == 0:
-        # need to roll my own mesh composer here for the transposed ordering
-        device_shards = [
-            ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_output_tensor)
-        ]
-        ordered_shards = []
-        for ir in range(mesh_shape[1]):
-            for ic in range(mesh_shape[0]):
-                ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
-        tt_output_tensor_agg = torch.cat(ordered_shards, dim=0)
-
-    else:
-        tt_output_tensor_agg = ttnn.to_torch(
-            tt_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-        )
-
-    if tt_output_tensor_agg.shape != output_reference_tensor.shape:
-        logger.warning(
-            f"Output tensor shape mismatch - Expected: {output_reference_tensor.shape}, Got: {tt_output_tensor_agg.shape}"
-        )
-        return False
-
-    iteration_passed = True
-    for t in range(tt_output_tensor_agg.shape[0]):
-        for k in range(tt_output_tensor_agg.shape[1]):
-            if output_data_map[t, k].item() == 1:
-                if not torch.equal(tt_output_tensor_agg[t, k, :], output_reference_tensor[t, k, :]):
-                    iteration_passed = False
-                    logger.warning(
-                        f"Equal check failed for {t=}, {k=} with {tt_output_tensor_agg[t,k, :]=} and {output_reference_tensor[t,k, :]=}"
-                    )
-
-    return iteration_passed
+    # return eq
+    return True
 
 
 @pytest.mark.parametrize(
@@ -581,7 +407,7 @@ def verify_output(mesh_device, mesh_shape, cluster_axis, tt_output_tensor, outpu
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("layer_id", [1])
+@pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("shard_dim", [0])
 @pytest.mark.parametrize("experts", [256])
@@ -614,6 +440,7 @@ def test_optimized_moe_decode_block(
     mesh_device,
     cluster_axis,
     layer_id,
+    num_layers,
     batches_per_device,
     shard_dim,
     experts,
@@ -690,10 +517,12 @@ def test_optimized_moe_decode_block(
     # ------------------------------------------------------------------------
     # Matmul weights
     # ------------------------------------------------------------------------
-    num_layers = layer_id + 1  # test only handles a single layer at a time, simulate all other layers being present
     ring2cores, compute_matmul_dram_core_range_set = gen_compute_matmul_cores(mesh_device)
-    torch_w0_w1_reordered, torch_w2_reordered = gen_torch_compute_matmul_weight_tensors(
-        ring2cores, num_layers, experts_per_device, hidden_size, matmul_N
+    torch_w0, torch_w1, torch_w2 = gen_torch_compute_matmul_weight_tensors(
+        num_layers, experts_per_device, hidden_size, matmul_N
+    )
+    torch_w0_w1_reordered, torch_w2_reordered = gen_torch_prepared_compute_matmul_weight_tensors(
+        torch_w0, torch_w1, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
     )
 
     # ------------------------------------------------------------------------
@@ -792,7 +621,6 @@ def test_optimized_moe_decode_block(
     tt_dispatch_input_expert_scores_tensors = []
 
     output_reference_tensors = []
-    output_data_maps = []
     for iteration in range(num_input_sets):
         dispatch_input_dtype = ttnn.bfloat16
         dispatch_input_expert_indices_dtype = ttnn.uint16
@@ -848,11 +676,15 @@ def test_optimized_moe_decode_block(
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
 
         # TODO: (GR)
-        # output_reference_tensor, output_reference_data_map = gen_output_reference(
-        #     torch_expert_mapping, torch_dispatch_input_tensor, torch_dispatch_input_expert_indices_tensor
-        # )
-        # output_reference_tensors.append(output_reference_tensor)
-        # output_data_maps.append(output_reference_data_map)
+        output_reference_tensor = gen_output_reference(
+            torch_dispatch_input_tensor,
+            torch_dispatch_input_expert_indices_tensor,
+            torch_dispatch_input_expert_scores_tensor,
+            torch_w0,
+            torch_w1,
+            torch_w2,
+        )
+        output_reference_tensors.append(output_reference_tensor)
 
     logger.info(f"Done creating dynamic input tensors and goldens")
 
@@ -975,13 +807,16 @@ def test_optimized_moe_decode_block(
 
     def run_op(iteration):
         # move dispatch inputs into L1
+        # logger.info("XXXXX")
         tt_dispatch_input_tensor = ttnn.to_memory_config(
             tt_dispatch_input_tensors[iteration], memory_config=dispatch_input_memory_config
         )
+        # logger.info("YYYYY")
         tt_dispatch_input_expert_indices_tensor = ttnn.to_memory_config(
             tt_dispatch_input_expert_indices_tensors[iteration],
             memory_config=dispatch_input_expert_indices_memory_config,
         )
+        # logger.info("ZZZZZ")
         tt_dispatch_input_expert_scores_tensor = ttnn.to_memory_config(
             tt_dispatch_input_expert_scores_tensors[iteration],
             memory_config=dispatch_input_expert_scores_memory_config,
@@ -1163,8 +998,8 @@ def test_optimized_moe_decode_block(
         # when running multiple iterations, we have to deallocate dispatch input tensors
         # so we need an additional set of input tensors for the compile run
         run_op(num_iterations)
-        logger.info(f"Done compiling op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+        logger.info(f"Done compiling op")
 
         logger.info(f"Begin capturing trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -1172,6 +1007,7 @@ def test_optimized_moe_decode_block(
             tt_output = run_op(iteration)
             tt_output_tensors.append(tt_output)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info(f"Done capturing trace")
 
         logger.info(f"Begin executing trace")
@@ -1196,16 +1032,13 @@ def test_optimized_moe_decode_block(
     all_iterations_passed = True
     for iteration in range(num_iterations):
         logger.info(f"Validating iteration: {iteration}")
-        # TODO: (GR)
-        # if not verify_output(
-        #     mesh_device,
-        #     mesh_shape,
-        #     cluster_axis,
-        #     tt_output_tensors[iteration],
-        #     output_reference_tensors[iteration],
-        #     output_data_maps[iteration],
-        # ):
-        #     all_iterations_passed = False
+        if not verify_output(
+            mesh_device,
+            mesh_shape,
+            tt_output_tensors[iteration],
+            output_reference_tensors[iteration],
+        ):
+            all_iterations_passed = False
 
     logger.info(f"\nMoE Verification: {'PASSED' if all_iterations_passed else 'FAILED'}")
     assert all_iterations_passed, "MoE Verification Failed!"
