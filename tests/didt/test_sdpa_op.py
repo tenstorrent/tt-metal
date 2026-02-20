@@ -51,12 +51,12 @@ class SdpaOpTest(OpTestBaseMulti):
 @pytest.mark.parametrize(
     "dtype, math_fidelity",
     [
+        (ttnn.bfloat16, ttnn.MathFidelity.LoFi),
         (ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi),
+        (ttnn.bfloat16, ttnn.MathFidelity.HiFi3),
+        (ttnn.bfloat16, ttnn.MathFidelity.HiFi4),
     ],
-    ids=["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi"],
+    ids=["bf16_LoFi", "bf16_HiFi2", "bf16_HiFi3", "bf16_HiFi4"],
 )
 def test_sdpa_op(
     mesh_device,
