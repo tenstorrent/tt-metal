@@ -5,7 +5,7 @@
 import torch
 import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -1706,3 +1706,38 @@ def test_ternary_sharded_half_mem_config_interleaved(device, memory_config):
     ttnn_result = ttnn.to_torch(ttnn_result)
 
     assert_with_pcc(torch_output, ttnn_result)
+
+
+def test_ternary_sharded_program_cache_sequence(device):
+    torch.manual_seed(0)
+    # Same volume (4096) but different shapes and grids
+    test_params = [
+        ((1, 1, 32, 128), (3, 0)),
+        ((1, 1, 64, 64), (1, 1)),
+    ]
+    for shape, grid_size in test_params:
+        core_grid = ttnn.CoreGrid(x=grid_size[0] + 1, y=grid_size[1] + 1)
+        mem_cfg = ttnn.create_sharded_memory_config(
+            shape=shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        torch_pred = torch.randint(0, 2, shape, dtype=torch.bfloat16)
+        torch_true = torch.ones(shape, dtype=torch.bfloat16) * 4.0
+        torch_false = torch.ones(shape, dtype=torch.bfloat16) * 5.0
+        pred = ttnn.from_torch(
+            torch_pred, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        true_t = ttnn.from_torch(
+            torch_true, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        false_t = ttnn.from_torch(
+            torch_false, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        out = ttnn.where(pred, true_t, false_t)
+        out_torch = ttnn.to_torch(out)
+        golden = torch.where(torch_pred.bool(), torch_true, torch_false)
+        golden = golden.to(out_torch.dtype)
+        assert_with_ulp(out_torch, golden)
+    assert device.num_program_cache_entries() == 2
