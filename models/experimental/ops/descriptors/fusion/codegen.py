@@ -10,6 +10,7 @@ fused kernel source generation (phase namespaces, barrier infrastructure,
 compile-time and runtime arg management).
 """
 
+import datetime
 import os
 import re
 import logging
@@ -347,6 +348,7 @@ def _read_kernel_source(kernel_desc: "ttnn.KernelDescriptor") -> Tuple[str, Opti
 
 _KERNEL_MAIN_SEARCH_RE = re.compile(r"\bvoid\s+kernel_main\s*\(")
 _SKIP_LINE_PREFIXES = ("#include", "#define", "#pragma", "#undef")
+_SKIP_COMMENT_SUBSTRINGS = ("SPDX-FileCopyrightText", "SPDX-License-Identifier")
 
 
 def _extract_pre_main_text(source: str) -> str:
@@ -354,6 +356,7 @@ def _extract_pre_main_text(source: str) -> str:
 
     Returns everything before ``kernel_main()`` that is not a preprocessor
     directive line (``#include``, ``#define``, ``#pragma``, ``#undef``).
+    Bare comment-only lines (just ``//``) are also stripped.
     """
     match = _KERNEL_MAIN_SEARCH_RE.search(source)
     pre_main_text = source[: match.start()] if match else source
@@ -363,9 +366,63 @@ def _extract_pre_main_text(source: str) -> str:
         stripped = line.strip()
         if any(stripped.startswith(p) for p in _SKIP_LINE_PREFIXES):
             continue
+        if any(sub in stripped for sub in _SKIP_COMMENT_SUBSTRINGS):
+            continue
+        # Skip bare comment lines (just "//" with no content)
+        if stripped == "//":
+            continue
         lines.append(line)
 
-    return "\n".join(lines).strip()
+    # Collapse consecutive blank lines into a single blank line
+    result = "\n".join(lines).strip()
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result
+
+
+def _dedent_ignoring_column_zero(text: str) -> str:
+    """Dedent text while ignoring non-code lines.
+
+    ``textwrap.dedent`` treats preprocessor directives and block-comment
+    delimiters at column 0 as having zero indent, preventing it from
+    stripping the common indent of real code lines.
+
+    This function computes the minimum indent only from lines that look
+    like actual C++ code (skipping empty lines, preprocessor directives,
+    and block-comment lines), then strips that amount from all indented
+    lines.
+    """
+    lines = text.split("\n")
+
+    def _is_non_code(stripped: str) -> bool:
+        """Return True for lines that should not contribute to min indent."""
+        # Preprocessor directives, comments, and block-comment continuations
+        return stripped.startswith(("#", "//", "/*", "*"))
+
+    # Find minimum indent of code lines
+    min_indent = None
+    for line in lines:
+        stripped = line.lstrip()
+        if not stripped or _is_non_code(stripped):
+            continue
+        indent = len(line) - len(stripped)
+        if min_indent is None or indent < min_indent:
+            min_indent = indent
+
+    if not min_indent:
+        return text
+
+    # Strip min_indent spaces from indented lines, leave others untouched
+    result = []
+    for line in lines:
+        if not line.strip():
+            result.append(line)
+        else:
+            indent = len(line) - len(line.lstrip())
+            if indent >= min_indent:
+                result.append(line[min_indent:])
+            else:
+                result.append(line)
+    return "\n".join(result)
 
 
 def _extract_phase_pre_main(
@@ -539,7 +596,9 @@ def _generate_phase_namespace(
     lines: List[str] = []
 
     label = f"Phase {phase_idx}: {phase_name}" if phase_name else f"Phase {phase_idx}"
-    lines.append(f"// ==== {label} ====")
+    lines.append("// " + "=" * 76)
+    lines.append(f"// {label}")
+    lines.append("// " + "=" * 76)
 
     # Per-phase defines (outside namespace — preprocessor is namespace-unaware)
     if defines:
@@ -555,18 +614,22 @@ def _generate_phase_namespace(
     # Pre-main code (transformed for CT arg offsets + named arg prefixes)
     if pre_main.strip():
         transformed_pre_main = _transform_phase_source(pre_main, phase_idx, ct_arg_offset)
-        lines.append(transformed_pre_main)
+        lines.append(_dedent_ignoring_column_zero(transformed_pre_main).strip())
         lines.append("")
 
     # Transform the kernel body source (CT arg offsets + named arg prefixes)
     body = extract_kernel_body(kernel_source)
     transformed = _transform_phase_source(body, phase_idx, ct_arg_offset)
+    dedented = _dedent_ignoring_column_zero(transformed)
 
     lines.append("void run() {")
     if phase_name:
         lines.append(f'    DeviceZoneScopedN("{phase_name}");')
-    for line in transformed.split("\n"):
-        lines.append(f"    {line}")
+    for line in dedented.split("\n"):
+        if line.strip():
+            lines.append(f"    {line}")
+        else:
+            lines.append("")
     lines.append("}")
 
     # Close namespace
@@ -704,7 +767,9 @@ def _generate_barrier_namespace_riscv0(
     num_segments = len(multi_barrier.segments)
     dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
 
-    lines.append("// ---- Barrier infrastructure ----")
+    lines.append("// " + "=" * 76)
+    lines.append("// Barrier infrastructure")
+    lines.append("// " + "=" * 76)
     lines.append("namespace barrier {")
     lines.append("")
     lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
@@ -860,7 +925,9 @@ def _generate_barrier_namespace_riscv1(
     num_segments = len(multi_barrier.segments)
     dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
 
-    lines.append("// ---- Barrier infrastructure ----")
+    lines.append("// " + "=" * 76)
+    lines.append("// Barrier infrastructure")
+    lines.append("// " + "=" * 76)
     lines.append("namespace barrier {")
     lines.append("")
     lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
@@ -964,7 +1031,9 @@ def _generate_barrier_namespace_compute(
     num_segments = len(multi_barrier.segments)
     dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
 
-    lines.append("// ---- Barrier infrastructure ----")
+    lines.append("// " + "=" * 76)
+    lines.append("// Barrier infrastructure")
+    lines.append("// " + "=" * 76)
     lines.append("namespace barrier {")
     lines.append("")
     lines.append('constexpr uint32_t rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
@@ -1191,7 +1260,7 @@ def _generate_fused_riscv0_source(
     file_scope_blocks, pre_mains = _extract_phase_pre_main(reader_sources, phase_headers)
 
     lines = [
-        "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
+        f"// SPDX-FileCopyrightText: © {datetime.date.today().year} Tenstorrent AI ULC",
         "//",
         "// SPDX-License-Identifier: Apache-2.0",
         "",
@@ -1213,9 +1282,17 @@ def _generate_fused_riscv0_source(
 
     # File-scope: namespace blocks from inlined headers (must stay at global scope)
     if file_scope_blocks:
+        lines.append("// " + "=" * 76)
+        lines.append("// Inlined headers")
+        lines.append("// " + "=" * 76)
+        lines.append("")
         for block in file_scope_blocks:
             lines.append(block)
             lines.append("")
+        lines.append("// " + "=" * 76)
+        lines.append("// End inlined headers")
+        lines.append("// " + "=" * 76)
+        lines.append("")
 
     # RT arg wrappers at file scope (all phases, uniform treatment)
     if rt_arg_offsets:
@@ -1323,7 +1400,7 @@ def _generate_fused_riscv1_source(
     file_scope_blocks, pre_mains = _extract_phase_pre_main(writer_sources, phase_headers)
 
     lines = [
-        "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
+        f"// SPDX-FileCopyrightText: © {datetime.date.today().year} Tenstorrent AI ULC",
         "//",
         "// SPDX-License-Identifier: Apache-2.0",
         "",
@@ -1344,9 +1421,17 @@ def _generate_fused_riscv1_source(
 
     # File-scope: namespace blocks from inlined headers
     if file_scope_blocks:
+        lines.append("// " + "=" * 76)
+        lines.append("// Inlined headers")
+        lines.append("// " + "=" * 76)
+        lines.append("")
         for block in file_scope_blocks:
             lines.append(block)
             lines.append("")
+        lines.append("// " + "=" * 76)
+        lines.append("// End inlined headers")
+        lines.append("// " + "=" * 76)
+        lines.append("")
 
     if rt_arg_offsets:
         for phase_idx, _ in writer_sources:
@@ -1448,7 +1533,7 @@ def _generate_fused_compute_source(
     file_scope_blocks, pre_mains = _extract_phase_pre_main(compute_sources, phase_headers)
 
     lines = [
-        "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
+        f"// SPDX-FileCopyrightText: © {datetime.date.today().year} Tenstorrent AI ULC",
         "//",
         "// SPDX-License-Identifier: Apache-2.0",
         "",
@@ -1469,9 +1554,17 @@ def _generate_fused_compute_source(
 
     # File-scope: namespace blocks from inlined headers
     if file_scope_blocks:
+        lines.append("// " + "=" * 76)
+        lines.append("// Inlined headers")
+        lines.append("// " + "=" * 76)
+        lines.append("")
         for block in file_scope_blocks:
             lines.append(block)
             lines.append("")
+        lines.append("// " + "=" * 76)
+        lines.append("// End inlined headers")
+        lines.append("// " + "=" * 76)
+        lines.append("")
 
     if rt_arg_offsets:
         for phase_idx, _ in compute_sources:

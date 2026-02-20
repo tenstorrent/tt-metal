@@ -2355,18 +2355,18 @@ class TestPhaseNameGeneration:
         gen = _mock_codegen._generate_phase_namespace
         source = "void kernel_main() { int x = 1; }"
         lines = gen(0, "", source, [], 0, phase_name="rms_norm")
-        header = lines[0]
-        assert "Phase 0: rms_norm" in header
-        assert "====" in header
+        # Banner: lines[0] = separator, lines[1] = label, lines[2] = separator
+        assert "====" in lines[0]
+        assert "Phase 0: rms_norm" in lines[1]
+        assert "====" in lines[2]
 
     def test_phase_namespace_comment_without_name(self):
         """Phase namespace comment omits op name when empty."""
         gen = _mock_codegen._generate_phase_namespace
         source = "void kernel_main() { int x = 1; }"
         lines = gen(0, "", source, [], 0, phase_name="")
-        header = lines[0]
-        assert "Phase 0" in header
-        assert ":" not in header.split("Phase 0")[1].split("=")[0]
+        assert "Phase 0" in lines[1]
+        assert ":" not in lines[1].split("Phase 0")[1]
 
     def test_device_zone_scoped_emitted_with_name(self):
         """DeviceZoneScopedN is emitted inside run() when phase_name is set."""
