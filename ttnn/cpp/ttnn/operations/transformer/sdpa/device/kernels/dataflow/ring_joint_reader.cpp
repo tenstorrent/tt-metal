@@ -132,6 +132,7 @@ void kernel_main() {
     uint32_t rind_index = fused_op_receiver.ring_index;
     // uint32_t tmp = global_q_end - global_q_start;
     // DPRINT << "GLOBAL Q RANGE: " << global_q_start << " - " << global_q_end << ENDL();
+    // DPRINT << "NUM LOCAL Q CHUNKS " << num_local_q_chunks << " K CHUNKS " << num_local_k_chunks << ENDL();
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
@@ -162,6 +163,7 @@ void kernel_main() {
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+            // DPRINT << "Q CHUNK " << q_chunk << ENDL();
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
@@ -187,7 +189,9 @@ void kernel_main() {
                 false /*transpose*/
             );
 
-            for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+            uint32_t k_high = (is_causal && ring_iter == 0 ? q_chunk + 1 : num_kv_chunks);
+
+            for (uint32_t k_chunk = 0; k_chunk < k_high; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
                  * If this is the last ring ID, we will also read from joint KV.
@@ -217,6 +221,9 @@ void kernel_main() {
                     if (ring_iter == 0) {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
+                        DPRINT << "Q CHUNK: " << q_chunk << " K: [" << nb << ", " << nq << ", "
+                               << local_k_row_start_tile << ", " << local_k_row_start_tile + Sk_chunk_t << "]"
+                               << ENDL();
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
@@ -302,6 +309,7 @@ void kernel_main() {
             cb_push_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_v_in, k_chunk_tiles);
         }
+        DPRINT << "READER STEP: " << ring_iter << ENDL();
     }
     DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
 }
