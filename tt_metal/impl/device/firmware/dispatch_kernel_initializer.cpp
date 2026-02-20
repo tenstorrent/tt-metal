@@ -9,8 +9,10 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt_metal.hpp>
 #include "common/executor.hpp"
-#include "device/firmware/fabric_firmware_initializer.hpp"
+#include "device/firmware/firmware_initializer.hpp"
 #include "impl/context/context_descriptor.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "device/device_impl.hpp"
 
 #include "dispatch/topology.hpp"
@@ -24,6 +26,19 @@ void wait_until_cores_done(
 
 namespace tt::tt_metal {
 
+DispatchKernelInitializer::DispatchKernelInitializer(
+    std::shared_ptr<const ContextDescriptor> descriptor, dispatch_core_manager& dispatch_core_manager) :
+    FirmwareInitializer(std::move(descriptor)), dispatch_core_manager_(dispatch_core_manager) {
+    dispatch_topology_ = std::make_unique<tt::tt_metal::DispatchTopology>(*descriptor_, dispatch_core_manager_);
+}
+
+void DispatchKernelInitializer::populate_fd_kernels_only(const std::vector<Device*>& devices) {
+    if (!using_fast_dispatch() || devices.empty()) {
+        return;
+    }
+    dispatch_topology_->populate_fd_kernels(devices, descriptor_->num_cqs());
+}
+
 void DispatchKernelInitializer::init(
     const std::vector<Device*>& devices, [[maybe_unused]] const std::unordered_set<InitializerKey>& init_done) {
     if (!using_fast_dispatch()) {
@@ -32,22 +47,26 @@ void DispatchKernelInitializer::init(
 
     devices_ = devices;
 
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
+        std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::WORKER, descriptor_->num_cqs());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
+        std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::ETH, descriptor_->num_cqs());
+
     // Skip firmware initialization for mock devices
     if (descriptor_->is_mock_device()) {
         log_info(tt::LogMetal, "Skipping dispatch firmware initialization for mock devices");
         return;
     }
 
+    // Dispatch requires Fabric, Profiler, and Command Queue
     TT_ASSERT(
-        init_done.contains(FabricFirmwareInitializer::key),
-        "Fabric firmware must be initialized before dispatch firmware");
-
-    // Compile dispatch kernels if using fast dispatch.
-    // Note: Host-side init (profiler buffer clear, CQ host init) is a prerequisite
-    // that must be performed by the caller before this point.
-    if (using_fast_dispatch()) {
-        compile_dispatch_kernels();
-    }
+        init_done.contains(InitializerKey::Fabric), "Fabric firmware must be initialized before dispatch firmware");
+    TT_ASSERT(
+        init_done.contains(InitializerKey::Profiler), "Profiler firmware must be initialized before dispatch firmware");
+    TT_ASSERT(
+        init_done.contains(InitializerKey::CommandQueue),
+        "Host-side command queue firmware must be initialized before dispatch firmware");
+    compile_dispatch_kernels();
 }
 
 void DispatchKernelInitializer::configure() {
@@ -81,8 +100,6 @@ void DispatchKernelInitializer::teardown() {
 bool DispatchKernelInitializer::is_initialized() const { return initialized_; }
 
 void DispatchKernelInitializer::compile_dispatch_kernels() {
-    // Compile dispatch firmware: populate static args, create CQ programs, compile.
-
     if (descriptor_->is_mock_device()) {
         return;
     }
@@ -94,14 +111,14 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
         }
 
         auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(dev->id());
-        populate_cq_static_args(dev);
+        dispatch_topology_->populate_cq_static_args(dev);
         for (const auto& tunnel : tunnels_from_mmio) {
             for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                 uint32_t mmio_controlled_device_id = tunnel[ts];
                 auto it = std::find_if(
                     devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
                 if (it != devices_.end()) {
-                    populate_cq_static_args(*it);
+                    dispatch_topology_->populate_cq_static_args(*it);
                 }
             }
         }
@@ -113,7 +130,7 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
             continue;
         }
 
-        create_cq_program(dev);
+        dispatch_topology_->create_cq_program(dev);
         auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(dev->id());
         for (const auto& tunnel : tunnels_from_mmio) {
             for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
@@ -121,14 +138,14 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
                 auto it = std::find_if(
                     devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
                 if (it != devices_.end()) {
-                    create_cq_program(*it);
+                    dispatch_topology_->create_cq_program(*it);
                 }
             }
         }
     }
 
     // Compile all programs
-    compile_cq_programs();
+    dispatch_topology_->compile_cq_programs();
 }
 
 void DispatchKernelInitializer::init_device_command_queues() {
@@ -146,7 +163,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
         ChipId mmio_device_id = dev->id();
         events.emplace_back(detail::async([this, dev, mmio_device_id]() {
             auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(mmio_device_id);
-            dev->init_command_queue_device();
+            dev->init_command_queue_device_with_topology(dispatch_topology_.get());
             log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
             for (const auto& tunnel : tunnels_from_mmio) {
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
@@ -155,8 +172,8 @@ void DispatchKernelInitializer::init_device_command_queues() {
                         return d->id() == mmio_controlled_device_id;
                     });
                     if (it != devices_.end()) {
-                        (*it)->init_command_queue_device();
-                        log_info(tt::LogMetal, "Command Queue initialized on Device {}", (*it)->id());
+                        (*it)->init_command_queue_device_with_topology(dispatch_topology_.get());
+                        log_debug(tt::LogMetal, "Command Queue initialized on Device {}", (*it)->id());
                     }
                 }
             }
@@ -176,6 +193,15 @@ void DispatchKernelInitializer::terminate_command_queues() {
             cq.terminate();
         }
     }
+}
+
+const std::unordered_set<CoreCoord>& DispatchKernelInitializer::get_virtual_dispatch_cores(ChipId dev_id) const {
+    return dispatch_topology_->get_virtual_dispatch_cores(dev_id);
+}
+
+const std::unordered_set<CoreCoord>& DispatchKernelInitializer::get_virtual_dispatch_routing_cores(
+    ChipId dev_id) const {
+    return dispatch_topology_->get_virtual_dispatch_routing_cores(dev_id);
 }
 
 void DispatchKernelInitializer::wait_for_dispatch_cores() const {
@@ -203,7 +229,7 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
 
 void DispatchKernelInitializer::process_termination_signals() const {
     for (auto* dev : devices_) {
-        const auto& info = get_registered_termination_cores(dev->id());
+        const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
             detail::WriteToDeviceL1(
