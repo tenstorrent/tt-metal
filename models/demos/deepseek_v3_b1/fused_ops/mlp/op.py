@@ -1722,10 +1722,6 @@ class MlpOp:
                             program,
                             fc,
                         )
-                        print(
-                            f"[Fabric] coord={coord}, fc={fc}, eth_channel={fabric_conn_args[0]}, "
-                            f"teardown_sem_id={fabric_conn_args[1]}, buffer_index_sem_id={fabric_conn_args[2]}"
-                        )
                         fabric_rt_args_ref.extend(fabric_conn_args)
 
                 # Assign to mesh coordinate
