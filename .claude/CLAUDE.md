@@ -121,4 +121,4 @@ Operation code: `ttnn/ttnn/operations/{op_name}/`
 Tests: `tests/ttnn/unit_tests/operations/{op_name}/`
 
 ### Additional Resources
-- `ttnn/experimental/claude_ttnn_agents/QUICK_START.md` - End-to-end workflow example
+- `.claude/QUICK_START.md` - End-to-end workflow example

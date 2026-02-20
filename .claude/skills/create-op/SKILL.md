@@ -18,7 +18,7 @@ Phase 0: Discovery ─► Phase 1: Analysis ─► Phase 2: Planning
 ```
 
 This skill replaces the following reference documents:
-- `ttnn/experimental/claude_ttnn_agents/references/ttnn-generic-op-workflow.md` — phases 0-3
+- `.claude/references/ttnn-generic-op-workflow.md` — phases 0-3
 - `.claude/references/tdd-kernel-pipeline.md` — phase 4
 
 ---
