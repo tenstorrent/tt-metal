@@ -90,18 +90,15 @@ class Qwen25VlTokenizerEncoderPair:
         # Store state dict for potential reloading
         self._encoder_state_dict = torch_state_dict
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             tt_model=model,
-            torch_state_dict=torch_state_dict,
+            get_torch_state_dict=lambda: torch_state_dict,
             model_name=checkpoint,
             subfolder=subfolder if subfolder is not None else "",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
-            dtype="bf16",
             is_fsdp=self._is_fsdp,
-        ):
-            logger.info("loading encoder from torch state...")
-            model.load_torch_state_dict(torch_state_dict)
+        )
 
         return model
 
@@ -114,17 +111,15 @@ class Qwen25VlTokenizerEncoderPair:
             return
 
         logger.info("reloading encoder weights to device...")
-        if not cache.initialize_from_cache(
+        cache.load_model(
             tt_model=self._encoder,
-            torch_state_dict=self._encoder_state_dict,
+            get_torch_state_dict=lambda: self._encoder_state_dict,
             model_name=self._checkpoint,
             subfolder=self._encoder_subfolder if self._encoder_subfolder is not None else "",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
-            dtype="bf16",
             is_fsdp=self._is_fsdp,
-        ):
-            self._encoder.load_torch_state_dict(self._encoder_state_dict)
+        )
 
         self._encoder_loaded = True
         ttnn.synchronize_device(self._device)

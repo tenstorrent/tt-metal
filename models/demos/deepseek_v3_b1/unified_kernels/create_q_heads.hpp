@@ -266,7 +266,8 @@ struct CreateQHeads {
             // Each phase does: wait→reserve→tilize→push→pop
             // This ensures proper hardware state between tilize_block calls.
 
-            compute_kernel_hw_startup(args.receiver_in_cb, args.out_cb);
+            reconfig_data_format_srca<false, true>(args.receiver_in_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
             tilize_init(args.receiver_in_cb, args.nope_tiles, args.out_cb);
 
             // Phase 1: Tilize first NOPE block [8, 256] → 8 tiles

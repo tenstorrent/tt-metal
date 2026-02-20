@@ -179,8 +179,16 @@ def run(
     # scale and decode the image latents with vae
     latents = 1 / 0.18215 * ttnn_latents
 
-    ttnn_output = ttnn.permute(latents, [0, 2, 3, 1])
-    ttnn_output = tt_vae.decode(ttnn_output)
+    # Deallocate L1 tensors from the last denoising iteration before VAE
+    ttnn_latent_model_input.deallocate(True)
+    ttnn_output.deallocate(True)
+    ttnn_latents.deallocate(True)
+    for e in ttnn_scheduler.ets:
+        e.deallocate(True)
+    ttnn_scheduler.ets.clear()
+
+    latents = ttnn.permute(latents, [0, 2, 3, 1])
+    ttnn_output = tt_vae.decode(latents)
     ttnn_output = ttnn.reshape(ttnn_output, [1, 512, 512, ttnn_output.shape[3]])
     return ttnn.permute(ttnn_output, [0, 3, 1, 2])
 

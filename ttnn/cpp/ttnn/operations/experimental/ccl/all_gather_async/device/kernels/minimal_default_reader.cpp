@@ -171,8 +171,9 @@ void kernel_main() {
     //   Note: backward needs to receive an ADDITIONAL slice for the second half!
     bool split_forwarding_enabled = false;
     if constexpr (topology == Topology::Ring) {
-        if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the first half of the
-                                                    // tiles, otherwise we write the entire packet
+        if (ring_size % 2 == 0 && ring_size > 2 &&
+            input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
+                                                             // the tiles, otherwise we write the entire packet
             split_forwarding_enabled = true;
             // Match writer's special case: backward worker forwards half slice when num_targets_backward_direction == 1
             if (direction == 1) {
@@ -281,7 +282,7 @@ void kernel_main() {
             }
 
             uint32_t num_channels_processed_in_current_batch = 0;
-            {
+
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                     chunk_count = 0;
                     while (tiles_read < tiles_to_read) {
@@ -360,7 +361,7 @@ void kernel_main() {
                         tiles_to_read = input_tile_id_end;
                     }
                 }
-            }
+
             slices_forwarded++;  // Track forwarded slices for split-forwarding logic
         } else {
             // Not forwarding - just wait for semaphores indicating data has arrived

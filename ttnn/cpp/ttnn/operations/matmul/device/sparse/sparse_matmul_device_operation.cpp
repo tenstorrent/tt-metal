@@ -63,10 +63,6 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 }  // namespace
 
 namespace ttnn::prim {
-SparseMatmulDeviceOperation::program_factory_t SparseMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return SparseMatmulMultiCoreReuseMcast1DProgramFactory{};
-}
 
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

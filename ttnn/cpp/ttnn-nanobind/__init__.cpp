@@ -16,6 +16,7 @@
 #include "ttnn-nanobind/fabric.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
+#include "ttnn-nanobind/hd_socket.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
@@ -236,6 +237,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_events = mod.def_submodule("events", "ttnn events");
     auto m_global_circular_buffer = mod.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = mod.def_submodule("global_semaphore", "ttnn global semaphore");
+    auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
@@ -259,6 +261,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
+    ttnn::hd_socket::py_module_types(m_hd_socket);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
@@ -292,6 +295,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
+    ttnn::hd_socket::py_module(m_hd_socket);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
