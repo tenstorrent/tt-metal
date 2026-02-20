@@ -773,6 +773,7 @@ def _generate_barrier_namespace_riscv0(
     lines.append("    volatile tt_l1_ptr uint32_t* writer_done;")
     lines.append("")
     lines.append("    FORCE_INLINE void wait() {")
+    lines.append('        DeviceZoneScopedN("barrier-wait");')
     lines.append("        done++;")
     lines.append("        noc_async_full_barrier();")
     lines.append("        noc_semaphore_wait_min(compute_done, done);")
@@ -780,6 +781,7 @@ def _generate_barrier_namespace_riscv0(
     lines.append("    }")
     lines.append("")
     lines.append("    FORCE_INLINE void reset() {")
+    lines.append('        DeviceZoneScopedN("barrier-reset");')
     lines.append("        reset_cbs();")
     # Op semaphore reset (all transitions)
     if op_semaphore_info:
@@ -884,12 +886,14 @@ def _generate_barrier_namespace_riscv1(
     lines.append("    volatile tt_l1_ptr uint32_t* writer_done;")
     lines.append("")
     lines.append("    FORCE_INLINE void wait() {")
+    lines.append('        DeviceZoneScopedN("barrier-wait");')
     lines.append("        done++;")
     lines.append("        noc_async_write_barrier();")
     lines.append("        *writer_done = done;")
     lines.append("    }")
     lines.append("")
     lines.append("    FORCE_INLINE void reset() {")
+    lines.append('        DeviceZoneScopedN("barrier-reset");')
     # Segment sync dispatch
     for entry in dispatch:
         lines.append(f"        if (done == {entry['done_val']}) {{")
@@ -1009,11 +1013,13 @@ def _generate_barrier_namespace_compute(
     lines.append("    volatile tt_l1_ptr uint32_t* compute_done;")
     lines.append("")
     lines.append("    FORCE_INLINE void wait() {")
+    lines.append('        DeviceZoneScopedN("barrier-wait");')
     lines.append("        done++;")
     lines.append("        *compute_done = done;")
     lines.append("    }")
     lines.append("")
     lines.append("    FORCE_INLINE void reset() {")
+    lines.append('        DeviceZoneScopedN("barrier-reset");')
     # Segment sync dispatch
     for entry in dispatch:
         lines.append(f"        if (done == {entry['done_val']}) {{")
