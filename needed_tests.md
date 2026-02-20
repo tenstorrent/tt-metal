@@ -180,24 +180,18 @@ run manually or added to a pipeline before merging.
 
 ## Summary Table
 
-| Changed File | CI Workflow | In Pipeline? |
+| Test / Job | Files Covered | In Pipeline? |
 |---|---|---|
-| common/demos/llama31_8B_demo.py | t3000-e2e-tests-impl.yaml | ✅ |
-| demos/gpt_oss/demo/text_demo.py | t3000-demo-tests-impl.yaml + galaxy | ✅ |
-| demos/gpt_oss/tests/accuracy/test_model.py | t3000-demo-tests-impl.yaml + galaxy | ✅ |
-| demos/llama3_70b_galaxy/demo/text_demo.py | galaxy-unit-tests-impl.yaml | ✅ |
-| demos/llama3_70b_galaxy/demo/text_qwen_demo.py | galaxy-unit-tests-impl.yaml | ✅ |
-| demos/multimodal/gemma3/demo/text_demo.py | t3000-demo-tests-impl.yaml + single-card | ✅ |
-| demos/multimodal/gemma3/demo/vision_demo.py | t3000-demo-tests-impl.yaml + single-card | ✅ |
-| demos/qwen25_vl/demo/demo.py | t3000-demo-tests-impl.yaml + single-card | ✅ |
-| demos/qwen3_vl/demo/demo.py | t3000-demo-tests-impl.yaml | ✅ |
-| demos/tg/llama3_70b/demo/demo.py | galaxy-unit-tests-impl.yaml | ✅ (placeholder only) |
-| tt_transformers/demo/simple_text_demo.py | t3000-demo + single-card + galaxy | ✅ |
-| tt_transformers/demo/simple_vision_demo.py | t3000-demo-tests-impl.yaml | ✅ |
-| tt_transformers/demo/multimodal_demo_chat.py | None | ❌ not in pipeline |
-| tt_transformers/demo/multimodal_demo_text.py | None | ❌ not in pipeline |
-| tt_transformers/tests/test_model_prefill.py | t3000-integration-tests-impl.yaml | ✅ |
-| tt_transformers/tests/test_chunked_generation.py | t3000-integration-tests-impl.yaml | ✅ |
-| tt_transformers/tests/mixtral/test_mixtral_model_prefill.py | t3000-unit-tests-impl.yaml | ✅ |
-| experimental/gemma3_4b/tests/vision_tests/test_end2end.py | None | ❌ not in pipeline |
-| experimental/mistral_24b/tests/pipeline_tests/test_end2end.py | None | ❌ not in pipeline |
+| `models_tttv2_llama31_8B_tests` | `common/demos/llama31_8B_demo.py` | ✅ |
+| `t3k_gpt_oss_tests` + Galaxy GPT-OSS | `demos/gpt_oss/demo/text_demo.py`<br>`demos/gpt_oss/tests/accuracy/test_model.py` | ✅ |
+| Galaxy llama3_70b tests | `demos/llama3_70b_galaxy/demo/text_demo.py`<br>`demos/llama3_70b_galaxy/demo/text_qwen_demo.py` | ✅ |
+| `t3k_gemma3_tests` + N300 single-card | `demos/multimodal/gemma3/demo/text_demo.py`<br>`demos/multimodal/gemma3/demo/vision_demo.py` | ✅ |
+| `t3k_qwen25_vl_tests` + N150/N300 single-card | `demos/qwen25_vl/demo/demo.py` | ✅ |
+| `t3k_qwen3_vl_tests` | `demos/qwen3_vl/demo/demo.py` | ✅ |
+| Galaxy demo (placeholder only) | `demos/tg/llama3_70b/demo/demo.py` | ✅ (placeholder only) |
+| t3k/single-card/galaxy demo tests (various) | `tt_transformers/demo/simple_text_demo.py` | ✅ |
+| `t3k_llama3_vision_tests` / `t3k_llama3_90b_vision_tests` | `tt_transformers/demo/simple_vision_demo.py` | ✅ |
+| t3000-integration tests | `tt_transformers/tests/test_model_prefill.py`<br>`tt_transformers/tests/test_chunked_generation.py` | ✅ |
+| `t3k_mixtral_tests` | `tt_transformers/tests/mixtral/test_mixtral_model_prefill.py` | ✅ |
+| ❌ Not in any pipeline | `tt_transformers/demo/multimodal_demo_chat.py`<br>`tt_transformers/demo/multimodal_demo_text.py` | ❌ |
+| ❌ Not in any pipeline | `experimental/gemma3_4b/tests/vision_tests/test_end2end.py`<br>`experimental/mistral_24b/tests/pipeline_tests/test_end2end.py` | ❌ |
