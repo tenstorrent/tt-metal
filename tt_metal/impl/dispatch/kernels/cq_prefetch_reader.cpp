@@ -136,7 +136,8 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy =
+    uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
@@ -424,19 +425,17 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                     // If the prefetcher state reached here, it is issuing a read to the same "slot", since for exec_buf
                     // commands we will insert a read barrier. Hence, the exec_buf command will be concatenated to a
                     // previous command, and should not be offset by preamble size.
-                    pending_read_size = read_from_pcie<0>(
-                        prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+                    pending_read_size = read_from_pcie<0>(prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
                     if (pending_read_size != 0) {
                         // if pending_read_size == 0 read_from_pcie early exited, due to a wrap, i.e. the exec_buf cmd
                         // is at a wrapped location, and a read to it could not be issued, since there are existing
                         // commands in the cmddat_q. Only move the stall_state to stalled if the read to the cmd that
                         // initiated the stall was issued
-                        barrier_and_stall(
-                            pending_read_size, fence, cmd_ptr);  // STALL_NEXT -> STALLED
+                        barrier_and_stall(pending_read_size, fence, cmd_ptr);  // STALL_NEXT -> STALLED
                     }
                 } else {
-                    pending_read_size = read_from_pcie<preamble_size>(
-                        prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+                    pending_read_size =
+                        read_from_pcie<preamble_size>(prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
                 }
             }
         } else {
@@ -538,8 +537,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
 }
 
 // Similar to relay_paged, this iterates and aggregates reads from multiple embedded relay_paged cmds
-void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cache) {
-}
+void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cache) {}
 
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_ptr, uint32_t* l1_cache) {
@@ -581,13 +579,10 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-uint32_t process_stall(uint32_t cmd_ptr) {
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-}
+uint32_t process_stall(uint32_t cmd_ptr) { return CQ_PREFETCH_CMD_BARE_MIN_SIZE; }
 
 // This function reads data from the DRAM and populates the cmddat_q l1 buffer.
-void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_state) {
-}
+void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_state) {}
 
 // processes the relay_inline cmd from an exec_buf
 // Separate implementation that fetches more data from exec buf when cmd has been split
@@ -632,12 +627,9 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-uint32_t process_set_ringbuffer_offset(uint32_t cmd_ptr) {
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-}
+uint32_t process_set_ringbuffer_offset(uint32_t cmd_ptr) { return CQ_PREFETCH_CMD_BARE_MIN_SIZE; }
 
-void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
-}
+void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {}
 
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_ptr, uint32_t* l1_cache) {
@@ -652,8 +644,7 @@ static uint32_t process_exec_buf_relay_ringbuffer_cmd(
     return cmd->relay_ringbuffer.stride;
 }
 
-void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_length, uint32_t* l1_cache) {
-}
+void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_length, uint32_t* l1_cache) {}
 
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache) {
@@ -1045,7 +1036,6 @@ void kernel_main_hd() {
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
         cmd_ptr += stride;
     }
-
 }
 
 void kernel_main() {
