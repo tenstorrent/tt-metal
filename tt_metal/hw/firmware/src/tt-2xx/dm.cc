@@ -90,9 +90,9 @@ void invalidate_trisc_instruction_cache() {
 
 void deassert_trisc() {
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
 // Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
@@ -120,8 +120,11 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    DPRINT << "DM-FW: waiting for TRISC0 to complete " << subordinate_sync->neo0_trisc0 << ENDL();
-    while (subordinate_sync->neo0_trisc0 != RUN_SYNC_MSG_DONE) {
+    DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
+    while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();

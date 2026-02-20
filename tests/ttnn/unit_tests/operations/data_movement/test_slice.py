@@ -99,7 +99,7 @@ def test_slice_write_four_dim(dims, begins, ends, layout, dtype, device):
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_input = ttnn.to_memory_config(ttnn_input, ttnn.L1_MEMORY_CONFIG)
-    ttnn.slice_write(ttnn_input, ttnn_output, begins, ends, strides)
+    ttnn.experimental.slice_write(ttnn_input, ttnn_output, begins, ends, strides)
     output = ttnn.to_torch(ttnn_output)
     torch_output[slices[0], slices[1], slices[2], slices[3]] = torch_input
     written_output = output[slices[0], slices[1], slices[2], slices[3]]
@@ -134,7 +134,7 @@ def test_slice_write_copy(device, dims, slice_dim, slice_size, layout):
             )
 
             this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, ttnn.L1_MEMORY_CONFIG)
-            ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+            ttnn.experimental.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)

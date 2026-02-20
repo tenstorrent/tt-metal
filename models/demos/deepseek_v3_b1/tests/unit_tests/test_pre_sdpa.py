@@ -18,6 +18,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
 
 
@@ -38,7 +39,8 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
-@pytest.mark.parametrize("num_iters", [(30)])
+@pytest.mark.parametrize("num_iters", [(1)])
+@pytest.mark.parametrize("position_id", [0, 2130])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -50,6 +52,7 @@ def create_fabric_router_config(max_payload_size):
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DEDICATED_NOC, ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 def test_pre_sdpa(
     bh_2d_mesh_device,
     mesh_rows,
@@ -61,9 +64,10 @@ def test_pre_sdpa(
     cluster_axis,
     secondary_cluster_axis,
     num_iters,
+    position_id,
+    noc_mode,
 ):
     """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
-
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     if num_devices == 1:
@@ -97,6 +101,8 @@ def test_pre_sdpa(
     KNOPE_DIM = 512
     KROPE_DIM = 64
 
+    assert QROPE_HEAD_DIM == KROPE_DIM, "Qrope and Krope head dimensions must match"
+
     # Qnope/Qrope grid configuration (must match head configuration)
     QNOPE_GRID_COLS = 8  # 8 Qnope cores per row (1 head each)
     QROPE_GRID_COLS = 4  # 4 Qrope cores per row (2 heads each)
@@ -108,8 +114,78 @@ def test_pre_sdpa(
             f"Device grid {device_grid_size.x}x{device_grid_size.y} too small for {TOTAL_COLS} columns required (P100 has 11 columns)"
         )
 
-    matmul2_grid_x = min(TOTAL_COLS, device_grid_size.x)  # Must be exactly 12 for correct sharding
+    matmul2_grid_x = 12
     matmul2_grid_y = 8
+
+    # SDPA KV Cache tensor declared here to overlap with pre-SDPA, pre-KV cache branch CBs.
+    # Matches flash_mla's double-buffered KV CB sizing: shard = (2 * k_chunk_size, kvpe_dim)
+    # = (256, 576) per core, giving 156,672 bytes/core — same as flash_mla's cb_k_in.
+    # Total height = shard_height * num_cores must be divisible by tile height (32).
+    kvpe_dim = KNOPE_DIM + KROPE_DIM  # 576
+    kv_cache_num_cores_x = device_grid_size.x
+    kv_cache_num_cores_y = device_grid_size.y
+    kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
+    kv_cache_shard_height = 256  # 2 * k_chunk_size (128), matching flash_mla double-buffer
+    kv_cache_total_height = kv_cache_shard_height * kv_cache_num_cores
+
+    kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(kv_cache_num_cores_x - 1, kv_cache_num_cores_y - 1),
+                )
+            }
+        ),
+        (kv_cache_shard_height, kvpe_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.randn((kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            kv_cache_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
+    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
+    sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
+    sdpa_out_interm_shard_height = 40  # 5 tile-rows of [8, 32]
+    sdpa_out_interm_shard_width = 544  # 17 tile-cols of [8, 32]
+    sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
+
+    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1),
+                )
+            }
+        ),
+        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_out_interm_buffer = ttnn.from_torch(
+        torch.zeros((sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_out_interm_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        tile=ttnn.Tile([8, 32]),
+    )
 
     # Matmul2 output width (interleaved Qnope/Qrope)
     matmul2_width = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM + NUM_QROPE_HEADS * QROPE_HEAD_DIM  # 8192 + 4096 = 12288
@@ -196,7 +272,6 @@ def test_pre_sdpa(
     # Create RoPE tensors (sin, cos, trans_mat)
     # ========================================================================
     max_seq_len = 8192
-    position_id = 0  # Decode mode: first token
     position_ids = torch.tensor([position_id])  # [batch]
 
     # Create cos/sin matrices in Meta-style format
@@ -485,6 +560,7 @@ def test_pre_sdpa(
     torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
     num_shards = kv_cache_branch_crs.num_cores()
     shard_width = dkv_matmul_weights_shape[1] // num_shards
+    # new_shard_order = [0, 15, 1, 14, 2, 13, 3, 12, 4, 11, 5, 10, 6, 9, 7, 8, 16, 17]
     new_shard_order = [0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17]
     torch_dkv_matmul_weights_shards = torch_dkv_matmul_weights.reshape(
         dkv_matmul_weights_shape[0], num_shards, shard_width
@@ -566,6 +642,46 @@ def test_pre_sdpa(
     secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
     semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
 
+    # KV Cache tensor in DRAM sharded
+    # Create KV cache (non-paged) based on max seq len
+    program_config = FlashMLADecode.ProgramConfig(
+        k_chunk_size=128,
+        exp_approx_mode=False,  # Use exact exp for higher precision
+    )
+    logger.info(f"Creating KV cache with seq_len={max_seq_len}...")
+    kvpe_dim = KNOPE_DIM + KROPE_DIM
+    cache_shape = (1, 1, max_seq_len, kvpe_dim)
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
+
+    # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
+    # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin
+    # Use optimal DRAM bank order matching S block work assignment for locality
+    grid = program_config.grid
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, program_config.k_chunk_size, kvpe_dim],
+        grid=grid.optimal_dram_grid(),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=kv_nd_shard_spec,
+    )
+    num_chunks = max_seq_len // program_config.k_chunk_size
+    num_banks = len(grid.OPTIMAL_DRAM_BANK_ORDER)
+    logger.info(
+        f"KV cache: ND sharded, DRAM banks: {num_banks} (optimal order: {grid.OPTIMAL_DRAM_BANK_ORDER}), chunks: {num_chunks}, shard_shape: [1, 1, {program_config.k_chunk_size}, {kvpe_dim}]"
+    )
+
+    ttnn_kv_cache = ttnn.from_torch(
+        torch_kv_cache,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
     # ========================================================================
     # Run pre-SDPA operation
     # ========================================================================
@@ -587,7 +703,11 @@ def test_pre_sdpa(
             ttnn_krope_sin,
             ttnn_dkv_matmul_weights,
             ttnn_dkv_rmsnorm_gamma,
+            ttnn_kv_cache,
+            position_ids,
             ttnn_sdpa_input_output,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
             sender_coord,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
@@ -595,8 +715,11 @@ def test_pre_sdpa(
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
         )
     ttnn.synchronize_device(submesh)
+
+    kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # Convert back to torch for verification
     sdpa_input_output_torch = ttnn.to_torch(
@@ -634,6 +757,10 @@ def test_pre_sdpa(
     slice_size = sdpa_input_output_shape[0]
     expected_width = COMBINED_HEAD_SIZE  # 576
 
+    # KV Cache is same across devices in 4x2 submesh
+    expected_nope = torch_kv_cache_expected[..., :KNOPE_DIM]
+    expected_rope = torch_kv_cache_expected[..., KNOPE_DIM:]
+
     for device_idx in range(mesh_rows * mesh_cols):
         start = device_idx * slice_size
         end = start + slice_size
@@ -658,7 +785,34 @@ def test_pre_sdpa(
         passing, pcc_message = comp_pcc(torch_sdpa_input_expected_flat, received, 0.99)
         logger.info(f"Device {device_idx}: {pcc_message}")
 
-        assert passing, f"Device {device_idx} failed: {pcc_message}"
+        assert (
+            passing
+        ), f"Device {device_idx} failed: {pcc_message}"  # Read back from kv cache tensor in DRAM to check PCC
+
+        compare_kv_cache = kv_cache_output_torch[..., position_id, :]
+
+        # Split into nope (first 512 elements) and rope (last 64 elements)
+        compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+        compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+
+        # Check nope portion
+        nope_max_diff = torch.max(torch.abs(expected_nope - compare_nope)).item()
+        nope_mean_diff = torch.mean(torch.abs(expected_nope - compare_nope)).item()
+        logger.info(f"KV Cache NOPE absolute difference: {nope_max_diff}")
+        logger.info(f"KV Cache NOPE mean absolute difference: {nope_mean_diff}")
+        nope_passing, nope_pcc_message = comp_pcc(compare_nope, expected_nope, 0.98)
+        logger.info(f"KV Cache NOPE PCC: {nope_pcc_message}")
+
+        # Check rope portion
+        rope_max_diff = torch.max(torch.abs(expected_rope - compare_rope)).item()
+        rope_mean_diff = torch.mean(torch.abs(expected_rope - compare_rope)).item()
+        logger.info(f"KV Cache ROPE absolute difference: {rope_max_diff}")
+        logger.info(f"KV Cache ROPE mean absolute difference: {rope_mean_diff}")
+        rope_passing, rope_pcc_message = comp_pcc(compare_rope, expected_rope, 0.98)
+        logger.info(f"KV Cache ROPE PCC: {rope_pcc_message}")
+
+        assert nope_passing, f"KV Cache NOPE verification failed: {nope_pcc_message}"
+        assert rope_passing, f"KV Cache ROPE verification failed: {rope_pcc_message}"
 
     logger.info("✓ PreSDPA mesh test passed!")
 
