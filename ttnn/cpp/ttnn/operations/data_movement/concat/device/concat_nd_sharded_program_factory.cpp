@@ -58,6 +58,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     const CoreCoord max_core = *max_core_it;
     const size_t max_core_index = static_cast<size_t>(std::distance(cores.begin(), max_core_it));
     const CoreRangeSet single_core_set = CoreRangeSet(CoreRange(max_core));
+    std::cout << "max_core_it " << max_core.x << " " << max_core.y << "\n";
 
     Program program = CreateProgram();
 
