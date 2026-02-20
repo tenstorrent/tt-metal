@@ -174,6 +174,12 @@ void sdpa_single_core(
                                         .set_page_size(normalized_out_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_normalized_out_config);
 
+    // cb_recip_scratch — 1-tile scratch CB for per-row normalization (1/sum intermediate)
+    const uint32_t recip_scratch_cb_index = CBIndex::c_10;
+    auto cb_recip_scratch_config = CircularBufferConfig(single_tile_size, {{recip_scratch_cb_index, cb_data_format}})
+                                       .set_page_size(recip_scratch_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_recip_scratch_config);
+
     const uint32_t cb_prev_out_index = CBIndex::c_25;
     CircularBufferConfig cb_prev_out_config =
         CircularBufferConfig(out_chunk_data_size, {{cb_prev_out_index, cb_data_format}})
@@ -440,6 +446,12 @@ void sdpa_single_core_test(
     auto cb_normalized_out_config = CircularBufferConfig(single_tile_size, {{normalized_out_cb_index, cb_data_format}})
                                         .set_page_size(normalized_out_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_normalized_out_config);
+
+    const uint32_t recip_scratch_cb_index_t = CBIndex::c_10;
+    auto cb_recip_scratch_config_t =
+        CircularBufferConfig(single_tile_size, {{recip_scratch_cb_index_t, cb_data_format}})
+            .set_page_size(recip_scratch_cb_index_t, single_tile_size);
+    CreateCircularBuffer(program, core, cb_recip_scratch_config_t);
 
     const uint32_t cb_prev_out_index = CBIndex::c_25;
     CircularBufferConfig cb_prev_out_config =
