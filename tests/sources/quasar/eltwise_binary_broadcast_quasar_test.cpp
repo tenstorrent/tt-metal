@@ -27,26 +27,26 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // Configure Source A buffer descriptor
     buffer_descriptor_u bd_val_A = {0};
     bd_val_A.f.l1_addr_16B       = params->buffer_A[0] / 16;
-    bd_val_A.f.format            = static_cast<std::uint8_t>(formats.unpack_src);
+    bd_val_A.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
     bd_val_A.f.x_dim             = params->TEST_FACE_C_DIM;
     bd_val_A.f.y_dim             = params->TEST_FACE_R_DIM;
     bd_val_A.f.z_dim             = params->num_faces;
 
     td_val_A.buf_desc        = bd_val_A;
     td_val_A.buf_desc_id     = buf_desc_id_a;
-    td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
+    td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
     // Configure Source B buffer descriptor
     buffer_descriptor_u bd_val_B = {0};
     bd_val_B.f.l1_addr_16B       = params->buffer_B[0] / 16;
-    bd_val_B.f.format            = static_cast<std::uint8_t>(formats.unpack_src);
+    bd_val_B.f.format            = static_cast<std::uint8_t>(formats.unpack_B_src);
     bd_val_B.f.x_dim             = params->TEST_FACE_C_DIM;
     bd_val_B.f.y_dim             = params->TEST_FACE_R_DIM;
     bd_val_B.f.z_dim             = params->num_faces;
 
     td_val_B.buf_desc        = bd_val_B;
     td_val_B.buf_desc_id     = buf_desc_id_b;
-    td_val_B.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
+    td_val_B.reg_data_format = static_cast<std::uint8_t>(formats.unpack_B_dst);
 
     _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
     _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);

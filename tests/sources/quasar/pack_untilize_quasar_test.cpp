@@ -27,14 +27,14 @@ void run_kernel(const volatile struct RuntimeParams *params)
     buffer_descriptor_u bd_val = {0};
 
     bd_val.f.l1_addr_16B = params->buffer_A[0] / 16;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_src);
+    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
     bd_val.f.x_dim       = TEST_FACE_C_DIM;
     bd_val.f.y_dim       = TEST_FACE_R_DIM;
     bd_val.f.z_dim       = num_faces;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
+    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);

@@ -164,7 +164,7 @@ def test_eltwise_binary(
     src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
+        stimuli_format_B=formats.input_format_B,  # Use different format for src_B
         input_dimensions_B=input_dimensions,
         tile_dimensions=tile_dimensions,
     )

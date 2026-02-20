@@ -29,7 +29,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 {
     // Configure unpacker for two-input AB operation (single tile each)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
     _llk_unpack_AB_init_<>();
 
     // Unpack one tile from each input buffer (A and B)

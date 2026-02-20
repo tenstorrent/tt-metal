@@ -26,10 +26,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 void run_kernel(const volatile struct RuntimeParams *params)
 {
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
-        formats.unpack_src,
-        formats.unpack_src,
-        formats.unpack_dst,
-        formats.unpack_dst,
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
         params->TEST_FACE_R_DIM,
         params->TEST_FACE_R_DIM,
         params->num_faces,
@@ -40,11 +40,12 @@ void run_kernel(const volatile struct RuntimeParams *params)
         params->UNPACK_TRANSPOSE_WITHIN_FACE,
         params->TEST_FACE_R_DIM,
         params->num_faces,
-        formats.unpack_src,
-        formats.unpack_dst);
+        formats.unpack_A_src,
+        formats.unpack_A_dst);
     for (int i = 0; i < params->TILE_CNT; ++i)
     {
-        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(L1_ADDRESS(params->buffer_A[i]), formats.unpack_src, formats.unpack_dst);
+        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
+            L1_ADDRESS(params->buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
     _llk_unpack_A_uninit_<BROADCAST_TYPE>(params->TEST_FACE_R_DIM);
 }

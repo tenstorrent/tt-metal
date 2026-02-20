@@ -31,10 +31,10 @@ void run_kernel(const volatile struct RuntimeParams *params)
 {
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats_array[run].unpack_src,
-        formats_array[run].unpack_src,
-        formats_array[run].unpack_dst,
-        formats_array[run].unpack_dst,
+        formats_array[run].unpack_A_src,
+        formats_array[run].unpack_B_src,
+        formats_array[run].unpack_A_dst,
+        formats_array[run].unpack_B_dst,
         FACE_R_DIM,
         FACE_R_DIM,
         4 /* num_faces */,
@@ -47,11 +47,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_src, formats_array[run].unpack_dst, TILE_SIZE_PACK);
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, TILE_SIZE_PACK);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, FACE_R_DIM, 4, formats_array[run].unpack_src, formats_array[run].unpack_dst);
+        0, 0, FACE_R_DIM, 4, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        L1_ADDRESS(buffer_A_tilized), formats_array[run].unpack_src, formats_array[run].unpack_dst);
+        L1_ADDRESS(buffer_A_tilized), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
 }
 
 #endif

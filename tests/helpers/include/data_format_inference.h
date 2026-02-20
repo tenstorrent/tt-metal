@@ -46,14 +46,29 @@ constexpr bool is_quasar    = true;
  */
 struct FormatConfig
 {
-    const std::uint32_t unpack_src;
-    const std::uint32_t unpack_dst;
+    const std::uint32_t unpack_A_src;
+    const std::uint32_t unpack_B_src;
+    const std::uint32_t unpack_A_dst;
+    const std::uint32_t unpack_B_dst;
     const std::uint32_t math;
     const std::uint32_t pack_src;
     const std::uint32_t pack_dst;
 
-    constexpr FormatConfig(std::uint32_t unpack_src_, std::uint32_t unpack_dst_, std::uint32_t math_, std::uint32_t pack_src_, std::uint32_t pack_dst_) :
-        unpack_src(unpack_src_), unpack_dst(unpack_dst_), math(math_), pack_src(pack_src_), pack_dst(pack_dst_)
+    constexpr FormatConfig(
+        std::uint32_t unpack_A_src_,
+        std::uint32_t unpack_B_src_,
+        std::uint32_t unpack_A_dst_,
+        std::uint32_t unpack_B_dst_,
+        std::uint32_t math_,
+        std::uint32_t pack_src_,
+        std::uint32_t pack_dst_) :
+        unpack_A_src(unpack_A_src_),
+        unpack_B_src(unpack_B_src_),
+        unpack_A_dst(unpack_A_dst_),
+        unpack_B_dst(unpack_B_dst_),
+        math(math_),
+        pack_src(pack_src_),
+        pack_dst(pack_dst_)
     {
     }
 };
@@ -107,11 +122,14 @@ constexpr bool is_format_combination_outlier(DataFormat input, DataFormat output
  * @tparam INPUT The input data format.
  * @return The inferred output data format for unpacking.
  */
-constexpr FormatConfig get_data_formats(DataFormat unpack_in, DataFormat unpack_out, DataFormat math, DataFormat pack_in, DataFormat pack_out)
+constexpr FormatConfig get_data_formats(
+    DataFormat unpack_A_in, DataFormat unpack_B_in, DataFormat unpack_A_out, DataFormat unpack_B_out, DataFormat math, DataFormat pack_in, DataFormat pack_out)
 {
     return {
-        ckernel::to_underlying(unpack_in),
-        ckernel::to_underlying(unpack_out),
+        ckernel::to_underlying(unpack_A_in),
+        ckernel::to_underlying(unpack_B_in),
+        ckernel::to_underlying(unpack_A_out),
+        ckernel::to_underlying(unpack_B_out),
         ckernel::to_underlying(math),
         ckernel::to_underlying(pack_in),
         ckernel::to_underlying(pack_out)};
@@ -215,21 +233,24 @@ template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC, bool unpack_to_des
 constexpr FormatConfig infer_data_formats()
 {
     // The following two formats are hard-coded for this test case
-    constexpr DataFormat unpack_in = INPUT;  // The input format for Unpcker (data format in L1)
-    constexpr DataFormat pack_out  = OUTPUT; // The final desired output format after packing (format in L1 after leaving the pipeline)
+    constexpr DataFormat unpack_A_in = INPUT;  // The input format for Unpacker A (data format in L1)
+    constexpr DataFormat unpack_B_in = INPUT;  // The input format for Unpacker B (data format in L1) - same as A for now
+    constexpr DataFormat pack_out    = OUTPUT; // The final desired output format after packing (format in L1 after leaving the pipeline)
 
     // Determine the intermediate formats
-    constexpr DataFormat unpack_out =
-        infer_unpack_out<INPUT, OUTPUT, FP32_ACC, unpack_to_dest>(); // output format for Unpacker, desired format in src register(s)
+    constexpr DataFormat unpack_A_out =
+        infer_unpack_out<INPUT, OUTPUT, FP32_ACC, unpack_to_dest>(); // output format for Unpacker A, desired format in src register A
+    constexpr DataFormat unpack_B_out =
+        infer_unpack_out<INPUT, OUTPUT, FP32_ACC, unpack_to_dest>(); // output format for Unpacker B, desired format in src register B
     constexpr DataFormat math =
-        unpack_out; // The data format used for mathematical computations, desired format in dest register (typically matches unpack_out)
+        unpack_A_out; // The data format used for mathematical computations, desired format in dest register (typically matches unpack_out)
     constexpr DataFormat pack_in =
-        infer_pack_in<INPUT, OUTPUT, unpack_out, FP32_ACC, unpack_to_dest>(); // input to the packing stage, determines what gasket can convert from dest
-                                                                              // register potentially different from unpack_out and pack_out depending on FP32
-                                                                              // accumulation
+        infer_pack_in<INPUT, OUTPUT, unpack_A_out, FP32_ACC, unpack_to_dest>(); // input to the packing stage, determines what gasket can convert from dest
+                                                                                // register potentially different from unpack_out and pack_out depending on FP32
+                                                                                // accumulation
 
     // Return a FormatConfig struct capturing all the inferred formats needed for this stage
-    return get_data_formats(unpack_in, unpack_out, math, pack_in, pack_out);
+    return get_data_formats(unpack_A_in, unpack_B_in, unpack_A_out, unpack_B_out, math, pack_in, pack_out);
 }
 
 /**

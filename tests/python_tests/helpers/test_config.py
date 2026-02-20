@@ -40,7 +40,7 @@ from .device import (
     set_tensix_soft_reset,
     wait_for_tensix_operations_finished,
 )
-from .format_config import DataFormat, FormatConfig
+from .format_config import DataFormat, InputOutputFormat
 from .llk_params import DestAccumulation, L1Accumulation, MailboxesDebug, MailboxesPerf
 from .stimuli_config import StimuliConfig
 from .test_variant_parameters import RuntimeParameter, TemplateParameter
@@ -337,7 +337,7 @@ class TestConfig:
     def __init__(
         self,
         test_name: str,
-        formats: FormatConfig = None,
+        formats: InputOutputFormat = None,
         templates: list[TemplateParameter] = [],
         runtimes: list[RuntimeParameter] = [],
         variant_stimuli: StimuliConfig = None,
@@ -680,7 +680,10 @@ class TestConfig:
         # Automatically enable dest_acc for outlier combinations
         if (
             is_format_combination_outlier(
-                self.formats.input_format, self.formats.output_format, self.dest_acc
+                self.formats.input_format,
+                self.formats.output_format,
+                self.dest_acc,
+                self.formats.input_format_B,
             )
             and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
         ):
@@ -706,6 +709,7 @@ class TestConfig:
             unpacking_to_dest=self.unpack_to_dest,
             chip_arch=TestConfig.CHIP_ARCH,
             disable_format_inference=self.disable_format_inference,
+            input_format_B=self.formats.input_format_B,
         )
 
         header_content.append(
@@ -729,8 +733,16 @@ class TestConfig:
                 f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_src.name})"
                 for fmt in formats_config
             ]
+            unpack_b_in_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_B_src.name})"
+                for fmt in formats_config
+            ]
             unpack_a_out_values = [
                 f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_dst.name})"
+                for fmt in formats_config
+            ]
+            unpack_b_out_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_B_dst.name})"
                 for fmt in formats_config
             ]
             math_values = [
@@ -749,7 +761,9 @@ class TestConfig:
             header_content.extend(
                 [
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_A_IN_LIST = {{{', '.join(unpack_a_in_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_B_IN_LIST = {{{', '.join(unpack_b_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_A_OUT_LIST = {{{', '.join(unpack_a_out_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_B_OUT_LIST = {{{', '.join(unpack_b_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> MATH_FORMAT_LIST = {{{', '.join(math_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_IN_LIST = {{{', '.join(pack_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_OUT_LIST = {{{', '.join(pack_out_values)}}};",
@@ -764,7 +778,9 @@ class TestConfig:
                 [
                     "// Format data for single L1-to-L1 iteration",
                     f"constexpr auto UNPACK_A_IN = ckernel::to_underlying(DataFormat::{formats_config.unpack_A_src.name});",
+                    f"constexpr auto UNPACK_B_IN = ckernel::to_underlying(DataFormat::{formats_config.unpack_B_src.name});",
                     f"constexpr auto UNPACK_A_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_A_dst.name});",
+                    f"constexpr auto UNPACK_B_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_B_dst.name});",
                     f"constexpr auto MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.math.name});",
                     f"constexpr auto PACK_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_src.name});",
                     f"constexpr auto PACK_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_dst.name});",

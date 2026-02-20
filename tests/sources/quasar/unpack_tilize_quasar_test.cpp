@@ -36,14 +36,14 @@ void run_kernel(const volatile struct RuntimeParams* params)
     }
 
     bd_val.f.l1_addr_16B = l1_addr_16B;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_src);
+    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
     bd_val.f.x_dim       = TEST_FACE_C_DIM;
     bd_val.f.y_dim       = TEST_FACE_R_DIM;
     bd_val.f.z_dim       = num_faces;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
+    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
     constexpr TileShape tile_shape      = {.num_faces = num_faces, .face_r_dim = TEST_FACE_R_DIM, .face_c_dim = TEST_FACE_C_DIM, .narrow_tile = 0};
     constexpr std::uint32_t C_DIM_FACES = (tile_shape.narrow_tile ? 1 : 2);                    // Tile width in faces

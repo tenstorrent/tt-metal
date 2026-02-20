@@ -50,14 +50,14 @@ void run_kernel(const volatile struct RuntimeParams *params)
     }
 
     bd_val.f.l1_addr_16B = l1_addr_16B;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_src);
+    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
     bd_val.f.x_dim       = params->TEST_FACE_C_DIM;
     bd_val.f.y_dim       = params->TEST_FACE_R_DIM;
     bd_val.f.z_dim       = params->num_faces;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
+    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     if (is_fp32_dest_acc_en && !unpack_to_dest)

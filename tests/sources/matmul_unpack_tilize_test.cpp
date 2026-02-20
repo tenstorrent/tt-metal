@@ -31,20 +31,22 @@ void run_kernel(const volatile struct RuntimeParams *params)
     const std::uint32_t block_ct_dim = is_blackhole ? 0 : BLOCK_CT_DIM;
     int run                          = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats_array[run].unpack_src,
-        formats_array[run].unpack_src,
-        formats_array[run].unpack_dst,
-        formats_array[run].unpack_dst,
+        formats_array[run].unpack_A_src,
+        formats_array[run].unpack_B_src,
+        formats_array[run].unpack_A_dst,
+        formats_array[run].unpack_B_dst,
         FACE_R_DIM,
         FACE_R_DIM,
         4 /* num_faces */,
         4 /* num_faces */);
 
-    _llk_unpack_tilize_init_(formats_array[run].unpack_src, formats_array[run].unpack_dst, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(params->buffer_A[0]), 0, formats_array[run].unpack_src, formats_array[run].unpack_dst, block_ct_dim, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_init_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1, FACE_R_DIM, false);
+    _llk_unpack_tilize_(
+        L1_ADDRESS(params->buffer_A[0]), 0, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, block_ct_dim, FACE_R_DIM, 4, false);
 
-    _llk_unpack_tilize_init_(formats_array[run].unpack_src, formats_array[run].unpack_dst, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(params->buffer_B[0]), 0, formats_array[run].unpack_src, formats_array[run].unpack_dst, block_ct_dim, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_init_(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, 1, FACE_R_DIM, false);
+    _llk_unpack_tilize_(
+        L1_ADDRESS(params->buffer_B[0]), 0, formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, block_ct_dim, FACE_R_DIM, 4, false);
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(
         semaphore::PACK_DONE); // Unpacker waits on signal when packer will increment semaphore to 1 (waits while semaphore == 0), utilizing SEMWAIT.
@@ -53,14 +55,14 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(
-        formats_array[run].unpack_src,
-        formats_array[run].unpack_dst,
+        formats_array[run].unpack_A_src,
+        formats_array[run].unpack_A_dst,
         tile_size); // have to reconfigure unpack kernel data formats_array if they change in this run
-    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_src, formats_array[run].unpack_dst, tile_size);
+    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
 #ifdef ARCH_BLACKHOLE
-    _llk_unpack_tilize_uninit_(formats_array[run].unpack_dst, 4, FACE_R_DIM);
+    _llk_unpack_tilize_uninit_(formats_array[run].unpack_A_dst, 4, FACE_R_DIM);
 #else
-    _llk_unpack_tilize_uninit_(formats_array[run].unpack_dst, FACE_R_DIM);
+    _llk_unpack_tilize_uninit_(formats_array[run].unpack_A_dst, FACE_R_DIM);
 #endif
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A_tilized), L1_ADDRESS(buffer_B_tilized), 0, 0, tile_size, tile_size);
