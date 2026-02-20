@@ -49,7 +49,6 @@ autograd::TensorPtr memory_efficient_runner(
     }
 
     // define grad function and copy generator (in the state before forward pass)
-    // NOTE: forward_impl must be captured by reference to avoid object slicing when it's a ModuleBase&
     autograd::GradFunction grad = [input, mask, out, forward_impl, generator]() mutable {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
