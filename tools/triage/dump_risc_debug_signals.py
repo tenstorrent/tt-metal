@@ -24,6 +24,8 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
+from ttexalens.umd_device import TimeoutDeviceRegisterError
+from ttexalens.hardware.risc_debug import RiscHaltError
 import os
 
 script_config = ScriptConfig(
@@ -46,15 +48,17 @@ def dump_risc_debug_signals(
     If it throws an exception, collect and return debug bus signals.
     """
     noc_block = location._device.get_block(location)
+    risc_debug = noc_block.get_risc_debug(risc_name)
+    if risc_debug.is_in_reset():
+        return None
 
     try:
-        risc_debug = noc_block.get_risc_debug(risc_name)
         # Try to halt the core
         with risc_debug.ensure_halted():
             pass
         # If halt was successful, return None
         return None
-    except:
+    except RiscHaltError:
         # If halt failed, collect debug bus signals
         debug_bus = noc_block.debug_bus
         if debug_bus is not None:
@@ -84,6 +88,8 @@ def dump_risc_debug_signals(
                         for signal_name in sorted(group_sample.keys()):
                             signal_names_str.append(f"{signal_name[len(risc_name)+1:]}")
                             signal_values_hex.append(hex(group_sample[signal_name]))
+                except TimeoutDeviceRegisterError:
+                    raise
                 except Exception as e:
                     log_check_risc(location, risc_name, False, f"Failed to collect all debug bus signals: {e}")
                 finally:

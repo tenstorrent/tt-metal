@@ -33,10 +33,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -129,7 +125,7 @@ void RunDelayTestOnCore(
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
-    SetRuntimeArgs(program_, eltwise_binary_kernel, core, {NUM_TILES, 1});
+    SetRuntimeArgs(program_, eltwise_binary_kernel, core, {NUM_TILES, 1, 0});
 
     float constant = 0.0f;
     float start_from = 0.0f;

@@ -20,15 +20,16 @@ from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
 
 @pytest.mark.parametrize(
-    "batch, num_heads, head_dim, position_id",
+    "batch, num_heads, head_dim, position_id, grid_size",
     [
-        (1, 1, 32, 5),  # Minimal single-core test
-        (1, 2, 64, 5),  # DeepSeek V3 Q rope (multiple heads)
+        (1, 1, 32, 5, (1, 1)),  # Minimal single-core test
+        (1, 1, 64, 5, (1, 2)),  # Multicore test
+        (1, 2, 64, 5, (1, 1)),  # DeepSeek V3 Q rope (multiple heads)
     ],
-    ids=["minimal", "q_rope"],
+    ids=["minimal", "multicore", "q_rope"],
 )
 @pytest.mark.parametrize("pcc", [0.999])
-def test_rope_decode(device, batch, num_heads, head_dim, position_id, pcc):
+def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size, pcc):
     """
     Test RoPE in decode mode on a single core.
 
@@ -66,19 +67,23 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, pcc):
     # For TTNN decode mode, reshape input to [1, batch, num_heads, head_dim]
     x_ttnn = x.permute(2, 0, 1, 3)  # [seq_len=1, batch, num_heads, head_dim]
 
-    # Create HEIGHT_SHARDED memory config for input
+    # Create WIDTH_SHARDED memory config for input
     # Use tiny tiles: tile height = num_heads (no padding to 32)
     tiny_tile = ttnn.Tile((num_heads, ttnn.TILE_SIZE))
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    # Create core grid from grid_size parameter
+    start_x, start_y = 0, 0  # Starting offset
+    end_x = start_x + grid_size[0] - 1
+    end_y = start_y + grid_size[1] - 1
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(start_x, start_y), ttnn.CoreCoord(end_x, end_y))})
 
     input_shard_spec = ttnn.ShardSpec(
         core_grid,
-        (num_heads, head_dim),
+        (num_heads, head_dim // (core_grid.num_cores())),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    # Create TTNN input tensor with HEIGHT_SHARDED memory and tiny tile
+    # Create TTNN input tensor with WIDTH_SHARDED memory and tiny tile
     tt_x = ttnn.from_torch(
         x_ttnn,
         dtype=ttnn.bfloat16,
@@ -97,11 +102,11 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, pcc):
     # Broadcast multiply reads row 0 and broadcasts to all rows
     cos_sin_shard_spec = ttnn.ShardSpec(
         core_grid,
-        (num_heads, head_dim),
+        (num_heads, head_dim // (core_grid.num_cores())),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
     )
 
     tt_cos = ttnn.from_torch(
@@ -124,7 +129,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, pcc):
     # Transformation matrix - standard 32x32 tile (rotation matrix)
     trans_mat = get_rot_transformation_mat()
     # Repeat for batch dimension
-    trans_mat = trans_mat.repeat(1, 1, batch, 1)
+    trans_mat_replicated = trans_mat.repeat(1, 1, batch, core_grid.num_cores())
 
     trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
     trans_shard_spec = ttnn.ShardSpec(
@@ -132,10 +137,10 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, pcc):
         (ttnn.TILE_SIZE, ttnn.TILE_SIZE),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    trans_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
+    trans_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
 
-    tt_trans = ttnn.from_torch(
-        trans_mat,
+    tt_trans_replicated = ttnn.from_torch(
+        trans_mat_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -159,7 +164,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, pcc):
         tt_x,
         tt_cos,
         tt_sin,
-        tt_trans,
+        tt_trans_replicated,
         tt_out,
     )
 
@@ -245,7 +250,7 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         (num_heads, head_dim),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
     tt_x = ttnn.from_torch(
         x_ttnn,

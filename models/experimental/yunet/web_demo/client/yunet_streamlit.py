@@ -38,7 +38,7 @@ class FaceDetectionProcessor(VideoProcessorBase):
     def __init__(self):
         self.frame_count = 0
         self.api_url = None
-        self.input_size = 320
+        self.input_size = 640
         self.conf_thresh = 0.35
 
     def set_api_url(self, url):
@@ -157,7 +157,7 @@ def main():
     )
 
     input_size = st.sidebar.selectbox(
-        "Input Size", options=[320, 640], index=0, help="Model input resolution. 320 is faster, 640 is more accurate."
+        "Input Size", options=[640, 320], index=0, help="Model input resolution. 640 is more accurate, 320 is faster."
     )
 
     conf_thresh = 0.35  # Fixed confidence threshold
@@ -186,9 +186,21 @@ def main():
         processor.set_params(input_size, conf_thresh)
         return processor
 
+    # RTC configuration for remote access
+    rtc_config = {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]},
+            {"urls": ["stun:stun3.l.google.com:19302"]},
+            {"urls": ["stun:stun4.l.google.com:19302"]},
+        ]
+    }
+
     webrtc_streamer(
         key="yunet-face-detection",
         video_processor_factory=processor_factory,
+        rtc_configuration=rtc_config,
         media_stream_constraints={
             "video": {
                 "width": {"min": 320, "ideal": 640, "max": 1280},

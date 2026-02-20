@@ -37,9 +37,13 @@
 
 namespace tt::tt_metal {
 class Allocator;
-class CommandQueue;
+class HWCommandQueue;
 class SubDevice;
 class SystemMemoryManager;
+
+namespace experimental {
+class DispatchContext;
+}  // namespace experimental
 
 namespace program_cache::detail {
 struct ProgramCache;
@@ -154,6 +158,8 @@ private:
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
+    friend class ::tt::tt_metal::experimental::DispatchContext;
+
 public:
     MeshDeviceImpl(
         std::shared_ptr<ScopedDevices> mesh_handle,
@@ -177,6 +183,7 @@ public:
     int num_dram_channels() const override;
     uint32_t l1_size_per_core() const override;
     uint32_t dram_size_per_channel() const override;
+    int get_clock_rate_mhz() const override;
 
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
@@ -216,7 +223,6 @@ public:
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
-    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     // If cq_id is not provided, the current command queue is returned from the current thread
@@ -249,7 +255,6 @@ public:
     void init_command_queue_device() override;
     bool compile_fabric() override;
     void configure_fabric() override;
-    void init_fabric() override;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

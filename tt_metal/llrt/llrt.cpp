@@ -28,32 +28,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace {
-void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual_core) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
-        return;
-    }
-    const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
-    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
-    const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
-    uint32_t port_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, port_status_addr, sizeof(uint32_t))[0];
-    uint32_t retrain_count = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
-    uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
-    log_critical(
-        tt::LogMetal,
-        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
-        device_id,
-        virtual_core.str(),
-        port_status,
-        retrain_count,
-        rx_link_up);
-}
-}  // namespace
-
 // llrt = lower-level runtime
 namespace tt::llrt {
 
@@ -272,12 +246,6 @@ void write_binary_to_address(const ll_api::memory& mem, tt::ChipId chip_id, cons
 
 namespace internal_ {
 
-bool is_active_eth_core(tt::ChipId chip_id, const CoreCoord& core) {
-    auto active_eth_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
-    return active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, core));
-}
-
 namespace {
 
 bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& core, int run_state) {
@@ -310,6 +278,33 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
     return get_mailbox_is_done(go_msg_addr);
 }
 
+void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual_core) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
+        return;
+    }
+    if (get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+        return;
+    }
+    const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
+    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
+    const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
+    uint32_t port_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, port_status_addr, sizeof(uint32_t))[0];
+    uint32_t retrain_count = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
+    uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
+    log_critical(
+        tt::LogMetal,
+        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        device_id,
+        virtual_core.str(),
+        port_status,
+        retrain_count,
+        rx_link_up);
+}
+
 }  // namespace
 
 void wait_until_cores_done(
@@ -334,9 +329,8 @@ void wait_until_cores_done(
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
                 for (const auto& core : not_done_phys_cores) {
-                    if (internal_::is_active_eth_core(device_id, core)) {
-                        print_aerisc_training_status(device_id, core);
-                    }
+                    // only prints if the core is an active ethernet core
+                    print_aerisc_training_status(device_id, core);
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
 
@@ -381,6 +375,22 @@ void wait_until_cores_done(
     }
 }
 
+void wait_for_idle(ChipId device_id, const std::vector<std::vector<CoreCoord>>& logical_cores) {
+    std::unordered_set<CoreCoord> not_done_cores;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        CoreType core_type = hal.get_core_type(index);
+        const auto& logical_cores_of_type = logical_cores[index];
+        for (const auto& logical_core : logical_cores_of_type) {
+            auto physical_core =
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, core_type);
+            not_done_cores.insert(physical_core);
+        }
+    }
+    wait_until_cores_done(device_id, tt_metal::dev_msgs::RUN_MSG_GO, not_done_cores);
+}
+
 void send_msg_to_eth_mailbox(
     tt::ChipId device_id,
     const CoreCoord& virtual_core,
@@ -395,9 +405,8 @@ void send_msg_to_eth_mailbox(
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
 
-    bool is_eth_core = internal_::is_active_eth_core(device_id, virtual_core);
     TT_ASSERT(
-        is_eth_core,
+        get_core_type(device_id, virtual_core) == tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
         "target core for send_msg_to_eth_mailbox {} (virtual) must be an active ethernet core",
         virtual_core.str());
 

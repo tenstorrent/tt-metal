@@ -56,11 +56,6 @@ void BatchNormOperation::validate_tensors(
     }
 }
 
-BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return BatchNormFactory();
-}
-
 void BatchNormOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
@@ -96,11 +91,6 @@ void BatchNormOperation::validate_on_program_cache_miss(
             "bias tensor must be interleaved");
     }
 
-    BatchNormOperation::validate_on_program_cache_hit(operation_attributes, tensor_args);
-};
-
-void BatchNormOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 

@@ -286,8 +286,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_cbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
@@ -414,7 +413,9 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
 TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
     for (const auto& mesh_device : devices_) {
         for (bool use_assembly : {true, false}) {
-            for (uint32_t mask : {0xffffffffu, 0xaaaaaaaau}) {
+            // mask_high only applies to architectures supporting more than 32 circular buffers
+            for (auto [mask_low, mask_high] :
+                 {std::make_pair(0xffffffffu, 0xffffffffu), std::make_pair(0xaaaaaaaau, 0xaaaaaaaau)}) {
                 CoreCoord core{0, 0};
                 distributed::MeshWorkload workload;
                 auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -435,7 +436,7 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
                         .defines = defines,
                         .opt_level = KernelBuildOptLevel::O2});
                 uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-                std::vector<uint32_t> runtime_args{mask, l1_unreserved_base};
+                std::vector<uint32_t> runtime_args{mask_low, mask_high, l1_unreserved_base};
                 SetRuntimeArgs(program, kernel, core, runtime_args);
                 workload.add_program(device_range, std::move(program));
                 this->RunProgram(mesh_device, workload);

@@ -7,11 +7,10 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include "compute_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
@@ -55,10 +54,11 @@ void MAIN {
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
     // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
     const uint32_t num_phases = get_arg_val<uint32_t>(7);
-    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(8);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(8);
+    uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(9);
     uint32_t chunked_q_chunk_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(9);
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(10);
     }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
@@ -87,8 +87,22 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    constexpr uint32_t cb_chunk_start_idx = tt::CBIndex::c_8;
     uint32_t chunked_q_chunk_offset = 0;
     mm_init(cb_q_in, cb_k_in, cb_out);
+
+    if constexpr (is_chunked) {
+        if (use_chunk_start_idx_tensor != 0) {
+            cb_wait_front(cb_chunk_start_idx, 1);
+            uint32_t chunk_start_idx = ckernel::read_tile_value(cb_chunk_start_idx, 0, 0);
+            cb_pop_front(cb_chunk_start_idx, 1);
+            const uint32_t q_chunk_size = Sq_chunk_t * TILE_HEIGHT;
+            chunked_q_chunk_offset_phase_1 = chunk_start_idx / q_chunk_size;
+            if (num_phases == 2) {
+                chunked_q_chunk_offset_phase_2 = chunked_q_chunk_offset_phase_1;
+            }
+        }
+    }
 
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
         if (phase == 0) {
@@ -154,4 +168,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <cmath>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -28,7 +29,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (!use_mla) {
         TT_FATAL(tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
     }
-    const auto& input_tensor_v = use_mla ? input_tensor_k : tensor_args.v.value();
+    const auto& input_tensor_v = tensor_args.v.has_value() ? tensor_args.v.value() : input_tensor_k;
 
     const auto& cur_pos_tensor = tensor_args.cur_pos_tensor;
     const auto& page_table_tensor = tensor_args.page_table_tensor;
@@ -72,8 +73,13 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
     const auto& q_shape_unpadded = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.padded_shape();
+    const auto& v_shape = input_tensor_v.padded_shape();
+
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
+
+    // If MLA is enabled, vDH is overridded by head_dim_v. Otherwise, vDH is same as DH.
+    uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
 
     uint32_t num_kv_heads = k_shape[1];
     uint32_t num_q_heads = q_shape_unpadded[2];
@@ -109,7 +115,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t Bkv = k_shape[0];
     uint32_t St = S / TILE_HEIGHT;
     uint32_t DHt = DH / TILE_WIDTH;
-    uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
+    uint32_t vDHt = vDH / TILE_WIDTH;
     uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
 
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
@@ -199,12 +205,24 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
+
     uint32_t num_heads_per_core = std::max((uint32_t)1, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch));
     uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     uint32_t num_output_cores = B;
     uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
     //// recalculate num_cores_per_batch based on num_active_cores
     num_cores_per_batch = num_active_cores / B;
+    // Calculate tree reduction parameters
+    uint32_t num_tree_reduction_rounds = 32 - __builtin_clz(num_cores_per_head);  // ceil(log2(num_cores_per_head))
+    log_debug(tt::LogOp, "Tree reduction enabled: num_tree_reduction_rounds: {}", num_tree_reduction_rounds);
+
+    TT_FATAL(
+        num_tree_reduction_rounds <= MAX_TREE_REDUCTION_ROUNDS,
+        "Flash Decode utilizes tree reduction for softmax calculation with a maximum of {} rounds, hence each KV head "
+        "can parallelize with a maximum of {} cores, but got {} cores per head.",
+        MAX_TREE_REDUCTION_ROUNDS,
+        1 << MAX_TREE_REDUCTION_ROUNDS,
+        num_cores_per_head);
 
     TT_FATAL(
         ((num_cores_per_head >= 1) && (num_heads_per_core == 1)) ||
@@ -406,10 +424,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (use_half_tile) {
         q_tile = half_tile;
         mask_tile = half_tile;
-
-        // TODO: out_tile is re-packed as full 32x32 with PACK for now #25060
-        // out_tile = half_tile;
-
         scalar_tile = half_tile;
         im_tile = half_tile;
         stats_tile = half_tile;
@@ -694,7 +708,25 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     log_debug(tt::LogOp, "reduce_core_physical_xs: {}", reduce_core_physical_xs);
     log_debug(tt::LogOp, "reduce_core_physical_ys: {}", reduce_core_physical_ys);
 
-    // Create core ggroups for output cores
+    // Build physical core coordinates for each reduction group (for tree reduction)
+    // This allows each core to look up physical coordinates of its parent/children
+    // reduction_group_core_xs[group_idx * num_cores_per_head + core_idx_in_group]
+    std::vector<uint32_t> reduction_group_core_xs;
+    std::vector<uint32_t> reduction_group_core_ys;
+    reduction_group_core_xs.reserve(num_active_cores);
+    reduction_group_core_ys.reserve(num_active_cores);
+
+    for (uint32_t i = 0; i < num_active_cores; ++i) {
+        CoreCoord core = core_group[i];
+        auto physical_core = device->worker_core_from_logical_core(core);
+        reduction_group_core_xs.push_back((uint32_t)physical_core.x);
+        reduction_group_core_ys.push_back((uint32_t)physical_core.y);
+    }
+
+    log_debug(tt::LogOp, "reduction_group_core_xs: {}", reduction_group_core_xs);
+    log_debug(tt::LogOp, "reduction_group_core_ys: {}", reduction_group_core_ys);
+
+    // Create core groups for output cores
     std::vector<uint32_t> output_core_physical_xs;
     std::vector<uint32_t> output_core_physical_ys;
     uint32_t output_core_noc_x{};
@@ -729,6 +761,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const uint32_t q_chunk_size_bytes =
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
 
+    const uint32_t reuse_k = tensor_args.v.has_value() ? 0 : 1;
+
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
         PNHt,
@@ -754,7 +788,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         use_attention_sink,
         max_dynamic_chunk_size,
         tilize_q,
-        (uint32_t)use_mla,
+        reuse_k,
         use_half_tile,
         q_chunk_size_bytes,
         is_cur_pos_tensor_sharded,
@@ -804,6 +838,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
         sliding_window_size.value_or(0),
+        num_tree_reduction_rounds,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -838,6 +873,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         use_half_tile,
         scale_union.u,
         sliding_window_size.value_or(0),
+        num_tree_reduction_rounds,
     };
 
     // Determine granularity for compute loops
@@ -942,6 +978,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         uint32_t cur_pos =
             (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
 
+        // Compute tree reduction parameters for this core
+        TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
+
         log_debug(tt::LogOp, "---- core_id: {}, coord: {} ----", i, core);
         log_debug(tt::LogOp, "worker_id_for_reduce: {}", worker_id_for_reduce);
         log_debug(tt::LogOp, "worker_id_for_output: {}", worker_id_for_output);
@@ -952,7 +991,15 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         log_debug(tt::LogOp, "core_num_in_reduce: {}", core_num_in_reduce);
         log_debug(tt::LogOp, "core_num_in_output: {}", core_num_in_output);
         log_debug(tt::LogOp, "cur_pos: {}", cur_pos);
+        log_debug(tt::LogOp, "tree_params.is_root: {}", tree_params.is_root);
+        log_debug(tt::LogOp, "tree_params.parent_core_in_group: {}", tree_params.parent_core_in_group);
+        log_debug(tt::LogOp, "tree_params.send_at_round: {}", tree_params.send_at_round);
+        log_debug(tt::LogOp, "tree_params.num_children: {}", tree_params.num_children);
+        log_debug(tt::LogOp, "tree_params.my_active_rounds: {}", tree_params.my_active_rounds);
 
+        // Calculate base index for this reduction group's cores in the physical coordinate arrays
+        uint32_t reduction_group_base_idx = (cur_batch * num_cores_per_batch) + (cur_head * num_cores_per_head);
+        log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
         // reader runtime args
         std::vector<uint32_t> reader_rt_args = {
             q_addr,
@@ -984,7 +1031,28 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             cur_batch,
             core_num_in_reduce,
             core_num_in_output,
-            cur_pos};
+            cur_pos,
+            // Tree reduction parameters
+            tree_params.is_root ? 1u : 0u,
+            tree_params.parent_core_in_group,
+            tree_params.send_at_round,
+            tree_params.num_children,
+            tree_params.my_active_rounds,
+            reduction_group_base_idx,
+        };
+        // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
+        for (unsigned int children : tree_params.children_per_round) {
+            writer_rt_args.push_back(children);
+        }
+        // Add reduction group physical core coordinates (for tree communication)
+        // First add the x coordinates for all cores in this reduction group
+        for (uint32_t c = 0; c < num_cores_per_head; ++c) {
+            writer_rt_args.push_back(reduction_group_core_xs[reduction_group_base_idx + c]);
+        }
+        // Then add the y coordinates for all cores in this reduction group
+        for (uint32_t c = 0; c < num_cores_per_head; ++c) {
+            writer_rt_args.push_back(reduction_group_core_ys[reduction_group_base_idx + c]);
+        }
         writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_xs.begin(), reduce_core_physical_xs.end());
         writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_ys.begin(), reduce_core_physical_ys.end());
         writer_rt_args.insert(writer_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
@@ -992,7 +1060,24 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
         // compute runtime args
         std::vector<uint32_t> compute_rt_args = {
-            do_reduce, do_output, cur_head, cur_batch, core_num_in_reduce, core_num_in_output, cur_pos};
+            do_reduce,
+            do_output,
+            cur_head,
+            cur_batch,
+            core_num_in_reduce,
+            core_num_in_output,
+            cur_pos,
+            // Tree reduction parameters for compute
+            tree_params.is_root ? 1u : 0u,
+            tree_params.parent_core_in_group,
+            tree_params.send_at_round,
+            tree_params.num_children,
+            tree_params.my_active_rounds,
+        };
+        // Add children_per_round array for compute
+        for (unsigned int children : tree_params.children_per_round) {
+            compute_rt_args.push_back(children);
+        }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
@@ -1003,15 +1088,25 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         // Set the rest of the cores to idle
         for (auto core : core_group_idle) {
             log_debug(tt::LogOp, "Setting core {} to idle", core);
-            // reader runtime args
-            std::vector<uint32_t> reader_rt_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-            // writer runtime args
-            std::vector<uint32_t> writer_rt_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            // Reader runtime args
+            // Base args (15)
+            std::vector<uint32_t> reader_rt_args(15, 0);
+
+            // Writer runtime args - need to match the size with tree reduction params
+            // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
+            // (2*num_cores_per_head)
+            // + reducer coords + output coords
+            std::vector<uint32_t> writer_rt_args(10 + 6 + MAX_TREE_REDUCTION_ROUNDS + 2 * num_cores_per_head, 0);
+
+            // Compute runtime args - 65 indicates idle core
+            // Base args (7) + tree params (5) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
+            std::vector<uint32_t> compute_rt_args(7 + 5 + MAX_TREE_REDUCTION_ROUNDS, 0);
+            compute_rt_args[0] = 65;  // Idle marker
 
             SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
             SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
-            SetRuntimeArgs(program, compute_kernels_id, core, {65, 0, 0, 0, 0, 0, 0});
+            SetRuntimeArgs(program, compute_kernels_id, core, compute_rt_args);
         }
     }
 
@@ -1065,11 +1160,14 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const bool use_attention_sink = shared_variables.use_attention_sink;
     const bool is_paged_attention = shared_variables.is_paged_attention;
     const bool is_causal = shared_variables.is_causal;
-    const bool use_mla = shared_variables.use_mla;
 
     auto* q_buffer = tensor_args.q.buffer();
     auto* k_buffer = tensor_args.k.buffer();
-    auto* v_buffer = use_mla ? k_buffer : tensor_args.v.value().buffer();
+    auto* v_buffer = k_buffer;
+
+    if (tensor_args.v.has_value()) {
+        v_buffer = tensor_args.v.value().buffer();
+    }
 
     auto* out0_buffer = tensor_return_value.buffer();
 

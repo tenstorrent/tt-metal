@@ -153,6 +153,7 @@ HalCoreInfoType create_tensix_mem_map() {
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         true /*supports_cbs*/,
+        false /*supports_dfbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory(),
         tensix_fabric_telemetry::create_factory()};

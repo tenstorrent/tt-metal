@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 void kernel_main() {
@@ -29,8 +29,11 @@ void kernel_main() {
     reconfig_data_format(qk_im_cb, scale_cb);
     pack_reconfig_data_format(out_max_cb);
 
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, qk_im_cb, scale_cb, Sq_chunk_t, Sk_chunk_t>(
-        out_max_cb, prev_max_cb, do_eltwise);
+    // Use the runtime version of reduce_c to match actual SDPA decode usage
+    // This version takes cols as a runtime parameter (4th function param)
+    // instead of a template parameter
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, qk_im_cb, scale_cb, Sq_chunk_t>(
+        out_max_cb, prev_max_cb, Sk_chunk_t, do_eltwise);
 
     // Ensure outputs are produced before exiting
     cb_wait_front(out_max_cb, Sq_chunk_t);

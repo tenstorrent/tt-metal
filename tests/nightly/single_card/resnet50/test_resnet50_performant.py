@@ -1,0 +1,1 @@
+../../../../models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py

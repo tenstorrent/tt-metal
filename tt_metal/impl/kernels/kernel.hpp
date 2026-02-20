@@ -95,16 +95,18 @@ public:
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
     std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
+
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
-    uint32_t dispatch_class() const { return this->dispatch_class_; }
 
     virtual bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
@@ -175,7 +177,6 @@ protected:
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    uint8_t dispatch_class_{};
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
@@ -188,6 +189,8 @@ protected:
     CoreCoord core_with_max_runtime_args_;   // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
+    const bool watcher_assert_enabled_;
+    const uint32_t watcher_count_word_offset_;
     std::set<CoreCoord> logical_cores_;
 
     // Build key -> binaries (moved from KernelImpl)
@@ -212,9 +215,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_DM0 + enchantum::to_underlying(config.processor);
-    }
+        config_(config) {}
 
     ~DataMovementKernel() override = default;
 
@@ -252,9 +253,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0 + enchantum::to_underlying(config.processor);
-    }
+        config_(config) {}
 
     ~EthernetKernel() override = default;
 
@@ -292,11 +291,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        // Note: it's wrong to use HalProcessorClassType here, because DM == 0 and COMPUTE == 1,
-        // but DISPATCH_CLASS_TENSIX_COMPUTE == 2.
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE;
-    }
+        config_(config) {}
 
     ~ComputeKernel() override = default;
 
@@ -368,6 +363,8 @@ public:
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
+
+    const std::vector<DataMovementProcessor>& get_dm_processors() const { return this->dm_cores_; }
 
 private:
     const QuasarDataMovementConfig config_;

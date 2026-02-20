@@ -180,7 +180,7 @@ class TtTransformerBlock(LightweightModule):
             attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in_sharded, mode)
+        ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":
