@@ -261,6 +261,7 @@ ENV_PASSTHROUGH_PREFIXES = frozenset(
         "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
         "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
         "MESH_",  # Mesh config (e.g., MESH_DEVICE)
+        "LOGURU_",
     }
 )
 
