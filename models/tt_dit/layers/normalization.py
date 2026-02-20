@@ -193,14 +193,21 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-            x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
+            x, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
         )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-            stats = self.ccl_manager.all_gather_persistent_buffer(
+            stats = ttnn.experimental.all_gather_async(
                 stats,
                 dim=len(x.shape) - 1,
-                mesh_axis=self.mesh_axis,
+                cluster_axis=self.mesh_axis,
+                mesh_device=x.device(),
+                topology=self.ccl_manager.topology,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+                persistent_output_tensor=self.ccl_manager.get_ag_ping_pong_buffer(
+                    stats.shape, len(stats.shape) - 1, self.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
             )
 
         x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
@@ -312,7 +319,7 @@ class DistributedLayerNorm(Module):
             )
 
     def forward(
-        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None, dtype=None
+        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None
     ) -> ttnn.Tensor:
         assert (dynamic_weight is None) == (
             dynamic_bias is None
@@ -347,7 +354,6 @@ class DistributedLayerNorm(Module):
             bias=bias,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-            dtype=dtype,
         )
         return x
 
