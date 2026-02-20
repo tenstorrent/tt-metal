@@ -25,6 +25,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 
@@ -781,7 +782,8 @@ void blocked_1x8_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        matmul_block_no_mop(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -969,7 +971,7 @@ void sdpa_inner_loop(
                     SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
                     // SDPA_DeviceZoneScopedN_5("Q@KT MM+Pack");
                     if (q_subblock > 0 || q_subblock == 0 && kt_subblock == 0) {
-                        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+                        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
                     }
                     blocked_1x8_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                         cb_q_in,
