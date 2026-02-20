@@ -297,7 +297,7 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
             False,  # users_row_sharded
-            True,  # long_context_mode
+            False,  # long_context_mode
             False,  # stop_at_eos
         ),
         (
@@ -312,7 +312,7 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
             False,  # users_row_sharded
-            True,  # long_context_mode
+            False,  # long_context_mode
             False,  # stop_at_eos
         ),
         (
@@ -327,7 +327,7 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
             False,  # users_row_sharded
-            True,  # long_context_mode
+            False,  # long_context_mode
             False,  # stop_at_eos
         ),
         # (
@@ -367,7 +367,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_4k",
         "batch128",
         "long_context_128k",
-        "long_context_short_prefill_long_decode"
+        "long_context_short_prefill_long_decode",
         "prefill_8k",
         "prefill_16k",
         "prefill_32k",
@@ -401,6 +401,8 @@ def test_gpt_oss_demo(
         pytest.skip(
             f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
         )
+    if long_context_mode:
+        assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
 
     if os.environ.get("CI", None) and long_context_mode:
         pytest.skip(f"Long-context mode skipped for CI environment.")
