@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <tt_stl/indestructible.hpp>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -12,6 +11,10 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_metal::distributed {
 
@@ -23,11 +26,13 @@ private:
     class Impl;  // Forward declaration only
 
     std::unique_ptr<Impl> pimpl_;
-    SystemMesh();
-
-    friend class tt::stl::Indestructible<SystemMesh>;
 
 public:
+    explicit SystemMesh(const tt::tt_fabric::ControlPlane& control_plane);
+    ~SystemMesh();
+
+    // Convenience accessor — delegates to MetalContext::instance().get_system_mesh().
+    // Retained because MetalContext is not part of the public API.
     static SystemMesh& instance();
     SystemMesh(const SystemMesh&) = delete;
     SystemMesh& operator=(const SystemMesh&) = delete;
