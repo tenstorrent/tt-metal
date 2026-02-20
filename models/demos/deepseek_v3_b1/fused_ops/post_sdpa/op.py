@@ -110,9 +110,7 @@ class PostSDPA:
         residual_tensor_mesh=None,
         fp32_dest_acc_en=False,
         ccl_enabled=True,
-<<<<<<< HEAD
         sdpa_kv_cache_buffer=None,
-=======
         # SDPA Reduce-to-All parameters (optional - when None, SDPA phase is skipped)
         sdpa_input_l_mesh=None,
         sdpa_input_ms_mesh=None,
@@ -124,7 +122,6 @@ class PostSDPA:
         sdpa_scale_fp32=1.0,
         sdpa_forwarder_cores=None,
         sdpa_cluster_axis=0,
->>>>>>> 1d1d93d379 (Fuse sdpa_reduce_to_all with post_sdpa. Test hangs in reduce_to_all phase.)
     ):
         """
         Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
@@ -176,7 +173,9 @@ class PostSDPA:
             output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         if ccl_enabled and residual_tensor_mesh is not None:
             residual_tensors_per_device = ttnn.get_device_tensors(residual_tensor_mesh)
-        sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
+        sdpa_kv_cache_buffers_per_device = (
+            ttnn.get_device_tensors(sdpa_kv_cache_buffer) if sdpa_kv_cache_buffer is not None else None
+        )
 
         # CCL semaphores (only when CCL is enabled)
         if ccl_enabled:
@@ -487,7 +486,11 @@ class PostSDPA:
                 if ccl_enabled:
                     output_tensor_device = output_tensors_per_device[device_idx]
                     intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
-                sdpa_kv_cache_buffer_device = sdpa_kv_cache_buffers_per_device[device_idx]
+                sdpa_kv_cache_buffer_device = (
+                    sdpa_kv_cache_buffers_per_device[device_idx]
+                    if sdpa_kv_cache_buffers_per_device is not None
+                    else None
+                )
 
                 device = input_tensor_device.device()
 
@@ -758,7 +761,7 @@ class PostSDPA:
                 matmul1_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in1_cb, weights1_tensor)
 
                 # CB 2: Matmul1 output (4 tiles of 1x32 per core, 8x8 grid)
-                # Overlap with kv_cache L1 buffer at offset 0. Consumed before CB 4 is written.
+                # When kv_cache buffer is available, overlap into it. Otherwise standalone.
                 matmul1_out_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul1_out_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=matmul1_out_cb,
@@ -766,15 +769,21 @@ class PostSDPA:
                     page_size=tile_1x32_size,
                     tile=matmul1_out_tile_descriptor,
                 )
-                matmul1_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul1_out_cb,
-                    sdpa_kv_cache_buffer_device,
-                    address_offset=running_address_offset,  # 0 B
-                    total_size=matmul1_out_w_per_core * tile_1x32_size,
-                )
-                matmul1_out_cb_descriptor.format_descriptors = [matmul1_out_cb_format]
-
-                running_address_offset += matmul1_out_cb_descriptor.total_size  # +256 B
+                if sdpa_kv_cache_buffer_device is not None:
+                    matmul1_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul1_out_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=matmul1_out_w_per_core * tile_1x32_size,
+                    )
+                    matmul1_out_cb_descriptor.format_descriptors = [matmul1_out_cb_format]
+                    running_address_offset += matmul1_out_cb_descriptor.total_size
+                else:
+                    matmul1_out_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=matmul1_out_w_per_core * tile_1x32_size,
+                        core_ranges=matmul1_core_grid,
+                        format_descriptors=[matmul1_out_cb_format],
+                    )
 
                 # CB 3: Gather1 output = Mcast source (from sharded tensor, gather core)
                 gather1_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -782,7 +791,6 @@ class PostSDPA:
                 )
 
                 # CB 4: Mcast destination = Matmul2 input (256 tiles of 1x32 per core)
-                # Overlap with kv_cache L1 buffer at offset 0 (16384 B).
                 matmul2_in0_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=matmul2_in0_cb,
                     data_format=data_format,
@@ -790,36 +798,47 @@ class PostSDPA:
                     tile=matmul1_out_tile_descriptor,
                 )
                 matmul2_in0_cb_grid = mcast_core_grid.merge(gather_core_grid)
-                matmul2_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul2_in0_cb,
-                    sdpa_kv_cache_buffer_device,
-                    address_offset=running_address_offset,  # 256 B
-                    total_size=mcast_dst_num_pages * tile_1x32_size,
-                )
-                matmul2_in0_cb_descriptor.format_descriptors = [matmul2_in0_cb_format]
-
-                running_address_offset += matmul2_in0_cb_descriptor.total_size  # +16384 B
+                if sdpa_kv_cache_buffer_device is not None:
+                    matmul2_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul2_in0_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=mcast_dst_num_pages * tile_1x32_size,
+                    )
+                    matmul2_in0_cb_descriptor.format_descriptors = [matmul2_in0_cb_format]
+                    running_address_offset += matmul2_in0_cb_descriptor.total_size
+                else:
+                    matmul2_in0_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=mcast_dst_num_pages * tile_1x32_size,
+                        core_ranges=matmul2_in0_cb_grid,
+                        format_descriptors=[matmul2_in0_cb_format],
+                    )
 
                 # CB 5: Matmul2 weights (from sharded tensor, 112 active matmul2 cores)
                 matmul2_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul2_in1_cb, weights2_tensor)
 
                 # CB 6: Matmul2 output (2 tiles of 1x32 per core, 112 active matmul2 cores)
-                # Overlap with kv_cache L1 buffer at offset 16384 (128 B).
                 matmul2_out_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=matmul2_out_cb,
                     data_format=data_format,
                     page_size=tile_1x32_size,
                     tile=matmul1_out_tile_descriptor,
                 )
-                matmul2_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul2_out_cb,
-                    sdpa_kv_cache_buffer_device,
-                    address_offset=running_address_offset,  # 16640 B
-                    total_size=matmul2_out_w_per_core * tile_1x32_size,
-                )
-                matmul2_out_cb_descriptor.format_descriptors = [matmul2_out_cb_format]
-
-                running_address_offset += matmul2_out_cb_descriptor.total_size  # +128 B
+                if sdpa_kv_cache_buffer_device is not None:
+                    matmul2_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul2_out_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=matmul2_out_w_per_core * tile_1x32_size,
+                    )
+                    matmul2_out_cb_descriptor.format_descriptors = [matmul2_out_cb_format]
+                    running_address_offset += matmul2_out_cb_descriptor.total_size
+                else:
+                    matmul2_out_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=matmul2_out_w_per_core * tile_1x32_size,
+                        core_ranges=matmul2_active_core_grid,
+                        format_descriptors=[matmul2_out_cb_format],
+                    )
 
                 # CB 7: Gather2 output = CCL local data (backed by tensor on gather core)
                 # CCL sender reads from this tensor via NOC, not from local CB
@@ -847,16 +866,22 @@ class PostSDPA:
                         page_size=tile_1x32_size,
                         tile=matmul1_out_tile_descriptor,
                     )
-                    ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        ccl_sender_in_cb,
-                        sdpa_kv_cache_buffer_device,
-                        address_offset=running_address_offset,  # 16768 B
-                        total_size=ccl_num_pages * tile_1x32_size,
-                    )
-                    ccl_sender_in_cb_descriptor.format_descriptors = [ccl_sender_in_cb_format]
+                    if sdpa_kv_cache_buffer_device is not None:
+                        ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            ccl_sender_in_cb,
+                            sdpa_kv_cache_buffer_device,
+                            address_offset=running_address_offset,
+                            total_size=ccl_num_pages * tile_1x32_size,
+                        )
+                        ccl_sender_in_cb_descriptor.format_descriptors = [ccl_sender_in_cb_format]
+                        running_address_offset += ccl_sender_in_cb_descriptor.total_size
+                    else:
+                        ccl_sender_in_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=ccl_num_pages * tile_1x32_size,
+                            core_ranges=ccl_sender_core_grid,
+                            format_descriptors=[ccl_sender_in_cb_format],
+                        )
                     cb_list.append(ccl_sender_in_cb_descriptor)
-
-                    running_address_offset += ccl_sender_in_cb_descriptor.total_size  # +14336 B
 
                     # CB 9: CCL remote data (backed by intermediate tensor with 1x32 tiles)
                     # The intermediate tensor is where the CCL sender writes remote data
@@ -890,15 +915,22 @@ class PostSDPA:
                             page_size=tile_1x32_size,
                             tile=matmul1_out_tile_descriptor,
                         )
-                        ccl_temp_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                            ccl_temp_cb,
-                            sdpa_kv_cache_buffer_device,
-                            address_offset=running_address_offset,  # 31104 B
-                            total_size=ccl_num_tiles * tile_1x32_size,
-                        )
-                        ccl_temp_cb_descriptor.format_descriptors = [ccl_temp_cb_format]
+                        if sdpa_kv_cache_buffer_device is not None:
+                            ccl_temp_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                                ccl_temp_cb,
+                                sdpa_kv_cache_buffer_device,
+                                address_offset=running_address_offset,
+                                total_size=ccl_num_tiles * tile_1x32_size,
+                            )
+                            ccl_temp_cb_descriptor.format_descriptors = [ccl_temp_cb_format]
+                            running_address_offset += ccl_temp_cb_descriptor.total_size
+                        else:
+                            ccl_temp_cb_descriptor = ttnn.CBDescriptor(
+                                total_size=ccl_num_tiles * tile_1x32_size,
+                                core_ranges=gather_core_grid,
+                                format_descriptors=[ccl_temp_cb_format],
+                            )
                         cb_list.append(ccl_temp_cb_descriptor)
-                        running_address_offset += ccl_temp_cb_descriptor.total_size  # +14336 B
 
                     # CB 12: CCL output (from sharded tensor)
                     ccl_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -913,18 +945,22 @@ class PostSDPA:
                         data_format=ttnn.uint32,
                         page_size=ccl_packet_header_size_bytes,
                     )
-                    ccl_packet_header_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        ccl_packet_header_cb,
-                        sdpa_kv_cache_buffer_device,
-                        address_offset=running_address_offset,  # 45440 B
-                        total_size=2 * ccl_packet_header_size_bytes,
-                    )
-                    ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
+                    if sdpa_kv_cache_buffer_device is not None:
+                        ccl_packet_header_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            ccl_packet_header_cb,
+                            sdpa_kv_cache_buffer_device,
+                            address_offset=running_address_offset,
+                            total_size=2 * ccl_packet_header_size_bytes,
+                        )
+                        ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
+                        running_address_offset += ccl_packet_header_cb_descriptor.total_size
+                    else:
+                        ccl_packet_header_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=2 * ccl_packet_header_size_bytes,
+                            core_ranges=gather_core_grid.merge(ccl_sender_core_grid),
+                            format_descriptors=[ccl_packet_header_cb_format],
+                        )
                     cb_list.append(ccl_packet_header_cb_descriptor)
-
-<<<<<<< HEAD
-                    running_address_offset += ccl_packet_header_cb_descriptor.total_size  # +64 B
-=======
                 # SDPA CBs (14-24): only when SDPA is enabled
                 if sdpa_enabled:
                     # Get per-device SDPA tensors
@@ -1056,7 +1092,6 @@ class PostSDPA:
                         format_descriptors=[sdpa_packet_slot_cb_format],
                     )
                     cb_list.append(sdpa_packet_slot_cb_descriptor)
->>>>>>> 1d1d93d379 (Fuse sdpa_reduce_to_all with post_sdpa. Test hangs in reduce_to_all phase.)
 
                 # ========================================================================
                 # Semaphore descriptors
@@ -1584,9 +1619,8 @@ class PostSDPA:
             io_tensors.append(output_tensor)
         if ccl_enabled and residual_tensor_mesh is not None:
             io_tensors.append(residual_tensor_mesh)
-<<<<<<< HEAD
-        io_tensors.append(sdpa_kv_cache_buffer)
-=======
+        if sdpa_kv_cache_buffer is not None:
+            io_tensors.append(sdpa_kv_cache_buffer)
         if sdpa_enabled:
             io_tensors.extend(
                 [
@@ -1598,7 +1632,6 @@ class PostSDPA:
                     sdpa_forwarder_scratch_mesh,
                 ]
             )
->>>>>>> 1d1d93d379 (Fuse sdpa_reduce_to_all with post_sdpa. Test hangs in reduce_to_all phase.)
 
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
