@@ -9,7 +9,7 @@ import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.run_config import trace_enabled, trace_disabled
 
 
 @trace_enabled
@@ -176,6 +176,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         return tt_output
 
 
+@trace_disabled
 class TTNNLinearLLama(TTNNLinear):
     """TTNN Linear layer optimized for LLaMA models using bfloat8."""
 
@@ -192,6 +193,7 @@ class TTNNLinearLLama(TTNNLinear):
         return super().forward(input_tensor)
 
 
+@trace_disabled
 class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
     """TTNN Linear layer optimized for LLaMA models using bfloat8."""
 
@@ -274,6 +276,7 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         return tt_output
 
 
+@trace_disabled
 class TTNNLinearLLamaBFloat16(TTNNLinear):
     """TTNN Linear layer optimized for LLaMA models using bfloat16."""
 
