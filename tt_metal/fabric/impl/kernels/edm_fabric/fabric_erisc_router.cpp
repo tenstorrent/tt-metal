@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
 #include "internal/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -2117,6 +2118,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
+    [[maybe_unused]] uint32_t link_health_outer_loop_counter = 0;
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
@@ -2355,6 +2357,34 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         routing_table,
                         local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
+                }
+            }
+
+            // Link health probe: every LINK_HEALTH_CHECK_OUTER_LOOP_PERIOD outer loop iterations,
+            // erisc0 sends its local counter to the remote peer's scratch register and reads
+            // back the remote peer's counter from its own local scratch register.
+            if constexpr (MY_ERISC_ID == 0 && LINK_HEALTH_TELEMETRY_ENABLED) {
+                link_health_outer_loop_counter++;
+                if ((link_health_outer_loop_counter & (LINK_HEALTH_CHECK_OUTER_LOOP_PERIOD - 1)) == 0) {
+                    // Best-effort write: skip if TXQ is busy (packet send in progress).
+                    // A missed ping is not an error; next window will retry.
+                    size_t count = 0;
+                    while (count < 1000 && internal_::eth_txq_is_busy(sender_txq_id)) {
+                        // need to make sure we don't get stuck here from filling up the txq
+                        // from previous writes submitted during downed link
+                        count++;
+                    }
+
+                    const uint32_t remote_reg_addr = get_stream_scratch_register_address(link_health_overlay_stream_id);
+                    internal_::eth_write_remote_reg_no_txq_check(
+                        sender_txq_id, remote_reg_addr, link_health_outer_loop_counter);
+
+                    // Read the local copy — contains the last value written by the remote peer.
+                    const uint32_t remote_peer_counter = read_stream_scratch_register(link_health_overlay_stream_id);
+                    // Push to watcher ring buffer: [0] local counter, [1] remote peer's counter.
+                    WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
+                    WATCHER_RING_BUFFER_PUSH(link_health_outer_loop_counter);
+                    WATCHER_RING_BUFFER_PUSH(remote_peer_counter);
                 }
             }
 

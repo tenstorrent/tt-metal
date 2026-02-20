@@ -164,6 +164,10 @@ struct StreamRegAssignments {
     // overlay scratch register
     static constexpr uint32_t eth_retrain_link_sync_stream_id = 30;
 
+    // Link health probe stream ID — used for scratch register read/write only
+    // Not included in get_all_stream_ids() (not part of the packet send/ack/complete protocol)
+    static constexpr uint32_t link_health_overlay_stream_id = 3;
+
     static const auto& get_all_stream_ids() {
         static constexpr std::array stream_ids = {
             to_receiver_0_pkts_sent_id,
@@ -355,6 +359,8 @@ struct FabricRiscConfig {
     void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
     uint8_t telemetry_stats_mask() const { return telemetry_stats_mask_; }
     void set_telemetry_stats_mask(uint8_t mask) { telemetry_stats_mask_ = mask; }
+    uint8_t link_health_overlay_stream_id() const { return link_health_overlay_stream_id_; }
+    void set_link_health_overlay_stream_id(uint8_t stream_id) { link_health_overlay_stream_id_ = stream_id; }
 
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
@@ -364,6 +370,7 @@ private:
     bool enable_interrupts_ = false;
     bool telemetry_enabled_ = true;
     uint8_t telemetry_stats_mask_ = 0xFF;
+    uint8_t link_health_overlay_stream_id_ = 0xFF;  // 0xFF = disabled
 };
 
 struct edm_termination_info_t {
@@ -529,6 +536,11 @@ public:
     void set_firmware_context_switch_interval(size_t interval);
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
     void set_wait_for_host_signal(bool wait_for_host_signal);
+    void set_link_health_overlay_stream_id(uint8_t stream_id) {
+        TT_ASSERT(!config.risc_configs.empty());
+        config.risc_configs[0].set_link_health_overlay_stream_id(stream_id);
+        // erisc1 (risc_id=1) remains 0xFF (disabled)
+    }
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 

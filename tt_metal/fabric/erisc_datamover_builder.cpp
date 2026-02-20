@@ -868,6 +868,9 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
         ct_args.push_back(0);  // No timers enabled
         ct_args.push_back(0);  // No buffer address
     }
+
+    // Link health overlay stream ID (0xFF = disabled)
+    ct_args.push_back(static_cast<uint32_t>(risc_config.link_health_overlay_stream_id()));
 }
 
 /*
