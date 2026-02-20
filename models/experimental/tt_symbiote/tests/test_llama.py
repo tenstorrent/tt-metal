@@ -119,5 +119,5 @@ def test_llama_intelligent(device):
     torch.set_grad_enabled(False)  # Disables autograd overhead
     DispatchManager.clear_timings()
     outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
-    DispatchManager.save_stats_to_file("llama_intelligent_timing_stats_3.csv")
+    DispatchManager.save_stats_to_file("llama_intelligent_timing_stats.csv")
     print(tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :]))
