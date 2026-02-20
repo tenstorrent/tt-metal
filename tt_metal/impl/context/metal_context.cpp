@@ -296,13 +296,6 @@ void MetalContext::initialize(
         }
     }
 
-    // Populate FD topology across all devices
-    if (rtoptions_.get_fast_dispatch()) {
-        std::set<ChipId> all_devices_set(all_devices.begin(), all_devices.end());
-        // TODO: enable this when dispatch init/teardown moves to MetalContext
-        // populate_fd_kernels(all_devices_set, num_hw_cqs);
-    }
-
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
@@ -562,9 +555,9 @@ void MetalContext::teardown_dispatch_state() {
             mem_map.reset();
         }
     }
+    device_manager_->reset_dispatch_topology();
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
-    tt::tt_metal::reset_topology_state();
 }
 
 void MetalContext::initialize_base_objects() {
@@ -951,7 +944,7 @@ tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabr
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
 std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
-    int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) const {
+    int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
     return std::make_shared<ContextDescriptor>(
         *hal_,
         *cluster_,
@@ -1149,8 +1142,12 @@ void MetalContext::reset_cores(ChipId device_id) {
 }
 
 void MetalContext::assert_cores(ChipId device_id) {
-    auto dispatch_cores = get_virtual_dispatch_cores(device_id);
-    auto routing_cores = get_virtual_dispatch_routing_cores(device_id);
+    std::unordered_set<CoreCoord> dispatch_cores;
+    std::unordered_set<CoreCoord> routing_cores;
+    if (device_manager_) {
+        dispatch_cores = device_manager_->get_virtual_dispatch_cores(device_id);
+        routing_cores = device_manager_->get_virtual_dispatch_routing_cores(device_id);
+    }
 
     // Assert riscs on Tensix
     CoreCoord grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
