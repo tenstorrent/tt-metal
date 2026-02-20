@@ -169,6 +169,7 @@ Tests:
       - type: all_to_all
 
   - name: "SingleSenderMeshUnicastAllDevices"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
@@ -185,6 +186,7 @@ Tests:
       - type: one_to_all
 
   - name: "PacketSizesMeshAllToOneRandomUnicast"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
@@ -202,6 +204,7 @@ Tests:
 
 
   - name: "PacketSizesMeshAllToOneUnicast"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 

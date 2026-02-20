@@ -569,6 +569,7 @@ Tests:
 
     patterns:
       - type: sequential_neighbor_exchange
+
   - name: "SimpleNOCSelect"
     fabric_setup:
       topology: Linear

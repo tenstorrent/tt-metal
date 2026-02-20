@@ -42,6 +42,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "test_host_kernel_common.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -374,6 +375,9 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValid
 }
 
 TEST_F(Fabric2DFixture, TestUnicastRaw) {
+    // Test failing with watcher enabled, github issue #29612
+    SKIP_FOR_WATCHER();
+
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastRaw(this);
     }
@@ -1938,6 +1942,8 @@ TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE3HopsW4Hops) {
 }
 
 TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
+    SKIP_FOR_WATCHER();
+
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }

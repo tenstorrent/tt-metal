@@ -56,4 +56,15 @@ inline std::string get_umd_arch_name() {
 
 }
 
+inline bool is_watcher_enabled() {
+    return tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
+}
+
 }  // namespace tt::test_utils
+
+#define SKIP_FOR_WATCHER()                                                  \
+    do {                                                                    \
+        if (::tt::test_utils::is_watcher_enabled()) {                       \
+            GTEST_SKIP() << "Test is skipped when watcher is enabled";      \
+        }                                                                   \
+    } while (0)
