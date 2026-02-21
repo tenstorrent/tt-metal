@@ -131,6 +131,7 @@ def test_sub_devices(device):
     run_sub_devices(device)
 
 
+@pytest.mark.skip(reason="Device communication issue: Read unexpected run_mailbox value")
 def test_sub_devices_mesh(mesh_device):
     run_sub_devices(mesh_device)
 
