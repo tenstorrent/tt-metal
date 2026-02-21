@@ -304,7 +304,8 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
     "b, nh, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
-    [(1, 1, 4 * 32, 32, 32, 32)],
+    #    [(1, 1, 4 * 32, 32, 32, 32)],
+    [(1, 1, 4 * 64, 32, 32, 32)],
     ids=["deepseek_v3_prefill"],
 )
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])

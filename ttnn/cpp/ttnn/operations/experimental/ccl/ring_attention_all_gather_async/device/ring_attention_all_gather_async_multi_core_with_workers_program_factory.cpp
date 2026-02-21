@@ -5,6 +5,7 @@
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include <algorithm>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -249,9 +250,6 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // Tensor Info
     /// needs fixing
-    const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
-    const auto input_tensor_shape = input_tensor[0].padded_shape();
-    const auto output_tensor_shape = output_tensor[0].padded_shape();
     const uint32_t num_inputs = input_tensor.size();
 
     uint32_t tiles_to_write_per_packet = 1;
@@ -402,35 +400,56 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Kernel Runtime Args
     uint32_t reader_sender_rt_offset = 0;
     uint32_t writer_sender_rt_offset = 0;
+    // log_info(tt::LogOp, "Input tensor num pages: {}", input_tensor_num_pages);
     for (uint32_t link = 0; link < num_links; link++) {
         // Set Sender Reader runtime args
-        const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+        // Needs fixing for MLA take a look at this!
 
-        uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-        const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
-        const uint32_t remainder = single_batch_head_num_pages % num_links;
-        const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
-        const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
+        std::vector<uint32_t> tensor_descriptor_args;
+        for (uint32_t i = 0; i < num_inputs; i++) {
+            const auto input_tensor_num_pages = input_tensor[i].buffer()->num_pages();
+            const auto input_tensor_shape = input_tensor[i].padded_shape();
+            const auto output_tensor_shape = output_tensor[i].padded_shape();
+            const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
-        TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
-        TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
-        const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-        const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
-        const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
-        const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+            const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
+            const uint32_t remainder = single_batch_head_num_pages % num_links;
+            const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
+            const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
+
+            const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
+            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
+            TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
+
+            tensor_descriptor_args.push_back(input_tensor_Wt);      // 0 == input_tensor_Wt
+            tensor_descriptor_args.push_back(input_tensor_Ht);      // 1 == input_tensor_Ht
+            tensor_descriptor_args.push_back(output_tensor_Wt);     // 2 == output_tensor_Wt
+            tensor_descriptor_args.push_back(output_tensor_Ht);     // 3 == output_tensor_Ht
+            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size
+            tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
+            tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
+        }
+
+        // log_info(tt::LogOp, "Link: {} input_tile_id_start: {} input_tile_id_end: {}", link, input_tile_id_start,
+        // input_tile_id_end);
+
+        // const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+        // const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+        // const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
+        // const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
 
         std::vector<uint32_t> reader_forward_rt_args = {
-            input_tensor_Wt,            // width in tiles of the input shard
-            input_tensor_Ht,            // height in tiles of the input shard
-            output_tensor_Wt,           // width in tiles of the entire output
-            output_tensor_Ht,           // height in tiles of the entire output
             dim,                        // dim to gather on
-            batch_head_size,            // product of the first two dims
-            input_tile_id_start,        //
-            input_tile_id_end,          // slice_num_pages
             ring_size,                  // ring_size
             semaphore.at(1).address(),  // out_ready_semaphore_backward
         };
+        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
+            reader_forward_rt_args.push_back(tensor_descriptor_args[i]);
+        }
         reader_sender_rt_offset = reader_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
@@ -448,17 +467,13 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_forward_rt_args);
 
         std::vector<uint32_t> reader_backward_rt_args = {
-            input_tensor_Wt,            // width in tiles of the input shard
-            input_tensor_Ht,            // height in tiles of the input shard
-            output_tensor_Wt,           // width in tiles of the entire output
-            output_tensor_Ht,           // height in tiles of the entire output
             dim,                        // dim to gather on
-            batch_head_size,            // product of the first two dims
-            input_tile_id_start,        // slice_num_pages
-            input_tile_id_end,          // slice_num_pages
             ring_size,                  // ring_size
             semaphore.at(0).address(),  // out_ready_semaphore_backward
         };
+        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
+            reader_backward_rt_args.push_back(tensor_descriptor_args[i]);
+        }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
         }
@@ -478,19 +493,15 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
         // Writer
         std::vector<uint32_t> writer_forward_rt_args = {
-            input_tensor_Wt,               // width in tiles of the input shard
-            input_tensor_Ht,               // height in tiles of the input shard
-            output_tensor_Wt,              // width in tiles of entire output
-            output_tensor_Ht,              // height in tiles of entire output
             dim,                           // dim to gather on
-            batch_head_size,               // product of the first two dims
-            input_tile_id_start,           //
-            input_tile_id_end,             //
             sender_forward_worker_core.x,  // out_ready_sem_noc0_x
             sender_forward_worker_core.y,  // out_ready_sem_noc0_y
             ring_size,                     // ring_size
             semaphore.at(1).address()      // out_ready_semaphore_backward
         };
+        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
+            writer_forward_rt_args.push_back(tensor_descriptor_args[i]);
+        }
         writer_sender_rt_offset = writer_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
@@ -519,19 +530,15 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
-            input_tensor_Wt,                // width in tiles of the input shard
-            input_tensor_Ht,                // height in tiles of the input shard
-            output_tensor_Wt,               // width in tiles of entire output
-            output_tensor_Ht,               // height in tiles of entire output
             dim,                            // dim to gather on
-            batch_head_size,                // product of the first two dims
-            input_tile_id_start,            //
-            input_tile_id_end,              //
             sender_backward_worker_core.x,  // out_ready_sem_noc0_x
             sender_backward_worker_core.y,  // out_ready_sem_noc0_y
             ring_size,                      // ring_size
             semaphore.at(0).address()       // out_ready_semaphore_backward
         };
+        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
+            writer_backward_rt_args.push_back(tensor_descriptor_args[i]);
+        }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }

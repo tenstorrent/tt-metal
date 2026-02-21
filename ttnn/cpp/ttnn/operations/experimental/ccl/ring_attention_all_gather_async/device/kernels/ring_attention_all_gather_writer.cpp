@@ -43,18 +43,22 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
     uint32_t arg_idx = 0;
-    uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    // uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tensor_descriptor_args_offset = arg_idx;
+    constexpr uint32_t num_properties_per_input_tensor = 7;
+    // now follows num_inputs * num_properties_per_input_tensor properties
+    arg_idx += num_inputs * num_properties_per_input_tensor;
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx, page_size_base_idx);
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
@@ -93,7 +97,6 @@ void kernel_main() {
     uint32_t slice_writes = 0;
 
     uint32_t row_offset = 0;
-    uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         /**
          * Write out the local slice to forward and backward devices
@@ -102,11 +105,34 @@ void kernel_main() {
          * when accessing the local slice. This is a performance optimization
          * to remove startup latency from the fused op.
          */
+
+        // tensor_descriptor_args.push_back(input_tensor_Wt); // 0 == input_tensor_Wt
+        // tensor_descriptor_args.push_back(input_tensor_Ht); // 1 == input_tensor_Ht
+        // tensor_descriptor_args.push_back(output_tensor_Wt); // 2 == output_tensor_Wt
+        // tensor_descriptor_args.push_back(output_tensor_Ht); // 3 == output_tensor_Ht
+        // tensor_descriptor_args.push_back(batch_head_size); // 4 == batch_head_size
+        // tensor_descriptor_args.push_back(input_tile_id_start); // 5 == input_tile_id_start
+        // tensor_descriptor_args.push_back(input_tile_id_end); // 6 == input_tile_id_end
+        uint32_t input_tensor_Wt =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor);
+        uint32_t input_tensor_Ht =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 1);
+        uint32_t output_tensor_Wt =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 2);
+        uint32_t output_tensor_Ht =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 3);
+        uint32_t input_batch_head_count =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 4);
+        uint32_t input_tile_id_start =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 5);
+        uint32_t input_tile_id_end =
+            get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 6);
+
+        uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
         uint32_t pages_read_in_row = input_tile_id_start % input_tensor_Wt;
         uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
         uint32_t tiles_read = input_tile_id_start;
         uint32_t tiles_to_read = input_tile_id_end;
-        uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
         if (gather_dim == 3) {
             tile_id_start = my_chip_id * input_tensor_Wt;
         } else {
@@ -239,6 +265,21 @@ void kernel_main() {
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            uint32_t input_tensor_Wt =
+                get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor);
+            uint32_t input_tensor_Ht =
+                get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 1);
+            uint32_t output_tensor_Wt =
+                get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 2);
+            uint32_t output_tensor_Ht =
+                get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 3);
+            uint32_t input_batch_head_count =
+                get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 4);
+            uint32_t input_tile_id_start =
+                get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 5);
+            uint32_t input_tile_id_end =
+                get_arg_val<uint32_t>(tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor + 6);
+
             uint32_t tiles_read = input_tile_id_start;
             uint32_t tiles_to_read = input_tile_id_end;
             uint32_t tile_id_start = actual_slice_chip_id * input_tensor_Wt;
