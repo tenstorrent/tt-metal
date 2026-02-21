@@ -151,6 +151,11 @@ public:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
+    ValidGroupingsMap get_valid_groupings_for_mgd(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
@@ -163,6 +168,10 @@ public:
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
+
+    // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
+    std::vector<GroupingInfo> build_flattened_adjacency_mesh(
+        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
 private:
     // Data members
@@ -193,6 +202,15 @@ private:
 
     // Helper to get ASIC count for a grouping name (from cache)
     uint32_t get_grouping_asic_count(const std::string& grouping_name) const;
+
+    // Private helper that takes PSD pointer (used internally by public overloads)
+    ValidGroupingsMap get_valid_groupings_for_mgd(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
+
+    // Private helper that takes PSD pointer (used internally by public overloads)
+    std::vector<GroupingInfo> build_flattened_adjacency_mesh(
+        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
 
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
