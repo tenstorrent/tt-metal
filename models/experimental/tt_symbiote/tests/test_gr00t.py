@@ -32,6 +32,10 @@ from models.experimental.tt_symbiote.core.run_config import DispatchManager
 
 try:
     from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
+
+    from utils.groot_utils import apply_gr00t_dit_attention_return_compat
+
+    apply_gr00t_dit_attention_return_compat()
 except Exception:
     _groot_dir = PROJECT_ROOT / "groot"
     if not _groot_dir.exists():
@@ -64,6 +68,10 @@ except Exception:
             )
             print(f"Error: {_e}")
             exit(1)
+
+    from utils.groot_utils import apply_gr00t_dit_attention_return_compat
+
+    apply_gr00t_dit_attention_return_compat()
 
 
 def _patched_beta_sample(self, sample_shape=torch.Size()):
