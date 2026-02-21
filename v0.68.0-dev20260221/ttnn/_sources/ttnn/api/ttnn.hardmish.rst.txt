@@ -1,0 +1,8 @@
+﻿ttnn.hardmish
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.hardmish:
+
+.. autooperation:: ttnn.hardmish
