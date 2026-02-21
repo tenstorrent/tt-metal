@@ -58,20 +58,6 @@ void kernel_main() {
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address, stick_size);
 
-    // NOTE: Do NOT initialize out_ready_sem here. out_ready_sem is a GlobalSemaphore
-    // (host-initialized to 0 before each dispatch). The neighbor's writer can send a
-    // fabric semaphore increment before this kernel starts. Initializing here would
-    // overwrite that valid increment and cause incorrect behavior.
-    // The semaphore is reset after use (in the !is_first_chip block below).
-
-    DPRINT << "H Reader: is_first=" << (uint32_t)is_first_chip << " is_last=" << (uint32_t)is_last_chip
-           << " dir=" << (uint32_t)direction << " od=" << outer_dim_size << " pad=" << padding
-           << " nsr=" << num_sticks_to_read << " l1_int=" << (uint32_t)use_l1_intermediate << ENDL();
-    if constexpr (!is_first_chip) {
-        DPRINT << "H Reader: out_ready_sem addr=0x" << HEX() << (uint32_t)out_ready_sem << DEC()
-               << " val=" << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) << ENDL();
-    }
-
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
         if (is_first_chip) {
@@ -141,8 +127,6 @@ void kernel_main() {
             // Push it into CB for the paired writer to write to output DRAM + W boundary L1.
             uint32_t recv_buf_addr = get_write_ptr(recv_cb_id);
             uint32_t buf_offset = 0;  // Accumulates across all outer_dims (no L1 reuse)
-            DPRINT << "H Reader: entering fabric recv, recv_buf=0x" << HEX() << recv_buf_addr << DEC()
-                   << " sem_val=" << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) << ENDL();
 
             for (uint32_t od = 0; od < outer_dim_size; od++) {
                 // Wait for this outer_dim's data using cumulative count.

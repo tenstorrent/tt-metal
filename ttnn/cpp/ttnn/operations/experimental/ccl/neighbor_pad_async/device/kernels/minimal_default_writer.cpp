@@ -130,12 +130,6 @@ void kernel_main() {
 
     fabric_connection.open();
 
-    // NOTE: Do NOT initialize barrier_sem here. The fabric pair barrier_sem_inc is
-    // sent as the writer's first action and can arrive at the neighbor device before
-    // the neighbor's kernel starts. Initializing here would overwrite a valid increment
-    // and cause a hang. The barrier_sem is a GlobalSemaphore (host-initialized to 0)
-    // and is reset at the end of this block after the wait.
-
     // Barrier semaphore
     if (use_barrier_sem) {
         auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();

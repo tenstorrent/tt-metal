@@ -10,8 +10,7 @@
 // Boundary buffer layout per row: [left_0..left_{p-1}, right_0..right_{p-1}]
 // where left = leftmost p interior sticks, right = rightmost p interior sticks.
 //
-// This kernel ONLY reads. All DRAM writes are handled by the paired writer
-// (minimal_default_writer on the same core's BRISC).
+// DRAM writes are handled by the paired writer (minimal_default_writer).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
@@ -56,25 +55,12 @@ void kernel_main() {
 
     const uint32_t row_stride = boundary_sticks_per_row * stick_size;
 
-    DPRINT << "W Reader: is_first=" << (uint32_t)is_first_chip << " is_last=" << (uint32_t)is_last_chip
-           << " dir=" << (uint32_t)direction << " od=" << outer_dim_size << " pad=" << padding
-           << " bc=" << barrier_count << ENDL();
-    DPRINT << "W Reader: barrier_sem addr=0x" << HEX() << barrier_sem_addr << DEC()
-           << " val=" << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr) << ENDL();
-    if constexpr (!is_first_chip) {
-        DPRINT << "W Reader: final_sem addr=0x" << HEX() << final_sem_addr << DEC()
-               << " val=" << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_sem_addr) << ENDL();
-    }
-    DPRINT << "W Reader: boundary_buf=0x" << HEX() << boundary_buf_addr << DEC() << " row_stride=" << row_stride
-           << ENDL();
-
     // barrier_sem is a CreateSemaphore (initialized to 0 at program dispatch). No kernel-side init needed.
     // Wait for Phase 1 to complete.
     if (barrier_count > 0) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
     }
-    DPRINT << "W Reader: barrier passed" << ENDL();
 
     // Main loop: read boundary sticks from local L1 → CB for the paired writer.
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
