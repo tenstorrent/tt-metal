@@ -23,12 +23,10 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datatypes_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/loopback)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/matmul)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sdpa_single_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/NoC_tile_transfer)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sdpa_single_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpu_eltwise_chain)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_add)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_smoothstep)
@@ -51,7 +49,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
-        sdpa_single_core
         shard_data_rm
         NoC_tile_transfer
         sfpu_eltwise_chain
@@ -80,7 +77,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
-        sdpa_single_core
         shard_data_rm
         NoC_tile_transfer
         sfpu_eltwise_chain
