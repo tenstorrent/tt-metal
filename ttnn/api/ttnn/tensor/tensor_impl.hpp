@@ -159,6 +159,12 @@ HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
 HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
 
 // ======================================================================================
+//                                  .to_dtype()
+// ======================================================================================
+
+HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
+
+// ======================================================================================
 //                                 Runtime Tensor Creation Functions
 // ======================================================================================
 
@@ -170,9 +176,6 @@ tt::tt_metal::DeviceTensor allocate_tensor_on_device(
 // ======================================================================================
 //                                  HostTensor Factory Functions
 // ======================================================================================
-
-// Forward declaration for use in host_tensor::from_vector
-HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
 namespace host_tensor {
 
@@ -255,8 +258,6 @@ extern PrintOptions TTNN_PRINT_OPTIONS;
 std::string to_string(const Tensor& tensor);
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
-
-HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
 // Utility to convert runtime DataType to compile-time constant and dispatch the function call
 template <typename Func, typename... Args>
