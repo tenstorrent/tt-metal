@@ -426,81 +426,83 @@ template <typename T>
 Tensor to_layout_impl(const Tensor& tensor, Layout target_layout);
 
 template <typename T>
-std::string to_string_impl(const Tensor& tensor) {
-    const auto& shape = tensor.logical_shape();
+std::string to_string_impl([[maybe_unused]] const Tensor& tensor) {
+    // const auto& shape = tensor.logical_shape();
 
-    if (!tensor.is_allocated()) {
-        return fmt::format(
-            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
-            detail::TENSOR_TYPE_STRING,
-            shape,
-            tensor.dtype(),
-            tensor.layout());
-    }
+    // if (!tensor.is_allocated()) {
+    //     return fmt::format(
+    //         "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+    //         detail::TENSOR_TYPE_STRING,
+    //         shape,
+    //         tensor.dtype(),
+    //         tensor.layout());
+    // }
 
-    auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
-        if (tensor.layout() == Layout::ROW_MAJOR) {
-            return tensor;
-        }
-        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
-        }
-        return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
-    };
+    // auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
+    //     if (tensor.layout() == Layout::ROW_MAJOR) {
+    //         return tensor;
+    //     }
+    //     if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
+    //         return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+    //     }
+    //     return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
+    // };
 
-    auto get_device_buffers = [&](const HostStorage& storage) {
-        std::vector<HostBuffer> buffers;
-        storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
-        return buffers;
-    };
+    // auto get_device_buffers = [&](const HostStorage& storage) {
+    //     std::vector<HostBuffer> buffers;
+    //     storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
+    //     return buffers;
+    // };
 
-    return std::visit(
-        tt::stl::overloaded{
-            [&](const HostStorage& /*storage*/) -> std::string {
-                const Tensor row_major_tensor = get_row_major_tensor(tensor);
-                const auto strides = row_major_tensor.tensor_spec().compute_strides();
-                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
-                std::stringstream ss;
-                for (size_t i = 0; i < buffers.size(); i++) {
-                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
-                    if (i + 1 != buffers.size()) {
-                        ss << std::endl;
-                    }
-                }
-                return ss.str();
-            },
-            [&](const DeviceStorage& storage) -> std::string {
-                auto cpu_tensor = tensor.cpu();
-                if (storage.mesh_buffer == nullptr) {
-                    // Use owned buffer path above.
-                    return to_string_impl<T>(cpu_tensor);
-                }
+    // return std::visit(
+    //     tt::stl::overloaded{
+    //         [&](const HostStorage& /*storage*/) -> std::string {
+    //             const Tensor row_major_tensor = get_row_major_tensor(tensor);
+    //             const auto strides = row_major_tensor.tensor_spec().compute_strides();
+    //             const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
+    //             std::stringstream ss;
+    //             for (size_t i = 0; i < buffers.size(); i++) {
+    //                 detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+    //                 if (i + 1 != buffers.size()) {
+    //                     ss << std::endl;
+    //                 }
+    //             }
+    //             return ss.str();
+    //         },
+    //         [&](const DeviceStorage& storage) -> std::string {
+    //             auto cpu_tensor = tensor.cpu();
+    //             if (storage.mesh_buffer == nullptr) {
+    //                 // Use owned buffer path above.
+    //                 return to_string_impl<T>(cpu_tensor);
+    //             }
 
-                auto* mesh_device = storage.mesh_buffer->device();
-                // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
-                // if (mesh_device->num_devices() == 1) {
-                //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
-                // }
+    //             auto* mesh_device = storage.mesh_buffer->device();
+    //             // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
+    //             // if (mesh_device->num_devices() == 1) {
+    //             //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+    //             // }
 
-                const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
-                const auto strides = row_major_tensor.tensor_spec().compute_strides();
-                const auto& coords = storage.coords;
-                auto coords_it = coords.begin();
-                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
-                std::stringstream ss;
-                for (size_t i = 0; i < buffers.size(); i++) {
-                    const distributed::MeshCoordinate coord = *coords_it++;
-                    if (mesh_device->is_local(coord)) {
-                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
-                        detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
-                    }
-                    if (i + 1 != buffers.size()) {
-                        ss << std::endl;
-                    }
-                }
-                return ss.str();
-            }},
-        tensor.storage());
+    //             const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
+    //             const auto strides = row_major_tensor.tensor_spec().compute_strides();
+    //             const auto& coords = storage.coords;
+    //             auto coords_it = coords.begin();
+    //             const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
+    //             std::stringstream ss;
+    //             for (size_t i = 0; i < buffers.size(); i++) {
+    //                 const distributed::MeshCoordinate coord = *coords_it++;
+    //                 if (mesh_device->is_local(coord)) {
+    //                     ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+    //                     detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(),
+    //                     tensor.layout());
+    //                 }
+    //                 if (i + 1 != buffers.size()) {
+    //                     ss << std::endl;
+    //                 }
+    //             }
+    //             return ss.str();
+    //         }},
+    //     tensor.storage());
+    return "superjeet tostring";
 }
 
 template <>
@@ -513,9 +515,7 @@ std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
-std::string to_string(const Tensor& tensor) {
-    return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
-}
+std::string to_string([[maybe_unused]] const Tensor& tensor) { return "hello sirjeet"; }
 
 // ======================================================================================
 //                                      .to_host()

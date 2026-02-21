@@ -114,9 +114,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_stage2_local_slot_offset"),
         get_named_compile_time_arg_val("argmax_mesh_local_send_slot_offset"),
         get_named_compile_time_arg_val("argmax_sender_idx"),
-        get_named_compile_time_arg_val("argmax_emit_d2h_on_this_device"),
-        get_named_compile_time_arg_val("argmax_d2h_cb"),
-        get_named_compile_time_arg_val("argmax_d2h_page_size_bytes")>;
+        get_named_compile_time_arg_val("argmax_socket_mode"),
+        get_named_compile_time_arg_val("argmax_socket_cb"),
+        get_named_compile_time_arg_val("argmax_socket_page_size_bytes")>;
 
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
     // Sender core: register mcast_src CB (CB 0) backed by input_tensor (skip_ccl)
@@ -205,9 +205,9 @@ void kernel_main() {
     using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
         get_named_compile_time_arg_val("argmax_winner_page_bytes"),
         get_named_compile_time_arg_val("argmax_local_ready_semaphore_id"),
-        get_named_compile_time_arg_val("argmax_emit_d2h_on_this_device"),
-        get_named_compile_time_arg_val("argmax_d2h_cb"),
-        get_named_compile_time_arg_val("argmax_d2h_page_size_bytes")>;
+        get_named_compile_time_arg_val("argmax_socket_mode"),
+        get_named_compile_time_arg_val("argmax_socket_cb"),
+        get_named_compile_time_arg_val("argmax_socket_page_size_bytes")>;
 
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---

@@ -42,9 +42,9 @@ struct Sampling {
         uint32_t Stage2LocalSlotOffset,
         uint32_t MeshLocalSendSlotOffset,
         uint32_t SenderIdx,
-        uint32_t EmitD2HOnThisDevice = 0,
-        uint32_t D2HCBId = 0,
-        uint32_t D2HPageSizeBytes = 0>
+        uint32_t SocketMode = 0,
+        uint32_t SocketCBId = 0,
+        uint32_t SocketPageSizeBytes = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
@@ -67,23 +67,23 @@ struct Sampling {
         static constexpr uint32_t stage2_local_slot_offset = Stage2LocalSlotOffset;
         static constexpr uint32_t mesh_local_send_slot_offset = MeshLocalSendSlotOffset;
         static constexpr uint32_t sender_idx = SenderIdx;
-        static constexpr bool emit_d2h_on_this_device = EmitD2HOnThisDevice == 1;
-        static constexpr uint32_t d2h_cb_id = D2HCBId;
-        static constexpr uint32_t d2h_page_size_bytes = D2HPageSizeBytes;
+        static constexpr uint32_t socket_mode = SocketMode;
+        static constexpr uint32_t socket_cb_id = SocketCBId;
+        static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
     };
 
     template <
         uint32_t WinnerPageBytes,
         uint32_t LocalReadySemaphoreId,
-        uint32_t EmitD2HOnThisDevice = 0,
-        uint32_t D2HCBId = 0,
-        uint32_t D2HPageSizeBytes = 0>
+        uint32_t SocketMode = 0,
+        uint32_t SocketCBId = 0,
+        uint32_t SocketPageSizeBytes = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
-        static constexpr bool emit_d2h_on_this_device = EmitD2HOnThisDevice == 1;
-        static constexpr uint32_t d2h_cb_id = D2HCBId;
-        static constexpr uint32_t d2h_page_size_bytes = D2HPageSizeBytes;
+        static constexpr uint32_t socket_mode = SocketMode;
+        static constexpr uint32_t socket_cb_id = SocketCBId;
+        static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
     };
 
     struct ReaderArgs {
@@ -102,7 +102,7 @@ struct Sampling {
         uint32_t final_noc_x;
         uint32_t final_noc_y;
         uint32_t scratch_addr;
-        uint32_t d2h_socket_config_addr = 0;
+        uint32_t socket_config_addr = 0;
     };
 
     struct ComputeArgs {};
@@ -268,15 +268,15 @@ struct Sampling {
             noc_async_full_barrier();
         }
 
-        FORCE_INLINE void send_d2h_token_from_cb_brisc(uint32_t d2h_socket_config_addr) {
-            SocketSenderInterface sender_socket = create_sender_socket_interface(d2h_socket_config_addr);
-            set_sender_socket_page_size(sender_socket, CTArgs::d2h_page_size_bytes);
+        FORCE_INLINE void send_d2h_token_from_cb_brisc(uint32_t socket_config_addr) {
+            SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
+            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
             const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
             const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
 
             socket_reserve_pages(sender_socket, 1);
-            cb_wait_front(CTArgs::d2h_cb_id, 1);
-            const uint32_t read_addr = get_read_ptr(CTArgs::d2h_cb_id);
+            cb_wait_front(CTArgs::socket_cb_id, 1);
+            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
 
             noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
             noc_async_wide_write_any_len_with_state(
@@ -288,15 +288,42 @@ struct Sampling {
                 sizeof(uint32_t));
             noc_async_writes_flushed();
 
-            cb_pop_front(CTArgs::d2h_cb_id, 1);
+            cb_pop_front(CTArgs::socket_cb_id, 1);
             socket_push_pages(sender_socket, 1);
             socket_notify_receiver(sender_socket);
             update_socket_config(sender_socket);
             noc_async_write_barrier();
         }
+
+        FORCE_INLINE void send_d2d_token_from_cb_brisc(uint32_t socket_config_addr) {
+            SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
+            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
+
+            socket_reserve_pages(sender_socket, 1);
+            cb_wait_front(CTArgs::socket_cb_id, 1);
+            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
+
+            for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
+                sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
+                noc_async_write(
+                    read_addr,
+                    get_noc_addr(
+                        downstream_enc.d2d.downstream_noc_x,
+                        downstream_enc.d2d.downstream_noc_y,
+                        sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
+                    CTArgs::socket_page_size_bytes);
+            }
+            noc_async_write_barrier();
+
+            cb_pop_front(CTArgs::socket_cb_id, 1);
+            socket_push_pages(sender_socket, 1);
+            socket_notify_receiver(sender_socket);
+            update_socket_config(sender_socket);
+        }
 #endif
 
         void impl(const RTArgs& args) {
+            DPRINT << "Argmax kernel started" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
             const uint32_t gather_addr = args.gather_addr;
@@ -354,11 +381,12 @@ struct Sampling {
                 if constexpr (!CTArgs::mesh_mode) {
                     auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                     output_ptr[0] = global_best_index;
-                    if constexpr (CTArgs::emit_d2h_on_this_device) {
-                        cb_reserve_back(CTArgs::d2h_cb_id, 1);
-                        auto d2h_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::d2h_cb_id));
+                    if constexpr (CTArgs::socket_mode != 0) {
+                        cb_reserve_back(CTArgs::socket_cb_id, 1);
+                        auto d2h_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                         d2h_ptr[0] = global_best_index;
-                        cb_push_back(CTArgs::d2h_cb_id, 1);
+                        cb_push_back(CTArgs::socket_cb_id, 1);
                     }
                 } else {
                     if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
@@ -387,20 +415,26 @@ struct Sampling {
                             stage2_best_index);
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                         output_ptr[0] = stage2_best_index;
-                        if constexpr (CTArgs::emit_d2h_on_this_device) {
-                            cb_reserve_back(CTArgs::d2h_cb_id, 1);
+                        if constexpr (CTArgs::socket_mode != 0) {
+                            cb_reserve_back(CTArgs::socket_cb_id, 1);
                             auto d2h_ptr =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::d2h_cb_id));
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                             d2h_ptr[0] = stage2_best_index;
-                            cb_push_back(CTArgs::d2h_cb_id, 1);
+                            cb_push_back(CTArgs::socket_cb_id, 1);
                         }
                     }
                 }
             }
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
-            if constexpr (IsFinalCore && CTArgs::emit_d2h_on_this_device) {
-                send_d2h_token_from_cb_brisc(args.d2h_socket_config_addr);
+            DPRINT << "IsFinalCore: " << (uint32_t)IsFinalCore << " CTArgs::socket_mode: " << CTArgs::socket_mode
+                   << ENDL();
+            if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
+                send_d2h_token_from_cb_brisc(args.socket_config_addr);
+            } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
+                DPRINT << "Sending D2D token from CB" << ENDL();
+                send_d2d_token_from_cb_brisc(args.socket_config_addr);
+                DPRINT << "D2D token sent from final core" << ENDL();
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
                 auto local_ready_sem_ptr =
@@ -414,6 +448,7 @@ struct Sampling {
                 send_mesh_winner_via_fabric_brisc(
                     args.final_noc_x, args.final_noc_y, local_slot_addr, metadata, arg_idx);
             }
+            DPRINT << "Final core completed" << ENDL();
 #elif defined(COMPILE_FOR_TRISC)
             // No-op for k=1 argmax fast path.
             (void)args;

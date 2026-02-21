@@ -35,12 +35,14 @@ bool logical_cores_intersect(
         }
     }
 
+    bool intersects = false;
     for (const auto& core : current_cores_set) {
         if (previous_cores_set.contains(core)) {
-            return true;
+            std::cout << "Cores intersect: " << core.str() << std::endl;
+            intersects = true;
         }
     }
-    return false;
+    return intersects;
 }
 
 }  // namespace
@@ -132,9 +134,11 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     auto lock = lock_api_function_();
 
     if (!asynchronous_slow_dispatch_enabled_) {
+        std::cout << "Waiting for cores idle" << std::endl;
         wait_for_cores_idle();
+        std::cout << "Cores idle" << std::endl;
     }
-
+    std::cout << "Launching programs" << std::endl;
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         const auto& program_cores = program.impl().logical_cores();
         for (const auto& coord : coord_range) {
@@ -188,6 +192,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             }
         }
     }
+    std::cout << "Programs launched" << std::endl;
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
