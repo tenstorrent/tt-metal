@@ -12,6 +12,7 @@ Tests for prepare_weights: building DeepSeekV3Weights from a state dict.
 - test_prepare_moe_layer_single_layer_4x2: one MoE layer on 4x2 mesh.
 - test_save_load_dense_layer_single_layer_4x2: save then load one dense layer on 4x2 submesh.
 - test_save_load_moe_layer_single_layer_4x2: save then load one MoE layer on 4x2 submesh.
+- test_load_4_layers_across_4_submeshes_4x2: prepare each of 4 layers on a different 4x2 submesh, save, then load each on same submesh (32 devices).
 """
 
 import time
@@ -504,3 +505,92 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     if orig_shared_down_shape is not None:
         assert getattr(layer, "shared_down_proj", None) is not None
         assert layer.shared_down_proj.shape == orig_shared_down_shape
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_load_4_layers_across_4_submeshes_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare each of 4 layers on a different 4x2 submesh, save them, then load each on the same submesh.
+
+    Uses create_submeshes to get 4 disjoint (4x2) submeshes; requires 32 devices.
+    Each layer is prepared on its own submesh to avoid OOM. Layers 0,1,2 are dense, layer 3 is MoE.
+    """
+
+    tmp_path = "/tmp/test-cache/"
+    if not is_slow_dispatch():
+        pytest.skip("prepare_weights tests require slow dispatch mode (TT_METAL_SLOW_DISPATCH_MODE=1)")
+    num_submeshes = 4
+    devices_per_submesh = 4 * 2
+    num_devices_required = num_submeshes * devices_per_submesh  # 32
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices_required:
+        pytest.skip(
+            f"Test requires {num_devices_required} devices (4 submeshes x 4x2), "
+            f"mesh has {bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
+        )
+    submeshes = bh_2d_mesh_device.create_submeshes(ttnn.MeshShape((4, 2)))
+    assert len(submeshes) >= num_submeshes, f"Expected at least {num_submeshes} submeshes"
+    submesh0 = submeshes[0]
+    device_grid = submesh0.compute_with_storage_grid_size()
+    if device_grid.x < 12 or device_grid.y < 10:
+        pytest.skip(f"Per-device grid {device_grid.x}x{device_grid.y} too small for blitz decode (need 12x10+)")
+    num_cores = device_grid.x * device_grid.y
+    if num_cores < 128:
+        pytest.skip(f"Per-device has {num_cores} compute cores; GATE_UP overlap spec requires 128 cores")
+
+    num_layers = 4
+    first_k_dense_replace = 3  # layers 0,1,2 dense; layer 3 MoE
+    for layer_idx in range(num_layers):
+        is_moe = layer_idx >= first_k_dense_replace
+        submesh = submeshes[layer_idx]
+        state = _layer_state_dict(
+            layer_idx,
+            is_moe=is_moe,
+            for_multi_device=True,
+            seed=42 + layer_idx,
+        )
+        # prepare_weights always looks up model.layers.0.* when num_layers=1; remap keys
+        state_for_prepare = {k.replace(f"model.layers.{layer_idx}.", "model.layers.0."): v for k, v in state.items()}
+        # first_k_dense_replace so the single layer (index 0) is dense or MoE
+        first_k = 1 if layer_idx < first_k_dense_replace else 0
+        t0 = time.perf_counter()
+        weights = prepare_weights(
+            state_for_prepare,
+            submesh,
+            num_layers=1,
+            first_k_dense_replace=first_k,
+        )
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "prepare_weights (layer %d, %s, on submesh %d): {:.3f} s",
+            layer_idx,
+            "moe" if is_moe else "dense",
+            layer_idx,
+            elapsed,
+        )
+        assert len(weights.layers) == 1
+        save_layer(
+            weights.layers[0],
+            tmp_path,
+            layer_idx,
+            hf_model_name="test-4layer-model",
+            hf_state_dict_name="test-4layer-state-dict.safetensors",
+            device_mesh_shape=(4, 2),
+        )
+        deallocate_weights(weights)
+
+    loaded = []
+    t0 = time.time()
+    for layer_idx in range(num_layers):
+        submesh = submeshes[layer_idx]
+        layer = load_layer(tmp_path, submesh, layer_idx)
+        loaded.append(layer)
+    elapsed = time.time() - t0
+    logger.info(f"load_layer (4 layers, 4x2 submesh): {elapsed:.3f} s")
+
+    assert isinstance(loaded[0], DeepSeekV3DenseLayerWeights)
+    assert isinstance(loaded[1], DeepSeekV3DenseLayerWeights)
+    assert isinstance(loaded[2], DeepSeekV3DenseLayerWeights)
+    assert isinstance(loaded[3], DeepSeekV3MoELayerWeights)
