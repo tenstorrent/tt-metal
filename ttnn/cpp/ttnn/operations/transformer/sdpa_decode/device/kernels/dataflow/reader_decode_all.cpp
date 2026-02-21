@@ -46,8 +46,10 @@ void kernel_main() {
     constexpr bool is_page_table_sharded = get_compile_time_arg_val(28);
     constexpr uint32_t q_page_size_bytes = get_compile_time_arg_val(29);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(30);
+    constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
+    constexpr bool has_block_padding = is_paged_attention && original_block_size > 0 && original_block_size < 32;
 
-    constexpr auto k_args = TensorAccessorArgs<31>();
+    constexpr auto k_args = TensorAccessorArgs<32>();
     constexpr auto q_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -106,6 +108,14 @@ void kernel_main() {
             // cur_pos of -1 indicates that the user should be skipped
             return;
         }
+    }
+
+    // When block_size < TILE_HEIGHT, each tile has zero-padded rows. Convert cur_pos from
+    // the original sequence space to the padded tile space so get_runtime_args computes the
+    // correct number of tiles to process. Only needed for causal mode where cur_pos comes
+    // from user input; non-causal uses cur_pos_base which is already in the padded space.
+    if constexpr (has_block_padding && is_causal) {
+        cur_pos = (cur_pos / original_block_size) * 32 + (cur_pos % original_block_size);
     }
 
     auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);

@@ -17,7 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.fused_ops.mlp.op import MlpOp
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe import (
     create_expert_matmul_tensors,
@@ -29,12 +29,16 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe import (
 # ============================================================================
 # Helper: create all MLP dense expert tensors (no routing)
 # ============================================================================
-def create_mlp_tensors(device):
+def create_mlp_tensors(device, mesh_mapper=None):
     """
     Create all tensors needed for MLP dense expert test.
     Same as create_routed_expert_tensors but without routing-specific tensors
     (gate MM, gate input/bias/indices, gate output scores/indices,
      expert index/scale, mul scalar buffer).
+
+    Args:
+        device: TT device or mesh device
+        mesh_mapper: Optional mesh mapper for multi-device replication
 
     Returns:
         dict with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -72,6 +76,8 @@ def create_mlp_tensors(device):
     residual_mcast_src_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, residual_mcast_src_shard
     )
+    from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
+
     ttnn_residual_mcast_src = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
@@ -79,6 +85,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=residual_mcast_src_mem,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     # ── RMSNorm gamma weights [1, K] on sender core ──
@@ -94,6 +101,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=rmsnorm_gamma_mem,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     # ── RMSNorm output [M, K] on sender core (L1 backing for compute output) ──
@@ -104,6 +112,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=input_mem_config,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     # Get optimal DRAM bank cores for DRAM streaming matmul
@@ -129,6 +138,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=mcast_output_mem_config,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     # ── Residual mcast destination tensor (on full mcast grid) ──
@@ -143,6 +153,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=residual_mcast_dst_mem,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     # ── Expert weight tensors (num_experts=1 for MLP) ──
@@ -162,6 +173,7 @@ def create_mlp_tensors(device):
         tile_w=32,
         dtype=ttnn.bfloat4_b,
         seed=0,
+        mesh_mapper=mesh_mapper,
     )
 
     # up_proj matmul tensors
@@ -181,6 +193,7 @@ def create_mlp_tensors(device):
         tile_w=32,
         dtype=ttnn.bfloat4_b,
         seed=256,
+        mesh_mapper=mesh_mapper,
     )
 
     # Fused output tensor
@@ -193,6 +206,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=up_proj_mm_out_tensor.memory_config(),
         tile=up_proj_mm_out_tensor.get_tile(),
+        **from_torch_kwargs,
     )
 
     # down_proj tensors
@@ -214,6 +228,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=down_proj_gather_mem_config,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     down_proj_mcast_shard_spec = ttnn.ShardSpec(
@@ -231,6 +246,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=down_proj_mcast_mem_config,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     # down_proj expert weights and output
@@ -250,6 +266,7 @@ def create_mlp_tensors(device):
         tile_w=32,
         dtype=ttnn.bfloat4_b,
         seed=512,
+        mesh_mapper=mesh_mapper,
     )
 
     # Final output tensor
@@ -274,6 +291,7 @@ def create_mlp_tensors(device):
         device=device,
         memory_config=final_output_mem_config,
         tile=tile_1x32,
+        **from_torch_kwargs,
     )
 
     # ── Tensor-backed working buffers for DRAM matmul CBs ──
@@ -298,6 +316,7 @@ def create_mlp_tensors(device):
             device=dev,
             memory_config=mem_config,
             tile=w_tile,
+            **from_torch_kwargs,
         )
         return buf_tensor
 
@@ -344,7 +363,10 @@ def create_mlp_tensors(device):
         # Dimensions for output extraction
         "num_gate_proj_cores": num_gate_proj_cores,
         "final_output_width_per_core": final_output_width_per_core,
+        "final_output_total_width": final_output_total_width,
+        "final_output_mem_config": final_output_mem_config,
         "per_core_down_proj_N": per_core_down_proj_N,
+        "gate_proj_core_ranges": gate_proj_core_ranges,
     }
 
 
@@ -439,3 +461,194 @@ def test_mlp_fused(device):
     assert passing, f"Fused MLP PCC check failed: {pcc}"
 
     logger.info(f"Fused MLP test PASSED! (PCC={pcc})")
+
+
+# ============================================================================
+# Test: Fused MLP with reduce_to_one on 4x2 mesh
+# ============================================================================
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+def test_mlp_fused_with_reduce(bh_2d_mesh_device):
+    """
+    Test fused MLP with reduce_to_one on 4x2 mesh.
+
+    Each of 8 devices runs the full fused MLP (dense MLP + shared expert),
+    then results are reduced (summed) across all devices to ROOT1.
+    """
+    num_devices = 8
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip(
+            f"Test requires {num_devices} devices, mesh has "
+            f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
+        )
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    logger.info(f"Created submesh with shape: {submesh.shape}")
+
+    device_grid = submesh.compute_with_storage_grid_size()
+    if device_grid.x < 13 or device_grid.y < 10:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
+
+    M = 1
+    K = 7168
+
+    logger.info(f"Testing fused MLP with reduce: K={K}")
+
+    # ── Create MLP tensors (replicated across mesh) ──
+    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+    r = create_mlp_tensors(submesh, mesh_mapper=mesh_mapper)
+    mcast_grid = r["ttnn_mcast_output"].memory_config().shard_spec.grid
+    s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
+
+    # ── ReduceToOne tensors and semaphores ──
+    root_coord = (1, 1)
+
+    # Reduce mesh mapper (2D shard across 4x2 mesh)
+    reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
+    reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
+
+    tile_1x32 = ttnn.Tile([1, 32])
+    final_output_total_width = r["final_output_total_width"]
+    final_output_mem_config = r["final_output_mem_config"]
+
+    # 3 intermediate tensors for 3 reduction rounds (same shape as final_output)
+    intermediate_tensors = []
+    for _ in range(3):
+        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+        intermediate_tensor = ttnn.from_torch(
+            intermediate_data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=final_output_mem_config,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
+        intermediate_tensors.append(intermediate_tensor)
+    logger.info("Created 3 intermediate tensors for reduce rounds")
+
+    # Reduce output tensor (single-core sharded on each device)
+    compute_grid = submesh.compute_with_storage_grid_size()
+    reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+    reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+    reduce_output_shard_spec = ttnn.ShardSpec(
+        reduce_output_shard_grid,
+        (1, final_output_total_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    reduce_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, reduce_output_shard_spec
+    )
+    reduce_output_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+    reduce_output_tensor = ttnn.from_torch(
+        reduce_output_data,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=reduce_output_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+    logger.info(f"Created reduce output tensor on core {reduce_output_core}")
+
+    # 4 global semaphores for reduce synchronization (round1, round2, round3, exit)
+    num_cores = compute_grid.x * compute_grid.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    ttnn.synchronize_device(submesh)
+    reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    ttnn.synchronize_device(submesh)
+    logger.info("Created 4 global semaphores for reduce synchronization")
+
+    # ── Run fused MLP op with reduce (looping inside kernel) ──
+    num_iterations = 100
+    ttnn_result_reduce = MlpOp.op(
+        r["ttnn_rmsnorm_output"],
+        r["ttnn_mcast_output"],
+        r["gate_proj_weights"],
+        r["gate_proj_output"],
+        r["up_proj_weights"],
+        r["up_proj_mm_out_tensor"],
+        r["fused_output_tensor"],
+        r["down_proj_gather_output_tensor"],
+        r["down_proj_mcast_output_tensor"],
+        r["down_proj_weights"],
+        r["down_proj_output"],
+        s["ttnn_output_mcast_dst"],  # fused_add_tensor (shared expert output)
+        r["final_output_tensor"],
+        r["gate_proj_in1_buf_tensor"],
+        r["down_proj_in1_buf_tensor"],
+        # RMSNorm gamma
+        rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
+        # Shared expert tensors
+        shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
+        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
+        shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
+        shared_down_weights_tensor=s["ttnn_down_weights"],
+        shared_output_tensor=s["ttnn_output"],
+        # Shared expert tensor-backed CB tensors
+        shared_ag_gather_dst_tensor=s["ttnn_ag_gather_dst"],
+        shared_bg_gather_dst_tensor=s["ttnn_bg_gather_dst"],
+        shared_gu_out_tensor=s["ttnn_gu_out"],
+        shared_intermed_tensor=s["ttnn_intermed"],
+        shared_down_mcast_src_tensor=s["ttnn_down_mcast_src"],
+        shared_down_matmul_out_tensor=s["ttnn_down_matmul_out"],
+        shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
+        shared_k_parallel=s["k_parallel"],
+        shared_n_parallel=s["n_parallel"],
+        num_iterations=num_iterations,
+        # ReduceToOne parameters
+        reduce_intermediate_tensors=intermediate_tensors,
+        reduce_output_tensor=reduce_output_tensor,
+        reduce_semaphores=reduce_semaphores,
+        reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+    )
+    ttnn.synchronize_device(submesh)
+    logger.info(f"Fused MLP with reduce: {num_iterations} iterations completed")
+
+    # ── Verify results ──
+    # Compute golden for a single device (all devices run identical MLP, no routing)
+    torch_expected_single = MlpOp.golden(
+        r["torch_input"],
+        shared_gate_weights=s["torch_gate_weights"],
+        shared_up_weights=s["torch_up_weights"],
+        shared_down_weights=s["torch_down_weights"],
+        gate_proj_weights=r["expert_weights_dict"][0],
+        up_proj_weights=r["up_proj_weights_dict"][0],
+        down_proj_weights=r["down_proj_weights_dict"][0],
+        rmsnorm_gamma=r["torch_rmsnorm_gamma"],
+        rmsnorm_epsilon=1e-6,
+    )
+
+    # Expected reduce output = sum of all 8 identical device outputs
+    expected_reduce_output = torch_expected_single * num_devices
+
+    # Get actual reduce output from ROOT1 device
+    reduce_output_torch = ttnn.to_torch(
+        ttnn_result_reduce,
+        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
+    )
+
+    # ROOT1 is at row 1, col 1 -> device_idx = 1*2 + 1 = 3
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
+    reduce_output_root = reduce_output_torch[root_device_idx]
+
+    # Extract valid portion (remove per-core padding)
+    reduce_output_valid = extract_routed_expert_output(
+        reduce_output_root.unsqueeze(0),
+        r["num_gate_proj_cores"],
+        r["final_output_width_per_core"],
+        r["per_core_down_proj_N"],
+    )
+
+    # Verify reduce output
+    passing, pcc_output = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
+    logger.info(f"Reduce output PCC: {pcc_output}")
+    assert passing, f"Reduce output PCC check failed: {pcc_output}"
+
+    logger.info("Fused MLP with reduce test PASSED!")

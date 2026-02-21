@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include "dispatch/dispatch_query_manager.hpp"
+#include "dprint_server.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_descriptor.hpp"
@@ -437,8 +438,19 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 
     // populate_fd_kernels_only needs to be done before Fabric initialization.
     // It allocates dispatch cores to dispatch_core_manager.
-    auto dispatch_kernel_initializer =
-        std::make_unique<DispatchKernelInitializer>(descriptor_, MetalContext::instance().get_dispatch_core_manager());
+    auto dispatch_kernel_initializer = std::make_unique<DispatchKernelInitializer>(
+        descriptor_,
+        MetalContext::instance().get_dispatch_core_manager(),
+        this,
+        []() -> tt::tt_fabric::ControlPlane& { return MetalContext::instance().get_control_plane(); },
+        []() -> const tt::tt_metal::DispatchQueryManager& {
+            return MetalContext::instance().get_dispatch_query_manager();
+        },
+        [this]() { return static_cast<uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
+        [](ChipId id) {
+            auto& s = MetalContext::instance().dprint_server();
+            return s && s.get() && s->reads_dispatch_cores(id);
+        });
     if (!activated_devices.empty()) {
         dispatch_kernel_initializer->populate_fd_kernels_only(activated_devices);
     }

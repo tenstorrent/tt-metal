@@ -499,6 +499,7 @@ class LMHeadSampling:
                 # Get NOC coordinates for mcast destination
                 mcast_dest_noc_start = device.worker_core_from_logical_core(mcast_grid.start)
                 mcast_dest_noc_end = device.worker_core_from_logical_core(mcast_grid.end)
+                bcast_num_pages_to_read = bcast_num_pages
 
                 # ================================================================
                 # NCRISC compile-time args
@@ -507,13 +508,19 @@ class LMHeadSampling:
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
+                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
                     ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
+                    ("bcast_num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
+                    ("bcast_num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
                     ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
                     ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
                     ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("bcast_is_active_broadcaster", int(is_sender or is_secondary_sender) if not skip_ccl else 0),
+                    ("bcast_has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
+                    ("bcast_start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
+                    ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
+                    ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
+                    ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
                     # Mcast source (for setup_sharded_buffer on sender core)
                     ("mcast_src_cb", mcast_src_cb),
                     ("mcast_src_num_pages", num_tiles_k),
@@ -562,19 +569,8 @@ class LMHeadSampling:
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
-                    ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
-                    ("bcast_num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
-                    ("bcast_num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
+                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
                     ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("bcast_has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
-                    ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
-                    ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
                     # Mcast sender
                     ("mcast_dest_noc_start_x", mcast_dest_noc_start.x),
                     ("mcast_dest_noc_start_y", mcast_dest_noc_start.y),
@@ -655,17 +651,9 @@ class LMHeadSampling:
 
                     num_connections = len(dst_nodes)
 
-                    ccl_reader_common_args = [
-                        int(input_tensor_device.buffer_address()),  # tensor_address0
-                        tile_id_start,  # tile_id_start
-                        bcast_num_pages,  # tile_id_end
-                    ]
-
-                    ccl_writer_common_args = [
+                    ncrisc_bcast_common_args = [
                         int(intermediate_tensor_device.buffer_address()),  # tensor_address0
                         int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        tile_id_start,  # tile_id_start
-                        bcast_num_pages,  # tile_id_end
                         int(wait_output_semaphore),  # wait_output_semaphore
                         int(reset_global_semaphore),  # reset_global_semaphore
                         core_noc_x,  # out_ready_sem_noc0_x
@@ -680,7 +668,7 @@ class LMHeadSampling:
                     ]
 
                     final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
-                    ncrisc_bcast_common_args = ccl_reader_common_args + [
+                    ncrisc_bcast_common_args = ncrisc_bcast_common_args + [
                         int(indices_tensor_device.buffer_address()),
                         int(output_index_tensor_device.buffer_address()),
                         int(final_core_phys.x),
@@ -689,7 +677,7 @@ class LMHeadSampling:
                         global_sem_addr,
                         global_stage2_sem_addr,
                     ]
-                    brisc_bcast_common_args = ccl_writer_common_args + [
+                    brisc_bcast_common_args = [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
                         int(scratch_tensors_per_device[device_idx].buffer_address()),
@@ -784,18 +772,7 @@ class LMHeadSampling:
 
                 # CB 30: CCL broadcast packet buffer (only in multi-device mode)
                 if not skip_ccl:
-                    bcast_pkt_tile_descriptor = ttnn.TileDescriptor(in0_tile)
-                    bcast_pkt_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=bcast_pkt_cb,
-                        data_format=data_format,
-                        page_size=input_tile_size,
-                        tile=bcast_pkt_tile_descriptor,
-                    )
-                    bcast_pkt_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=num_tiles_k * input_tile_size,
-                        core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
-                        format_descriptors=[bcast_pkt_cb_format],
-                    )
+                    bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
                     cbs_list.append(bcast_pkt_cb_descriptor)
 
                 # ================================================================
@@ -899,6 +876,7 @@ class LMHeadSampling:
                     ),
                     # Per-core runtime args: mesh argmax senders get BRISC sender metadata.
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        ncrisc_args=[(worker_core, [])],
                         brisc_args=[(worker_core, [])] + per_core_brisc_runtime_args,
                     ),
                 )
@@ -970,7 +948,7 @@ class LMHeadSampling:
                     semaphores=semaphore_descriptors,
                 )
 
-                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
+                # Append CCL routing args to the broadcast writer kernel (NCRISC in current broadcast split).
                 if not skip_ccl and num_connections > 0:
                     ccl_writer_group = None
                     for group in kernel_result.groups:
@@ -981,7 +959,7 @@ class LMHeadSampling:
                             break
                     if ccl_writer_group is None:
                         raise RuntimeError("Missing is_input_core kernel group for CCL writer fabric append")
-                    writer_kernel_idx = ccl_writer_group.brisc_kernel_index
+                    writer_kernel_idx = ccl_writer_group.ncrisc_kernel_index
                     writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
                         fabric_node_id, dst_nodes, [0], program, writer_kernel_idx, worker_core
