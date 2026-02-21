@@ -25,52 +25,106 @@ tests:
     ttsim: false  # Examples use features not supported in simulator
 
   # ---------------------------------------------------------------------------
-  # Core TTNN unit tests (base_functionality split into 6 groups)
+  # Eltwise operation tests (split into 5 groups for parallelization)
   # ---------------------------------------------------------------------------
-  - name: "ttnn base functionality group 1"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality -xv --splits 6 --group 1 -m "not disable_fast_runtime_mode"'
+  - name: "ttnn eltwise group 1"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 1 -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
 
-  - name: "ttnn base functionality group 2"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality -xv --splits 6 --group 2 -m "not disable_fast_runtime_mode"'
+  - name: "ttnn eltwise group 2"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 2 -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
 
-  - name: "ttnn base functionality group 3"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality -xv --splits 6 --group 3 -m "not disable_fast_runtime_mode"'
+  - name: "ttnn eltwise group 3"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 3 -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
 
-  - name: "ttnn base functionality group 4"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality -xv --splits 6 --group 4 -m "not disable_fast_runtime_mode"'
+  - name: "ttnn eltwise group 4"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 4 -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
 
-  - name: "ttnn base functionality group 5"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality -xv --splits 6 --group 5 -m "not disable_fast_runtime_mode"'
+  - name: "ttnn eltwise group 5"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 5 -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
 
-  - name: "ttnn base functionality group 6"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality -xv --splits 6 --group 6 -m "not disable_fast_runtime_mode"'
+  # ---------------------------------------------------------------------------
+  # Convolution tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn conv group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
 
-  - name: "ttnn benchmarks group"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/benchmarks -xv -m "not disable_fast_runtime_mode"'
+  # ---------------------------------------------------------------------------
+  # Pooling tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn pool group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
 
-  - name: "ttnn tensor group"
-    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
+  # ---------------------------------------------------------------------------
+  # Matrix multiplication tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn matmul group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
+    timeout: 15
+    merge_gate: false
+    ttsim: true
+
+  # ---------------------------------------------------------------------------
+  # Fused operation tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn fused group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"'
+    timeout: 15
+    merge_gate: false
+    ttsim: true
+
+  # ---------------------------------------------------------------------------
+  # Transformer operation tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn transformers group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+    timeout: 15
+    merge_gate: false
+    ttsim: true
+
+  # ---------------------------------------------------------------------------
+  # SDPA / MLA operation tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn sdpa group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+    timeout: 15
+    merge_gate: false
+    ttsim: false  # SDPA tests require device
+
+  # ---------------------------------------------------------------------------
+  # Reduce and misc operation tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn reduce and misc ops group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"'
+    timeout: 15
+    merge_gate: false
+    ttsim: true
+
+  # ---------------------------------------------------------------------------
+  # Core TTNN unit tests
+  # ---------------------------------------------------------------------------
+  - name: "core ttnn unit test group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
     timeout: 15
     merge_gate: false
     ttsim: true
