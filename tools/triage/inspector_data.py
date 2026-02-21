@@ -168,6 +168,14 @@ def run(args, context) -> InspectorData:
     log_directory = args["--inspector-log-path"]
     rpc_port = args["--inspector-rpc-port"]
     rpc_host = args["--inspector-rpc-host"]
+    try:
+        rpc_port_int = int(rpc_port)
+        if rpc_port_int <= 0 or rpc_port_int > 65535:
+            raise ValueError(f"port out of range: {rpc_port_int}")
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid --inspector-rpc-port value '{rpc_port}'. Expected integer in range 1-65535."
+        ) from exc
 
     # First try to connect to Inspector RPC
     rpc_error: Exception | None = None

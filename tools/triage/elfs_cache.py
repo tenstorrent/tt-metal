@@ -16,6 +16,9 @@ Owner:
 """
 
 import os
+import errno
+import shutil
+import tempfile
 import threading
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
@@ -47,6 +50,26 @@ class ElfsCache:
         self._cache: dict[str, ParsedElfFile] = {}
         self._lock = threading.Lock()
 
+    @staticmethod
+    def _is_estale_error(exc: Exception) -> bool:
+        if isinstance(exc, OSError) and exc.errno == errno.ESTALE:
+            return True
+        return "stale file handle" in str(exc).lower()
+
+    def _parse_elf_with_estale_retry(self, elf_path: str) -> ParsedElfFile | None:
+        """Parse ELF, retrying only once when ESTALE is encountered."""
+        try:
+            return parse_elf(elf_path, self.context)
+        except Exception as exc:
+            if not self._is_estale_error(exc):
+                raise
+
+        # Retry once by reopening through a fresh local copy.
+        with tempfile.TemporaryDirectory(prefix="tt-triage-elf-") as tmp_dir:
+            local_elf_path = os.path.join(tmp_dir, os.path.basename(elf_path))
+            shutil.copy2(elf_path, local_elf_path)
+            return parse_elf(local_elf_path, self.context)
+
     def __getitem__(self, elf_path: str) -> ParsedElfFile:
         """
         Get a ParsedElfFile from cache or parse and cache it if not present.
@@ -64,7 +87,14 @@ class ElfsCache:
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
         with self._lock:
             if elf_path not in self._cache:
-                parsed_elf = parse_elf(elf_path, self.context)
+                try:
+                    parsed_elf = self._parse_elf_with_estale_retry(elf_path)
+                except Exception as exc:
+                    if self._is_estale_error(exc):
+                        raise TTTriageError(
+                            f"Failed to parse ELF file {elf_path} due to stale file handle on filesystem: {exc}"
+                        ) from exc
+                    raise
                 if not parsed_elf:
                     raise TTTriageError(
                         f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."

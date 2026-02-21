@@ -26,6 +26,8 @@ sys.path.insert(0, triage_home)
 import triage
 from triage import run_script, FAILURE_CHECKS, ScriptArguments
 from metal_device_id_mapping import MetalDeviceIdMapping
+import inspector_data
+from dispatcher_data import DispatcherData
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
@@ -586,3 +588,64 @@ def test_serialize_result_prints_summary_before_details(capsys):
 
     assert "Summary: RuntimeError: Inspector RPC unavailable" in output
     assert "Details:" in output
+
+
+@pytest.fixture
+def inspector_run_args():
+    return {
+        "--inspector-rpc-port": "50051",
+        "--inspector-rpc-host": "localhost",
+        "--inspector-log-path": "/tmp/ignored",
+    }
+
+
+def _mock_rpc_unavailable_with_logs_present(monkeypatch):
+    monkeypatch.setattr(
+        inspector_data,
+        "connect_rpc_with_retry",
+        lambda host, port: (_ for _ in ()).throw(inspector_data.InspectorException("rpc unavailable")),
+    )
+    monkeypatch.setattr(inspector_data, "get_log_directory", lambda directory: "/tmp/tt-triage-test")
+    monkeypatch.setattr(inspector_data.os.path, "exists", lambda path: True)
+
+
+def test_inspector_data_run_falls_back_to_serialized_when_rpc_unavailable(monkeypatch, inspector_run_args):
+    sentinel = object()
+
+    _mock_rpc_unavailable_with_logs_present(monkeypatch)
+    monkeypatch.setattr(inspector_data, "InspectorRpcSerialized", lambda directory: sentinel)
+
+    result = inspector_data.run(inspector_run_args, context=None)
+    assert result is sentinel
+
+
+def test_inspector_data_run_reports_both_rpc_and_serialized_failures(monkeypatch, inspector_run_args):
+    _mock_rpc_unavailable_with_logs_present(monkeypatch)
+    monkeypatch.setattr(
+        inspector_data,
+        "InspectorRpcSerialized",
+        lambda directory: (_ for _ in ()).throw(ValueError("missing serialized artifacts")),
+    )
+
+    with pytest.raises(inspector_data.InspectorException) as exc:
+        inspector_data.run(inspector_run_args, context=None)
+    message = str(exc.value)
+    assert "RPC connection failure:" in message
+    assert "Serialized data failure:" in message
+    assert "rpc unavailable" in message
+    assert "missing serialized artifacts" in message
+
+
+def test_dispatcher_data_missing_build_env_includes_last_error_and_env_hint(monkeypatch):
+    dispatcher = DispatcherData.__new__(DispatcherData)
+    dispatcher._build_env_cache = {}
+    dispatcher._build_env_last_error = RuntimeError("rpc timeout")
+    dispatcher._refresh_build_env_cache = lambda: None
+
+    monkeypatch.setenv("TT_METAL_INSPECTOR_RPC", "0")
+    with pytest.raises(triage.TTTriageError) as exc:
+        dispatcher._get_build_env_for_device(99)
+    message = str(exc.value)
+    assert "unique_id=99" in message
+    assert "Last getAllBuildEnvs failure: RuntimeError: rpc timeout" in message
+    assert "TT_METAL_INSPECTOR_RPC is not set to 1" in message
