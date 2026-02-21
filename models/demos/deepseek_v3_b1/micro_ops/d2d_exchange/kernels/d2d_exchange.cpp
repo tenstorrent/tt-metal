@@ -26,6 +26,7 @@ FORCE_INLINE bool socket_wait_for_pages_with_termination(
     constexpr uint32_t termination_value = 1;
     while (!socket_wait_for_pages(socket, num_pages, 1000)) {
         invalidate_l1_cache();
+        DPRINT << "Waiting for pages in receiver socket with termination checks...\n";
         if (termination_semaphore[0] == termination_value) {
             return false;
         }
@@ -107,6 +108,19 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
+    DPRINT << "start of d2d exchange d2d_1 kernel main\n";
+    DPRINT << "CT ARGS :\n";
+    DPRINT << "sender_socket_config_addr: " << (uint32_t)sender_socket_config_addr << "\n";
+    DPRINT << "receiver_socket_config_addr: " << (uint32_t)receiver_socket_config_addr << "\n";
+    DPRINT << "termination_semaphore_addr: " << (uint32_t)termination_semaphore_addr << "\n";
+    DPRINT << "page_size: " << (uint32_t)page_size << "\n";
+    DPRINT << "num_whole_fabric_packets_link_0: " << (uint32_t)num_whole_fabric_packets_link_0 << "\n";
+    DPRINT << "num_whole_fabric_packets_link_1: " << (uint32_t)num_whole_fabric_packets_link_1 << "\n";
+    DPRINT << "whole_packet_size: " << (uint32_t)whole_packet_size << "\n";
+    DPRINT << "partial_packet_size: " << (uint32_t)partial_packet_size << "\n";
+    DPRINT << "fabric_packet_header_cb_id: " << (uint32_t)fabric_packet_header_cb_id << "\n";
+    DPRINT << "use_fabric_on_receiver: " << (uint32_t)use_fabric_on_receiver << "\n";
+    DPRINT << "use_fabric_on_sender: " << (uint32_t)use_fabric_on_sender << "\n";
     // Build Fabric Connections
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
@@ -174,6 +188,7 @@ void kernel_main() {
     while (true) {
         socket_reserve_pages(sender_socket, 1);
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+            DPRINT << "Termination signal received. Ending kernel main loop.\n";
             break;
         }
 
@@ -189,6 +204,7 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
+        DPRINT << "after sending pages over socket\n";
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
             fabric_socket_notify_sender_stateful(
@@ -199,17 +215,21 @@ void kernel_main() {
         } else {
             socket_notify_sender(receiver_socket);
         }
+        DPRINT << "after notifying sender\n";
     }
 
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
+    DPRINT << "after updating socket config\n";
 
     if constexpr (use_fabric_on_receiver) {
         upstream_fabric_connection.close();
     }
+    DPRINT << "after closing upstream fabric connection\n";
 
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
+    DPRINT << "end of d2d exchange 1 kernel main\n";
 }
