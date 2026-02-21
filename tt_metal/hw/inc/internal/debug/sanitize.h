@@ -369,9 +369,12 @@ uint32_t debug_sanitize_noc_addr(
             return_code = DebugSanitizeNocMixedVirtualandPhysical;
         }
         if (is_virtual_coord && is_virtual_coord_end) {
-            // If coordinates are in virtual space, start can be greater than end, when using NOC1.
-            // This is because NOC0 and NOC1 endpoints are identical in virtual space, but order of
-            // start and end coords is still flipped between NOC0 and NOC1.
+            // Virtual coordinates: noc0 and noc1 endpoints are identical in virtual space,
+            // but coordinate ordering differs between noc0 and noc1.
+            //
+            // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
+            // Non-torus architectures (Quasar) require start <= end.
+#ifdef ARCH_QUASAR
             if (noc_id == 0) {
                 if (x > x_end || y > y_end) {
                     return_code = DebugSanitizeNocMulticastInvalidRange;
@@ -381,10 +384,17 @@ uint32_t debug_sanitize_noc_addr(
                     return_code = DebugSanitizeNocMulticastInvalidRange;
                 }
             }
+#else
+            // WH/BH: Allow wrap-around coordinates
+#endif
         } else {
+#ifdef ARCH_QUASAR
             if (x > x_end || y > y_end) {
                 return_code = DebugSanitizeNocMulticastInvalidRange;
             }
+#else
+            // WH/BH: Allow wrap-around in physical coordinates
+#endif
         }
         debug_sanitize_post_addr_and_hang(
             noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, return_code);

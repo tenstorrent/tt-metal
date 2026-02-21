@@ -146,9 +146,14 @@ inline void watcher_sanitize_host_noc_multicast_write(
     const CoreCoord& core_end,
     uint64_t addr,
     uint32_t lbytes) {
-    if (core_start.x > core_end.x || core_start.y > core_end.y) {
+    // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
+    // Non-torus architectures (Quasar) require start <= end in both dimensions.
+    bool has_noc_torus = (soc_d.arch == tt::ARCH::WORMHOLE_B0 || soc_d.arch == tt::ARCH::BLACKHOLE);
+
+    if (!has_noc_torus && (core_start.x > core_end.x || core_start.y > core_end.y)) {
         TT_THROW(
-            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y",
+            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y for non-torus "
+            "architecture",
             core_start.str(),
             core_end.str());
     }
