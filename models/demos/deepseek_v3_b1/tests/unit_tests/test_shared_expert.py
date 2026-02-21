@@ -17,6 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_b1.blitz_decode_weights import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
@@ -67,8 +68,9 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     # ========================================================================
     # Core grids
     # ========================================================================
-    a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
-    compute_cores_list = a_cores_list + b_cores_list  # 128 compute cores
+    gate_up_cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    gate_crs = gate_up_cfg.gate_core_range_set
+    up_crs = gate_up_cfg.up_core_range_set
 
     mcast_gather_core = DownProj.MCAST_GATHER_CORE
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
@@ -115,34 +117,31 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     # Gate/Up weights: stacked, HEIGHT_SHARDED on 128 compute cores
     # Each core gets [k_per_core, 32] weight shard
     # A cores get gate weight shards, B cores get up weight shards
-    # Row order must match compute_cores_list = a_cores + b_cores
+    # Shard order follows CoreRangeSet enumeration of gate + up ranges
     # ========================================================================
-    # Build weight tensor with shards ordered by compute core list
-    weight_shards = []
-    for i, core in enumerate(a_cores_list):
-        # A core i: k_idx = i // n_parallel, n_idx = i % n_parallel
-        k_idx = i // n_parallel
-        n_idx = i % n_parallel
-        k_start = k_idx * k_per_core * 32
-        k_end = k_start + k_per_core * 32
-        n_start = n_idx * 32
-        n_end = n_start + 32
-        weight_shards.append(torch_gate_weights[k_start:k_end, n_start:n_end])
+    num_gate_cores = gate_crs.num_cores()
+    num_up_cores = up_crs.num_cores()
 
-    for i, core in enumerate(b_cores_list):
-        k_idx = i // n_parallel
-        n_idx = i % n_parallel
-        k_start = k_idx * k_per_core * 32
-        k_end = k_start + k_per_core * 32
-        n_start = n_idx * 32
-        n_end = n_start + 32
-        weight_shards.append(torch_up_weights[k_start:k_end, n_start:n_end])
+    def _build_shards(weights, num_cores, crs):
+        """Build weight shards in CRS enumeration order for HEIGHT_SHARDED placement."""
+        shards_rowmajor = []
+        for i in range(num_cores):
+            k_idx = i // n_parallel
+            n_idx = i % n_parallel
+            k_start = k_idx * k_per_core * 32
+            k_end = k_start + k_per_core * 32
+            n_start = n_idx * 32
+            n_end = n_start + 32
+            shards_rowmajor.append(weights[k_start:k_end, n_start:n_end])
+        perm = type(gate_up_cfg)._crs_shard_permutation(crs)
+        return [shards_rowmajor[p] for p in perm]
 
-    # Stack all shards: [128 * k_per_core, 32]
-    torch_gate_up_stacked = torch.cat(weight_shards, dim=0)
+    gate_shards = _build_shards(torch_gate_weights, num_gate_cores, gate_crs)
+    up_shards = _build_shards(torch_up_weights, num_up_cores, up_crs)
+    torch_gate_up_stacked = torch.cat(gate_shards + up_shards, dim=0)
     logger.info(f"Gate/Up weights stacked shape: {torch_gate_up_stacked.shape}")
 
-    compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
+    compute_core_grid = ttnn.CoreRangeSet(list(gate_crs.ranges()) + list(up_crs.ranges()))
     gu_shard_spec = ttnn.ShardSpec(compute_core_grid, (k_per_core * 32, 32), ttnn.ShardOrientation.ROW_MAJOR)
     gu_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gu_shard_spec)
 
