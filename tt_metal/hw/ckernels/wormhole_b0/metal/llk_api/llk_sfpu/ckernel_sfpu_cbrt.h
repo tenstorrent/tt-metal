@@ -65,7 +65,14 @@ inline void calculate_cube_root() {
             y = d * (t * t);
         }
 
-        sfpi::dst_reg[0] = sfpi::setsgn(y, a);
+        y = sfpi::setsgn(y, a);
+
+        if constexpr (is_fp32_dest_acc_en) {
+            sfpi::dst_reg[0] = y;
+        } else {
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+            ;
+        }
         sfpi::dst_reg++;
     }
 }
