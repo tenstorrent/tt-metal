@@ -22,118 +22,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
-
-
-def create_expert_matmul_tensors(
-    device,
-    K,
-    N,
-    num_experts,
-    compute_core_grid,
-    num_cores,
-    tile_h=1,
-    tile_w=32,
-    dtype=ttnn.bfloat4_b,
-    seed=0,
-    mesh_mapper=None,
-):
-    """
-    Create DRAM streaming matmul weight and output tensors.
-
-    This helper is designed to be reused for multiple DRAM matmuls in the fused kernel.
-
-    Args:
-        device: TT device or MeshDevice
-        K: K dimension (input width)
-        N: N dimension (output width, will be padded to num_banks)
-        num_experts: Number of expert weight matrices
-        compute_core_grid: CoreRangeSet for compute cores
-        num_cores: Number of compute cores
-        tile_h: Tile height (default 1)
-        tile_w: Tile width (default 32)
-        dtype: Data type for weights (default bfloat4_b)
-        seed: Random seed for weight generation
-        mesh_mapper: Optional mesh mapper for multi-device (e.g., ttnn.ReplicateTensorToMesh)
-
-    Returns:
-        Tuple of:
-        - weights_tensor: First expert tensor (kernel uses base addr + offset for others)
-        - output_tensor: Output tensor for matmul result
-        - expert_weights_for_validation: Dict of expert weights for golden validation
-        - expert_tensors: List of all expert tensors (must be kept alive to prevent deallocation)
-    """
-    num_banks = device.dram_grid_size().x
-
-    # Pad N to be divisible by num_banks * tile_w
-    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-    per_core_N = N_padded // num_banks
-
-    logger.info(f"DRAM MM: K={K}, N={N}, N_padded={N_padded}, per_core_N={per_core_N}, num_experts={num_experts}")
-
-    # DRAM shard spec for weights
-    in1_shard_shape = [K, per_core_N]
-    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
-    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
-
-    # Upload experts as separate contiguous tensors
-    # Keep unshuffled weights for validation
-    logger.info(f"Uploading {num_experts} experts as separate contiguous tensors...")
-    expert_tensors = []
-    expert_weights_for_validation = {}  # Store unshuffled weights for validation
-
-    for expert_idx in range(num_experts):
-        torch.manual_seed(seed + expert_idx)
-        expert_weights = torch.randn(1, 1, K, N_padded).clamp(-2, 2).bfloat16()
-
-        # Store unshuffled weights for validation
-        expert_weights_for_validation[expert_idx] = expert_weights.clone()
-
-        # Shuffle tiles for this expert
-        expert_shuffled = shuffle_tensor_tiles(expert_weights.reshape(1, K, N_padded), tile_w, num_banks)
-        expert_shuffled = expert_shuffled.reshape(1, 1, K, N_padded)
-
-        # Upload to DRAM
-        expert_t = ttnn.from_torch(
-            expert_shuffled.contiguous(),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=in1_memory_config,
-            mesh_mapper=mesh_mapper,
-        )
-        expert_tensors.append(expert_t)
-
-        del expert_shuffled
-
-        if (expert_idx + 1) % 32 == 0:
-            logger.info(f"  Uploaded {expert_idx + 1}/{num_experts} experts")
-
-    logger.info(f"All experts uploaded.")
-
-    # Use first expert tensor for the op
-    weights_tensor = expert_tensors[0]
-
-    # Output tensor - WIDTH_SHARDED in L1
-    out_tile = ttnn.Tile([tile_h, tile_w])
-    out_shard_shape = [tile_h, per_core_N]
-    out_shard_spec = ttnn.ShardSpec(compute_core_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
-
-    output_tensor = ttnn.from_torch(
-        torch.zeros(1, 1, tile_h, N_padded).bfloat16(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=out_memory_config,
-        tile=out_tile,
-        mesh_mapper=mesh_mapper,
-    )
-
-    return weights_tensor, output_tensor, expert_weights_for_validation, expert_tensors
 
 
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
@@ -385,54 +275,59 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     )
     logger.info(f"Created expert scale tensor [1, 16] on mcast grid")
 
-    (
-        gate_proj_weights,
-        gate_proj_output,
-        expert_weights_dict,
-        gate_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=device,
-        K=gate_proj_K,
-        N=gate_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,  # Use optimal DRAM bank cores
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=0,
-    )
-    logger.info(
-        f"Created DRAM matmul + SiLU tensors: weights={gate_proj_weights.shape}, output={gate_proj_output.shape}"
-    )
-
-    # ========== up_proj Matmul Tensors (with fused mul using gate_proj output) ==========
-    # up_proj computes: up_proj_mm_result * gate_proj_output (element-wise mul)
-    (
-        up_proj_weights,
-        up_proj_mm_out_tensor,
-        up_proj_weights_dict,
-        up_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=device,
-        K=gate_proj_K,
-        N=gate_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=256,  # Different seed for different weights
-    )
-    logger.info(
-        f"Created up_proj matmul tensors: weights={up_proj_weights.shape}, mm_out={up_proj_mm_out_tensor.shape}"
-    )
-
-    # Final fused output tensor: silu(gate_proj) * up_proj
-    # Same shape and memory config as up_proj_mm_out_tensor
+    # ── Compute dimensions for expert DRAM matmul ──
     num_banks = device.dram_grid_size().x
-    gate_proj_N_padded = ((gate_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    tile_w = 32
+    gate_proj_N_padded = ((gate_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    down_proj_K = gate_proj_N
+    down_proj_N = K
+    down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    per_core_gate_N = gate_proj_N_padded // num_banks
+    per_core_down_proj_N = down_proj_N_padded // num_banks
+
+    # ── Generate expert weights for validation ──
+    def _gen_experts(num_exp, K_dim, N_padded, seed):
+        stacked = torch.zeros(num_exp, K_dim, N_padded, dtype=torch.bfloat16)
+        validation = {}
+        for i in range(num_exp):
+            torch.manual_seed(seed + i)
+            w = torch.randn(1, 1, K_dim, N_padded).clamp(-2, 2).bfloat16()
+            validation[i] = w.clone()
+            stacked[i] = w.reshape(K_dim, N_padded)
+        return stacked, validation
+
+    gate_stacked, expert_weights_dict = _gen_experts(num_experts, gate_proj_K, gate_proj_N_padded, seed=0)
+    up_stacked, up_proj_weights_dict = _gen_experts(num_experts, gate_proj_K, gate_proj_N_padded, seed=256)
+    down_stacked, down_proj_weights_dict = _gen_experts(num_experts, down_proj_K, down_proj_N_padded, seed=512)
+
+    # ── Upload expert weights via BlitzDecodeWeights ──
+    bdw = BlitzDecodeWeights(device)
+    gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
+        gate_stacked, up_stacked, down_stacked
+    )
+    gate_proj_weights = gate_proj_expert_tensors[0]
+    up_proj_weights = up_proj_expert_tensors[0]
+    down_proj_weights = down_proj_expert_tensors[0]
+    logger.info("Uploaded gate/up/down expert weights via BlitzDecodeWeights")
+
+    # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──
+    def _create_dram_mm_output(N_pad, per_core_N_val):
+        out_tile = ttnn.Tile([M, tile_w])
+        out_shard = ttnn.ShardSpec(gate_proj_core_ranges, [M, per_core_N_val], ttnn.ShardOrientation.ROW_MAJOR)
+        out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard)
+        return ttnn.from_torch(
+            torch.zeros(1, 1, M, N_pad).bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=out_mem,
+            tile=out_tile,
+        )
+
+    gate_proj_output = _create_dram_mm_output(gate_proj_N_padded, per_core_gate_N)
+    up_proj_mm_out_tensor = _create_dram_mm_output(gate_proj_N_padded, per_core_gate_N)
+
+    # Fused output tensor (same layout as gate/up output)
     fused_output_tensor = ttnn.from_torch(
         torch.zeros([1, 1, M, gate_proj_N_padded]).bfloat16().float(),
         dtype=ttnn.bfloat16,
@@ -441,17 +336,10 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
         memory_config=up_proj_mm_out_tensor.memory_config(),
         tile=up_proj_mm_out_tensor.get_tile(),
     )
-    logger.info(f"Created fused_output_tensor for intermediate result: silu(gate_proj) * up_proj")
 
-    # ========== down_proj Tensors ==========
-    # down_proj: [1, gate_proj_N] x [gate_proj_N, K] -> [1, K]
-    down_proj_K = gate_proj_N  # Input dimension = fused output width (2048)
-    down_proj_N = K  # Output dimension = original input width (7168)
-
-    # down_proj_gather_output: gathered fused output on sender core
-    # Shape: [1, gate_proj_N_padded] on sender core
+    # down_proj intermediate tensors
     down_proj_gather_shard_spec = ttnn.ShardSpec(
-        input_core_grid,  # Sender core
+        input_core_grid,
         (M, gate_proj_N_padded),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -466,12 +354,9 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
         memory_config=down_proj_gather_mem_config,
         tile=tile_1x32,
     )
-    logger.info(f"Created down_proj_gather_output_tensor on sender core")
 
-    # down_proj_mcast_output: mcasted fused output on mcast grid
-    # Same shape as gather output, but sharded on mcast grid
     down_proj_mcast_shard_spec = ttnn.ShardSpec(
-        mcast_output_core_grid,  # Mcast grid
+        mcast_output_core_grid,
         (M, gate_proj_N_padded),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -486,33 +371,8 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
         memory_config=down_proj_mcast_mem_config,
         tile=tile_1x32,
     )
-    logger.info(f"Created down_proj_mcast_output_tensor on gate_proj cores")
 
-    # down_proj expert weights and output
-    (
-        down_proj_weights,
-        down_proj_output,
-        down_proj_weights_dict,
-        down_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=device,
-        K=down_proj_K,  # 2048 (fused output width)
-        N=down_proj_N,  # 7168 (original input width)
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,  # Same cores as gate_proj/up_proj
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=512,  # Different seed for different weights
-    )
-    logger.info(f"Created down_proj tensors: weights={down_proj_weights.shape}, output={down_proj_output.shape}")
-
-    # ========== fused_add Tensor (for eltwise_add after down_proj) ==========
-    # fused_add is replicated on all gate_proj cores via HEIGHT_SHARDED
-    # Each core has the full [1, down_proj_N_padded] tensor
-    down_proj_N_padded = ((down_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
-    per_core_down_proj_N = down_proj_N_padded // num_banks
+    down_proj_output = _create_dram_mm_output(down_proj_N_padded, per_core_down_proj_N)
 
     # Create fused_add torch tensor [1, 1, 1, down_proj_N_padded]
     torch.manual_seed(1024)  # Different seed for fused_add
@@ -930,73 +790,73 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
         mesh_mapper=mesh_mapper,
     )
 
-    # ========== DRAM Matmul Tensors ==========
-    (
-        gate_proj_weights,
-        gate_proj_output,
-        expert_weights_for_validation,
-        gate_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=submesh,
-        K=gate_proj_K,
-        N=gate_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=0,
-        mesh_mapper=mesh_mapper,
-    )
-    logger.info(f"Created gate_proj tensors: weights={gate_proj_weights.shape}, output={gate_proj_output.shape}")
-
-    # up_proj tensors
-    (
-        up_proj_weights,
-        up_proj_mm_out_tensor,
-        up_proj_weights_for_validation,
-        up_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=submesh,
-        K=gate_proj_K,
-        N=gate_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=256,
-        mesh_mapper=mesh_mapper,
-    )
-    logger.info(f"Created up_proj tensors: weights={up_proj_weights.shape}, mm_out={up_proj_mm_out_tensor.shape}")
-
-    # Fused output tensor (same shape as up_proj_mm_out)
+    # ── Compute dimensions for expert DRAM matmul ──
     num_banks = submesh.dram_grid_size().x
-    gate_proj_N_padded = ((gate_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    tile_w = 32
+    gate_proj_N_padded = ((gate_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    down_proj_K = gate_proj_N
+    down_proj_N = K
+    down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
     per_core_gate_proj_N = gate_proj_N_padded // num_banks
-    out_tile = ttnn.Tile([M, 32])
-    out_shard_shape = [M, per_core_gate_proj_N]
-    out_shard_spec = ttnn.ShardSpec(gate_proj_core_ranges, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+    per_core_down_proj_N = down_proj_N_padded // num_banks
+
+    # ── Generate expert weights for validation ──
+    def _gen_experts(num_exp, K_dim, N_padded, seed):
+        stacked = torch.zeros(num_exp, K_dim, N_padded, dtype=torch.bfloat16)
+        validation = {}
+        for i in range(num_exp):
+            torch.manual_seed(seed + i)
+            w = torch.randn(1, 1, K_dim, N_padded).clamp(-2, 2).bfloat16()
+            validation[i] = w.clone()
+            stacked[i] = w.reshape(K_dim, N_padded)
+        return stacked, validation
+
+    gate_stacked, expert_weights_for_validation = _gen_experts(num_experts, gate_proj_K, gate_proj_N_padded, seed=0)
+    up_stacked, up_proj_weights_for_validation = _gen_experts(num_experts, gate_proj_K, gate_proj_N_padded, seed=256)
+    down_stacked, down_proj_weights_for_validation = _gen_experts(
+        num_experts, down_proj_K, down_proj_N_padded, seed=512
+    )
+
+    # ── Upload expert weights via BlitzDecodeWeights ──
+    bdw = BlitzDecodeWeights(submesh)
+    gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
+        gate_stacked, up_stacked, down_stacked
+    )
+    gate_proj_weights = gate_proj_expert_tensors[0]
+    up_proj_weights = up_proj_expert_tensors[0]
+    down_proj_weights = down_proj_expert_tensors[0]
+    logger.info("Uploaded gate/up/down expert weights via BlitzDecodeWeights")
+
+    # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──
+    def _create_dram_mm_output(dev, N_pad, per_core_N_val):
+        out_tile = ttnn.Tile([M, tile_w])
+        out_shard = ttnn.ShardSpec(gate_proj_core_ranges, [M, per_core_N_val], ttnn.ShardOrientation.ROW_MAJOR)
+        out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard)
+        return ttnn.from_torch(
+            torch.zeros(1, 1, M, N_pad).bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=out_mem,
+            tile=out_tile,
+            mesh_mapper=mesh_mapper,
+        )
+
+    gate_proj_output = _create_dram_mm_output(submesh, gate_proj_N_padded, per_core_gate_proj_N)
+    up_proj_mm_out_tensor = _create_dram_mm_output(submesh, gate_proj_N_padded, per_core_gate_proj_N)
+
+    # Fused output tensor (same layout as gate/up output)
     fused_output_tensor = ttnn.from_torch(
         torch.zeros([1, 1, M, gate_proj_N_padded]).bfloat16(),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=out_memory_config,
-        tile=out_tile,
+        memory_config=up_proj_mm_out_tensor.memory_config(),
+        tile=up_proj_mm_out_tensor.get_tile(),
         mesh_mapper=mesh_mapper,
     )
 
-    # down_proj tensors
-    down_proj_K = gate_proj_N
-    down_proj_N = K
-    down_proj_N_padded = ((down_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
-    per_core_down_proj_N = down_proj_N_padded // num_banks
-
-    # down_proj gather output
+    # down_proj intermediate tensors
     down_proj_gather_shard_spec = ttnn.ShardSpec(
         input_core_grid, (M, gate_proj_N_padded), ttnn.ShardOrientation.ROW_MAJOR
     )
@@ -1013,7 +873,6 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
         mesh_mapper=mesh_mapper,
     )
 
-    # down_proj mcast output
     down_proj_mcast_shard_spec = ttnn.ShardSpec(
         mcast_output_core_grid, (M, gate_proj_N_padded), ttnn.ShardOrientation.ROW_MAJOR
     )
@@ -1030,26 +889,7 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
         mesh_mapper=mesh_mapper,
     )
 
-    # down_proj expert weights and output
-    (
-        down_proj_weights,
-        down_proj_output,
-        down_proj_weights_for_validation,
-        down_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=submesh,
-        K=down_proj_K,
-        N=down_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=512,
-        mesh_mapper=mesh_mapper,
-    )
-    logger.info(f"Created down_proj tensors: weights={down_proj_weights.shape}, output={down_proj_output.shape}")
+    down_proj_output = _create_dram_mm_output(submesh, down_proj_N_padded, per_core_down_proj_N)
 
     # fused_add tensor
     torch.manual_seed(1024)

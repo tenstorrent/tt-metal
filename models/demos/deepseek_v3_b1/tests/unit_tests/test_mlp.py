@@ -18,9 +18,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.mlp.op import MlpOp
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe import (
-    create_expert_matmul_tensors,
     create_shared_expert_tensors,
     extract_routed_expert_output,
 )
@@ -156,49 +156,59 @@ def create_mlp_tensors(device, mesh_mapper=None):
         **from_torch_kwargs,
     )
 
-    # ── Expert weight tensors (num_experts=1 for MLP) ──
-    (
-        gate_proj_weights,
-        gate_proj_output,
-        expert_weights_dict,
-        gate_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=device,
-        K=gate_proj_K,
-        N=gate_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=0,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # up_proj matmul tensors
-    (
-        up_proj_weights,
-        up_proj_mm_out_tensor,
-        up_proj_weights_dict,
-        up_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=device,
-        K=gate_proj_K,
-        N=gate_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=256,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # Fused output tensor
+    # ── Compute dimensions for expert DRAM matmul ──
     num_banks = device.dram_grid_size().x
-    gate_proj_N_padded = ((gate_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    tile_w = 32
+    gate_proj_N_padded = ((gate_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    down_proj_K = gate_proj_N
+    down_proj_N = K
+    down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    per_core_gate_N = gate_proj_N_padded // num_banks
+    per_core_down_proj_N = down_proj_N_padded // num_banks
+
+    # ── Generate expert weights for validation ──
+    def _gen_experts(num_exp, K_dim, N_padded, seed):
+        stacked = torch.zeros(num_exp, K_dim, N_padded, dtype=torch.bfloat16)
+        validation = {}
+        for i in range(num_exp):
+            torch.manual_seed(seed + i)
+            w = torch.randn(1, 1, K_dim, N_padded).clamp(-2, 2).bfloat16()
+            validation[i] = w.clone()
+            stacked[i] = w.reshape(K_dim, N_padded)
+        return stacked, validation
+
+    gate_stacked, expert_weights_dict = _gen_experts(num_experts, gate_proj_K, gate_proj_N_padded, seed=0)
+    up_stacked, up_proj_weights_dict = _gen_experts(num_experts, gate_proj_K, gate_proj_N_padded, seed=256)
+    down_stacked, down_proj_weights_dict = _gen_experts(num_experts, down_proj_K, down_proj_N_padded, seed=512)
+
+    # ── Upload expert weights via BlitzDecodeWeights ──
+    bdw = BlitzDecodeWeights(device)
+    gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
+        gate_stacked, up_stacked, down_stacked
+    )
+    gate_proj_weights = gate_proj_expert_tensors[0]
+    up_proj_weights = up_proj_expert_tensors[0]
+    down_proj_weights = down_proj_expert_tensors[0]
+
+    # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──
+    def _create_dram_mm_output(N_pad, per_core_N_val):
+        out_tile = ttnn.Tile([M, tile_w])
+        out_shard = ttnn.ShardSpec(gate_proj_core_ranges, [M, per_core_N_val], ttnn.ShardOrientation.ROW_MAJOR)
+        out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard)
+        return ttnn.from_torch(
+            torch.zeros(1, 1, M, N_pad).bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=out_mem,
+            tile=out_tile,
+            **from_torch_kwargs,
+        )
+
+    gate_proj_output = _create_dram_mm_output(gate_proj_N_padded, per_core_gate_N)
+    up_proj_mm_out_tensor = _create_dram_mm_output(gate_proj_N_padded, per_core_gate_N)
+
+    # Fused output tensor (same layout as gate/up output)
     fused_output_tensor = ttnn.from_torch(
         torch.zeros([1, 1, M, gate_proj_N_padded]).bfloat16().float(),
         dtype=ttnn.bfloat16,
@@ -209,10 +219,7 @@ def create_mlp_tensors(device, mesh_mapper=None):
         **from_torch_kwargs,
     )
 
-    # down_proj tensors
-    down_proj_K = gate_proj_N
-    down_proj_N = K
-
+    # down_proj intermediate tensors
     down_proj_gather_shard_spec = ttnn.ShardSpec(
         input_core_grid,
         (M, gate_proj_N_padded),
@@ -249,29 +256,7 @@ def create_mlp_tensors(device, mesh_mapper=None):
         **from_torch_kwargs,
     )
 
-    # down_proj expert weights and output
-    (
-        down_proj_weights,
-        down_proj_output,
-        down_proj_weights_dict,
-        down_proj_expert_tensors,
-    ) = create_expert_matmul_tensors(
-        device=device,
-        K=down_proj_K,
-        N=down_proj_N,
-        num_experts=num_experts,
-        compute_core_grid=gate_proj_core_ranges,
-        num_cores=num_gate_proj_cores,
-        tile_h=M,
-        tile_w=32,
-        dtype=ttnn.bfloat4_b,
-        seed=512,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # Final output tensor
-    down_proj_N_padded = ((down_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
-    per_core_down_proj_N = down_proj_N_padded // num_banks
+    down_proj_output = _create_dram_mm_output(down_proj_N_padded, per_core_down_proj_N)
 
     final_output_width_per_core = 32 * 32
     final_output_total_width = final_output_width_per_core * num_gate_proj_cores
@@ -412,7 +397,8 @@ def test_mlp_fused(device):
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
         shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
@@ -586,7 +572,8 @@ def test_mlp_fused_with_reduce(bh_2d_mesh_device):
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
         shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
@@ -612,21 +599,29 @@ def test_mlp_fused_with_reduce(bh_2d_mesh_device):
     logger.info(f"Fused MLP with reduce: {num_iterations} iterations completed")
 
     # ── Verify results ──
-    # Compute golden for a single device (all devices run identical MLP, no routing)
-    torch_expected_single = MlpOp.golden(
-        r["torch_input"],
-        shared_gate_weights=s["torch_gate_weights"],
-        shared_up_weights=s["torch_up_weights"],
-        shared_down_weights=s["torch_down_weights"],
-        gate_proj_weights=r["expert_weights_dict"][0],
-        up_proj_weights=r["up_proj_weights_dict"][0],
-        down_proj_weights=r["down_proj_weights_dict"][0],
-        rmsnorm_gamma=r["torch_rmsnorm_gamma"],
-        rmsnorm_epsilon=1e-6,
-    )
+    # Compute per-device golden with per-device TP shards of shared expert weights
+    K_down = s["K_down"]
+    expected_final_outputs = []
+    for device_idx in range(num_devices):
+        shared_gate_shard = s["torch_gate_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_up_shard = s["torch_up_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_down_shard = s["torch_down_weights"][device_idx * K_down : (device_idx + 1) * K_down, :]
 
-    # Expected reduce output = sum of all 8 identical device outputs
-    expected_reduce_output = torch_expected_single * num_devices
+        device_expected = MlpOp.golden(
+            r["torch_input"],
+            shared_gate_weights=shared_gate_shard,
+            shared_up_weights=shared_up_shard,
+            shared_down_weights=shared_down_shard,
+            gate_proj_weights=r["expert_weights_dict"][0],
+            up_proj_weights=r["up_proj_weights_dict"][0],
+            down_proj_weights=r["down_proj_weights_dict"][0],
+            rmsnorm_gamma=r["torch_rmsnorm_gamma"],
+            rmsnorm_epsilon=1e-6,
+        )
+        expected_final_outputs.append(device_expected)
+
+    # Expected reduce output = sum of all per-device outputs (each with unique TP shard)
+    expected_reduce_output = sum(expected_final_outputs)
 
     # Get actual reduce output from ROOT1 device
     reduce_output_torch = ttnn.to_torch(
