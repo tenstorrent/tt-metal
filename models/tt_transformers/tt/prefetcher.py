@@ -48,8 +48,10 @@ def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     cfg = ARCH_CONFIG["blackhole"]
     left_y = cfg["bank_ordered_y_coords"]["left"]
     right_y = cfg["bank_ordered_y_coords"]["right"]
-    left_senders = [(0, r) for r in left_y]
-    right_senders = [(8, r) for r in right_y]
+    left_sender_col = cfg["sender_cols"]["left"]
+    right_sender_col = cfg["sender_cols"]["right"]
+    left_senders = [(left_sender_col, r) for r in left_y]
+    right_senders = [(right_sender_col, r) for r in right_y]
     mapping = {}
     for sx, sy in left_senders:
         mapping[(sx, sy)] = [(x, sy) for x in range(1, num_receivers_per_sender + 1)]
