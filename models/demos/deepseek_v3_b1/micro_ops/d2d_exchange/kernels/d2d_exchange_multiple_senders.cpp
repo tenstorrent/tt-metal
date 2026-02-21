@@ -35,7 +35,6 @@ FORCE_INLINE bool socket_wait_for_pages_with_termination(
     constexpr uint32_t termination_value = 1;
     while (!socket_wait_for_pages(socket, num_pages, 1000)) {
         invalidate_l1_cache();
-        DPRINT << "Waiting for pages in receiver socket with termination checks...\n";
         if (termination_semaphore[0] == termination_value) {
             return false;
         }
@@ -75,7 +74,6 @@ FORCE_INLINE void send_pages_over_socket(
     uint32_t l1_read_addr,
     uint64_t dst_addr,
     uint32_t bytes_offset) {
-    DPRINT << "use fabric on sender: " << (uint32_t)use_fabric_on_sender << "\n";
     if constexpr (use_fabric_on_sender) {
         for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
             write_data_to_remote_core_with_ack(
@@ -111,36 +109,12 @@ FORCE_INLINE void send_pages_over_socket(
                 partial_packet_size);
         }
     } else {
-        DPRINT << "Sending data over socket without using fabric...\n";
         write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr + bytes_offset, upstream_page_size);
     }
 }
 
 void kernel_main() {
     // Build Fabric Connections
-    DPRINT << "start of d2d exchange d2d_0 kernel main\n";
-    DPRINT << "My NOC coordinates: x=" << (uint32_t)my_x[0] << ", y=" << (uint32_t)my_y[0] << "\n";
-    DPRINT << "CT ARGS for d2d 0\n";
-    DPRINT << "sender_socket_config_addr: " << (uint32_t)sender_socket_config_addr << "\n";
-    DPRINT << "termination_semaphore_addr: " << (uint32_t)termination_semaphore_addr << "\n";
-    DPRINT << "page_size: " << (uint32_t)page_size << "\n";
-    DPRINT << "upstream_page_size: " << (uint32_t)upstream_page_size << "\n";
-    DPRINT << "num_whole_fabric_packets_link_0: " << (uint32_t)num_whole_fabric_packets_link_0 << "\n";
-    DPRINT << "num_whole_fabric_packets_link_1: " << (uint32_t)num_whole_fabric_packets_link_1 << "\n";
-    DPRINT << "whole_packet_size: " << (uint32_t)whole_packet_size << "\n";
-    DPRINT << "partial_packet_size: " << (uint32_t)partial_packet_size << "\n";
-    DPRINT << "fabric_packet_header_cb_id: " << (uint32_t)fabric_packet_header_cb_id << "\n";
-    DPRINT << "use_fabric_on_receiver: " << (uint32_t)use_fabric_on_receiver << "\n";
-    DPRINT << "use_fabric_on_sender: " << (uint32_t)use_fabric_on_sender << "\n";
-    DPRINT << "num_upstream_sockets: " << (uint32_t)num_upstream_sockets << "\n";
-    DPRINT << "upstream_socket_0_config_addr: " << (uint32_t)upstream_socket_0_config_addr << "\n";
-    DPRINT << "upstream_socket_1_config_addr: " << (uint32_t)upstream_socket_1_config_addr << "\n";
-    DPRINT << "upstream_socket_2_config_addr: " << (uint32_t)upstream_socket_2_config_addr << "\n";
-    DPRINT << "upstream_socket_3_config_addr: " << (uint32_t)upstream_socket_3_config_addr << "\n";
-    DPRINT << "upstream_socket_4_config_addr: " << (uint32_t)upstream_socket_4_config_addr << "\n";
-    DPRINT << "upstream_socket_5_config_addr: " << (uint32_t)upstream_socket_5_config_addr << "\n";
-    DPRINT << "upstream_socket_6_config_addr: " << (uint32_t)upstream_socket_6_config_addr << "\n";
-    DPRINT << "upstream_socket_7_config_addr: " << (uint32_t)upstream_socket_7_config_addr << "\n";
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
@@ -152,18 +126,10 @@ void kernel_main() {
         downstream_fabric_connection_2 =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     }
-    DPRINT << "after building fabric connections on sender\n";
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
     set_sender_socket_page_size(sender_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
-
-    // Debug: Print downstream encoding (where D2D_0 will send to D2D_1)
-    DPRINT << "D2D_0 Sender Socket downstream encoding:\n";
-    DPRINT << "  downstream_noc_x: " << (uint32_t)downstream_enc.d2d.downstream_noc_x << "\n";
-    DPRINT << "  downstream_noc_y: " << (uint32_t)downstream_enc.d2d.downstream_noc_y << "\n";
-    DPRINT << "  downstream_bytes_sent_addr: " << (uint32_t)sender_socket.downstream_bytes_sent_addr << "\n";
-    DPRINT << "  downstream_fifo_addr: " << (uint32_t)sender_socket.downstream_fifo_addr << "\n";
 
     // Create receiver socket interfaces for all upstream sockets
     SocketReceiverInterface receiver_sockets[8];
@@ -175,21 +141,10 @@ void kernel_main() {
     receiver_sockets[5] = create_receiver_socket_interface(upstream_socket_5_config_addr);
     receiver_sockets[6] = create_receiver_socket_interface(upstream_socket_6_config_addr);
     receiver_sockets[7] = create_receiver_socket_interface(upstream_socket_7_config_addr);
-    DPRINT << "after creating receiver socket interfaces\n";
-
-    // Debug: print receiver socket FIFO addresses
-    for (uint32_t i = 0; i < num_upstream_sockets; i++) {
-        DPRINT << "Receiver socket " << i << ":\n";
-        DPRINT << "  config_addr: " << receiver_sockets[i].config_addr << "\n";
-        DPRINT << "  fifo_addr: " << receiver_sockets[i].fifo_addr << "\n";
-        DPRINT << "  fifo_total_size: " << receiver_sockets[i].fifo_total_size << "\n";
-    }
 
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
     }
-
-    DPRINT << "Starting d2d exchange kernel with " << (uint32_t)num_upstream_sockets << " upstream sockets" << ENDL();
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
@@ -216,7 +171,6 @@ void kernel_main() {
 
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
-        DPRINT << "after opening downstream fabric connections and setting routes\n";
     }
 
     uint64_t upstream_bytes_acked_noc_addrs[8];
@@ -226,20 +180,17 @@ void kernel_main() {
             receiver_sockets[i].d2d.upstream_noc_y,
             receiver_sockets[i].d2d.upstream_bytes_acked_addr);
     }
-    DPRINT << "after calculating NOC addresses for upstream bytes acked\n";
 
     uint32_t current_socket_idx = 0;
     uint32_t bytes_accumulated = 0;
     bool data_pushed = false;
 
     socket_reserve_pages(sender_socket, 1);
-    DPRINT << "after reserving page on sender socket\n";
 
     // Collect data from all upstream sockets into a single larger page
     while (true) {
         // Wait for pages in current upstream socket with termination checks
         if (!socket_wait_for_pages_with_termination(receiver_sockets[current_socket_idx], 1, termination_semaphore)) {
-            DPRINT << "Termination signal received. Ending kernel main loop.\n";
             break;
         }
 
@@ -251,8 +202,6 @@ void kernel_main() {
         uint64_t dst_addr =
             get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, dst_l1_addr);
 
-        DPRINT << "Socket " << current_socket_idx << " writing to offset " << skt_offset << "\n";
-
         send_pages_over_socket(
             sender_socket,
             downstream_fabric_connection,
@@ -263,50 +212,34 @@ void kernel_main() {
             l1_read_addr,
             dst_addr,
             0);  // Pass 0 as offset since we already added it to dst_addr
-        DPRINT << "after sending pages over socket\n";
 
         socket_pop_pages(receiver_sockets[current_socket_idx], 1);
 
         socket_notify_sender(receiver_sockets[current_socket_idx]);
-        DPRINT << "after notifying sender\n";
 
         invalidate_l1_cache();
 
         // Update accumulation
         bytes_accumulated += upstream_page_size;
         current_socket_idx = (current_socket_idx + 1) % num_upstream_sockets;
-        DPRINT << "current socket idx: " << (uint32_t)current_socket_idx
-               << ", bytes_accumulated: " << (uint32_t)bytes_accumulated << ENDL();
 
         // Push when we've accumulated a full downstream page
-        DPRINT << "Checking push condition: bytes_accumulated=" << (uint32_t)bytes_accumulated
-               << ", page_size=" << (uint32_t)page_size << ENDL();
         if (bytes_accumulated >= page_size) {
-            DPRINT << "PUSHING pages to D2D_1! Calling socket_push_pages...\n";
             socket_push_pages(sender_socket, 1);
-            DPRINT << "Called socket_push_pages, now calling socket_notify_receiver...\n";
             socket_notify_receiver(sender_socket);
-            DPRINT << "Notified D2D_1 receiver socket!\n";
             data_pushed = true;
             bytes_accumulated = 0;
 
             // Reserve next page if continuing
-            // break;
             socket_reserve_pages(sender_socket, 1);
         }
-        DPRINT << "after reserving page on sender socket\n";
     }
 
     // Push any remaining data if we broke out of loop before filling a complete page
-    DPRINT << "Final check: bytes_accumulated=" << (uint32_t)bytes_accumulated
-           << ", data_pushed=" << (uint32_t)data_pushed << ENDL();
     if (bytes_accumulated > 0 && !data_pushed) {
-        DPRINT << "PUSHING remaining data to D2D_1!\n";
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
-        DPRINT << "Pushed and notified for remaining data!\n";
     }
-    DPRINT << "after pushing remaining data if any\n";
 
     invalidate_l1_cache();
 
@@ -315,10 +248,8 @@ void kernel_main() {
         update_socket_config(receiver_sockets[i]);
     }
 
-    DPRINT << "after updating socket configs\n";
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
-    DPRINT << "end of d2d exchange 0 kernel main\n";
 }

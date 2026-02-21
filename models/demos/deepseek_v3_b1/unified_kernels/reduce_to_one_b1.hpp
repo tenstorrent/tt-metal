@@ -202,13 +202,7 @@ struct ReduceToOneB1 {
             // ================================================================
             // NCRISC - Reader: receives data from fabric via semaphore waits
             // ================================================================
-            DPRINT << "start of reduce to one ncrisc\n";
-            DPRINT << "device is mesh root 1: " << (uint32_t)(CTArgs::device_role == MESH_ROOT1) << "\n";
-            DPRINT << "device is mesh root 2: " << (uint32_t)(CTArgs::device_role == MESH_ROOT2) << "\n";
-            DPRINT << "device is mesh root 3: " << (uint32_t)(CTArgs::device_role == MESH_ROOT3) << "\n";
-            DPRINT << "is fabric core: " << (uint32_t)CTArgs::is_fabric_core << "\n";
             if constexpr (CTArgs::is_fabric_core) {
-                DPRINT << "end of reduce to one ncrisc on fabric core\n";
                 // Fabric cores have no reader work
                 return;
             }
@@ -250,23 +244,16 @@ struct ReduceToOneB1 {
                 semaphore_dec(recv_sem3_ptr);
                 cb_push_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
             }
-            DPRINT << "end of reduce to one ncrisc\n";
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC - Writer: sends data via fabric or NOC
             // ================================================================
-            DPRINT << "start of reduce to one brisc\n";
-            DPRINT << "device is mesh root 1: " << (uint32_t)(CTArgs::device_role == MESH_ROOT1) << "\n";
-            DPRINT << "device is mesh root 2: " << (uint32_t)(CTArgs::device_role == MESH_ROOT2) << "\n";
-            DPRINT << "device is mesh root 3: " << (uint32_t)(CTArgs::device_role == MESH_ROOT3) << "\n";
-            DPRINT << "is fabric core: " << (uint32_t)CTArgs::is_fabric_core << "\n";
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
                 // Fabric core: forward worker packets via fabric
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
                     // ROOT1 fabric cores have nothing to do
-                    DPRINT << "end of reduce to one brisc on fabric core for ROOT1\n";
                     return;
                 }
 
@@ -307,7 +294,6 @@ struct ReduceToOneB1 {
 
                 fabric_sender.close();
                 noc_async_write_barrier();
-                DPRINT << "end of reduce to one brisc on fabric core for ROOT2/ROOT3\n";
                 return;
             }
 
@@ -317,7 +303,6 @@ struct ReduceToOneB1 {
 
             // ROOT1: send final results via socket (if D2H enabled) or NOC gather
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                DPRINT << "setting up and sending through sockets\n";
                 // Wait for compute to finish
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
 
@@ -332,33 +317,16 @@ struct ReduceToOneB1 {
                 noc_async_write_barrier();
 
                 // Send to D2H socket if enabled (socket_config_addr != 0)
-                DPRINT << "socket config addr: " << (uint32_t)args.socket_config_addr << "\n";
-                DPRINT << "page size: " << (uint32_t)CTArgs::payload_size_bytes << "\n";
                 if (args.socket_config_addr != 0) {
                     // Create socket sender interface
                     SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
                     set_sender_socket_page_size(sender_socket, CTArgs::payload_size_bytes);
 
-                    DPRINT << "Socket sender config:\n";
-                    DPRINT << "  num_downstreams: " << (uint32_t)sender_socket.num_downstreams << "\n";
-                    DPRINT << "  downstream_fifo_addr: " << (uint32_t)sender_socket.downstream_fifo_addr << "\n";
-                    DPRINT << "  downstream_fifo_total_size: " << (uint32_t)sender_socket.downstream_fifo_total_size
-                           << "\n";
-                    DPRINT << "  downstream_bytes_sent_addr: " << (uint32_t)sender_socket.downstream_bytes_sent_addr
-                           << "\n";
-                    DPRINT << "  bytes_sent (before notify): " << (uint32_t)sender_socket.bytes_sent << "\n";
-
                     // Reserve space in socket
                     socket_reserve_pages(sender_socket, 1);
-                    DPRINT << "reserved page in socket\n";
 
                     // Get downstream encoding
                     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
-
-                    DPRINT << "Downstream encoding:\n";
-                    DPRINT << "  noc_x: " << (uint32_t)downstream_enc.d2d.downstream_noc_x << "\n";
-                    DPRINT << "  noc_y: " << (uint32_t)downstream_enc.d2d.downstream_noc_y << "\n";
-                    DPRINT << "  chip_id: " << (uint32_t)downstream_enc.d2d.downstream_chip_id << "\n";
 
                     // Write to downstream socket
                     noc_async_write(
@@ -368,23 +336,18 @@ struct ReduceToOneB1 {
                             downstream_enc.d2d.downstream_noc_y,
                             sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
                         CTArgs::payload_size_bytes);
-                    DPRINT << "after aync write to socket\n";
 
                     // Push to downstream and notify
                     socket_push_pages(sender_socket, 1);
                     socket_notify_receiver(sender_socket);
                     noc_async_writes_flushed();
 
-                    DPRINT << "after notify receiver\n";
-
                     socket_barrier(sender_socket);
                     noc_async_write_barrier();
-                    DPRINT << "after socket barrier\n";
                 }
 
                 // Pop from CB
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                DPRINT << "end of reduce to one writing to sockets\n";
                 return;
             }
 
@@ -403,7 +366,6 @@ struct ReduceToOneB1 {
                 static_cast<uint16_t>(CTArgs::dst_fabric_node_chip_id),
                 static_cast<uint16_t>(CTArgs::dst_fabric_node_mesh_id),
                 static_cast<uint16_t>(CTArgs::num_hops));
-            DPRINT << "after set unicast route\n";
 
             // Set up fused write + atomic inc
             uint64_t dst_noc_addr = get_noc_addr(my_noc_x, my_noc_y, args.dst_l1_addr);
@@ -439,13 +401,11 @@ struct ReduceToOneB1 {
             // Send header and payload to fabric core
             noc_async_write(reinterpret_cast<uint32_t>(packet_header), header_noc_addr, packet_header_size_bytes);
             noc_async_write(data_addr, payload_noc_addr, CTArgs::payload_size_bytes);
-            DPRINT << "after async writes to fabric core\n";
 
             // Signal fabric core
             uint64_t arrival_sem_noc_addr =
                 get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
             noc_semaphore_inc(arrival_sem_noc_addr, 1);
-            DPRINT << "after semaphore inc to signal fabric core\n";
 
             noc_async_write_barrier();
             noc_async_atomic_barrier();
@@ -465,14 +425,8 @@ struct ReduceToOneB1 {
             // ================================================================
             // TRISC - Compute: performs reduction
             // ================================================================
-            DPRINT << "start of reduce to one trisc\n";
-            DPRINT << "device is mesh root 1: " << (uint32_t)(CTArgs::device_role == MESH_ROOT1) << "\n";
-            DPRINT << "device is mesh root 2: " << (uint32_t)(CTArgs::device_role == MESH_ROOT2) << "\n";
-            DPRINT << "device is mesh root 3: " << (uint32_t)(CTArgs::device_role == MESH_ROOT3) << "\n";
-            DPRINT << "is fabric core: " << (uint32_t)CTArgs::is_fabric_core << "\n";
             if constexpr (CTArgs::is_fabric_core || CTArgs::device_role == MESH_LEAF) {
                 // Fabric cores and LEAFs have no compute
-                DPRINT << "end of reduce to one trisc on fabric core or leaf\n";
                 return;
             }
 
@@ -524,7 +478,6 @@ struct ReduceToOneB1 {
             }
             release_dst();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-            DPRINT << "end of reduce to one trisc\n";
 #endif
         }
     };  // class Op
