@@ -147,11 +147,6 @@ public:
         return false;
     }
 
-    // We prob need to leak this for compatability:
-    //
-    // // TODO-ask Alex: can we retire this method in favor of mesh_buffer()
-    // Buffer* buffer() const;
-    //
     /**
      * From original tensor:
      *  Returns device `MeshBuffer`.

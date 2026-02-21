@@ -261,8 +261,6 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    // static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    // auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
     static constexpr auto attribute_names = std::forward_as_tuple("tensor_spec");
     auto attribute_values() const { return std::forward_as_tuple(tensor_spec()); }
 
