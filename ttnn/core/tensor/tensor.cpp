@@ -4,6 +4,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -155,7 +156,11 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
+    auto res = Tensor(tensor_impl::host_tensor::from_span(buffer, spec, pad_value));
+    if (device) {
+        res = res.to_device(device, spec.memory_config(), cq_id);
+    }
+    return res;
 }
 
 template <typename T>
@@ -164,10 +169,8 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    size_t volume = shape.volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    return Tensor(HostBuffer(buffer, std::move(buffer_pin)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
+    auto host_tensor = tensor_impl::host_tensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    return Tensor(std::move(host_tensor));
 }
 
 template <typename T>
@@ -177,25 +180,8 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
-        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
-    }
-
-    // Create host tensor with DataType matching buffer
-    auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
-
-    auto host_buffer =
-        logical_matches_physical(buffer_spec)
-            ? HostBuffer(std::move(buffer))
-            : HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
-    auto res = Tensor(std::move(host_buffer), buffer_spec);
-    // Convert to datatype from original spec
-    res = to_dtype(res, spec.data_type());
+    auto host_tensor = tensor_impl::host_tensor::from_vector(std::move(buffer), spec, pad_value);
+    auto res = Tensor(std::move(host_tensor));
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
