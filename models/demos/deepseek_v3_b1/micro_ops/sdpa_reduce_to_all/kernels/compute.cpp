@@ -84,8 +84,14 @@ ALWI void sdpa_tail_streaming(
     uint32_t cb_l_out) {
     // Phase 1: MS reduction - computes P1/P2, sets up SRCB
     // This also reserves regs if normalize=true for first L block
-    ckernel::sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
-        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
+    ckernel::sdpa_tail_ms_reduce<
+        SDPA_EXP_APPROX_MODE,
+        normalize,
+        block_size,
+        scale_fp32,
+        vector_mode,
+        false,
+        false /*TODO*/>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
     // Phase 2: Process L chunks as they arrive
     // Each chunk = one block (block_size = tiles_per_chunk)
@@ -99,7 +105,8 @@ ALWI void sdpa_tail_streaming(
         uint32_t tile_index = chunk * block_size;
         // For normalize=true, first chunk uses regs still held from MS phase
         bool acquire_regs = !(normalize && chunk == 0);
-        ckernel::sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, tile_index, acquire_regs);
+        ckernel::sdpa_tail_l_block<block_size, 1, false /*TODO*/, false /*TODO*/, false>(
+            cb_l1, cb_l2, cb_l_out, tile_index, acquire_regs);
 
         cb_push_back(cb_l_out, block_size);
         // NOTE: No cb_pop_front for cb_l1/cb_l2 - tiles remain for other readers
@@ -131,6 +138,7 @@ ALWI void forward_data(
     cb_push_back(cb_cur_max_sum, 1);
 
     // Copy neighbor L to output L
+    copy_tile_init(cb_l1);
     for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
         cb_wait_front(cb_l1, (chunk + 1) * block_size);
         cb_reserve_back(cb_l_out, block_size);
@@ -138,7 +146,6 @@ ALWI void forward_data(
         uint32_t tile_index = chunk * block_size;
         for (uint32_t i = 0; i < block_size; i++) {
             tile_regs_acquire();
-            copy_tile_init(cb_l1);
             copy_tile(cb_l1, tile_index + i, i);
             tile_regs_commit();
 
