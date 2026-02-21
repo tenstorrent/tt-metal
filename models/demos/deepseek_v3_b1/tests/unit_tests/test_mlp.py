@@ -599,21 +599,29 @@ def test_mlp_fused_with_reduce(bh_2d_mesh_device):
     logger.info(f"Fused MLP with reduce: {num_iterations} iterations completed")
 
     # ── Verify results ──
-    # Compute golden for a single device (all devices run identical MLP, no routing)
-    torch_expected_single = MlpOp.golden(
-        r["torch_input"],
-        shared_gate_weights=s["torch_gate_weights"],
-        shared_up_weights=s["torch_up_weights"],
-        shared_down_weights=s["torch_down_weights"],
-        gate_proj_weights=r["expert_weights_dict"][0],
-        up_proj_weights=r["up_proj_weights_dict"][0],
-        down_proj_weights=r["down_proj_weights_dict"][0],
-        rmsnorm_gamma=r["torch_rmsnorm_gamma"],
-        rmsnorm_epsilon=1e-6,
-    )
+    # Compute per-device golden with per-device TP shards of shared expert weights
+    K_down = s["K_down"]
+    expected_final_outputs = []
+    for device_idx in range(num_devices):
+        shared_gate_shard = s["torch_gate_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_up_shard = s["torch_up_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_down_shard = s["torch_down_weights"][device_idx * K_down : (device_idx + 1) * K_down, :]
 
-    # Expected reduce output = sum of all 8 identical device outputs
-    expected_reduce_output = torch_expected_single * num_devices
+        device_expected = MlpOp.golden(
+            r["torch_input"],
+            shared_gate_weights=shared_gate_shard,
+            shared_up_weights=shared_up_shard,
+            shared_down_weights=shared_down_shard,
+            gate_proj_weights=r["expert_weights_dict"][0],
+            up_proj_weights=r["up_proj_weights_dict"][0],
+            down_proj_weights=r["down_proj_weights_dict"][0],
+            rmsnorm_gamma=r["torch_rmsnorm_gamma"],
+            rmsnorm_epsilon=1e-6,
+        )
+        expected_final_outputs.append(device_expected)
+
+    # Expected reduce output = sum of all per-device outputs (each with unique TP shard)
+    expected_reduce_output = sum(expected_final_outputs)
 
     # Get actual reduce output from ROOT1 device
     reduce_output_torch = ttnn.to_torch(

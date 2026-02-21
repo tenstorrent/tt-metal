@@ -56,12 +56,16 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
     matmul_core_grid = DownProj.build_matmul_core_grid()
 
-    # Create torch data
+    # Create torch data — generate full TP-width weights with unique data per shard
+    bdw = BlitzDecodeWeights(device)
+    moe_tp = bdw.moe_tp
+    K_down_full = K_down * moe_tp
+
     torch.manual_seed(100)  # Different seed from routed expert
     torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
-    torch_gate_weights = torch.randn((K_gate, K_down), dtype=torch.bfloat16)
-    torch_up_weights = torch.randn((K_gate, K_down), dtype=torch.bfloat16)
-    torch_down_weights = torch.randn((K_down, N), dtype=torch.bfloat16)
+    torch_gate_weights = torch.randn((K_gate, K_down_full), dtype=torch.bfloat16)
+    torch_up_weights = torch.randn((K_gate, K_down_full), dtype=torch.bfloat16)
+    torch_down_weights = torch.randn((K_down_full, N), dtype=torch.bfloat16)
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
     from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
@@ -81,12 +85,9 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
 
     compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
 
-    bdw = BlitzDecodeWeights(device)
-    moe_tp = bdw.moe_tp
-    gate_full = torch_gate_weights.repeat(1, moe_tp) if moe_tp > 1 else torch_gate_weights
-    up_full = torch_up_weights.repeat(1, moe_tp) if moe_tp > 1 else torch_up_weights
-    down_full = torch_down_weights.repeat(moe_tp, 1) if moe_tp > 1 else torch_down_weights
-    gate_ov, up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(gate_full, up_full, down_full)
+    gate_ov, up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(
+        torch_gate_weights, torch_up_weights, torch_down_weights
+    )
 
     # ── Output ──
     out_shard = ttnn.ShardSpec(sender_core_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
@@ -249,6 +250,8 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
         # Params
         "k_parallel": k_parallel,
         "n_parallel": n_parallel,
+        "moe_tp": moe_tp,
+        "K_down": K_down,
         # Tensor-backed CB tensors
         "ttnn_ag_gather_dst": ttnn_ag_gather_dst,
         "ttnn_bg_gather_dst": ttnn_bg_gather_dst,
@@ -1129,6 +1132,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 
     # Compute expected output for each device, then sum
     # Each device uses a different hardcoded expert index (chip_id)
+    # and a different TP shard of shared expert weights
+    K_down = s["K_down"]
     expected_final_outputs = []
     for device_idx in range(num_devices):
         chip_id = device_idx
@@ -1140,13 +1145,17 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
             actual_expert_idx = int(device_gate_indices[0].flatten()[chip_id].item())
             actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
 
+        shared_gate_shard = s["torch_gate_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_up_shard = s["torch_up_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_down_shard = s["torch_down_weights"][device_idx * K_down : (device_idx + 1) * K_down, :]
+
         _, _, torch_expected_final = MoeOp.golden(
             r["torch_input"],
             r["torch_gate_mm_weights"],
             r["torch_bias"],
-            shared_gate_weights=s["torch_gate_weights"],
-            shared_up_weights=s["torch_up_weights"],
-            shared_down_weights=s["torch_down_weights"],
+            shared_gate_weights=shared_gate_shard,
+            shared_up_weights=shared_up_shard,
+            shared_down_weights=shared_down_shard,
             gate_proj_weights_dict=r["expert_weights_dict"],
             up_proj_weights_dict=r["up_proj_weights_dict"],
             down_proj_weights_dict=r["down_proj_weights_dict"],
