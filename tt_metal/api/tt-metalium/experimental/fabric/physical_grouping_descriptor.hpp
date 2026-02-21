@@ -55,13 +55,11 @@ struct GroupingItemInfo {
 struct GroupingInfo {
     std::string name;  // Unique identifier/name for this specific grouping instance
     std::string type;  // Type of grouping (e.g., "MESH", "TRAY_1", "meshes", "pods")
-    std::vector<GroupingItemInfo> items;
+    std::vector<GroupingItemInfo> items;  // items[i] is the item for graph node i (0..n-1)
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
 
-    // Adjacency graph representing the topology/connections between instances
-    // Node IDs are instance IDs (uint32_t) from the grouping's instances list
-    // Empty graph if no connection type is specified
-    // Always uses 1 connection per edge (bidirectional)
+    // Adjacency graph. For flattened groupings, nodes are 0..n-1 and items[i] = item for node i.
+    // Empty graph if no connection type is specified.
     AdjacencyGraph<uint32_t> adjacency_graph;
 };
 
@@ -107,6 +105,11 @@ public:
     // There can be multiple valid groupings for each MGD instance
     ValidGroupingsMap get_valid_groupings_for_mgd(const MeshGraphDescriptor& mesh_graph_descriptor) const;
 
+    // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
+    ValidGroupingsMap get_valid_groupings_for_mgd(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
@@ -120,6 +123,10 @@ public:
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
 
+    // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
+    std::vector<GroupingInfo> build_flattened_adjacency_mesh(
+        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
 private:
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
@@ -132,6 +139,15 @@ private:
 
     // Helper to get ASIC count for a grouping name (from cache)
     uint32_t get_grouping_asic_count(const std::string& grouping_name) const;
+
+    // Private helper that takes PSD pointer (used internally by public overloads)
+    ValidGroupingsMap get_valid_groupings_for_mgd(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
+
+    // Private helper that takes PSD pointer (used internally by public overloads)
+    std::vector<GroupingInfo> build_flattened_adjacency_mesh(
+        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
 
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
