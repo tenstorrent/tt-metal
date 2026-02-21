@@ -17,6 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_b1.blitz_decode_weights import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC, BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
@@ -43,14 +44,16 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     if device_grid.x < 13 or device_grid.y < 10:
         pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
-    # Dimensions
-    k_parallel = 8
-    n_parallel = 8
-    K_down = n_parallel * 32  # = 256 (64 partials per branch, 8 N-positions)
-    N = N_per_core * DownProj.NUM_MATMUL_CORES  # e.g. 7168
     M = 1
-    k_per_core = (K_gate // 32) // k_parallel  # tiles per core along K dimension
+    cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    k_parallel = cfg.k_parallel
+    n_parallel = cfg.n_parallel
+    K_down = n_parallel * 32  # 256
+    N = N_per_core * DownProj.NUM_MATMUL_CORES
+    k_per_core = (K_gate // 32) // k_parallel
     assert k_per_core * k_parallel * 32 == K_gate, "K_gate must be divisible by 32 * k_parallel"
+
+    use_bdw = K_gate == cfg.gate_proj_shape[0] and weights_dtype == ttnn.bfloat4_b
 
     logger.info("=" * 70)
     logger.info("Testing Shared Expert:")
@@ -64,16 +67,9 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     b_tile = ttnn.Tile([32, 32])
     out_tile = ttnn.Tile([M, 32])
 
-    # ========================================================================
-    # Core grids
-    # ========================================================================
-    a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
-    compute_cores_list = a_cores_list + b_cores_list  # 128 compute cores
-
+    # Core grids (activation / bias / output placement)
     mcast_gather_core = DownProj.MCAST_GATHER_CORE
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
-
-    matmul_core_grid = DownProj.build_matmul_core_grid()
 
     # ========================================================================
     # Create test data
@@ -112,64 +108,70 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     )
 
     # ========================================================================
-    # Gate/Up weights: stacked, HEIGHT_SHARDED on 128 compute cores
-    # Each core gets [k_per_core, 32] weight shard
-    # A cores get gate weight shards, B cores get up weight shards
-    # Row order must match compute_cores_list = a_cores + b_cores
+    # Gate/Up/Down weights
     # ========================================================================
-    # Build weight tensor with shards ordered by compute core list
-    weight_shards = []
-    for i, core in enumerate(a_cores_list):
-        # A core i: k_idx = i // n_parallel, n_idx = i % n_parallel
-        k_idx = i // n_parallel
-        n_idx = i % n_parallel
-        k_start = k_idx * k_per_core * 32
-        k_end = k_start + k_per_core * 32
-        n_start = n_idx * 32
-        n_end = n_start + 32
-        weight_shards.append(torch_gate_weights[k_start:k_end, n_start:n_end])
+    # BlitzDecodeWeights hard-codes weights to bfloat4_b; use the old flow to test bfloat8_b weights
+    if use_bdw:
+        bdw = BlitzDecodeWeights(device)
+        gate_ov, _up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(
+            torch_gate_weights,
+            torch_up_weights,
+            torch_down_weights,
+        )
+        ttnn_gate_up_weights = gate_ov.fused_tensor
+        logger.info("Created shared expert weights via BlitzDecodeWeights")
+    else:
+        a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
+        compute_cores_list = a_cores_list + b_cores_list
 
-    for i, core in enumerate(b_cores_list):
-        k_idx = i // n_parallel
-        n_idx = i % n_parallel
-        k_start = k_idx * k_per_core * 32
-        k_end = k_start + k_per_core * 32
-        n_start = n_idx * 32
-        n_end = n_start + 32
-        weight_shards.append(torch_up_weights[k_start:k_end, n_start:n_end])
+        weight_shards = []
+        for i, core in enumerate(a_cores_list):
+            k_idx = i // n_parallel
+            n_idx = i % n_parallel
+            k_start = k_idx * k_per_core * 32
+            k_end = k_start + k_per_core * 32
+            n_start = n_idx * 32
+            n_end = n_start + 32
+            weight_shards.append(torch_gate_weights[k_start:k_end, n_start:n_end])
 
-    # Stack all shards: [128 * k_per_core, 32]
-    torch_gate_up_stacked = torch.cat(weight_shards, dim=0)
-    logger.info(f"Gate/Up weights stacked shape: {torch_gate_up_stacked.shape}")
+        for i, core in enumerate(b_cores_list):
+            k_idx = i // n_parallel
+            n_idx = i % n_parallel
+            k_start = k_idx * k_per_core * 32
+            k_end = k_start + k_per_core * 32
+            n_start = n_idx * 32
+            n_end = n_start + 32
+            weight_shards.append(torch_up_weights[k_start:k_end, n_start:n_end])
 
-    compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
-    gu_shard_spec = ttnn.ShardSpec(compute_core_grid, (k_per_core * 32, 32), ttnn.ShardOrientation.ROW_MAJOR)
-    gu_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gu_shard_spec)
+        torch_gate_up_stacked = torch.cat(weight_shards, dim=0)
+        logger.info(f"Gate/Up weights stacked shape: {torch_gate_up_stacked.shape}")
 
-    ttnn_gate_up_weights = ttnn.from_torch(
-        torch_gate_up_stacked,
-        dtype=weights_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=gu_mem,
-        tile=b_tile,
-    )
+        compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
+        gu_shard_spec = ttnn.ShardSpec(compute_core_grid, (k_per_core * 32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+        gu_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gu_shard_spec)
 
-    # ========================================================================
-    # Down proj weights: [K_down, N] WIDTH_SHARDED on 112 matmul cores
-    # ========================================================================
-    down_shard_spec = ttnn.ShardSpec(matmul_core_grid, (K_down, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
-    down_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, down_shard_spec)
+        ttnn_gate_up_weights = ttnn.from_torch(
+            torch_gate_up_stacked,
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=gu_mem,
+            tile=b_tile,
+        )
 
-    ttnn_down_weights = ttnn.from_torch(
-        torch_down_weights,
-        dtype=weights_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=down_mem,
-        tile=b_tile,
-    )
-    logger.info(f"Down weights: shard ({K_down}, {N_per_core}) on {DownProj.NUM_MATMUL_CORES} cores")
+        matmul_core_grid = DownProj.build_matmul_core_grid()
+        down_shard_spec = ttnn.ShardSpec(matmul_core_grid, (K_down, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+        down_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, down_shard_spec)
+
+        ttnn_down_weights = ttnn.from_torch(
+            torch_down_weights,
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=down_mem,
+            tile=b_tile,
+        )
+        logger.info(f"Down weights: shard ({K_down}, {N_per_core}) on {DownProj.NUM_MATMUL_CORES} cores")
 
     # ========================================================================
     # Bias: [1, N] HEIGHT_SHARDED on sender (12,9)

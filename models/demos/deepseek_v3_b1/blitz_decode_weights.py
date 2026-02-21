@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -1386,6 +1387,8 @@ class BlitzDecodeWeights:
                         mesh_mapper=mesh_mapper,
                     )
                 )
+                if (i + 1) % 32 == 0:
+                    logger.info(f"  Uploaded {i + 1}/{num_experts} experts")
             return tensors
 
         return upload(gate_proj_weights), upload(up_proj_weights), upload(down_proj_weights)
