@@ -1217,9 +1217,15 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
     ASSERT_FALSE(all_mesh_groupings.empty()) << "No MESH groupings found in PGD";
 
     // Find specific mesh groupings by name or by dimensions (name can have WH/BH suffix)
+    // Prefer exact match first so "2x4_Mesh" matches the single-tray grouping, not "2x4_Mesh_2tray"
     auto find_mesh_by_name = [&all_mesh_groupings](const std::string& name) -> const GroupingInfo* {
         for (const auto& mesh : all_mesh_groupings) {
-            if (mesh.name == name || mesh.name.find(name) == 0) {
+            if (mesh.name == name) {
+                return &mesh;
+            }
+        }
+        for (const auto& mesh : all_mesh_groupings) {
+            if (mesh.name.find(name) == 0) {
                 return &mesh;
             }
         }
@@ -1338,14 +1344,27 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BlitzPipeline2x4) 
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
 
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // Print valid groupings
+    for (const auto& [instance_type, instances] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : instances) {
+            std::cout << "Instance type: " << instance_type << ", Instance name: " << instance_name << std::endl;
+            for (const auto& grouping : groupings) {
+                std::cout << "Grouping name: " << grouping.name << ", ASIC count: " << grouping.asic_count << std::endl;
+            }
+        }
+    }
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
@@ -1719,11 +1738,12 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Phase3_HigherLayer
     const auto& m0_groupings = valid_groupings.at("MESH").at("M0");
     const auto& m1_groupings = valid_groupings.at("MESH").at("M1");
 
+    // Grouping names may have suffixes (e.g., mesh_2x4_0, mesh_4x2_1) due to flattened combinations
     bool m0_has_mesh_2x4_or_4x2 = std::any_of(m0_groupings.begin(), m0_groupings.end(), [](const auto& g) {
-        return g.name == "mesh_2x4" || g.name == "mesh_4x2";
+        return g.name.find("mesh_2x4") == 0 || g.name.find("mesh_4x2") == 0;
     });
     bool m1_has_mesh_2x4_or_4x2 = std::any_of(m1_groupings.begin(), m1_groupings.end(), [](const auto& g) {
-        return g.name == "mesh_2x4" || g.name == "mesh_4x2";
+        return g.name.find("mesh_2x4") == 0 || g.name.find("mesh_4x2") == 0;
     });
 
     EXPECT_TRUE(m0_has_mesh_2x4_or_4x2) << "M0 (2x4) should map to at least one of mesh_2x4 or mesh_4x2";

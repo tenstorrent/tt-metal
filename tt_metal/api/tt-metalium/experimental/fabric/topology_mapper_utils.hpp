@@ -158,6 +158,21 @@ TopologyMappingResult map_mesh_to_physical(
 std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt_fabric::MeshGraph& mesh_graph);
 
 /**
+ * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
+ *
+ * Builds a complete flat adjacency map including all connections (both intra-mesh and intermesh),
+ * with multiple entries per channel. If asic_id_to_mesh_rank is empty, includes all ASICs from PSD.
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @param asic_id_to_mesh_rank Optional mapping of mesh IDs to ASIC IDs to mesh host ranks.
+ *                              If empty, all ASICs from PSD are included.
+ * @return PhysicalAdjacencyMap Map from AsicID to vector of neighbor AsicIDs
+ */
+PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {});
+
+/**
  * @brief Build physical adjacency maps from system descriptor connectivity
  *
  * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system

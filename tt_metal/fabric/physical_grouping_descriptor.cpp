@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <cctype>
@@ -34,6 +35,36 @@
 using namespace tt::tt_fabric;
 
 namespace {
+
+// Helper function to iterate through Cartesian product of multiple vectors.
+// Calls callback(indices) for each combination, where indices[i] is the index into the i-th vector.
+template <typename Callback>
+void iterate_cartesian_product(const std::vector<size_t>& sizes, Callback callback) {
+    if (sizes.empty()) {
+        return;
+    }
+
+    std::vector<size_t> indices(sizes.size(), 0);
+    bool done = false;
+
+    while (!done) {
+        callback(indices);
+
+        // Advance to next combination (like an odometer)
+        size_t d = sizes.size();
+        while (d > 0) {
+            d--;
+            indices[d]++;
+            if (indices[d] < sizes[d]) {
+                break;
+            }
+            indices[d] = 0;
+            if (d == 0) {
+                done = true;
+            }
+        }
+    }
+}
 
 std::string read_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
@@ -433,18 +464,39 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
             item_info.type = GroupingItemInfo::ItemType::GROUPING_REF;
             const auto& ref = instance.grouping_ref();
             if (ref.has_preset_type()) {
-                // Convert preset_type enum to string
+                // Convert preset_type enum to string and populate tray_id for TRAY_* types
                 switch (ref.preset_type()) {
-                    case proto::TRAY_1: item_info.grouping_name = "TRAY_1"; break;
-                    case proto::TRAY_2: item_info.grouping_name = "TRAY_2"; break;
-                    case proto::TRAY_3: item_info.grouping_name = "TRAY_3"; break;
-                    case proto::TRAY_4: item_info.grouping_name = "TRAY_4"; break;
-                    case proto::HOSTS: item_info.grouping_name = "HOSTS"; break;
-                    case proto::MESH: item_info.grouping_name = "MESH"; break;
-                    default: break;
+                    case proto::TRAY_1:
+                        item_info.grouping_name = "TRAY_1";
+                        item_info.tray_id = 1;
+                        break;
+                    case proto::TRAY_2:
+                        item_info.grouping_name = "TRAY_2";
+                        item_info.tray_id = 2;
+                        break;
+                    case proto::TRAY_3:
+                        item_info.grouping_name = "TRAY_3";
+                        item_info.tray_id = 3;
+                        break;
+                    case proto::TRAY_4:
+                        item_info.grouping_name = "TRAY_4";
+                        item_info.tray_id = 4;
+                        break;
+                    case proto::HOSTS:
+                        item_info.grouping_name = "HOSTS";
+                        // tray_id remains 0 (default)
+                        break;
+                    case proto::MESH:
+                        item_info.grouping_name = "MESH";
+                        // tray_id remains 0 (default)
+                        break;
+                    default:
+                        // tray_id remains 0 (default)
+                        break;
                 }
             } else if (ref.has_custom_type()) {
                 item_info.grouping_name = ref.custom_type();
+                // tray_id remains 0 (default) for custom types
             }
             info.items.push_back(item_info);
         }
@@ -1563,6 +1615,19 @@ void process_higher_layer_and_recurse(
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor) const {
+    return get_valid_groupings_for_mgd(
+        mesh_graph_descriptor, static_cast<const tt::tt_metal::PhysicalSystemDescriptor*>(nullptr));
+}
+
+ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor);
+}
+
+ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
     ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
@@ -1576,7 +1641,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     auto mesh_it = resolved_groupings_cache_.find("MESH");
     if (mesh_it != resolved_groupings_cache_.end()) {
         for (const auto& mesh_group_info : mesh_it->second) {
-            auto meshes = build_flattened_adjacency_mesh(mesh_group_info);
+            auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
             for (size_t i = 0; i < meshes.size(); ++i) {
                 std::string uniquified_key = mesh_group_info.name + "_" + std::to_string(i);
                 mesh_flat_groupings[uniquified_key] = std::move(meshes[i]);
@@ -1633,10 +1698,12 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             result[instance_type][instance_name].push_back(mgd_grouping_info);
         } else {
             for (const std::string& match_name : best_matches) {
-                // Look up the GroupingInfo from lookup map
+                // Look up the flattened GroupingInfo from lookup map (already contains flattened adjacency graphs)
                 auto lookup_it = mesh_flat_groupings.find(match_name);
                 if (lookup_it != mesh_flat_groupings.end()) {
-                    result[instance_type][instance_name].push_back(lookup_it->second);
+                    // Return the flattened GroupingInfo (not the original)
+                    const GroupingInfo& flattened_grouping = lookup_it->second;
+                    result[instance_type][instance_name].push_back(flattened_grouping);
                 }
             }
         }
@@ -2050,6 +2117,106 @@ uint32_t extract_tray_id(const std::string& grouping_name) {
     return 0;
 }
 
+// Helper to extract ASIC location from grouping path string (e.g., "ASIC_LOCATION_1" -> 1)
+uint32_t extract_asic_location_from_path(const std::vector<std::string>& grouping_path) {
+    for (const auto& path_elem : grouping_path) {
+        if (path_elem.starts_with("ASIC_LOCATION_")) {
+            try {
+                return static_cast<uint32_t>(std::stoul(path_elem.substr(14)));
+            } catch (...) {
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+
+// Rebuild GroupingInfo.items from FlattenedMesh. Graph nodes are 0..n-1; items[i] is the item for node i.
+void rebuild_items_from_flattened_mesh(GroupingInfo& info, const FlattenedMesh& mesh) {
+    info.items.clear();
+    const auto& node_ids = mesh.graph.get_nodes();
+    info.items.reserve(node_ids.size());
+
+    for (uint32_t node_id : node_ids) {
+        GroupingItemInfo item;
+        item.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
+        item.asic_location = 0;
+        item.tray_id = 0;
+
+        auto metadata_it = mesh.node_metadata.find(node_id);
+        if (metadata_it != mesh.node_metadata.end()) {
+            const NodeMetadata& metadata = metadata_it->second;
+            item.tray_id = metadata.tray_id;
+            item.asic_location = extract_asic_location_from_path(metadata.grouping_path);
+            item.grouping_path = metadata.grouping_path;
+        }
+        info.items.push_back(std::move(item));
+    }
+}
+
+// Helper functions for PSD validation
+namespace {
+using tt::tt_metal::AsicID;
+using tt::tt_metal::ASICLocation;
+using tt::tt_metal::TrayID;
+using tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd;
+using tt::tt_metal::experimental::tt_fabric::PhysicalAdjacencyMap;
+
+// Helper function to solve the topology mapping with pinning constraints from GroupingInfo
+MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    MappingConstraints<uint32_t, AsicID> constraints;
+
+    // Build trait maps: graph nodes are 0..n-1, items[i] is the item for node i
+    std::map<uint32_t, uint32_t> target_tray_traits;
+    std::map<uint32_t, uint32_t> target_location_traits;
+
+    for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
+        if (node_id >= grouping_info.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping_info.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        if (item.tray_id > 0) {
+            target_tray_traits[node_id] = item.tray_id;
+        }
+        if (item.asic_location > 0) {
+            target_location_traits[node_id] = item.asic_location;
+        }
+    }
+    // Build trait maps for global nodes (from physical graph)
+    std::map<AsicID, uint32_t> global_tray_traits;
+    std::map<AsicID, uint32_t> global_location_traits;
+
+    for (const auto& asic_id : physical_graph.get_nodes()) {
+        TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
+        ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
+        global_tray_traits[asic_id] = *tray_id;
+        global_location_traits[asic_id] = *asic_location;
+    }
+
+    // Add trait constraints for tray_id and asic_location
+    if (!target_tray_traits.empty() && !global_tray_traits.empty()) {
+        TT_FATAL(
+            constraints.add_required_trait_constraint<uint32_t>(target_tray_traits, global_tray_traits),
+            "Internal error: Failed to add required trait constraint for tray_id");
+    }
+    if (!target_location_traits.empty() && !global_location_traits.empty()) {
+        TT_FATAL(
+            constraints.add_required_trait_constraint<uint32_t>(target_location_traits, global_location_traits),
+            "Internal error: Failed to add required trait constraint for asic_location");
+    }
+
+    return solve_topology_mapping(
+        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+}
+
+}  // namespace
+
 // Recursively build flattened meshes from a grouping item.
 // Returns a vector of meshes - one per possibility (based on possible groupings that can be formed).
 // Algorithm:
@@ -2057,6 +2224,7 @@ uint32_t extract_tray_id(const std::string& grouping_name) {
 //   - Single-item grouping: recurse for each possible sub_grouping, don't join - one entry per possibility
 //   - Multi-item grouping: build sub-meshes for each item (each can have multiple possibilities),
 //     then for each combination in the Cartesian product, join and add one entry
+// Note: PSD validation is done at the top level in build_flattened_adjacency_mesh, not here.
 std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     const GroupingItemInfo& item,
     uint32_t& next_global_id,
@@ -2090,6 +2258,8 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         mesh.nodes_row_major = {node_id};
         mesh.node_metadata[node_id] = metadata;
         mesh.graph = AdjacencyGraph<uint32_t>({{node_id, {}}});
+
+        // PSD validation is done at the top level only, not for individual leaf nodes
         return {std::move(mesh)};
     }
 
@@ -2104,10 +2274,21 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         std::vector<std::string> new_path = grouping_path;
         new_path.push_back(sub_grouping.name);
 
+        // Ensure tray_id is extractable in leaf nodes: add type (e.g. "TRAY_1") if it encodes tray
+        // and the name didn't already provide it. This handles cases where name might not match "tray_N".
+        if (extract_tray_id(sub_grouping.name) == 0 && extract_tray_id(sub_grouping.type) > 0) {
+            new_path.push_back(sub_grouping.type);
+        }
+        // Fallback: ref item has tray_id (e.g. TRAY_1) but neither name nor type encodes it
+        if (extract_tray_id(sub_grouping.name) == 0 && extract_tray_id(sub_grouping.type) == 0 && item.tray_id > 0) {
+            new_path.push_back("tray_" + std::to_string(item.tray_id));
+        }
+
         // Single-item grouping: recurse directly, add each possibility as its own entry (no join)
         if (sub_grouping.items.size() == SINGLE_ITEM) {
             std::vector<FlattenedMesh> sub_results =
                 build_flattened_meshes_for_item(sub_grouping.items[0], next_global_id, cache, desc, new_path);
+            // PSD validation is done at the top level only, not at intermediate levels
             for (FlattenedMesh& m : sub_results) {
                 all_results.push_back(std::move(m));
             }
@@ -2135,9 +2316,14 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         const std::vector<int32_t> layout = normalize_dims(inferred_dims, sub_grouping.items.size());
 
         // Cartesian product: for each combination of one mesh from each item, join and add one entry
-        std::vector<size_t> indices(sub_grouping.items.size(), 0);
-        bool done = false;
-        while (!done) {
+        std::vector<size_t> sizes;
+        sizes.reserve(sub_meshes_per_item.size());
+        for (const auto& meshes : sub_meshes_per_item) {
+            sizes.push_back(meshes.size());
+        }
+
+        size_t combination_index = 0;
+        iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
             std::vector<FlattenedMesh> chosen;
             chosen.reserve(sub_grouping.items.size());
             for (size_t i = 0; i < sub_grouping.items.size(); ++i) {
@@ -2149,35 +2335,43 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
             mesh.dims = layout;
             mesh.sub_meshes = std::move(chosen);
 
+            // Collect nodes and metadata from all sub-meshes
             for (const auto& sub_mesh : mesh.sub_meshes) {
                 mesh.nodes_row_major.insert(
                     mesh.nodes_row_major.end(), sub_mesh.nodes_row_major.begin(), sub_mesh.nodes_row_major.end());
+                // Copy node metadata from sub-mesh
+                for (const auto& [node_id, metadata] : sub_mesh.node_metadata) {
+                    mesh.node_metadata[node_id] = metadata;
+                }
             }
-            all_results.push_back(std::move(mesh));
 
-            // Advance to next combination
-            size_t d = sub_grouping.items.size();
-            while (d > 0) {
-                d--;
-                indices[d]++;
-                if (indices[d] < sub_meshes_per_item[d].size()) {
-                    break;
-                }
-                indices[d] = 0;
-                if (d == 0) {
-                    done = true;
-                }
-            }
-        }
+            // Note: We don't filter here because build_flattened_meshes_for_item already filtered sub-items
+            // and the top-level join will be validated in build_flattened_adjacency_mesh
+            all_results.push_back(std::move(mesh));
+            combination_index++;
+        });
     }
     return all_results;
 }
 
 }  // unnamed namespace
 
-// Top-level entry point: builds meshes for each item, returns a vector - one per possibility
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
+    return build_flattened_adjacency_mesh(
+        grouping, static_cast<const tt::tt_metal::PhysicalSystemDescriptor*>(nullptr));
+}
+
+std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
+    const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    return build_flattened_adjacency_mesh(grouping, &physical_system_descriptor);
+}
+
+// Top-level entry point: builds meshes for each item, returns a vector - one per possibility
+std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
+    const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
+    (void)physical_system_descriptor;  // Reserved for future use - can be used for validation/filtering
+
     if (grouping.items.empty()) {
         GroupingInfo result = grouping;
         result.adjacency_graph = AdjacencyGraph<uint32_t>();
@@ -2194,9 +2388,37 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
             grouping.items[0], next_node_id, resolved_groupings_cache_, this, initial_path);
         std::vector<GroupingInfo> result;
         result.reserve(meshes.size());
-        for (FlattenedMesh& m : meshes) {
+
+        // Build physical graph once if PSD is provided
+        std::optional<AdjacencyGraph<tt::tt_metal::AsicID>> physical_graph_opt;
+        if (physical_system_descriptor != nullptr) {
+            using tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd;
+            using tt::tt_metal::experimental::tt_fabric::PhysicalAdjacencyMap;
+            PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(*physical_system_descriptor, {});
+            physical_graph_opt = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_map);
+        }
+
+        for (size_t i = 0; i < meshes.size(); ++i) {
             GroupingInfo info = grouping;
-            info.adjacency_graph = std::move(m.graph);
+            if (meshes.size() > 1) {
+                info.name = grouping.name + "_" + std::to_string(i);
+            }
+
+            // Rebuild items from flattened mesh node metadata BEFORE moving the graph
+            // (rebuild_items_from_flattened_mesh needs mesh.graph.get_nodes() and mesh.node_metadata)
+            rebuild_items_from_flattened_mesh(info, meshes[i]);
+            info.adjacency_graph = std::move(meshes[i].graph);
+
+            // If PSD is provided, validate that the graph can be mapped to it
+            if (physical_system_descriptor != nullptr && physical_graph_opt.has_value()) {
+                // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
+                auto mapping_result =
+                    solve_for_one_grouping_to_psd(info, physical_graph_opt.value(), *physical_system_descriptor);
+                if (!mapping_result.success) {
+                    continue;  // Skip this combination if it can't be mapped
+                }
+            }
+
             result.push_back(std::move(info));
         }
         return result;
@@ -2206,8 +2428,13 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
     std::vector<std::vector<FlattenedMesh>> meshes_per_item;
     meshes_per_item.reserve(grouping.items.size());
     for (const auto& item : grouping.items) {
-        meshes_per_item.push_back(
-            build_flattened_meshes_for_item(item, next_node_id, resolved_groupings_cache_, this, initial_path));
+        auto item_meshes =
+            build_flattened_meshes_for_item(item, next_node_id, resolved_groupings_cache_, this, initial_path);
+        // If item has no meshes (shouldn't happen for valid groupings), return empty result
+        if (item_meshes.empty()) {
+            return {};
+        }
+        meshes_per_item.push_back(std::move(item_meshes));
     }
 
     const std::vector<int32_t> inferred_dims = infer_dims_from_corners(grouping);
@@ -2222,9 +2449,18 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
     const std::vector<int32_t> layout = normalize_dims(inferred_dims, grouping.items.size());
 
     std::vector<GroupingInfo> result;
-    std::vector<size_t> indices(grouping.items.size(), 0);
-    bool done = false;
-    while (!done) {
+    std::vector<size_t> sizes;
+    sizes.reserve(meshes_per_item.size());
+    for (const auto& meshes : meshes_per_item) {
+        sizes.push_back(meshes.size());
+    }
+    size_t total_combinations = 1;
+    for (size_t s : sizes) {
+        total_combinations *= s;
+    }
+
+    size_t combination_index = 0;
+    iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
         std::vector<FlattenedMesh> chosen;
         chosen.reserve(grouping.items.size());
         for (size_t i = 0; i < grouping.items.size(); ++i) {
@@ -2233,23 +2469,49 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
         AdjacencyGraph<uint32_t> joined_graph = join_mesh_level(chosen, layout);
 
-        GroupingInfo info = grouping;
-        info.adjacency_graph = std::move(joined_graph);
-        result.push_back(std::move(info));
+        // Collect node metadata from all chosen meshes
+        FlattenedMesh joined_mesh;
+        joined_mesh.graph = std::move(joined_graph);
+        joined_mesh.dims = layout;
+        joined_mesh.sub_meshes = chosen;
 
-        size_t d = grouping.items.size();
-        while (d > 0) {
-            d--;
-            indices[d]++;
-            if (indices[d] < meshes_per_item[d].size()) {
-                break;
-            }
-            indices[d] = 0;
-            if (d == 0) {
-                done = true;
+        // Collect nodes and metadata from all sub-meshes
+        for (const auto& sub_mesh : chosen) {
+            joined_mesh.nodes_row_major.insert(
+                joined_mesh.nodes_row_major.end(), sub_mesh.nodes_row_major.begin(), sub_mesh.nodes_row_major.end());
+            // Copy node metadata from sub-mesh
+            for (const auto& [node_id, metadata] : sub_mesh.node_metadata) {
+                joined_mesh.node_metadata[node_id] = metadata;
             }
         }
-    }
+
+        GroupingInfo info = grouping;
+        if (total_combinations > 1) {
+            info.name = grouping.name + "_" + std::to_string(combination_index);
+        }
+
+        // Rebuild items from flattened mesh node metadata BEFORE moving the graph
+        // (rebuild_items_from_flattened_mesh needs joined_mesh.graph.get_nodes() and joined_mesh.node_metadata)
+        rebuild_items_from_flattened_mesh(info, joined_mesh);
+        info.adjacency_graph = std::move(joined_mesh.graph);
+
+        // If PSD is provided, validate that the top-level joined graph can be mapped to it
+        if (physical_system_descriptor != nullptr) {
+            // Build physical adjacency map from PSD (empty map means include all ASICs)
+            PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(*physical_system_descriptor, {});
+            // Convert to AdjacencyGraph
+            AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
+
+            // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
+            auto mapping_result = solve_for_one_grouping_to_psd(info, physical_graph, *physical_system_descriptor);
+            if (!mapping_result.success) {
+                return;  // Skip this combination if it can't be mapped
+            }
+        }
+
+        result.push_back(std::move(info));
+        combination_index++;
+    });
     return result;
 }
 
@@ -2262,21 +2524,6 @@ namespace {
 using tt::tt_metal::AsicID;
 using tt::tt_metal::ASICLocation;
 using tt::tt_metal::TrayID;
-
-AdjacencyGraph<AsicID> build_physical_adjacency_graph_for_cluster(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    std::map<AsicID, std::vector<AsicID>> adj_map;
-    for (const std::string& hostname : psd.get_all_hostnames()) {
-        const auto& asic_graph = psd.get_system_graph().asic_connectivity_graph.at(hostname);
-        for (const auto& [asic_id, edges] : asic_graph) {
-            std::vector<AsicID> neighbors;
-            for (const auto& [dst_asic, _] : edges) {
-                neighbors.push_back(dst_asic);
-            }
-            adj_map[asic_id] = std::move(neighbors);
-        }
-    }
-    return AdjacencyGraph<AsicID>(adj_map);
-}
 
 std::string build_pgd_mapping_failure_message(
     const std::string& grouping_name,
@@ -2296,27 +2543,15 @@ std::string build_pgd_mapping_failure_message(
 
 }  // namespace
 
-namespace {
-
-// Helper function to solve the topology mapping
-MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
-    const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& /* physical_system_descriptor */) {
-    MappingConstraints<uint32_t, AsicID> constraints;
-    // No trait constraints - solve without tray/location matching requirements
-    return solve_topology_mapping(
-        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
-}
-
-}  // namespace
-
 std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     std::vector<std::string>* errors_out) const {
-    auto physical_graph = build_physical_adjacency_graph_for_cluster(physical_system_descriptor);
-    auto flat_meshes = build_flattened_adjacency_mesh(grouping);
+    // Build physical adjacency map from PSD (empty map means include all ASICs)
+    PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor, {});
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
+    auto flat_meshes = build_flattened_adjacency_mesh(grouping, physical_system_descriptor);
 
     std::unordered_set<tt::tt_metal::AsicID> asic_ids;
     const GroupingInfo* last_mesh_tried = nullptr;
@@ -2329,6 +2564,7 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
         }
 
         last_mesh_tried = &flat_mesh;
+        // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
         auto result = solve_for_one_grouping_to_psd(flat_mesh, physical_graph, physical_system_descriptor);
         last_result = result;
 
@@ -2340,7 +2576,23 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
         }
     }
 
-    if (flat_meshes.empty() || flat_meshes.front().adjacency_graph.get_nodes().empty()) {
+    // If flat_meshes is empty, it means PSD filtering removed all possibilities
+    // This is a valid case (grouping can't be mapped to this PSD), not an internal error
+    if (flat_meshes.empty()) {
+        // Return empty set - grouping cannot be mapped to this PSD
+        return asic_ids;
+    }
+
+    // Check if there's an actual internal error (all meshes have empty graphs)
+    bool all_empty = true;
+    for (const auto& flat_mesh : flat_meshes) {
+        if (!flat_mesh.adjacency_graph.get_nodes().empty()) {
+            all_empty = false;
+            break;
+        }
+    }
+
+    if (all_empty) {
         TT_THROW("Internal error: grouping produced empty graph");
     }
 
