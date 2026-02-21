@@ -179,6 +179,11 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                     static_cast<std::size_t>(core_coord.get<0>()), static_cast<std::size_t>(core_coord.get<1>()));
             })
         .def("__repr__", [](const CoreCoord& self) -> std::string { return self.str(); })
+        .def(
+            "__eq__", [](const CoreCoord& a, const CoreCoord& b) { return a == b; }, nb::arg("other"))
+        .def(
+            "__ne__", [](const CoreCoord& a, const CoreCoord& b) { return a != b; }, nb::arg("other"))
+        .def("__hash__", [](const CoreCoord& self) { return std::hash<CoreCoord>{}(self); })
         .def_ro("x", &CoreCoord::x)
         .def_ro("y", &CoreCoord::y);
     nb::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
