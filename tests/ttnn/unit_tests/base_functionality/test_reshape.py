@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
+from models.common.utility_functions import is_watcher_enabled, skip_with_watcher, skip_with_llk_assert
 
 
 @pytest.mark.parametrize(
@@ -741,7 +741,7 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-@pytest.mark.skip(reason="Firmware overflow: segment[0] overflows region:0 limit - see test output")
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
