@@ -20,7 +20,12 @@ NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperati
 
 void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_FATAL(args.dim < 3, "Error, neighbor pad currently only supports padding non last dim, provided {}", args.dim);
+    const auto input_rank = tensor_args.input_tensor.padded_shape().size();
+    TT_FATAL(
+        args.dim < input_rank - 1,
+        "Error, neighbor pad only supports padding non-last dim, provided dim={} for rank-{} tensor",
+        args.dim,
+        input_rank);
 
     TT_FATAL(
         tensor_args.input_tensor.layout() == Layout::ROW_MAJOR,
@@ -77,6 +82,27 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
             args.secondary_mesh_shape.value().at(1),
             target_ring_size);
     }
+
+    // Validate secondary padding dimension (2D padding)
+    if (args.pad_dim2.has_value()) {
+        uint32_t dim2 = args.pad_dim2.value();
+        TT_FATAL(
+            dim2 < input_rank - 1,
+            "Secondary pad dim must be a non-last dim, provided dim2={} for rank-{} tensor",
+            dim2,
+            input_rank);
+        TT_FATAL(dim2 != args.dim, "Secondary pad dim {} must differ from primary pad dim {}", dim2, args.dim);
+        TT_FATAL(dim2 > args.dim, "Secondary pad dim {} must be greater than primary pad dim {}", dim2, args.dim);
+        TT_FATAL(
+            args.pad2_left <= input_tensor_shape[dim2] && args.pad2_right <= input_tensor_shape[dim2],
+            "Secondary padding values {} or {} exceed input tensor dim {} size {}.",
+            args.pad2_left,
+            args.pad2_right,
+            dim2,
+            input_tensor_shape[dim2]);
+        TT_FATAL(args.pad2_cluster_axis.has_value(), "pad2_cluster_axis required when pad_dim2 is set");
+        TT_FATAL(args.pad2_num_links > 0, "pad2_num_links must be > 0 when pad_dim2 is set");
+    }
 }
 
 TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
@@ -84,6 +110,9 @@ TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
     shape[args.dim] += (args.padding_left + args.padding_right);
+    if (args.pad_dim2.has_value()) {
+        shape[args.pad_dim2.value()] += (args.pad2_left + args.pad2_right);
+    }
     return TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
@@ -115,6 +144,11 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.ring_size,
         args.secondary_cluster_axis,
         args.secondary_mesh_shape,
+        args.pad_dim2,
+        args.pad2_left,
+        args.pad2_right,
+        args.pad2_cluster_axis,
+        args.pad2_num_links,
         tensor_args,
         program_factory.index());
 }
@@ -136,7 +170,12 @@ Tensor neighbor_pad_async(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
+    std::optional<uint32_t> pad_dim2,
+    uint32_t pad2_left,
+    uint32_t pad2_right,
+    std::optional<uint32_t> pad2_cluster_axis,
+    std::optional<size_t> pad2_num_links) {
     using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
@@ -161,7 +200,12 @@ Tensor neighbor_pad_async(
         topology_,
         num_devices,
         secondary_cluster_axis,
-        secondary_mesh_shape);
+        secondary_mesh_shape,
+        pad_dim2,
+        pad2_left,
+        pad2_right,
+        pad2_cluster_axis,
+        pad2_num_links.value_or(0));
 
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::nullopt};
 

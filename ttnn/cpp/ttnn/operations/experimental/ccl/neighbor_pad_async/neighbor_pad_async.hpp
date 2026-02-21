@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -14,14 +16,14 @@ namespace operations::experimental::ccl {
 struct ExecuteNeighborPadAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        int32_t dim,
-        uint32_t padding_left,
-        uint32_t padding_right,
+        std::vector<int32_t> dim,
+        std::vector<uint32_t> padding_left,
+        std::vector<uint32_t> padding_right,
         const std::string& padding_mode,
-        uint32_t cluster_axis,
-        const GlobalSemaphore& final_semaphore,
-        const GlobalSemaphore& barrier_semaphore,
-        std::optional<size_t> num_preferred_links = std::nullopt,
+        std::vector<uint32_t> cluster_axis,
+        std::vector<GlobalSemaphore> final_semaphore,
+        std::vector<GlobalSemaphore> barrier_semaphore,
+        std::optional<std::vector<size_t>> num_preferred_links = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::ccl::Topology> topology = std::nullopt,
         std::optional<uint32_t> secondary_cluster_axis = std::nullopt,

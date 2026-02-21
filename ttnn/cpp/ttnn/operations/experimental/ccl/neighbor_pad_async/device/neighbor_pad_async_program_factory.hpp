@@ -19,6 +19,13 @@ struct NeighborPadAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> local_copy_core_coords;  // logical coords used for local copy
     uint32_t num_links = 0;
     uint32_t num_directions = 0;  // Always 2 (left/right padding)
+    // Phase 2 W fabric cores (for 2D padding)
+    std::vector<tt::tt_metal::KernelHandle> w_reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> w_writer_kernel_ids;
+    std::vector<tt::tt_metal::CoreCoord> w_fabric_core_coords;
+    uint32_t num_w_links = 0;
+    // L1 buffer backing the boundary CB on W fabric cores (keeps allocation alive)
+    std::shared_ptr<tt::tt_metal::Buffer> boundary_l1_buffer;
 };
 
 struct NeighborPadAsyncMeshWorkloadFactory {

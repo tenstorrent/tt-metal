@@ -9,32 +9,56 @@ namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    int32_t dim,
-    uint32_t padding_left,
-    uint32_t padding_right,
+    std::vector<int32_t> dim,
+    std::vector<uint32_t> padding_left,
+    std::vector<uint32_t> padding_right,
     const std::string& padding_mode,
-    uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    std::optional<size_t> num_preferred_links,
+    std::vector<uint32_t> cluster_axis,
+    std::vector<GlobalSemaphore> final_semaphore,
+    std::vector<GlobalSemaphore> barrier_semaphore,
+    std::optional<std::vector<size_t>> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
+    TT_FATAL(dim.size() >= 1 && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
+
+    std::vector<size_t> links = num_preferred_links.value_or(std::vector<size_t>(dim.size(), 1));
+
+    // Unpack secondary dimension if present
+    std::optional<uint32_t> pad_dim2;
+    uint32_t pad2_left = 0;
+    uint32_t pad2_right = 0;
+    std::optional<uint32_t> pad2_cluster_axis;
+    std::optional<size_t> pad2_num_links;
+
+    if (dim.size() == 2) {
+        pad_dim2 = static_cast<uint32_t>(dim[1]);
+        pad2_left = padding_left[1];
+        pad2_right = padding_right[1];
+        pad2_cluster_axis = cluster_axis[1];
+        pad2_num_links = links.size() >= 2 ? links[1] : 1;
+    }
+
     return ttnn::prim::neighbor_pad_async(
         input_tensor,
-        dim,
-        padding_left,
-        padding_right,
+        dim[0],
+        padding_left[0],
+        padding_right[0],
         padding_mode,
-        cluster_axis,
-        final_semaphore,
-        barrier_semaphore,
-        num_preferred_links,
+        cluster_axis[0],
+        final_semaphore[0],
+        barrier_semaphore[0],
+        links[0],
         memory_config,
         topology,
         secondary_cluster_axis,
-        secondary_mesh_shape);
+        secondary_mesh_shape,
+        pad_dim2,
+        pad2_left,
+        pad2_right,
+        pad2_cluster_axis,
+        pad2_num_links);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

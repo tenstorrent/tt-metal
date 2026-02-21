@@ -29,6 +29,13 @@ struct NeighborPadAsyncParams {
     std::optional<uint32_t> secondary_cluster_axis;
     std::optional<std::vector<uint32_t>> secondary_mesh_shape;
 
+    // Secondary dimension for 2D padding (optional)
+    std::optional<uint32_t> pad_dim2;
+    uint32_t pad2_left = 0;
+    uint32_t pad2_right = 0;
+    std::optional<uint32_t> pad2_cluster_axis;
+    uint32_t pad2_num_links = 0;
+
     // Constructor required because GlobalSemaphore is not default constructible
     NeighborPadAsyncParams(
         uint32_t dim,
@@ -43,7 +50,12 @@ struct NeighborPadAsyncParams {
         ttnn::ccl::Topology topology,
         uint32_t ring_size,
         std::optional<uint32_t> secondary_cluster_axis,
-        const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) :
+        const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
+        std::optional<uint32_t> pad_dim2 = std::nullopt,
+        uint32_t pad2_left = 0,
+        uint32_t pad2_right = 0,
+        std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
+        uint32_t pad2_num_links = 0) :
         dim(dim),
         padding_left(padding_left),
         padding_right(padding_right),
@@ -56,7 +68,12 @@ struct NeighborPadAsyncParams {
         topology(topology),
         ring_size(ring_size),
         secondary_cluster_axis(secondary_cluster_axis),
-        secondary_mesh_shape(secondary_mesh_shape ? std::make_optional(*secondary_mesh_shape) : std::nullopt) {}
+        secondary_mesh_shape(secondary_mesh_shape ? std::make_optional(*secondary_mesh_shape) : std::nullopt),
+        pad_dim2(pad_dim2),
+        pad2_left(pad2_left),
+        pad2_right(pad2_right),
+        pad2_cluster_axis(pad2_cluster_axis),
+        pad2_num_links(pad2_num_links) {}
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -74,6 +91,11 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("secondary_cluster_axis", secondary_cluster_axis);
         attrs.emplace_back("secondary_mesh_shape", secondary_mesh_shape);
+        attrs.emplace_back("pad_dim2", pad_dim2);
+        attrs.emplace_back("pad2_left", pad2_left);
+        attrs.emplace_back("pad2_right", pad2_right);
+        attrs.emplace_back("pad2_cluster_axis", pad2_cluster_axis);
+        attrs.emplace_back("pad2_num_links", pad2_num_links);
         return attrs;
     }
 };
