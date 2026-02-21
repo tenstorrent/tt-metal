@@ -10,7 +10,7 @@ This test validates the complete data path:
 
 Pipeline:
 - D2D_0: Integrated into reduce_to_one_b1 (uses d2d_exchange_multiple_senders.cpp)
-- D2D_1 + D2H: Managed from test side using SocketInterface (like test_host_io.py)
+- D2D_1 + D2H: Managed from test side using SocketInterface
 """
 
 import pytest
@@ -39,15 +39,13 @@ from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOn
 @pytest.mark.parametrize(
     "tensor_shape",
     [
-        [1, 7168],  # Standard shape: 1 × 7168 = 1 × (224 tiles × 32)
+        [1, 7168],
     ],
 )
 def test_reduce_to_one_b1_with_d2d1_d2h(
     mesh_device,
     tensor_shape,
 ):
-    """Test reduce-to-one with D2D_0 → D2H chain using HostInterface."""
-
     logger.info(f"mesh_device shape: {mesh_device.shape}")
     logger.info(f"mesh_device num_devices: {mesh_device.get_num_devices()}")
 
@@ -64,27 +62,26 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     ttnn.enable_asynchronous_slow_dispatch(submesh_device)
 
     # Configuration
-    root_coord = ttnn.MeshCoordinate(1, 1)  # ROOT1 device (where reduce happens) - maps to physical device-0
-    exit_coord = ttnn.MeshCoordinate(0, 1)  # EXIT device (different from ROOT1) - maps to physical device-1
+    root_coord = ttnn.MeshCoordinate(1, 1)
+    exit_coord = ttnn.MeshCoordinate(0, 1)
 
-    # Calculate sizes early for D2H socket creation (create sockets BEFORE allocating tensors)
     element_size = 2  # bfloat16
-    shard_shape = [1, 896]  # Each shard: 1 × 896 (28 tiles × 32)
+    shard_shape = [1, 896]  #
     payload_size_bytes = shard_shape[1] * element_size  # 896 * 2 = 1,792 bytes per worker
     aggregated_size_bytes = 8 * payload_size_bytes  # 8 * 1,792 = 14,336 bytes total
 
     # Core allocation
     d2d1_receiver_core = ttnn.CoreCoord(1, 1)  # D2D_1 receiver on EXIT/device-1
-    d2h_core = ttnn.CoreCoord(2, 2)  # D2H receiver on EXIT/device-1 (different core!)
+    d2h_core = ttnn.CoreCoord(2, 2)  # D2H receiver on EXIT/device-1
 
     d2d1_receiver_mesh_core = ttnn.MeshCoreCoord(exit_coord, d2d1_receiver_core)
     d2h_mesh_core = ttnn.MeshCoreCoord(exit_coord, d2h_core)
 
-    d2h_socket_fifo_size = aggregated_size_bytes  # Minimal FIFO size like test_host_io.py
+    d2h_socket_fifo_size = aggregated_size_bytes * 2
     d2h_socket = ttnn.D2HSocket(submesh_device, d2h_mesh_core, d2h_socket_fifo_size)
     logger.info(f"✓ Created D2H socket EARLY on EXIT device @ {d2h_core} with FIFO size: {d2h_socket_fifo_size} bytes")
 
-    h2d_core = ttnn.CoreCoord(5, 5)  # Dummy H2D on EXIT device (different core)
+    h2d_core = ttnn.CoreCoord(5, 5)  # Dummy H2D on EXIT device
     h2d_mesh_core = ttnn.MeshCoreCoord(exit_coord, h2d_core)
     # Create dummy H2D socket (required by HostInterface but not used in this test)
     h2d_socket = ttnn.H2DSocket(submesh_device, h2d_mesh_core, ttnn.BufferType.L1, 64, ttnn.H2DMode.HOST_PUSH)
@@ -193,15 +190,6 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
 
     logger.info("\n=== Setting up D2D_0 → D2D_1 → D2H chain using SocketInterface ===")
 
-    # Calculate size of aggregated data from D2D_0
-    # D2D_0 aggregates 8 worker cores → single page
-    element_size = 2  # bfloat16
-    payload_size_bytes = shard_shape[1] * element_size  # 896 * 2 = 1,792 bytes per worker
-    aggregated_size_bytes = 8 * payload_size_bytes  # 8 * 1,792 = 14,336 bytes total
-
-    logger.info(f"Per-worker payload size: {payload_size_bytes} bytes")
-    logger.info(f"Aggregated size from D2D_0: {aggregated_size_bytes} bytes")
-
     # Get shard cores for core allocation
     shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
     compute_grid = submesh_device.compute_with_storage_grid_size()
@@ -212,23 +200,16 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     #   - Physical device-1 = MeshCoordinate(0,1) = EXIT
     #
     # Pipeline (following SocketInterface pattern from test_host_io.py):
-    # - D2D_0 aggregator: ROOT1 device @ (3,3) - aggregates from 8 worker cores, sends to D2D_1
+    # - D2D_0 aggregator: ROOT1 device @ (12,9) - aggregates from 8 worker cores, sends to D2D_1
     # - D2D_1 sender: ROOT1 device @ (1,1) - receives from D2D_0, sends cross-device
     # - D2D_1 receiver: EXIT device @ (1,1) - receives cross-device, sends to D2H
     # - D2H: EXIT device @ (2,2) - receives from D2D_1 receiver
-    #
-    # SocketInterface logic (from op.py):
-    # - send_core_coord = where upstream socket receiver is located (ROOT1 @ (1,1))
-    # - recv_core_coord = where downstream socket sender is located (EXIT @ (1,1))
-    # - Creates internal socket between send_core and recv_core for forwarding
 
     # Core coordinates for the D2D_1 SocketInterface
-    d2d1_sender_core = ttnn.CoreCoord(1, 1)  # On ROOT1 device
-    # d2d1_receiver_core is already defined above as (1,1) on EXIT device
+    d2d1_sender_core = ttnn.CoreCoord(1, 1)
 
     # Mesh core coordinates
     d2d1_sender_mesh_core = ttnn.MeshCoreCoord(root_coord, d2d1_sender_core)
-    # d2d1_receiver_mesh_core already defined above
 
     logger.info(f"Using D2H socket created early with FIFO size: {d2h_socket_fifo_size} bytes")
 
@@ -246,11 +227,6 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     logger.info("Created HostInterface for D2H on EXIT device")
 
     # Create SocketInterface for D2D_1: ROOT1 (sender) → EXIT (receiver)
-    # Following test_host_io.py pattern:
-    # - send_core_coord: where upstream socket receiver is (ROOT1 @ (1,1))
-    # - recv_core_coord: where downstream socket sender is (EXIT @ (2,2))
-    # - upstream_core_coord: where upstream socket sender is (D2D_0's output core on ROOT1)
-    # - downstream_socket: from HostInterface
 
     # Allocate D2D_0's output core
     d2d0_output_core = ttnn.CoreCoord(12, 9)  # Free core on ROOT1 device
@@ -258,7 +234,7 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
 
     socket_interface = SocketInterface(
         aggregated_size_bytes,  # page_size
-        aggregated_size_bytes,  # socket_fifo_size
+        aggregated_size_bytes * 2,  # socket_fifo_size
         aggregated_size_bytes,  # data_size_per_transfer
         d2d1_sender_mesh_core,  # send_core_coord (ROOT1 @ (1,1)) - receives from D2D_0
         d2d1_receiver_mesh_core,  # recv_core_coord (EXIT @ (2,2)) - sends to D2H
@@ -285,10 +261,9 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
 
     logger.info("\n=== Running Reduce-to-One with integrated D2D_0 ===")
 
-    # Execute reduce-to-one with D2D_0 integration FIRST
+    # Execute reduce-to-one with D2D_0 integration
     # This launches all reduce workers + D2D_0 aggregator
-    logger.info(">>> ABOUT TO CALL ReduceToOneB1.op()")
-    result, d2d_infra = ReduceToOneB1.op(
+    result = ReduceToOneB1.op(
         input_tensor,
         intermediate_tensors,
         output_tensor,
@@ -297,28 +272,21 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
         enable_d2d0_output=True,
         d2d0_infrastructure=d2d0_infra,
     )
-    logger.info(">>> ReduceToOneB1.op() RETURNED")
 
     if isinstance(result, tuple):
-        output_tensor, d2d0_infra_returned = result
+        output_tensor, d2d_infra = result
     else:
         output_tensor = result
 
     logger.info("✓ Reduce-to-one with D2D_0 completed")
 
-    # NOW start HostInterface and SocketInterface to drain the data from D2D_0
-    # D2D_0 has already sent its data, so D2D_1 will receive it and forward to D2H
     logger.info("\n=== Starting HostInterface and D2D_1 pipeline ===")
     host_io.run()
     socket_interface.run()
     logger.info("✓ HostInterface and D2D_1 pipeline started")
 
-    # Note: Skip ROOT1 validation here because .cpu().to_torch() would synchronize the device
-    # and wait for D2D_1/D2H kernels to complete, but they're waiting for termination signals.
-    # We'll validate D2H output instead, which validates the entire pipeline.
-
     # Read from D2H socket
-    logger.info("\n=== Reading from D2H socket ===")
+    logger.info("\n=== Termination Semaphore Set ===")
 
     termination_semaphore = d2d_infra["d2d0_termination_semaphore"]
     ttnn.reset_global_semaphore_value(termination_semaphore, 1)

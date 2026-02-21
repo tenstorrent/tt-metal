@@ -360,19 +360,14 @@ struct ReduceToOneB1 {
                     DPRINT << "  noc_y: " << (uint32_t)downstream_enc.d2d.downstream_noc_y << "\n";
                     DPRINT << "  chip_id: " << (uint32_t)downstream_enc.d2d.downstream_chip_id << "\n";
 
-                    // Calculate write address
-                    uint32_t write_l1_addr = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
-                    uint64_t write_noc_addr = get_noc_addr(
-                        downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, write_l1_addr);
-
-                    DPRINT << "NOC write params:\n";
-                    DPRINT << "  src_addr: " << src_addr << "\n";
-                    DPRINT << "  dst_l1_addr: " << write_l1_addr << "\n";
-                    DPRINT << "  write_size: " << (uint32_t)CTArgs::payload_size_bytes << "\n";
-                    DPRINT << "  write_ptr: " << (uint32_t)sender_socket.write_ptr << "\n";
-
                     // Write to downstream socket
-                    noc_async_write(src_addr, write_noc_addr, CTArgs::payload_size_bytes);
+                    noc_async_write(
+                        src_addr,
+                        get_noc_addr(
+                            downstream_enc.d2d.downstream_noc_x,
+                            downstream_enc.d2d.downstream_noc_y,
+                            sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
+                        CTArgs::payload_size_bytes);
                     DPRINT << "after aync write to socket\n";
 
                     // Push to downstream and notify
@@ -451,10 +446,6 @@ struct ReduceToOneB1 {
                 get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
             noc_semaphore_inc(arrival_sem_noc_addr, 1);
             DPRINT << "after semaphore inc to signal fabric core\n";
-
-            if constexpr (CTArgs::device_role != MESH_LEAF) {
-                cb_pop_front(source_cb, CTArgs::num_tiles);
-            }
 
             noc_async_write_barrier();
             noc_async_atomic_barrier();
