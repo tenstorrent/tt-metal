@@ -1159,7 +1159,8 @@ class MlpOp:
         rmsnorm_gamma_tensor,
         # Shared expert tensors
         shared_residual_mcast_src_tensor,
-        shared_gate_up_weights_tensor,
+        shared_gate_weights_overlapped,
+        shared_up_weights_overlapped,
         shared_residual_mcast_dst_tensor,
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
@@ -1242,7 +1243,8 @@ class MlpOp:
 
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
-            shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
+            shared_gate_weights_overlapped=shared_gate_weights_overlapped,
+            shared_up_weights_overlapped=shared_up_weights_overlapped,
             shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
             shared_down_weights_tensor=shared_down_weights_tensor,
             shared_output_tensor=shared_output_tensor,
@@ -1349,7 +1351,7 @@ class MlpOp:
             rmsnorm_gamma_tensor,
             # Shared expert tensors
             shared_residual_mcast_src_tensor,
-            shared_gate_up_weights_tensor,
+            shared_gate_weights_overlapped.fused_tensor,
             shared_ag_gather_dst_tensor,
             shared_bg_gather_dst_tensor,
             shared_residual_mcast_dst_tensor,
