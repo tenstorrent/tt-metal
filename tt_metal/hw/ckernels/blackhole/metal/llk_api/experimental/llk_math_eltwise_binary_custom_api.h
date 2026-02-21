@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_assert.h"
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_eltwise_binary_custom.h"
 
