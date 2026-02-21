@@ -293,14 +293,33 @@ class SocketInterface:
                 self.downstream_socket,
             )
         else:
-            program = self._create_program()
+            if self.upstream_socket:
+                # Has an upstream socket - is sender
+                program = self._create_program(
+                    self.mesh_device, self.send_core_coord, self.upstream_socket, self.internal_socket
+                )
+            else:
+                assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
+                program = self._create_program(
+                    self.mesh_device,
+                    self.recv_core_coord,
+                    self.internal_socket,
+                    self.downstream_socket,
+                )
+
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        mesh_program_descriptor[
-            ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-        ] = sender_program
-        mesh_program_descriptor[
-            ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
-        ] = receiver_program
+        if self.local_socket:
+            mesh_program_descriptor[
+                ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
+            ] = sender_program
+            mesh_program_descriptor[
+                ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
+            ] = receiver_program
+        else:
+            device_coord = (
+                self.send_core_coord.device_coord if self.upstream_socket else self.recv_core_coord.device_coord
+            )
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
 
         io_tensors = [
             dummy_tensor,
