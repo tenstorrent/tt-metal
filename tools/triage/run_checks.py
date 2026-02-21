@@ -41,6 +41,7 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 from ttexalens.hardware.risc_debug import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
+from triage import TTTriageError
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -145,6 +146,7 @@ def _convert_metal_device_ids_to_device_ids(
     context: Context,
 ) -> list[int]:
     device_ids = []
+    missing_mappings: list[tuple[int, int]] = []
     for metal_device_id in metal_device_ids:
         unique_id = metal_device_id_mapping.get_unique_id(metal_device_id)
         found = False
@@ -156,6 +158,16 @@ def _convert_metal_device_ids_to_device_ids(
         log_check(
             found,
             f"Device {metal_device_id} [{unique_id}] not found. There is a mismatch between metal and exalens device IDs, most likely due to use of TT_VISIBLE_DEVICES. Please contact script owner.",
+        )
+        if not found:
+            missing_mappings.append((metal_device_id, unique_id))
+
+    if missing_mappings:
+        formatted = ", ".join(f"{metal_id}[{unique_id}]" for metal_id, unique_id in missing_mappings)
+        raise TTTriageError(
+            "Failed to map Metal device IDs to Exalens device IDs for in-use selection: "
+            f"{formatted}. This is usually caused by TT_VISIBLE_DEVICES remapping. "
+            "Retry with --dev=all (or explicit --dev IDs) so triage can enumerate devices from the debugger context."
         )
     return device_ids
 
@@ -422,6 +434,11 @@ def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
+    if not devices:
+        raise TTTriageError(
+            "No devices were selected by run_checks. This can happen when in-use device selection "
+            "fails under TT_VISIBLE_DEVICES remapping. Retry with --dev=all (or explicit --dev IDs)."
+        )
     return RunChecks(devices, metal_device_id_mapping)
 
 

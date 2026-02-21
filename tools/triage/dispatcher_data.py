@@ -19,10 +19,16 @@ from dataclasses import dataclass
 import os
 import threading
 
-from inspector_data import run as get_inspector_data, InspectorData
+from inspector_data import (
+    run as get_inspector_data,
+    InspectorData,
+    InspectorException,
+    InspectorRpcRemoteException,
+    InspectorUnserializedMethod,
+)
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from elfs_cache import run as get_elfs_cache, ElfsCache
-from triage import triage_singleton, ScriptConfig, run_script, log_check_location, log_warning
+from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
 from ttexalens.memory_access import MemoryAccess
@@ -85,7 +91,7 @@ class DispatcherData:
         metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
-        self.metal_device_id_mapping = metal_device_id_mapping
+        self._metal_device_id_mapping = metal_device_id_mapping
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
@@ -99,20 +105,30 @@ class DispatcherData:
         # Each device needs to have its own build_env to get the correct firmware path
         # Cache is keyed by unique_id for consistency
         self._build_env_cache = {}
-        self._build_env_last_error: Exception | None = None
-        self._is_2_erisc_mode = False
 
-        # Get firmware paths from Inspector build environments instead of relative paths.
-        self._refresh_build_env_cache()
+        # Prefill cache from no-arg RPC (best effort); strict handling happens on-demand.
+        self._populate_build_env_cache(strict=False)
 
-        # Get the device ID from run_checks or inspector_data
-        if not (run_checks and getattr(run_checks, "devices", None)):
-            raise TTTriageError("RunChecks.devices not available. Ensure run_checks is a dependency or pass --dev.")
+        if run_checks is None:
+            raise TTTriageError(
+                "RunChecks dependency is unavailable. Fix run_checks failures first (device mapping and selection) "
+                "or pass --dev explicitly."
+            )
+        if not hasattr(run_checks, "devices"):
+            raise TTTriageError(
+                "RunChecks.devices is unavailable. Ensure run_checks completed successfully and returned a valid result."
+            )
+        if not run_checks.devices:
+            raise TTTriageError(
+                "RunChecks selected zero devices. This commonly happens when --dev=in_use is combined with "
+                "TT_VISIBLE_DEVICES remapping. Retry with --dev=all or explicit --dev IDs."
+            )
 
+        # Use unique_id for device lookup
         device = run_checks.devices[0]
         device_unique_id = device.unique_id
-        build_env = self._get_build_env_for_device(device_unique_id)
 
+        build_env = self._get_build_env_for_device(device_unique_id)
         # Use build_env for initial firmware paths
         brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
         idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -210,55 +226,43 @@ class DispatcherData:
             "ERISC1": 0,
         }
 
+    def _populate_build_env_cache(self, strict: bool) -> None:
+        """Populate build-env cache from Inspector, optionally with strict failures."""
+        try:
+            all_build_envs = self.inspector_data.getAllBuildEnvs().buildEnvs
+            for build_env in all_build_envs:
+                unique_id = self._metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
+                self._build_env_cache[unique_id] = build_env.buildInfo
+        except InspectorUnserializedMethod as exc:
+            if strict:
+                raise TTTriageError(
+                    "Inspector build-env data is unavailable in serialized logs (getAllBuildEnvs missing). "
+                    "Provide complete inspector serialized artifacts via --inspector-log-path, or connect "
+                    "to live Inspector RPC with TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1."
+                ) from exc
+        except InspectorRpcRemoteException as exc:
+            if strict:
+                raise TTTriageError(
+                    f"Inspector RPC getAllBuildEnvs failed remotely: {exc}. Ensure Inspector RPC is healthy "
+                    "and enabled in the Metal process (TT_METAL_INSPECTOR=1, TT_METAL_INSPECTOR_RPC=1)."
+                ) from exc
+        except InspectorException as exc:
+            if strict:
+                raise TTTriageError(f"Failed to query Inspector build environment data: {exc}") from exc
+        except Exception as exc:
+            if strict:
+                raise TTTriageError(f"Unexpected failure while querying Inspector build environments: {exc}") from exc
+
     def _get_build_env_for_device(self, device_unique_id: int):
-        """Get build_env for a specific device, with cache refresh and actionable errors."""
+        """Get build_env for a specific device, filling cache on demand with precise errors."""
         if device_unique_id not in self._build_env_cache:
-            # Retry once in case Inspector RPC becomes available after initial startup.
-            self._refresh_build_env_cache()
+            self._populate_build_env_cache(strict=True)
         if device_unique_id not in self._build_env_cache:
-            details: list[str] = []
-            if self._build_env_last_error is not None:
-                details.append(
-                    f"Last getAllBuildEnvs failure: {type(self._build_env_last_error).__name__}: {self._build_env_last_error}"
-                )
-            details.append(
-                "Ensure Inspector RPC is available or serialized RPC data includes getAllBuildEnvs/getMetalDeviceIdMappings."
-            )
-            if os.environ.get("TT_METAL_INSPECTOR_RPC") != "1":
-                details.append(
-                    "TT_METAL_INSPECTOR_RPC is not set to 1 in this environment; live RPC may be unavailable."
-                )
             raise TTTriageError(
-                f"No build environment found for device unique_id={device_unique_id}. " + " ".join(details)
+                f"Inspector build environment missing for device unique_id={device_unique_id}. "
+                "Check device-id mapping consistency between Inspector and debugger context."
             )
         return self._build_env_cache[device_unique_id]
-
-    def _refresh_build_env_cache(self) -> None:
-        """Populate build-env cache from Inspector data; preserve root cause on failure."""
-        self._build_env_last_error = None
-        try:
-            result = self.inspector_data.getAllBuildEnvs()
-            build_envs = getattr(result, "buildEnvs", None)
-            if build_envs is None:
-                raise TTTriageError("Inspector getAllBuildEnvs returned malformed data (missing 'buildEnvs').")
-
-            skipped_metal_ids: list[int] = []
-            for build_env in build_envs:
-                metal_device_id = build_env.metalDeviceId
-                if not self.metal_device_id_mapping.has_metal_device_id(metal_device_id):
-                    skipped_metal_ids.append(metal_device_id)
-                    continue
-                unique_id = self.metal_device_id_mapping.get_unique_id(metal_device_id)
-                self._build_env_cache[unique_id] = build_env.buildInfo
-
-            if skipped_metal_ids:
-                skipped_text = ", ".join(str(metal_id) for metal_id in skipped_metal_ids)
-                log_warning(
-                    "Inspector getAllBuildEnvs returned unknown metal device IDs that were skipped: "
-                    f"{skipped_text}. This can happen with partial/incompatible serialized artifacts."
-                )
-        except Exception as exc:
-            self._build_env_last_error = exc
 
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
