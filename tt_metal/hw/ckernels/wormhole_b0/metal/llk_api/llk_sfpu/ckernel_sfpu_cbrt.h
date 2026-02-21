@@ -37,7 +37,7 @@ inline void calculate_cube_root() {
         //
         // The calculation below does:
         // 1. f = (float)i; this is inexact for values larger than 2^24.
-        // 2. Use a single SFPMAD to compute (f/3.0)/128.0, which is guaranteed to be smaller than 2^24,
+        // 2. Use a single SFPMAD to compute (f/3.0)/128.0, which is guaranteed to be smaller than 2^23,
         //    and add 2^23, shifting result into mantissa bits (rounding to nearest even).
         // 3. Now we extract the mantissa bits, and left-shift by 7 to undo division by 128.0.
         // This gives us approximately `i/3` but with low 7 bits all zero.
