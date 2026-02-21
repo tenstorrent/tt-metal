@@ -24,7 +24,9 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/sdpa_sub_custom.h"
 #include "api/compute/matmul.h"
+#include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 
@@ -576,6 +578,7 @@ template <
     uint32_t scale_fp32,
     uint32_t SBH,
     uint32_t SBW,
+    bool use_custom_sub = false,
     bool do_reduce = true,
     int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_no_push(
@@ -587,7 +590,14 @@ void sub_exp_block_bcast_cols_no_push(
     // Initialize operation
     {
         SDPA_DeviceZoneScopedN_1("SUB_BCAST_INIT");
-        sub_bcast_cols_init_short(inout0_cb, in1_cb);
+#ifdef ARCH_BLACKHOLE
+        if constexpr (use_custom_sub) {
+            sub_bcast_cols_init_short_custom<SBW>(inout0_cb, in1_cb);
+        } else
+#endif
+        {
+            sub_bcast_cols_init_short(inout0_cb, in1_cb);
+        }
     }
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
@@ -602,10 +612,19 @@ void sub_exp_block_bcast_cols_no_push(
         SDPA_DeviceZoneScopedN_1("SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < SBH; i++) {
-            for (uint32_t j = 0; j < SBW; j++) {
-                uint32_t in0_tile_index =
-                    (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
-                sub_tiles_bcast_cols(inout0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (use_custom_sub) {
+                uint32_t in0_tile_index = (global_row_base + i) * cols + global_col_base;
+                sub_tiles_bcast_cols_custom<SBW>(inout0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index);
+                dst_index += SBW;
+            } else
+#endif
+            {
+                for (uint32_t j = 0; j < SBW; j++) {
+                    uint32_t in0_tile_index =
+                        (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
+                    sub_tiles_bcast_cols(inout0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
+                }
             }
         }
         tile_regs_commit();
@@ -728,7 +747,12 @@ void reduce_c_row_group_no_push(
     /**
      * For the GROUP_SIZE rows in this group, compute the max into DST registers.
      */
-    reduce_block_max_row_init<cols>();
+    if (row_group_index == 0) {
+        // Seed full reduce config once; subsequent groups can use lighter reinit.
+        reduce_block_max_row_init<cols>();
+    } else {
+        reduce_block_max_row_reinit_short<cols>();
+    }
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * cols;
         const uint32_t reduce_dst_idx = i;
@@ -781,7 +805,8 @@ void blocked_1x8_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        matmul_block_no_mop(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -824,7 +849,8 @@ void blocked_1x4_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        matmul_block_no_mop(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -869,7 +895,8 @@ void blocked_1x4_matmul_and_pack_faster(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        matmul_block_no_mop(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -955,22 +982,22 @@ void sdpa_inner_loop(
             // DeviceZoneScopedN("Softmax(Q@KT)");
             cb_wait_front(cb_q_in, q_wait_tiles);
             kt_index_offset = 0;
+            // Program replay once per q_subblock; restore matmul addrmods only after sub_exp transitions.
+            mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 
             for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
                 if (q_subblock > 0) {
                     uint32_t prev_q_subblock = q_subblock - 1;
                     MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
                     // SDPA_DeviceZoneScopedN_5("SUB EXP");
-                    sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                    sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                         alias_cur_max, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+                    mm_no_mop_reinit_addrmods_only(true);
                 }
 
                 {
                     SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
                     // SDPA_DeviceZoneScopedN_5("Q@KT MM+Pack");
-                    if (q_subblock > 0 || q_subblock == 0 && kt_subblock == 0) {
-                        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-                    }
                     blocked_1x8_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                         cb_q_in,
                         cb_kt_in,
@@ -1055,14 +1082,14 @@ void sdpa_inner_loop(
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=0" << ENDL());
                     {
                         SDPA_DeviceZoneScopedN_5("SUB EXP");
-                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                             alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
                     }
 
                     // 2. matmul first half — FPU overlaps with EXP(kt=0) on SFPU
                     {
                         uint32_t v_index_offset = 0;
-                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
+                        mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H1");
                             SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack H1");
@@ -1088,7 +1115,7 @@ void sdpa_inner_loop(
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=1" << ENDL());
                     {
                         SDPA_DeviceZoneScopedN_5("SUB EXP");
-                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                             alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
                     }
                     // alias_cur_sum: full-CB push (Sq_chunk_t tiles on Sq_chunk_t-tile CB).
@@ -1099,7 +1126,7 @@ void sdpa_inner_loop(
                     PACK((llk_pack_reconfig_l1_acc(1)));
                     {
                         uint32_t v_index_offset = 0;
-                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
+                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H2");
                             SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack H2");
@@ -1127,7 +1154,7 @@ void sdpa_inner_loop(
                     // Non-overlap path: drain + full matmul
                     MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << ENDL());
                     for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true, true>(
                             alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
                     }
                     // alias_cur_sum: full-CB push (Sq_chunk_t tiles on Sq_chunk_t-tile CB).
@@ -1135,7 +1162,7 @@ void sdpa_inner_loop(
                     cb_push_back(alias_cur_sum, Sq_chunk_t);
 
                     uint32_t v_index_offset = 0;
-                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+                    mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
                         blocked_1x4_matmul_and_pack_faster<
@@ -1185,7 +1212,8 @@ void sdpa_inner_loop(
                 {
                     SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
-                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+                    mm_no_mop_reinit_short(
+                        cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
                         blocked_1x4_matmul_and_pack<
