@@ -117,7 +117,7 @@ public:
     const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
     const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
 
-    const TensorSpec& tensor_spec() const { return impl->get_tensor_spec(); }
+    const TensorSpec& tensor_spec() const { return impl->tensor_spec_; }
 
     volumn_type logical_volume() const { return logical_shape().volume(); }
     volumn_type physical_volume() const { return padded_shape().volume(); }
@@ -128,7 +128,7 @@ public:
      * From original Tensor:
      * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
      */
-    const TensorTopology& tensor_topology() const { return impl->get_tensor_topology(); }
+    const TensorTopology& tensor_topology() const { return impl->tensor_topology_; }
 
     // From original Tensor:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
@@ -158,7 +158,7 @@ public:
      */
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const { return get_storage().mesh_buffer; }
 
-    const DeviceStorage& get_storage() const { return impl->get_storage(); }
+    const DeviceStorage& get_storage() const { return impl->storage_; }
 
     // TODO: This is a hack right now, because this allows multiple device tensor holding on to the same conceptual
     // storage, find a better way to do this.
@@ -169,7 +169,7 @@ public:
 private:
     std::unique_ptr<attribute_type> impl;
 
-    DeviceStorage& get_storage() { return impl->get_storage(); }
+    DeviceStorage& get_storage() { return impl->storage_; }
 };
 
 }  // namespace tt::tt_metal
