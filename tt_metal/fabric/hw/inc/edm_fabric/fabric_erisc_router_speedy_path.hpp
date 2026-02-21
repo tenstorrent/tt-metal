@@ -111,7 +111,24 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     bool capture_full_timer = true;
     sender_full_timer.open();
 
-    // --- Send packet if possible (unchanged from normal path) ---
+    // --- Prefetch packet header payload_size and ETH TXQ status via inline asm ---
+    // Issue loads early so their multi-cycle latencies (8c L1, 7c ETH) are hidden
+    // behind the flow control stream register reads and branch computation.
+    uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
+    uint32_t prefetched_payload_size_raw;
+    asm volatile("lhu %0, 40(%1)" : "=r"(prefetched_payload_size_raw) : "r"(src_addr));
+
+    // Prefetch ETH TXQ busy status: CMD dummy read (BH-55 workaround) + STATUS read.
+    // By the time we reach the spin-wait ~20 instructions later, the value is ready.
+    constexpr uint32_t txq_base = ETH_TXQ0_REGS_START + (sender_txq_id * ETH_TXQ_REGS_SIZE);
+    uint32_t prefetched_txq_cmd_dummy, prefetched_txq_status;
+    asm volatile(
+        "lw %0, %2(%3)\n\t"
+        "lw %1, %4(%3)"
+        : "=r"(prefetched_txq_cmd_dummy), "=r"(prefetched_txq_status)
+        : "i"(ETH_TXQ_CMD), "r"(txq_base), "i"(ETH_TXQ_STATUS));
+
+    // --- Send packet if possible ---
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
@@ -129,26 +146,38 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
         // --- Inlined send_next_data with sub-timers and spin counters ---
         auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
-        uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
-        auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(src_addr);
+        // payload_size_bytes = raw payload + sizeof(packet header) = prefetched + 48
+        const size_t payload_size_bytes = static_cast<size_t>(prefetched_payload_size_raw) + sizeof(PACKET_HEADER_TYPE);
+        const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
         // SUB-TIMER: ETH_SEND (L1 reads + spin-wait + eth_send)
         sender_send_eth_timer.set_should_dump(true);
         sender_send_eth_timer.open();
 
-        const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
         channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
         channel_trimming_usage_recorder.update_sender_channel_packet_size(
-            sender_channel_index, static_cast<uint16_t>(pkt_header->payload_size_bytes));
-        const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
+            sender_channel_index, static_cast<uint16_t>(prefetched_payload_size_raw));
 
         if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-            while (internal_::eth_txq_is_busy(sender_txq_id)) {
-                eth_txq_spin_1.increment();
+            // Use prefetched TXQ status for first check — the reads were issued ~20 instructions
+            // ago so the 7c ETH latency is fully hidden. Only enter the spin-wait if busy.
+            if ((prefetched_txq_status >> ETH_TXQ_STATUS_CMD_ONGOING_BIT) & 0x1) {
+                while (internal_::eth_txq_is_busy(sender_txq_id)) {
+                    eth_txq_spin_1.increment();
+                }
             }
             eth_txq_spin_1.flush();
         }
         internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+
+        // Prefetch TXQ status for second spin-wait. Issue right after eth_send so the
+        // 7c ETH latency is hidden behind the ~30 instructions of bookkeeping below.
+        uint32_t prefetched_txq_status_2;
+        asm volatile(
+            "lw %0, %1(%2)\n\t"
+            "lw %0, %3(%2)"
+            : "=r"(prefetched_txq_status_2)
+            : "i"(ETH_TXQ_CMD), "r"(txq_base), "i"(ETH_TXQ_STATUS));
 
         sender_send_eth_timer.close();
 
@@ -168,8 +197,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         sender_send_notify_timer.set_should_dump(true);
         sender_send_notify_timer.open();
 
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
-            eth_txq_spin_2.increment();
+        // Use prefetched TXQ status — if the ETH transfer completed during bookkeeping,
+        // this skips the spin-wait entirely. If still busy, fall into the normal loop.
+        if ((prefetched_txq_status_2 >> ETH_TXQ_STATUS_CMD_ONGOING_BIT) & 0x1) {
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+                eth_txq_spin_2.increment();
+            }
         }
         eth_txq_spin_2.flush();
         remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
@@ -178,7 +211,8 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
         sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-            update_bw_counters(pkt_header, local_fabric_telemetry);
+            auto* pkt_header_v = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(src_addr);
+            update_bw_counters(pkt_header_v, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
