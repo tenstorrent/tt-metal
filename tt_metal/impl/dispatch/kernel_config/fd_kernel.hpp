@@ -112,10 +112,10 @@ public:
         noc_selection_(noc_selection),
         descriptor_(descriptor),
         dispatch_core_manager_(dispatch_core_manager),
-        get_control_plane_(std::move(get_control_plane)),
-        get_dispatch_query_manager_(std::move(get_dispatch_query_manager)),
-        get_max_num_eth_cores_(std::move(get_max_num_eth_cores)),
-        get_reads_dispatch_cores_(std::move(get_reads_dispatch_cores)) {
+        get_control_plane_(get_control_plane),
+        get_dispatch_query_manager_(get_dispatch_query_manager),
+        get_max_num_eth_cores_(get_max_num_eth_cores),
+        get_reads_dispatch_cores_(get_reads_dispatch_cores) {
         dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
             std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::WORKER, descriptor.num_cqs());
         dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
