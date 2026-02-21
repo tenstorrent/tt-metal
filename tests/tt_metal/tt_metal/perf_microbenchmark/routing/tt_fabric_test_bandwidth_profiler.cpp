@@ -207,6 +207,34 @@ void BandwidthProfiler::read_performance_results(
                 uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
 
                 device_core_cycles_[device.device_node_id][core] = total_cycles;
+
+                // Print per-phase breakdown from MISC region
+                uint32_t misc_idx = TT_FABRIC_MISC_INDEX;
+                uint32_t wait_total = core_data[misc_idx++];
+                uint32_t advance_total = core_data[misc_idx++];
+                uint32_t noc_total = core_data[misc_idx++];
+                uint32_t loop_total = core_data[misc_idx++];
+                uint32_t num_packets = core_data[misc_idx++];
+                if (num_packets > 0) {
+                    uint32_t wait_avg = wait_total / num_packets;
+                    uint32_t advance_avg = advance_total / num_packets;
+                    uint32_t noc_avg = noc_total / num_packets;
+                    uint32_t loop_avg = loop_total / num_packets;
+                    uint32_t total_avg = wait_avg + advance_avg + noc_avg + loop_avg;
+                    log_info(
+                        tt::LogTest,
+                        "Worker sender profile device={} core=({},{}): "
+                        "wait_avg={} advance_avg={} noc_avg={} loop_avg={} total_avg={} num_packets={}",
+                        device.device_node_id.chip_id,
+                        core.x,
+                        core.y,
+                        wait_avg,
+                        advance_avg,
+                        noc_avg,
+                        loop_avg,
+                        total_avg,
+                        num_packets);
+                }
             }
         }
     }

@@ -1029,8 +1029,12 @@ struct SenderKernelTrafficConfig {
 
     // Send exactly one packet per call (round-robin scheduling)
     // Returns: true if packet was sent, false if blocked (no credits)
-    template <bool BENCHMARK_MODE>
-    bool send_one_packet() {
+    // In BENCHMARK_MODE, accumulators and prev_t are passed by reference to avoid L1 traffic.
+    // All timestamps are local variables (registers), deltas accumulated directly.
+    // STATEFUL_NOC: when true, uses pre-configured NOC cmd buf state for credit updates.
+    template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
+    FORCE_INLINE bool send_one_packet(
+        uint32_t& wait_accum, uint32_t& advance_accum, uint32_t& noc_accum, uint32_t& loop_accum, uint32_t& prev_t) {
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
             if (!credit_manager_.has_credits_available(num_packets_processed)) {
@@ -1039,22 +1043,40 @@ struct SenderKernelTrafficConfig {
         }
 
         // STEP 2: Wait for space
-        connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+        if constexpr (BENCHMARK_MODE) {
+            // uint32_t t0 = get_timestamp_32b();
+            // loop_accum += (t0 - prev_t);
 
-        // STEP 3: Send packet
-        if constexpr (!BENCHMARK_MODE) {
+            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            // uint32_t t1 = get_timestamp_32b();
+            // wait_accum += (t1 - t0);
+
+            // STEP 3: Send (credit-only in steady state)
+            auto* conn = static_cast<WorkerToFabricEdmSender*>(connection_ptr_);
+            if (num_packets_processed < conn->num_buffers_per_channel) {
+                conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+                // prev_t = get_timestamp_32b();
+                // advance_accum += (prev_t - t1);
+            } else {
+                conn->advance_buffer_slot_write_index();
+                // uint32_t t2 = get_timestamp_32b();
+                // advance_accum += (t2 - t1);
+                conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+                // prev_t = get_timestamp_32b();
+                // noc_accum += (prev_t - t2);
+            }
+        } else {
+            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+
+            // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
-
-                // Send payload without header
                 connection_manager_->send_payload_without_header<BENCHMARK_MODE>(
                     connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
+            connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
+                connection_ptr_, connection_idx_, (uint32_t)packet_header);
         }
-
-        // Send header
-        connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
-            connection_ptr_, connection_idx_, (uint32_t)packet_header);
 
         // STEP 4: Update state (after successful send)
         if constexpr (!BENCHMARK_MODE) {
@@ -1115,6 +1137,9 @@ public:
     uint32_t payload_size_bytes = 0;
     uint32_t num_packets_processed = 0;
     uint64_t elapsed_cycles = 0;
+
+    // Profiling timestamps removed — accumulation now done entirely in register-resident
+    // local variables passed by reference to send_one_packet()
 
     SenderCreditManager credit_manager_;
 
