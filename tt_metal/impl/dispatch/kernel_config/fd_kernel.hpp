@@ -6,20 +6,23 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <stdint.h>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/context_descriptor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -79,16 +82,45 @@ static std::vector<std::string> dispatch_kernel_file_names = {
     ""                                                             // COUNT
 };
 
+// Use getters because they may be recreated between calls to Generate() and ConfigureCore()
+// E.g., Changing fabric mode from Disabled to Enabled constructs a new control plane
+using GetControlPlaneFn = std::function<tt::tt_fabric::ControlPlane&()>;
+using GetDispatchQueryManagerFn = std::function<const DispatchQueryManager&()>;
+using GetMaxNumEthCoresFn = std::function<uint32_t()>;
+using GetReadsDispatchCoresFn = std::function<bool(ChipId)>;
+
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
 // from this class and implement the virtual functions as required.
 class FDKernel {
 public:
-    FDKernel(int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+    FDKernel(
+        int node_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        const GetControlPlaneFn& get_control_plane = {},
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {}) :
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
         node_id_(node_id),
         cq_id_(cq_id),
-        noc_selection_(noc_selection) {}
+        noc_selection_(noc_selection),
+        descriptor_(descriptor),
+        dispatch_core_manager_(dispatch_core_manager),
+        get_control_plane_(get_control_plane),
+        get_dispatch_query_manager_(get_dispatch_query_manager),
+        get_max_num_eth_cores_(get_max_num_eth_cores),
+        get_reads_dispatch_cores_(get_reads_dispatch_cores) {
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
+            std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::WORKER, descriptor.num_cqs());
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
+            std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::ETH, descriptor.num_cqs());
+    }
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including
@@ -118,29 +150,34 @@ public:
         uint8_t cq_id,
         noc_selection_t noc_selection,
         tt::tt_metal::DispatchWorkerType type,
-        int tunnel_index = -1);
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        int tunnel_index = -1,
+        const GetControlPlaneFn& get_control_plane = {},
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     // Translate DispatchCoreType to programmable core type index
-    static uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false);
+    static uint32_t get_programmable_core_type_index(
+        const ContextDescriptor& descriptor, CoreType dispatch_core_type, bool is_active_eth_core = false);
 
     // Translate core coord using the chip_id from the logical_cxy
     //
     // IDevice::virtual_core_from_logical_core uses the chip_id of the device instance whereas this function uses the
     // chip_id specified in the logical coordinate.
-    static CoreCoord get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type);
+    static CoreCoord get_virtual_core_coord(
+        const ContextDescriptor& descriptor, const tt_cxy_pair& logical_cxy, const CoreType& core_type);
 
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() const {
-        return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    }
+    virtual CoreType GetCoreType() const { return dispatch_core_manager_.get_dispatch_core_type(); }
     FDKernelType GetKernelType() const { return kernel_type_; }
     tt_cxy_pair GetLogicalCore() const { return logical_core_; }
     tt_cxy_pair GetVirtualCore() const {
-        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            logical_core_, GetCoreType());
+        return descriptor_.cluster().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
     }
     ChipId GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet
     int GetNodeId() const { return node_id_; }
@@ -151,6 +188,10 @@ public:
     int GetDownstreamPort(FDKernel* other) const { return GetPort(other, this->downstream_kernels_); }
     void AddDevice(tt::tt_metal::IDevice* device) { device_ = device; }
     void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
+
+    tt::tt_fabric::ControlPlane& get_control_plane_ref() const;
+    const DispatchQueryManager& get_dispatch_query_manager_ref() const;
+    uint32_t get_max_num_eth_cores() const;
 
 protected:
     // Attributes for an EDM client to connect to the router
@@ -179,11 +220,11 @@ protected:
     }
 
     // Helper function to get upstream device in the tunnel from current device, not valid for mmio
-    static ChipId GetUpstreamDeviceId(ChipId device_id);
+    static ChipId GetUpstreamDeviceId(const ContextDescriptor& descriptor, ChipId device_id);
     // Helper function to get downstream device in the tunnel from current device
-    static ChipId GetDownstreamDeviceId(ChipId device_id, int tunnel = -1);
+    static ChipId GetDownstreamDeviceId(const ContextDescriptor& descriptor, ChipId device_id, int tunnel = -1);
     // Helper function to get the tunnel stop index of current device
-    static uint32_t GetTunnelStop(ChipId device_id);
+    static uint32_t GetTunnelStop(const ContextDescriptor& descriptor, ChipId device_id);
     // Create and populate semaphores for the EDM connection
     void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
     IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
@@ -201,6 +242,13 @@ protected:
     std::vector<FDKernel*> downstream_kernels_;
 
     std::vector<uint32_t> runtime_args_;
+    const ContextDescriptor& descriptor_;
+    dispatch_core_manager& dispatch_core_manager_;
+    GetControlPlaneFn get_control_plane_;
+    GetDispatchQueryManagerFn get_dispatch_query_manager_;
+    GetMaxNumEthCoresFn get_max_num_eth_cores_;
+    GetReadsDispatchCoresFn get_reads_dispatch_cores_;
+    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
 };
 
 }  // namespace tt::tt_metal

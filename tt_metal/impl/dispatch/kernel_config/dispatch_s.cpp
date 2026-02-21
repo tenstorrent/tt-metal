@@ -19,7 +19,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
-#include "context/metal_context.hpp"
+#include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -31,11 +31,31 @@
 using namespace tt::tt_metal;
 
 DispatchSKernel::DispatchSKernel(
-    int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-    FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-    uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-    this->logical_core_ =
-        MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_id, channel, cq_id_);
+    int node_id,
+    ChipId device_id,
+    ChipId servicing_device_id,
+    uint8_t cq_id,
+    noc_selection_t noc_selection,
+    const ContextDescriptor& descriptor,
+    dispatch_core_manager& dispatch_core_manager,
+    const GetControlPlaneFn& get_control_plane,
+    const GetDispatchQueryManagerFn& get_dispatch_query_manager,
+    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
+    const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
+    FDKernel(
+        node_id,
+        device_id,
+        servicing_device_id,
+        cq_id,
+        noc_selection,
+        descriptor,
+        dispatch_core_manager,
+        get_control_plane,
+        get_dispatch_query_manager,
+        get_max_num_eth_cores,
+        get_reads_dispatch_cores) {
+    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
+    this->logical_core_ = dispatch_core_manager.dispatcher_s_core(device_id, channel, cq_id_);
     this->kernel_type_ = FDKernelType::DISPATCH;
     // Log dispatch_s core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
@@ -43,10 +63,10 @@ DispatchSKernel::DispatchSKernel(
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {
-    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
 
     uint32_t dispatch_s_buffer_base = 0xff;
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
         uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
         if (GetCoreType() == CoreType::WORKER) {
             // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -68,13 +88,12 @@ void DispatchSKernel::GenerateStaticConfigs() {
     // used by dispatch_d to signal that dispatch_s can send go signal
 
     static_config_.mcast_go_signal_addr =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+        descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
     static_config_.unicast_go_signal_addr =
-        (MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-            ? MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+        (descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+            ? descriptor_.hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
             : 0;
-    static_config_.distributed_dispatcher =
-        MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
+    static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
@@ -103,13 +122,9 @@ void DispatchSKernel::CreateKernel() {
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores =
-        MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
+    uint32_t num_virtual_active_eth_cores = get_max_num_eth_cores();
     uint32_t num_physical_active_eth_cores =
-        MetalContext::instance()
-            .get_control_plane()
-            .get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true)
-            .size();
+        get_control_plane_ref().get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true).size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
 
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
@@ -167,12 +182,12 @@ void DispatchSKernel::CreateKernel() {
 }
 
 void DispatchSKernel::ConfigureCore() {
-    if (!MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
+    if (!get_dispatch_query_manager_ref().distributed_dispatcher()) {
         return;
     }
     // Just need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
