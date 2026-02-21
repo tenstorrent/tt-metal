@@ -367,7 +367,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
             .noc = reader_noc,
             .compile_args = reader_mcast_sender_compile_time_args_group_1,
             .defines = reader_mcast_sender_defines,
-            .named_compile_args = reader_mcast_sender_named_compile_time_args});
+            .named_compile_args = reader_mcast_sender_named_compile_time_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::Os});
     KernelHandle reader_mcast_receiver_kernels_id_group_1 = CreateKernel(
         program,
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"

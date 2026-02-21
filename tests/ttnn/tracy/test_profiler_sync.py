@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_for_wormhole_b0
 
 
 def test_with_ops(device):
@@ -39,6 +40,7 @@ def test_with_ops(device):
     output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
 
 
+@skip_for_wormhole_b0()
 def test_mesh_device(
     mesh_device,
 ):

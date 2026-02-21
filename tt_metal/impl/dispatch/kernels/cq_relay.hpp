@@ -7,12 +7,14 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "cq_common.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "internal/risc_attribs.h"
 #include "api/debug/waypoint.h"
 #include "noc/noc_parameters.h"
+#if defined(FABRIC_RELAY)
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#endif
 
 #if !defined(FD_CORE_TYPE)
 #define FD_CORE_TYPE 0
@@ -26,9 +28,9 @@ template <uint32_t mux_num_buffers_per_channel, uint32_t mux_channel_buffer_size
 class CQRelayClient {
 private:
     constexpr static ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
-
+#if defined(FABRIC_RELAY)
     tt::tt_fabric::WorkerToFabricMuxSender<mux_num_buffers_per_channel> edm;
-
+#endif
 #if ASSERT_ENABLED
     // Pointer to the end of the last released page. Used for assertions to catch cmd_ptr/released_pages desync.
     uint32_t watch_released_ptr_;

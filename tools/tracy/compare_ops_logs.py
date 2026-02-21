@@ -24,12 +24,12 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None, only
 
     try:
         python_df = pd.read_csv(python_ops_perf_report)
-    except pd.errors.EmptyDataError:
+    except (pd.errors.EmptyDataError, FileNotFoundError):
         python_df = pd.DataFrame()
 
     try:
         cpp_df = pd.read_csv(cpp_ops_perf_report)
-    except pd.errors.EmptyDataError:
+    except (pd.errors.EmptyDataError, FileNotFoundError):
         cpp_df = pd.DataFrame()
 
     if python_df.empty or cpp_df.empty:

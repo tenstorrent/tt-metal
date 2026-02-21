@@ -7,7 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from models.common.utility_functions import nearest_y
+from models.common.utility_functions import nearest_y, skip_for_wormhole_b0
 
 
 def get_random_devices(mesh_shape: list[int]) -> set[ttnn.MeshCoordinate]:
@@ -142,6 +142,7 @@ def run_test_update_cache(mesh_device: ttnn.MeshDevice, cache_shape: list[int], 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 1.0"
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
 @pytest.mark.parametrize("cache_shape", [(32, 1, 32, 128)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

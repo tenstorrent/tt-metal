@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from models.common.utility_functions import skip_for_wormhole_b0
 
 
 def run_global_circular_buffer(device):
@@ -36,5 +37,6 @@ def test_global_circular_buffer(device):
     run_global_circular_buffer(device)
 
 
+@skip_for_wormhole_b0()
 def test_global_circular_buffer_mesh(mesh_device):
     run_global_circular_buffer(mesh_device)

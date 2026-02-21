@@ -105,7 +105,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_init_<untilize, zero_output>(
-        pack_dst_format[output_id], pack_src_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -198,11 +198,7 @@ inline void llk_pack_untilize(
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-            pack_tile_addr,
-            pack_dst_format[output_id],
-            face_r_dim,
-            num_faces,
-            block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr, pack_dst_format[output_id], face_r_dim, 4, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }

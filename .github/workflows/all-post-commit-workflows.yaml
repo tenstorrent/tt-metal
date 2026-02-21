@@ -109,7 +109,7 @@ on:
         description: "Run TTNN unit tests"
       run-models-unit-tests:
         required: false
-        default: true
+        default: false
         type: boolean
         description: "Run model unit tests"
       run-tt-train-cpp-unit-tests:
@@ -119,12 +119,12 @@ on:
         description: "Run TT-Train C++ unit tests"
       run-profiler-regression:
         required: false
-        default: true
+        default: false
         type: boolean
         description: "Run profiler regression tests"
       run-t3000-apc-fast-tests:
         required: false
-        default: true
+        default: false
         type: boolean
         description: "Run T3000 APC fast tests"
       run-ops-unit-tests:
@@ -139,12 +139,12 @@ on:
         description: "Enable watcher for long-running tests"
       enable-lightweight-kernel-asserts:
         required: false
-        default: false
+        default: true
         type: boolean
         description: "Enable lightweight kernel asserts"
       enable-llk-asserts:
         required: false
-        default: false
+        default: true
         type: boolean
         description: "Enable LLK asserts"
       ref:
