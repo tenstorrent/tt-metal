@@ -21,11 +21,6 @@ from models.common.utility_functions import skip_for_blackhole
 class TestUpdateCache:
     @pytest.mark.parametrize("seq_len", [32, 512, 2048, 4096])
     def test_fill_cache(self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device):
-        if not in_sharded and num_heads > 1 and seq_len == 2048:
-            pytest.skip(
-                "For interleaved, each core can only have 1 tile along seq_len if num_heads > 1, so there is a restriction on max seq_len!"
-            )
-
         cache_dtype = input_dtype
 
         input_shape = [1, num_heads, seq_len, head_dim]
@@ -151,11 +146,6 @@ class TestUpdateCacheFP32:
     def test_fill_cache_fp32(
         self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device
     ):
-        if not in_sharded and num_heads > 1 and seq_len == 1024:
-            pytest.skip(
-                "For interleaved, each core can only have 1 tile along seq_len if num_heads > 1, so there is a restriction on max seq_len!"
-            )
-
         cache_dtype = input_dtype
 
         input_shape = [1, num_heads, seq_len, head_dim]
