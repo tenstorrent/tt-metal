@@ -86,8 +86,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
     gate_full = torch_gate_weights.repeat(1, moe_tp) if moe_tp > 1 else torch_gate_weights
     up_full = torch_up_weights.repeat(1, moe_tp) if moe_tp > 1 else torch_up_weights
     down_full = torch_down_weights.repeat(moe_tp, 1) if moe_tp > 1 else torch_down_weights
-    gate_ov, _up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(gate_full, up_full, down_full)
-    ttnn_gate_up_weights = gate_ov.fused_tensor
+    gate_ov, up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(gate_full, up_full, down_full)
 
     # ── Output ──
     out_shard = ttnn.ShardSpec(sender_core_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
@@ -241,7 +240,8 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
     return {
         # TTNN tensors
         "ttnn_activation": ttnn_activation,
-        "ttnn_gate_up_weights": ttnn_gate_up_weights,
+        "shared_gate_weights_overlapped": gate_ov,
+        "shared_up_weights_overlapped": up_ov,
         "ttnn_down_weights": ttnn_down_weights,
         "ttnn_output": ttnn_output,
         "ttnn_down_mcast_dst": ttnn_down_mcast_dst,
@@ -888,7 +888,8 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
         shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
@@ -1094,7 +1095,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
         shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],

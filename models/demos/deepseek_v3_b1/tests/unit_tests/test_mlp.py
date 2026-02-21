@@ -397,7 +397,8 @@ def test_mlp_fused(device):
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
         shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
@@ -571,7 +572,8 @@ def test_mlp_fused_with_reduce(bh_2d_mesh_device):
         rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
         # Shared expert tensors
         shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
         shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
