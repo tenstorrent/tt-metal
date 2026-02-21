@@ -94,6 +94,14 @@ class CBPoolAllocator:
         # Maps slot_index -> original CB index that created it (for identity-preference)
         self._slot_to_orig_index: Dict[int, int] = {}
 
+    def reserve_index(self, index: int) -> None:
+        """Reserve a slot index without creating a pool slot or remap entry.
+
+        Used for GlobalCB remote indices which occupy a hardware slot but must
+        not be pool-allocated, remapped, or included in per-phase CB reset.
+        """
+        self._allocated_indices.add(index)
+
     def _alloc_index(self) -> int:
         """Find the next free slot index."""
         while self._next_index in self._allocated_indices:
@@ -295,6 +303,17 @@ class CBPoolAllocator:
                 cb_desc.total_size = max_size_by_id[cid]
                 merged.append(cb_desc)
 
+        # Pass through GlobalCB-backed CBDescriptors not already in merged set.
+        # CBDescriptors with only remote_format_descriptors (no local) are missed
+        # by the pool-based lookup above, so we append them here unchanged.
+        for phase in phases:
+            for cb_desc in phase.op_descriptor.descriptor.cbs:
+                if cb_desc.has_global_circular_buffer():
+                    cid = id(cb_desc)
+                    if cid not in seen_ids:
+                        seen_ids.add(cid)
+                        merged.append(cb_desc)
+
         return merged
 
     def build_unpack_to_dest_mode(self) -> list:
@@ -335,11 +354,6 @@ def extract_cb_info(
     """
     cb_info = {}
     for cb_desc in descriptor.cbs:
-        if cb_desc.has_global_circular_buffer():
-            raise ValueError(
-                "Sequential fusion does not support GlobalCircularBuffer CBs. "
-                "CB with global_circular_buffer detected in ProgramDescriptor."
-            )
         for fmt_desc in cb_desc.format_descriptors:
             cb_idx = fmt_desc.buffer_index
             try:
@@ -366,6 +380,22 @@ def extract_cb_info(
                 unpack_to_dest_mode=utd_mode,
             )
     return cb_info
+
+
+def _extract_remote_cb_indices(descriptor: "ttnn.ProgramDescriptor") -> Set[int]:
+    """Get buffer indices from remote_format_descriptors of GlobalCB-backed CBs.
+
+    These indices occupy hardware CB slots but are managed by the
+    GlobalCircularBuffer (L1-based tracking, no stream registers).
+    They must be reserved in the pool to prevent collisions but must NOT
+    be pool-allocated, remapped, or included in inter-phase CB reset.
+    """
+    indices: Set[int] = set()
+    for cb_desc in descriptor.cbs:
+        if cb_desc.has_global_circular_buffer():
+            for fmt_desc in cb_desc.remote_format_descriptors:
+                indices.add(fmt_desc.buffer_index)
+    return indices
 
 
 # Convention: CB-reference named compile-time args MUST start with this prefix
@@ -534,4 +564,5 @@ __all__ = [
     "_verify_cb_restore",
     "_get_phantom_cb_indices",
     "_compute_rebind_info",
+    "_extract_remote_cb_indices",
 ]

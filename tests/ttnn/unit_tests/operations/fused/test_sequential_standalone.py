@@ -2413,5 +2413,265 @@ class TestPhaseNameGeneration:
         assert op2.name == "matmul"
 
 
+class TestGlobalCircularBufferPassThrough:
+    """Tests for GlobalCircularBuffer support in the fusion framework.
+
+    A GlobalCB-backed CBDescriptor has two sets of format descriptors:
+    - format_descriptors (local): regular CB slots, pool-allocated normally
+    - remote_format_descriptors (remote): GlobalCB slots, reserved only
+    """
+
+    def _make_regular_cb(self, buffer_index=0, data_format="F16", page_size=1024, total_size=2048):
+        """Create a mock regular (non-GlobalCB) CBDescriptor."""
+        fmt = MagicMock(buffer_index=buffer_index, data_format=data_format, page_size=page_size)
+        cb = MagicMock(
+            total_size=total_size,
+            core_ranges="mock_ranges",
+            format_descriptors=[fmt],
+            remote_format_descriptors=[],
+        )
+        cb.has_global_circular_buffer.return_value = False
+        cb.has_buffer.return_value = False
+        return cb
+
+    def _make_global_cb(
+        self,
+        local_index=1,
+        remote_index=31,
+        data_format="F16",
+        page_size=1024,
+        total_size=4096,
+    ):
+        """Create a mock GlobalCB-backed CBDescriptor with both local and remote indices."""
+        local_fmt = MagicMock(buffer_index=local_index, data_format=data_format, page_size=page_size)
+        remote_fmt = MagicMock(buffer_index=remote_index, data_format=data_format, page_size=page_size)
+        cb = MagicMock(
+            total_size=total_size,
+            core_ranges="mock_ranges",
+            format_descriptors=[local_fmt],
+            remote_format_descriptors=[remote_fmt],
+        )
+        cb.has_global_circular_buffer.return_value = True
+        cb.has_buffer.return_value = False
+        return cb
+
+    def _make_remote_only_global_cb(self, remote_index=31, data_format="F16", page_size=1024, total_size=4096):
+        """Create a mock GlobalCB-backed CBDescriptor with ONLY remote descriptors (no local)."""
+        remote_fmt = MagicMock(buffer_index=remote_index, data_format=data_format, page_size=page_size)
+        cb = MagicMock(
+            total_size=total_size,
+            core_ranges="mock_ranges",
+            format_descriptors=[],
+            remote_format_descriptors=[remote_fmt],
+        )
+        cb.has_global_circular_buffer.return_value = True
+        cb.has_buffer.return_value = False
+        return cb
+
+    def test_extract_cb_info_skips_global_cb_remote(self):
+        """extract_cb_info should extract local format descriptors but NOT remote ones."""
+        extract_cb_info = _mock_cb_allocator.extract_cb_info
+
+        regular_cb = self._make_regular_cb(buffer_index=0)
+        global_cb = self._make_global_cb(local_index=1, remote_index=31)
+
+        prog_desc = MagicMock(cbs=[regular_cb, global_cb])
+        result = extract_cb_info(prog_desc)
+
+        # Regular CB index 0 extracted
+        assert 0 in result
+        # GlobalCB local index 1 also extracted
+        assert 1 in result
+        # Remote index 31 NOT extracted (not in format_descriptors)
+        assert 31 not in result
+
+    def test_extract_cb_info_remote_only_global_cb_produces_no_cbinfo(self):
+        """A GlobalCB with only remote_format_descriptors should produce no CBInfo."""
+        extract_cb_info = _mock_cb_allocator.extract_cb_info
+
+        remote_only_cb = self._make_remote_only_global_cb(remote_index=31)
+        prog_desc = MagicMock(cbs=[remote_only_cb])
+
+        result = extract_cb_info(prog_desc)
+        assert len(result) == 0
+
+    def test_extract_remote_cb_indices(self):
+        """_extract_remote_cb_indices should return remote buffer indices from GlobalCB-backed CBs."""
+        fn = _mock_cb_allocator._extract_remote_cb_indices
+
+        regular_cb = self._make_regular_cb(buffer_index=0)
+        global_cb = self._make_global_cb(local_index=1, remote_index=31)
+
+        prog_desc = MagicMock(cbs=[regular_cb, global_cb])
+        result = fn(prog_desc)
+
+        assert result == {31}
+
+    def test_extract_remote_cb_indices_no_global_cbs(self):
+        """_extract_remote_cb_indices returns empty set when no GlobalCBs present."""
+        fn = _mock_cb_allocator._extract_remote_cb_indices
+
+        regular_cb = self._make_regular_cb(buffer_index=0)
+        prog_desc = MagicMock(cbs=[regular_cb])
+
+        result = fn(prog_desc)
+        assert result == set()
+
+    def test_reserve_index_prevents_collision(self):
+        """reserve_index should prevent pool from allocating at reserved slot."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Reserve slot 31 (GlobalCB remote index)
+        pool.reserve_index(31)
+
+        # Allocate a phase with a CB that naturally wants index 31
+        cb_info = {31: CBInfo(31, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info, set())
+
+        # CB 31 should be remapped to a different slot (31 is reserved)
+        remap = pool.get_remap(0)
+        assert remap[31] != 31, "Reserved index should not be reused by pool allocation"
+
+    def test_reserve_index_not_in_remap(self):
+        """Reserved indices should NOT appear in any phase's remap (no CB reset)."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+        pool.reserve_index(31)
+
+        # Phase 0: regular CBs only
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # Phase 1: also regular CBs only
+        cb_info_1 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(1, cb_info_1, set())
+
+        # Index 31 should not appear in any remap
+        for phase_idx in range(2):
+            remap = pool.get_remap(phase_idx)
+            assert 31 not in remap.values(), f"Reserved index 31 found in phase {phase_idx} remap values"
+
+    def test_per_phase_cb_slots_excludes_reserved(self):
+        """per_phase_cb_slots (derived from remaps) should exclude reserved GlobalCB indices."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+        pool.reserve_index(31)
+
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # Compute per_phase_cb_slots the same way builder.py does
+        per_phase_cb_slots = []
+        for i in range(1):
+            remap = pool.get_remap(i)
+            slots = sorted(set(remap.values()))
+            per_phase_cb_slots.append(slots)
+
+        # Slot 31 should NOT be in any phase's CB slot list (no reset for it)
+        for slots in per_phase_cb_slots:
+            assert 31 not in slots, "Reserved GlobalCB index should not be in per_phase_cb_slots"
+
+    def test_global_cb_local_index_pool_allocated(self):
+        """GlobalCB's local format_descriptor index should be pool-allocated normally."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+        pool.reserve_index(31)  # Reserve remote index
+
+        # Phase 0: GlobalCB local index 1 + regular CB index 0
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+            1: CBInfo(1, 4096, "F16", 1024, None, "Default"),  # GlobalCB local part
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # Phase 1: regular CB index 1 with same config
+        cb_info_1 = {
+            1: CBInfo(1, 2048, "F16", 1024, None, "Default"),
+        }
+        pool.allocate_phase(1, cb_info_1, set())
+
+        # Local index 1 should be pool-allocated and reused across phases
+        slot_p0 = pool.get_remap(0)[1]
+        slot_p1 = pool.get_remap(1)[1]
+        assert slot_p0 == slot_p1, "GlobalCB local index should share slot with compatible CB"
+
+    def test_build_merged_includes_remote_only_global_cb(self):
+        """build_merged_cb_descriptors should include remote-only GlobalCB descriptors."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+        PhaseInfo = _mock_cb_allocator.PhaseInfo
+        OpDescriptor = _mock_cb_allocator.OpDescriptor
+
+        pool = CBPoolAllocator(max_slots=32)
+        pool.reserve_index(31)
+
+        # Phase with a regular CB and a remote-only GlobalCB
+        regular_cb = self._make_regular_cb(buffer_index=0)
+        remote_only_cb = self._make_remote_only_global_cb(remote_index=31)
+
+        mock_descriptor = MagicMock()
+        mock_descriptor.cbs = [regular_cb, remote_only_cb]
+
+        mock_op_desc = MagicMock()
+        mock_op_desc.descriptor = mock_descriptor
+
+        # Extract CB info (only regular CB gets extracted)
+        cb_info = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        phase = PhaseInfo(phase_idx=0, op_descriptor=mock_op_desc, cb_info=cb_info)
+
+        pool.allocate_phase(0, cb_info, set())
+
+        merged = pool.build_merged_cb_descriptors([phase])
+
+        # Both the regular CB and the remote-only GlobalCB should be in merged
+        assert len(merged) == 2
+        # The remote-only GlobalCB should be the one with has_global_circular_buffer
+        global_cbs = [cb for cb in merged if cb.has_global_circular_buffer()]
+        assert len(global_cbs) == 1
+
+    def test_build_merged_includes_local_plus_remote_global_cb(self):
+        """A GlobalCB with both local+remote descriptors should appear once in merged."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+        PhaseInfo = _mock_cb_allocator.PhaseInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+        pool.reserve_index(31)
+
+        # GlobalCB with local index 1 and remote index 31
+        global_cb = self._make_global_cb(local_index=1, remote_index=31)
+        regular_cb = self._make_regular_cb(buffer_index=0)
+
+        mock_descriptor = MagicMock()
+        mock_descriptor.cbs = [regular_cb, global_cb]
+
+        mock_op_desc = MagicMock()
+        mock_op_desc.descriptor = mock_descriptor
+
+        cb_info = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+            1: CBInfo(1, 4096, "F16", 1024, None, "Default"),  # from local fmt
+        }
+        phase = PhaseInfo(phase_idx=0, op_descriptor=mock_op_desc, cb_info=cb_info)
+        pool.allocate_phase(0, cb_info, set())
+
+        merged = pool.build_merged_cb_descriptors([phase])
+
+        # Both CBDescriptors should be included (regular + GlobalCB)
+        assert len(merged) == 2
+        # GlobalCB descriptor appears exactly once
+        global_cbs = [cb for cb in merged if cb.has_global_circular_buffer()]
+        assert len(global_cbs) == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

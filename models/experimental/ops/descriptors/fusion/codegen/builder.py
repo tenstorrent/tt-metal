@@ -23,6 +23,7 @@ from models.experimental.ops.descriptors.fusion.cb_allocator import (
     extract_cb_info,
     _get_phantom_cb_indices,
     _compute_rebind_info,
+    _extract_remote_cb_indices,
 )
 from models.experimental.ops.descriptors.fusion.codegen.source_gen import (
     _generate_fused_source,
@@ -175,8 +176,13 @@ def _build_fused_descriptor(
             role_map[rk] = kernel_desc
         phase_kernels.append(role_map)
 
-    # Pool-allocate CB slots based on compatibility keys
+    # Pool-allocate CB slots based on compatibility keys.
+    # Pre-reserve remote CB indices from GlobalCBs — prevents collisions
+    # without adding to remaps, so they are excluded from inter-phase CB reset.
     pool = CBPoolAllocator(max_slots=32)
+    for phase in phases:
+        for remote_idx in _extract_remote_cb_indices(phase.op_descriptor.descriptor):
+            pool.reserve_index(remote_idx)
     for phase_idx, phase in enumerate(phases):
         phantom_indices = _get_phantom_cb_indices(phase)
         pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
@@ -188,9 +194,12 @@ def _build_fused_descriptor(
     merged_cbs = pool.build_merged_cb_descriptors(phases)
 
     # Set CB core_ranges to the target when building for a specific core group.
+    # Skip GlobalCB-backed descriptors — their core_ranges must stay within
+    # the GlobalCircularBuffer's all_cores().
     if target_core_range is not None:
         for cb_desc in merged_cbs:
-            cb_desc.core_ranges = target_core_range
+            if not cb_desc.has_global_circular_buffer():
+                cb_desc.core_ranges = target_core_range
 
     # Per-phase CB slot sets (for targeted reset between phases)
     per_phase_cb_slots: List[List[int]] = []
