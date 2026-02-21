@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def run_global_semaphore(device):
@@ -35,11 +35,11 @@ def run_global_semaphore(device):
     ttnn.reset_global_semaphore_value(global_sem0, 3)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_global_semaphore(device):
     run_global_semaphore(device)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_global_semaphore_mesh(mesh_device):
     run_global_semaphore(mesh_device)

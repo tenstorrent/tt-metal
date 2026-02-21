@@ -9,7 +9,7 @@ import tempfile
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import skip_with_llk_assert
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
@@ -17,7 +17,7 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 #######
 # Test MultiDevice Initialization, Open/Close
 #######
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_mesh_device_open_close_explicit(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()
@@ -28,7 +28,7 @@ def test_mesh_device_open_close_explicit(silicon_arch_name, silicon_arch_wormhol
     ttnn.close_mesh_device(multi_device)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()
@@ -45,19 +45,19 @@ def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     ttnn.close_mesh_device(multi_device)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
     """Using `mesh_device` pytest fixture defined in conftest.py"""
     pass
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
     """Using `mesh_device` pytest fixture defined in conftest.py"""
     pass
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
     if ttnn.get_num_devices() < 4:
@@ -68,7 +68,7 @@ def test_multi_device_open_close_using_context_manager(silicon_arch_name, silico
         pass
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_multi_device_open_close_galaxy_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     if ttnn.get_num_devices() < 32:
         pytest.skip("Test is only valid on Galaxy")
@@ -100,7 +100,7 @@ def test_multi_device_open_close_galaxy_mesh(silicon_arch_name, silicon_arch_wor
 #######
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -127,7 +127,7 @@ def test_ttnn_to_multi_device_multiple_times(mesh_device, layout, memory_config,
     assert_with_pcc(torch_tensor, torch_loop_back_tensor, pcc=0.9999)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -153,7 +153,7 @@ def test_ttnn_to_and_from_multi_device_shard(mesh_device, layout, memory_config,
     assert_with_pcc(torch_tensor, torch_loop_back_tensor, pcc=0.9999)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -182,7 +182,7 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
         shard_offset += shard_size
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -213,7 +213,7 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
         assert torch.all(full_tensor == loopback_replicated_tensor)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -238,7 +238,7 @@ def test_ttnn_multi_device_all_gather(pcie_mesh_device):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -261,7 +261,7 @@ def test_multi_device_single_op_unary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_multi_device_single_op_unary_with_cache(mesh_device):
     """Multidevice API test: Running tensor-parallel multi-device single-op unary with cache"""
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
@@ -281,7 +281,7 @@ def test_multi_device_single_op_unary_with_cache(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_golden, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -311,7 +311,7 @@ def test_multi_device_single_op_binary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -336,7 +336,7 @@ def test_multi_device_multi_op(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -366,7 +366,7 @@ def test_multi_device_data_parallel_matmul_op(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.993)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -423,7 +423,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.991)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -460,7 +460,7 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
         assert_with_pcc(input_tensor, torch_loaded_tensor, pcc=expected_pcc)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_tensor_file_extension_validation(tmp_path):
     with pytest.raises(RuntimeError, match="must have .tensorbin extension"):
         ttnn.load_tensor(str(tmp_path / "test.bin"))
@@ -469,7 +469,7 @@ def test_tensor_file_extension_validation(tmp_path):
         ttnn.dump_tensor(str(tmp_path / "test.bin"), torch.rand((1, 1, 32, 32)))
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -496,7 +496,7 @@ def test_multi_device_permute(mesh_device, layout, memory_config, dtype):
     assert_with_pcc(torch_golden, torch_loop_back_tensor, pcc=0.9999)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -515,7 +515,7 @@ def test_max(mesh_device):
     print(weights_ex0_1SB1)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -542,7 +542,7 @@ def test_ttnn_multi_device_all_gather_all_devices(mesh_device):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -611,7 +611,7 @@ def test_sharded_matmul(mesh_device):
     print(attn_1B4P)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_4b_tensor(mesh_device):
     tensor = ttnn.from_torch(
         torch.randn(1, 1, 32, 32),
@@ -639,7 +639,7 @@ def test_4b_tensor(mesh_device):
     )
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_slicing(mesh_device):
     tensor = ttnn.from_torch(
         torch.randn(1, 32, 32, 32),
@@ -653,7 +653,7 @@ def test_slicing(mesh_device):
     assert all([device_tensor.shape == tensor.shape for device_tensor in ttnn.get_device_tensors(tensor)])
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_clone(mesh_device):
     results_11BH = ttnn.from_torch(
         torch.randn(1, 1, 32, 128),
@@ -667,7 +667,7 @@ def test_clone(mesh_device):
     print(results_11BH)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_validate_as_tensor(tmp_path, mesh_device, height, width):
@@ -701,13 +701,13 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
     assert ttnn.get_memory_config(tensor) == memory_config
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_visualize_mesh_device(mesh_device):
     ttnn.visualize_mesh_device(mesh_device)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_all_gather_multiple_submeshes(mesh_device):
@@ -737,7 +737,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
         model(submesh)
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_line_all_gather_after_reshape(mesh_device):
@@ -764,7 +764,7 @@ def test_line_all_gather_after_reshape(mesh_device):
     # )
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_distribute_api(mesh_device):
     torch_hidden_states = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
@@ -776,7 +776,7 @@ def test_distribute_api(mesh_device):
         )
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 def test_heterogenous_operation_dispatch():
     if ttnn.get_num_devices() < 8:
         pytest.skip()
@@ -807,7 +807,7 @@ def test_heterogenous_operation_dispatch():
     )
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 # Verify that submeshes can be created on a mesh device with fabric enabled
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -816,7 +816,7 @@ def test_fabric_with_submeshes(mesh_device):
     mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
 
 
-@skip_for_wormhole_b0()
+@skip_with_llk_assert()
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_multihost_sanity(mesh_device):
     torch.manual_seed(0)
