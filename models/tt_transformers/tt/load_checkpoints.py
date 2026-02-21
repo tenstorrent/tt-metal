@@ -335,15 +335,17 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     for key, tensor in loaded_weights.items():
         if "q_proj.weight" in key or "k_proj.weight" in key:
             n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = reverse_permute(
-                tensor, n_heads, tensor.shape[0], tensor.shape[1]
-            )
+            if is_phi1:
+                converted_weights[key] = reverse_permute_partial_qk_weight(tensor, head_dim=head_dim, rotary_dim=rotary_dim)
+            else:
+                converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
 
         elif "q_proj.bias" in key or "k_proj.bias" in key:
             n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = reverse_permute(
-                tensor, n_heads, tensor.shape[0], 1
-            ).squeeze(-1)
+            if is_phi1:
+                converted_weights[key] = reverse_permute_partial_qk_bias(tensor, head_dim=head_dim, rotary_dim=rotary_dim)
+            else:
+                converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
 
         elif "q_norm.weight" in key or "k_norm.weight" in key:
             # keep as-is unless you're *sure* Phi-1 needs this;

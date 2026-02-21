@@ -161,7 +161,7 @@ class MLP(LightweightModule):
                 memory_config=memory_config,
             )
         else:
-            w3_out = None
+            w3_out = None            
         ttnn.deallocate(x)
 
         if TG:

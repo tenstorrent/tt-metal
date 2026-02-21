@@ -1464,6 +1464,11 @@ class ModelArgs:
         )
 
     def is_distributed_norm(self, mode):
+        # Phi-1: run LN after all_gather (i.e., NOT true distributed norm)
+        import os
+        if os.getenv("HF_MODEL", "").strip() == "microsoft/Phi-1":
+            return False
+    
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
