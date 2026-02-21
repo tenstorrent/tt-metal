@@ -94,10 +94,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
     distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
-    // Moves the metal device tensor out of the ttnn tensor object.
-    auto target_tensor = std::move(device_tensor).device_tensor();
-    tensor_impl::copy_to_device(mesh_cq, host_tensor.host_tensor(), target_tensor);
-    device_tensor = Tensor(std::move(target_tensor));
+    tensor_impl::copy_to_device(mesh_cq, host_tensor.host_tensor(), device_tensor.device_tensor());
 
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -134,14 +131,14 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
     distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
 
-    HostTensor target_tensor = host_tensor.host_tensor();
-    tensor_impl::copy_to_host(mesh_cq, device_tensor.device_tensor(), target_tensor, blocking);
-    host_tensor = Tensor(std::move(target_tensor));
+    tensor_impl::copy_to_host(mesh_cq, device_tensor.device_tensor(), host_tensor.host_tensor(), blocking);
     GraphTracker::instance().track_function_end(host_tensor);
 }
 
 Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
-    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor is not on device!");
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
+        return input_tensor;
+    }
 
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
@@ -173,7 +170,6 @@ Tensor pad(
 
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
         log_warning(

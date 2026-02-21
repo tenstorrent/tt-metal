@@ -49,7 +49,7 @@ const std::shared_ptr<distributed::MeshBuffer>& DeviceStorage::get_root_mesh_buf
 void DeviceStorage::deallocate_root_mesh_buffer() {
     if (root_mesh_buffer) {
         root_mesh_buffer->deallocate();
-    } else {
+    } else if (mesh_buffer) {
         mesh_buffer->deallocate();
     }
 }
@@ -57,7 +57,7 @@ void DeviceStorage::deallocate_root_mesh_buffer() {
 void DeviceStorage::reset_root_mesh_buffer() {
     if (root_mesh_buffer) {
         root_mesh_buffer.reset();
-    } else {
+    } else if (mesh_buffer) {
         mesh_buffer.reset();
     }
 }
