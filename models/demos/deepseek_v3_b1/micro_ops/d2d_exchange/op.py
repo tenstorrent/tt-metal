@@ -227,12 +227,33 @@ class SocketInterface:
             self.downstream_socket,
         )
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        mesh_program_descriptor[
-            ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-        ] = sender_program
-        mesh_program_descriptor[
-            ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
-        ] = receiver_program
+
+        same_device = self.send_core_coord.device_coord == self.recv_core_coord.device_coord
+        if same_device:
+            sender_cb_ids = {fd.buffer_index for cb in sender_program.cbs for fd in cb.format_descriptors}
+            combined_cbs = sender_program.cbs + [
+                cb
+                for cb in receiver_program.cbs
+                if not any(fd.buffer_index in sender_cb_ids for fd in cb.format_descriptors)
+            ]
+            combined_program = ttnn.ProgramDescriptor(
+                kernels=sender_program.kernels + receiver_program.kernels,
+                semaphores=[],
+                cbs=combined_cbs,
+            )
+            # Preserve per-kernel runtime args from the independently built programs.
+            combined_program.kernels[0].runtime_args = sender_program.kernels[0].runtime_args
+            combined_program.kernels[1].runtime_args = receiver_program.kernels[0].runtime_args
+            mesh_program_descriptor[
+                ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
+            ] = combined_program
+        else:
+            mesh_program_descriptor[
+                ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
+            ] = sender_program
+            mesh_program_descriptor[
+                ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
+            ] = receiver_program
 
         io_tensors = [
             dummy_tensor,

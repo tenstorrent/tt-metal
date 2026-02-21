@@ -13,8 +13,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
@@ -46,15 +47,19 @@ def test_broadcast_rms_single_device(
     Test fused Broadcast+RMSNorm op on a single device with skip_ccl=True for Debugging purpose.
 
     """
-    logger.info(
-        f"Testing BroadcastRMSNorm (skip_ccl=True, use_socket={use_socket}) with shape={output_shape}, "
-        f"epsilon={epsilon}"
-    )
+
+    if use_socket:
+        if not is_slow_dispatch():
+            pytest.skip("Skipping test in fast dispatch mode")
+
+        ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     bcast_core = ttnn.CoreCoord(0, 0)
     pipeline_core = ttnn.CoreCoord(0, 1)
-    d2h_upstream_core = ttnn.CoreCoord(0, 2)
+    intermed_core_0 = ttnn.CoreCoord(0, 2)
+    intermed_core_1 = ttnn.CoreCoord(0, 3)
+    d2h_upstream_core = ttnn.CoreCoord(0, 4)
 
     # Set up sharded memory config (single core shard)
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(bcast_core, bcast_core)})
@@ -125,8 +130,6 @@ def test_broadcast_rms_single_device(
         element_size = dtype_size(input_dtype)
         socket_page_size = output_shape[0] * output_shape[1] * element_size
         token_page_size = 64
-        if compute_grid_size.y < 3:
-            raise RuntimeError("Need at least 3 rows in the compute grid for socket cores")
 
         sender_tensor_4d = torch_input.reshape(1, 1, 1, output_shape[1])
         embedding_tensor = ttnn.from_torch(
@@ -140,24 +143,44 @@ def test_broadcast_rms_single_device(
 
         device_coord = ttnn.MeshCoordinate(0, 0)
         pipeline_mesh_core = ttnn.MeshCoreCoord(device_coord, pipeline_core)
+        intermed_mesh_core_0 = ttnn.MeshCoreCoord(device_coord, intermed_core_0)
+        intermed_mesh_core_1 = ttnn.MeshCoreCoord(device_coord, intermed_core_1)
+        bcast_mesh_core = ttnn.MeshCoreCoord(device_coord, bcast_core)
+        d2h_upstream_mesh_core = ttnn.MeshCoreCoord(device_coord, d2h_upstream_core)
+
         h2d_socket = ttnn.H2DSocket(
             mesh_device, pipeline_mesh_core, ttnn.BufferType.L1, token_page_size * 2, ttnn.H2DMode.HOST_PUSH
         )
         d2h_socket = ttnn.D2HSocket(mesh_device, pipeline_mesh_core, socket_page_size)
+
         host_io = HostInterface(
             h2d_socket,
             d2h_socket,
             token_page_size,
             socket_page_size,
             core_to_core_socket_buffer_size=socket_page_size,
-            h2d_downstream_core=bcast_core,
-            d2h_upstream_core=d2h_upstream_core,
+            h2d_downstream_core=intermed_mesh_core_0,
+            d2h_upstream_core=d2h_upstream_mesh_core,
             embedding_tensor=embedding_tensor,
             loopback_mode=False,
             embedding_cb_index=4,
         )
+
+        socket_interface_1 = SocketInterface(
+            socket_page_size,
+            socket_page_size,
+            socket_page_size,
+            intermed_mesh_core_0,
+            intermed_mesh_core_1,
+            upstream_socket=host_io.get_downstream_socket(),
+            downstream_core_coord=bcast_mesh_core,
+            mesh_device=mesh_device,
+        )
+
+        recv_socket = socket_interface_1.get_downstream_socket()
+
         host_io.run()
-        recv_socket = host_io.downstream_socket_pair[1]
+        socket_interface_1.run()
 
     # Run fused operation with skip_ccl=True (single-device mode)
     logger.info("Running fused Broadcast+RMSNorm with skip_ccl=True")
@@ -175,21 +198,17 @@ def test_broadcast_rms_single_device(
         fp32_dest_acc_en=fp32_dest_acc_en,
         socket=recv_socket if use_socket else None,
     )
-    logger.info("Fused operation completed")
+
     if use_socket:
         token_size_datums = token_page_size // 4
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
         torch_token[0, 0] = 0
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        logger.info("Writing token to H2D socket to trigger data transfer")
         h2d_socket.write_tensor(token_tensor)
-        logger.info("Waiting for data to be available on D2H socket")
-        host_io.terminate()
-        logger.info("Host IO terminated, data should be available on D2H socket")
+        host_io.terminate(False)
+        socket_interface_1.terminate(True)
     else:
-        logger.info("No socket used, synchronizing device to ensure operation completion")
         ttnn.synchronize_device(mesh_device)
-        logger.info("Device synchronized")
 
     # Convert result back to torch
     output_tensor_torch = ttnn.to_torch(result, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from dataclasses import dataclass
 
 import torch
 
@@ -9,6 +10,14 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
+
+
+@dataclass(frozen=True)
+class DataPathConfig:
+    rmsnorm_input_cb: int
+    socket_config_addr: int
+    socket_num_pages: int
+    bcast_reader_enabled: bool
 
 
 class BroadcastRMSNorm:
@@ -36,6 +45,29 @@ class BroadcastRMSNorm:
         variance = input_tensor.pow(2).mean(-1, keepdim=True)
         normalized = input_tensor * torch.rsqrt(variance + epsilon)
         return normalized * gamma_tensor
+
+    @staticmethod
+    def _select_data_path(skip_ccl, use_socket, socket_obj, input_cb, pkt_cb):
+        if skip_ccl:
+            if use_socket:
+                return DataPathConfig(
+                    rmsnorm_input_cb=pkt_cb,
+                    socket_config_addr=socket_obj.get_config_buffer_address(),
+                    socket_num_pages=1,
+                    bcast_reader_enabled=True,
+                )
+            return DataPathConfig(
+                rmsnorm_input_cb=input_cb,
+                socket_config_addr=0,
+                socket_num_pages=0,
+                bcast_reader_enabled=False,
+            )
+        return DataPathConfig(
+            rmsnorm_input_cb=input_cb,
+            socket_config_addr=(socket_obj.get_config_buffer_address() if use_socket else 0),
+            socket_num_pages=(1 if use_socket else 0),
+            bcast_reader_enabled=True,
+        )
 
     @staticmethod
     def op(
@@ -151,18 +183,6 @@ class BroadcastRMSNorm:
         # Define circular buffer page size
         cb_page_size = tile_size
 
-        def select_data_path(use_socket, socket_obj):
-            if skip_ccl:
-                if use_socket:
-                    return pkt_cb, socket_obj.get_config_buffer_address(), 1, True
-                return input_cb, 0, 0, False
-            return (
-                input_cb,
-                (socket_obj.get_config_buffer_address() if use_socket else 0),
-                (1 if use_socket else 0),
-                True,
-            )
-
         # For each device in the mesh, create appropriate program
         for row in range(mesh_rows):
             for col in range(mesh_cols):
@@ -188,9 +208,6 @@ class BroadcastRMSNorm:
                 input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
                 shard_grid_start = input_shard_grid.bounding_box().start
                 worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
-                print(
-                    f"Device at {coord} has worker core {worker_core}, is_sender: {is_sender}, is_secondary_sender: {is_secondary_sender}, is_receiver: {is_receiver}"
-                )
                 worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
 
                 # Get physical core for NOC addressing
@@ -221,9 +238,11 @@ class BroadcastRMSNorm:
                 # 2) skip_ccl + socket: NCRISC reader pulls from socket into pkt_cb; RMSNorm reads pkt_cb.
                 # 3) skip_ccl + no socket: RMSNorm reads directly from input_cb.
                 use_socket = socket is not None and is_sender
-                rmsnorm_input_source_cb, socket_config_addr, socket_num_pages, bcast_reader_enabled = select_data_path(
-                    use_socket, socket
-                )
+                data_path = BroadcastRMSNorm._select_data_path(skip_ccl, use_socket, socket, input_cb, pkt_cb)
+                rmsnorm_input_source_cb = data_path.rmsnorm_input_cb
+                socket_config_addr = data_path.socket_config_addr
+                socket_num_pages = data_path.socket_num_pages
+                bcast_reader_enabled = data_path.bcast_reader_enabled
 
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
@@ -368,10 +387,8 @@ class BroadcastRMSNorm:
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
                 kernel_defines = []
                 if skip_ccl:
-                    print("Running in skip_ccl mode: CCL broadcast will be skipped, running RMSNorm only")
                     kernel_defines.append(("SKIP_CCL", "1"))
                 if use_socket:
-                    print("Running with socket: enabling socket reader path in kernel")
                     kernel_defines.append(("ENABLE_SOCKET_READER", "1"))
 
                 # Unified kernel descriptor for fused op
