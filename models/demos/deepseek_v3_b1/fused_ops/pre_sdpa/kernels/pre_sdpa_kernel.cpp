@@ -163,11 +163,22 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
 
     // Qrope CTArgs type alias (NCRISC uses ReaderCTArgs)
-    using QRopeCTArgs = deepseek_b1_ops::Rope::
-        ReaderCTArgs<get_named_compile_time_arg_val("qrope_Wt"), get_named_compile_time_arg_val("qrope_Ht")>;
+    using QRopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("qrope_Wt"),
+        get_named_compile_time_arg_val("qrope_Ht"),
+        get_named_compile_time_arg_val("qrope_cos_sin_page_size"),
+        get_named_compile_time_arg_val("qrope_total_Wt"),
+        get_named_compile_time_arg_val("qrope_start_tile_offset")>;
 
-    // Qrope reader args (NCRISC is no-op)
-    deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
+    deepseek_b1_ops::Rope::ReaderArgs qrope_args{
+        .in_cb = get_named_compile_time_arg_val("qrope_in_cb"),
+        .cos_cb = get_named_compile_time_arg_val("qrope_cos_cb"),
+        .sin_cb = get_named_compile_time_arg_val("qrope_sin_cb"),
+        .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
+        .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
+        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb"),
+    };
 
     // NCRISC: Sender args for QNOPE/QROPE cores
     // Senders write to intermediate CB, then compute tilizes to output CB
@@ -227,15 +238,22 @@ void kernel_main() {
     // kv cache rmsnorm reader args
     deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::
-        ReaderCTArgs<get_named_compile_time_arg_val("krope_Wt"), get_named_compile_time_arg_val("krope_Ht")>;
-    constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
-    constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-    constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
-    constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("krope_Wt"),
+        get_named_compile_time_arg_val("krope_Ht"),
+        get_named_compile_time_arg_val("krope_cos_sin_page_size"),
+        get_named_compile_time_arg_val("krope_total_Wt"),
+        get_named_compile_time_arg_val("krope_start_tile_offset")>;
 
-    // Reader args: CB indices for sharded input signaling
-    deepseek_b1_ops::Rope::ReaderArgs krope_args{};
+    deepseek_b1_ops::Rope::ReaderArgs krope_args{
+        .in_cb = get_named_compile_time_arg_val("krope_in_cb"),
+        .cos_cb = get_named_compile_time_arg_val("krope_cos_cb"),
+        .sin_cb = get_named_compile_time_arg_val("krope_sin_cb"),
+        .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
+        .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
+        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb"),
+    };
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
 // ============================================================================
@@ -616,19 +634,8 @@ void kernel_main() {
     }
 
     if constexpr (Core::is_qrope_core) {
-        // Qrope CB indices and parameters from named compile-time args
-        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("qrope_cos_cb");
-        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("qrope_sin_cb");
         constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("qrope_Wt");
-
-        // NOTE: Do NOT setup qrope input CB (matmul2_output_cb) as sharded buffer!
-        // The input to RoPE comes from matmul2 compute output, NOT from a sharded tensor.
-        // Calling setup_sharded_buffer on it would fill the CB and block matmul2's cb_reserve_back.
-        // Only setup the actual sharded tensor CBs (cos, sin, trans_mat).
-        unified_kernels::setup_sharded_buffer(qrope_cos_cb, Wt);
-        unified_kernels::setup_sharded_buffer(qrope_sin_cb, Wt);
-        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);  // trans_mat is 1 tile (32x32)
+        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
     }
 
     if constexpr (Core::is_dkv_matmul_core) {
@@ -647,12 +654,7 @@ void kernel_main() {
     }
 
     if constexpr (Core::is_krope_core) {
-        constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-        constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
         constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
-        constexpr uint32_t krope_Wt = get_named_compile_time_arg_val("krope_Wt");
-        unified_kernels::setup_sharded_buffer(krope_cos_cb, krope_Wt);
-        unified_kernels::setup_sharded_buffer(krope_sin_cb, krope_Wt);
         unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
     }
 #endif

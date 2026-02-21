@@ -60,18 +60,27 @@ void kernel_main() {
     // kv cache rmsnorm reader args
     deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
-    using K_RopeCTArgs =
-        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("Wt"),
+        get_named_compile_time_arg_val("Ht"),
+        get_named_compile_time_arg_val("cos_sin_page_size"),
+        get_named_compile_time_arg_val("total_Wt"),
+        get_named_compile_time_arg_val("start_tile_offset")>;
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t cos_tensor_address = get_named_compile_time_arg_val("cos_tensor_address");
+    constexpr uint32_t sin_tensor_address = get_named_compile_time_arg_val("sin_tensor_address");
+    constexpr uint32_t position_ids_tensor_address = get_named_compile_time_arg_val("position_ids_tensor_address");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
 
-    // Reader args: CB indices for sharded input signaling
     deepseek_b1_ops::Rope::ReaderArgs k_rope_args{
         .in_cb = k_rope_input_cb,
         .cos_cb = cos_cb,
         .sin_cb = sin_cb,
+        .cos_tensor_address = cos_tensor_address,
+        .sin_tensor_address = sin_tensor_address,
+        .position_ids_tensor_address = position_ids_tensor_address,
         .trans_mat_cb = trans_mat_cb,
     };
 
@@ -184,12 +193,7 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
     }
     if constexpr (Core::is_krope_core) {
-        constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-        constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
         constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
-        unified_kernels::setup_sharded_buffer(cos_cb, Wt);
-        unified_kernels::setup_sharded_buffer(sin_cb, Wt);
         unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
     }
 #endif
@@ -240,7 +244,10 @@ void kernel_main() {
     DeviceZoneScopedN("KV_CACHE_UPDATE");
     // Get runtime args: buffer address and starting tile ID
     uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
-    uint32_t kv_cache_start_tile_id = get_common_arg_val<uint32_t>(1);
+    uint32_t position_ids_addr = get_common_arg_val<uint32_t>(1);
+
+    volatile tt_l1_ptr uint32_t* position_ids_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_ids_addr);
+    uint32_t kv_cache_start_tile_id = position_ids_ptr[0];
 
     // Create TensorAccessor for DRAM interleaved tensor
     auto kv_cache_addr_gen = TensorAccessor(

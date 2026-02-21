@@ -504,52 +504,34 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # RoPE tensors - sharded on Qrope grid (4x8 = 32 cores)
+    # RoPE tensors
     qrope_grid = ttnn.CoreRange(
         ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
     )
 
-    # For decode mode, cos/sin are indexed by position: [1, batch, 1, head_dim]
-    # Shape: [1, 1, 1, qrope_head_dim] - broadcast multiply will use row 0
+    # QRoPE cos/sin: DRAM INTERLEAVED (all qrope cores read full head_dim)
+    # Shape: [1, 1, max_seq_len, qrope_head_dim]
+    qrope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
+    qrope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
 
-    # Cos/Sin sharding: HEIGHT_SHARDED on qrope grid
-    # Each core gets full head_dim (since cos/sin are reused for all heads on that core)
-    # Shape per core: (1, qrope_head_dim) = (1, 64)
-    # Shared with KV Cache branch, double check if modifying these tensors
-    cos_selected = torch_cos[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
-    sin_selected = torch_sin[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
-
-    qrope_cos_sin_shard_shape = (1, QROPE_HEAD_DIM)  # [1, 64] per core
-    qrope_cos_sin_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({qrope_grid}),
-        qrope_cos_sin_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    qrope_cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, qrope_cos_sin_shard_spec
-    )
-
-    # Repeat cos/sin for all qrope cores: [1, 1, num_cores, qrope_head_dim]
-    # Each core gets the same cos/sin (reused for its 2 heads)
-    cos_replicated = cos_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
-    sin_replicated = sin_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
+    qrope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     ttnn_qrope_cos = ttnn.from_torch(
-        cos_replicated,
+        qrope_cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=qrope_cos_sin_mem_config,
+        memory_config=qrope_dram_mem_config,
         tile=tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     ttnn_qrope_sin = ttnn.from_torch(
-        sin_replicated,
+        qrope_sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=qrope_cos_sin_mem_config,
+        memory_config=qrope_dram_mem_config,
         tile=tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
@@ -629,32 +611,47 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    krope_num_heads = 1
-    krope_cos_sin_shard_spec = ttnn.ShardSpec(
-        kv_cache_branch_rope_crs,
-        (krope_num_heads, KROPE_DIM // 2),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    krope_cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, krope_cos_sin_shard_spec
-    )
+    # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
+    krope_num_cores = kv_cache_branch_rope_crs.num_cores()
+    krope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
+    krope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
+
+    krope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     ttnn_krope_cos = ttnn.from_torch(
-        cos_selected,
+        krope_cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=krope_cos_sin_mem_config,
+        memory_config=krope_dram_mem_config,
         tile=tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
     ttnn_krope_sin = ttnn.from_torch(
-        sin_selected,
+        krope_sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=krope_cos_sin_mem_config,
+        memory_config=krope_dram_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=pos_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
@@ -727,7 +724,8 @@ def test_pre_sdpa(
             ttnn_dkv_matmul_weights,
             ttnn_dkv_rmsnorm_gamma,
             ttnn_kv_cache,
-            position_ids,
+            position_id,
+            ttnn_position_ids,
             ttnn_sdpa_input_output,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
