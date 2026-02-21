@@ -461,6 +461,64 @@ def _verify_cb_restore(saved: List[dict]) -> None:
                 )
 
 
+def _get_phantom_cb_indices(phase: PhaseInfo) -> Set[int]:
+    """Get CB indices referenced in named compile-time args but without CBDescriptors.
+
+    These "phantom" CBs need identity-mapped reservations in the pool to prevent
+    real CBs from being allocated at conflicting indices.
+    """
+    real_cb_indices = set(phase.cb_info.keys())
+
+    phantom = set()
+    for kernel_desc in phase.op_descriptor.descriptor.kernels:
+        for name, value in kernel_desc.named_compile_time_args:
+            if _is_cb_named_arg(name, value) and value not in real_cb_indices:
+                phantom.add(value)
+
+    return phantom
+
+
+def _compute_rebind_info(
+    phases: List[PhaseInfo],
+    phase_remaps: List[Dict[int, int]],
+) -> Dict[int, List[Tuple[int, int, int]]]:
+    """Compute which CB slots need address rebinding at each phase transition.
+
+    For each phase 1+, identifies remapped slot indices where the buffer address
+    differs from what was set in the previous phase.
+    """
+    phase_slot_addrs: List[Dict[int, Tuple[int, int]]] = []
+    for phase_idx, phase in enumerate(phases):
+        remap = phase_remaps[phase_idx] if phase_idx < len(phase_remaps) else {}
+        addrs: Dict[int, Tuple[int, int]] = {}
+        for cb_desc in phase.op_descriptor.descriptor.cbs:
+            for fmt_desc in cb_desc.format_descriptors:
+                orig_idx = fmt_desc.buffer_index
+                slot_idx = remap.get(orig_idx, orig_idx)
+                if cb_desc.has_buffer():
+                    addr = cb_desc.buffer_address()
+                    if addr is not None:
+                        addrs[slot_idx] = (addr, cb_desc.total_size)
+        phase_slot_addrs.append(addrs)
+
+    if not phase_slot_addrs:
+        return {}
+
+    rebind_info: Dict[int, List[Tuple[int, int, int]]] = {}
+    current_addrs = dict(phase_slot_addrs[0])
+
+    for phase_idx in range(1, len(phases)):
+        rebinds: List[Tuple[int, int, int]] = []
+        for slot_idx, (phase_addr, phase_size) in phase_slot_addrs[phase_idx].items():
+            current = current_addrs.get(slot_idx)
+            if current is None or current[0] != phase_addr:
+                rebinds.append((slot_idx, phase_addr, phase_size))
+                current_addrs[slot_idx] = (phase_addr, phase_size)
+        rebind_info[phase_idx] = rebinds
+
+    return rebind_info
+
+
 __all__ = [
     "CBInfo",
     "PhaseInfo",
@@ -474,4 +532,6 @@ __all__ = [
     "_save_cb_state",
     "_restore_cb_state",
     "_verify_cb_restore",
+    "_get_phantom_cb_indices",
+    "_compute_rebind_info",
 ]

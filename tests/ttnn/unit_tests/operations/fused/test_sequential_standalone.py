@@ -563,7 +563,7 @@ class TestComputeRuntimeArgOffsets:
 
     def test_basic_offsets(self):
         """Test basic runtime arg offset computation."""
-        _compute_runtime_arg_offsets = _mock_codegen._compute_runtime_arg_offsets
+        _compute_and_concatenate_runtime_args = _mock_codegen._compute_and_concatenate_runtime_args
 
         core_ranges = _make_mock_core_ranges()
 
@@ -580,13 +580,13 @@ class TestComputeRuntimeArgOffsets:
             {"reader": kernel1},
         ]
 
-        offsets = _compute_runtime_arg_offsets(phase_kernels, "reader")
+        offsets, _ = _compute_and_concatenate_runtime_args(phase_kernels, "reader")
         assert offsets[0] == 0
         assert offsets[1] == 5  # Phase 0 had 5 args
 
     def test_offsets_with_missing_kernel(self):
         """Test offsets when a phase has no kernel of that type."""
-        _compute_runtime_arg_offsets = _mock_codegen._compute_runtime_arg_offsets
+        _compute_and_concatenate_runtime_args = _mock_codegen._compute_and_concatenate_runtime_args
 
         core_ranges = _make_mock_core_ranges()
 
@@ -599,7 +599,7 @@ class TestComputeRuntimeArgOffsets:
             {"reader": None},
         ]
 
-        offsets = _compute_runtime_arg_offsets(phase_kernels, "reader")
+        offsets, _ = _compute_and_concatenate_runtime_args(phase_kernels, "reader")
         assert offsets[0] == 0
         assert offsets[1] == 3
 
@@ -609,7 +609,7 @@ class TestConcatenateRuntimeArgs:
 
     def test_basic_concatenation(self):
         """Test basic runtime arg concatenation across phases."""
-        _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
+        _compute_and_concatenate_runtime_args = _mock_codegen._compute_and_concatenate_runtime_args
 
         core_ranges = _make_mock_core_ranges()
 
@@ -626,7 +626,7 @@ class TestConcatenateRuntimeArgs:
             {"reader": kernel1},
         ]
 
-        result = _concatenate_runtime_args(phase_kernels, "reader")
+        _, result = _compute_and_concatenate_runtime_args(phase_kernels, "reader")
         assert len(result) == 1  # One core
         core_coord, args = result[0]
         assert args == [1, 2, 3, 10, 20]
@@ -1635,7 +1635,7 @@ class _SimpleCoreCoord:
 
 
 class TestRuntimeArgsPadding:
-    """Tests that _concatenate_runtime_args pads to match _compute_runtime_arg_offsets."""
+    """Tests that _compute_and_concatenate_runtime_args pads correctly."""
 
     def _patch_core_coord(self):
         """Temporarily set ttnn.CoreCoord to return objects with proper .x/.y."""
@@ -1650,8 +1650,7 @@ class TestRuntimeArgsPadding:
         """Core A has 5 args, core B has 3 — both should pad to 5 for phase offset alignment."""
         original = self._patch_core_coord()
         try:
-            _compute_runtime_arg_offsets = _mock_codegen._compute_runtime_arg_offsets
-            _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
+            _compute_and_concatenate_runtime_args = _mock_codegen._compute_and_concatenate_runtime_args
 
             coords = [(0, 0), (1, 0)]
             core_ranges = _make_mock_core_ranges_multi(coords)
@@ -1678,8 +1677,7 @@ class TestRuntimeArgsPadding:
 
             phase_kernels = [{"reader": kernel0}, {"reader": kernel1}]
 
-            offsets = _compute_runtime_arg_offsets(phase_kernels, "reader")
-            result = _concatenate_runtime_args(phase_kernels, "reader")
+            offsets, result = _compute_and_concatenate_runtime_args(phase_kernels, "reader")
 
             assert offsets[0] == 0
             assert offsets[1] == 5  # max_args for phase 0 = 5
@@ -1702,7 +1700,7 @@ class TestRuntimeArgsPadding:
         """A core with no args in a phase gets zero-padded to max width."""
         original = self._patch_core_coord()
         try:
-            _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
+            _compute_and_concatenate_runtime_args = _mock_codegen._compute_and_concatenate_runtime_args
 
             coords = [(0, 0), (1, 0)]
             core_ranges = _make_mock_core_ranges_multi(coords)
@@ -1718,7 +1716,11 @@ class TestRuntimeArgsPadding:
 
             phase_kernels = [{"reader": kernel0}]
 
-            result = _concatenate_runtime_args(phase_kernels, "reader", target_core_range=core_ranges)
+            _, result = _compute_and_concatenate_runtime_args(
+                phase_kernels,
+                "reader",
+                target_core_range=core_ranges,
+            )
 
             result_dict = {(c.x, c.y): args for c, args in result}
 
@@ -1734,7 +1736,7 @@ class TestRuntimeArgsPadding:
         """When all cores have same arg count, no padding is needed."""
         original = self._patch_core_coord()
         try:
-            _concatenate_runtime_args = _mock_codegen._concatenate_runtime_args
+            _compute_and_concatenate_runtime_args = _mock_codegen._compute_and_concatenate_runtime_args
 
             coords = [(0, 0), (1, 0)]
             core_ranges = _make_mock_core_ranges_multi(coords)
@@ -1749,7 +1751,7 @@ class TestRuntimeArgsPadding:
             kernel0.core_ranges = core_ranges
 
             phase_kernels = [{"reader": kernel0}]
-            result = _concatenate_runtime_args(phase_kernels, "reader")
+            _, result = _compute_and_concatenate_runtime_args(phase_kernels, "reader")
 
             result_dict = {(c.x, c.y): args for c, args in result}
             assert result_dict[(0, 0)] == [1, 2, 3]
@@ -1844,7 +1846,7 @@ class TestSemaphoreInitialValue:
 
     def test_nonzero_initial_value_in_source(self):
         """Generated source should reset semaphore to initial_value=5, not 0."""
-        _generate_fused_riscv0_source = _mock_codegen._generate_fused_riscv0_source
+        _generate_fused_source = _mock_codegen._generate_fused_source
 
         # Create minimal mock data for a 2-phase chain
         core_ranges = _make_mock_core_ranges()
@@ -1900,12 +1902,14 @@ class TestSemaphoreInitialValue:
             transition_map={0: (0, 0)},
         )
 
-        result = _generate_fused_riscv0_source(
+        result = _generate_fused_source(
             phase_kernels,
             "reader",
             phases,
             {0: 0, 1: 0},  # ct_offsets
             [[0]],  # per_phase_cb_slots
+            risc_type="riscv_0",
+            role_label="reader",
             rebind_info={},
             op_semaphore_info=[(3, 5)],  # sem_id=3, initial_value=5
             multi_barrier=multi_barrier,
@@ -1917,7 +1921,7 @@ class TestSemaphoreInitialValue:
 
     def test_mixed_initial_values(self):
         """Multiple semaphores with different initial values get their own values."""
-        _generate_fused_riscv0_source = _mock_codegen._generate_fused_riscv0_source
+        _generate_fused_source = _mock_codegen._generate_fused_source
 
         source_code_type = _mock_codegen.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
 
@@ -1961,12 +1965,14 @@ class TestSemaphoreInitialValue:
             transition_map={0: (0, 0)},
         )
 
-        result = _generate_fused_riscv0_source(
+        result = _generate_fused_source(
             phase_kernels,
             "reader",
             [phase0, phase1],
             {0: 0, 1: 0},
             [[0]],  # per_phase_cb_slots
+            risc_type="riscv_0",
+            role_label="reader",
             rebind_info={},
             op_semaphore_info=[(2, 0), (7, 3)],  # sem 2 -> 0, sem 7 -> 3
             multi_barrier=multi_barrier,
