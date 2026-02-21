@@ -55,10 +55,10 @@ DispatchKernel::DispatchKernel(
         noc_selection,
         descriptor,
         dispatch_core_manager,
-        std::move(get_control_plane),
-        std::move(get_dispatch_query_manager),
-        std::move(get_max_num_eth_cores),
-        std::move(get_reads_dispatch_cores)) {
+        get_control_plane,
+        get_dispatch_query_manager,
+        get_max_num_eth_cores,
+        get_reads_dispatch_cores) {
     TT_FATAL(
         noc_selection.downstream_noc == tt_metal::k_dispatch_downstream_noc,
         "Invalid downstream NOC specified for Dispatcher kernel");
