@@ -71,7 +71,6 @@ inline void calculate_cube_root() {
             sfpi::dst_reg[0] = y;
         } else {
             sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
-            ;
         }
         sfpi::dst_reg++;
     }
