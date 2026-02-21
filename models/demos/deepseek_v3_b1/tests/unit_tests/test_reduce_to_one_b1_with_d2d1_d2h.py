@@ -288,7 +288,7 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     # Execute reduce-to-one with D2D_0 integration FIRST
     # This launches all reduce workers + D2D_0 aggregator
     logger.info(">>> ABOUT TO CALL ReduceToOneB1.op()")
-    result = ReduceToOneB1.op(
+    result, d2d_infra = ReduceToOneB1.op(
         input_tensor,
         intermediate_tensors,
         output_tensor,
@@ -319,6 +319,9 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
 
     # Read from D2H socket
     logger.info("\n=== Reading from D2H socket ===")
+
+    termination_semaphore = d2d_infra["d2d0_termination_semaphore"]
+    ttnn.reset_global_semaphore_value(termination_semaphore, 1)
 
     # D2D_1 sends ONE aggregated page containing data from all 8 worker cores
     # Total bytes = 8 workers × 896 elements/worker × 2 bytes/element = 14,336 bytes
@@ -354,6 +357,7 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     # Terminate socket interface and host interface
     socket_interface.terminate(False)
     host_io.terminate(True)
+    ttnn.synchronize_device(submesh_device)
     logger.info("✓ Socket interface and host interface terminated")
 
     logger.info("\n✓ Test passed: Reduce-to-one with D2D_0 + D2D_1 (SocketInterface) + D2H (HostInterface) successful!")

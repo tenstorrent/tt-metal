@@ -291,7 +291,7 @@ void kernel_main() {
             bytes_accumulated = 0;
 
             // Reserve next page if continuing
-            break;
+            // break;
             socket_reserve_pages(sender_socket, 1);
         }
         DPRINT << "after reserving page on sender socket\n";
