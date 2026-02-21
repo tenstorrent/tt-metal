@@ -29,26 +29,30 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
-    // CBs used in the MoEGPT operation
+    // CBs used in the MoEGPT operation (GPT-OSS dimensions: K=N=2880)
     /*
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_r2c_w0      | CBIndex::c_0  | Bfp4_b     | true  |    14*6  |      48384      |
-        | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224*2 |      917504     |
+        | cb_r2c_w0      | CBIndex::c_0  | Bfp4_b     | true  |  10*2*3  |      34560      |
+        | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |   90*4   |      737280     |
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
-        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*2   |      24576      |
+        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |   8*6    |      98304      |
         ------------------------------------------------------------------------------------
+        Total L1 ~= 530 KB (fits in 1.2 MB L1)
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in is handled separately as it is sharded CB
+    // cb_r2c_w0: triple-buffered, each slot = W0_W1_TILES_PER_TXN * W0_W1_TXNS_PER_BLOCK = 10*2 = 20 tiles
+    // cb_s2c_in2: 6 buffers for A2A ring data. 6 divides 12 (steps per iter),
+    // giving 5 slots of slack between write and overwrite. Each slot = 8 tiles (IN2_TILES_PER_STEP).
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, true, 10 * 2 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 2},
+        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 8 * 6},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
@@ -70,7 +74,7 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
              tt::CBIndex::c_1,
              tt::DataFormat::Float16_b,
              true,
-             224 * 2,
+             90 * 4,  // E=4 experts, each needs 90 tiles of input (K=2880/32=90)
              tensor_args.input_tensor.buffer()}};
 
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer] : sharded_cb_specs) {

@@ -51,8 +51,8 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
+    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
@@ -62,39 +62,54 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_gpt_ring::NUM_A2A_ITERS_A;
+    constexpr uint32_t num_a2a_iters = moe_gpt_ring::NUM_A2A_ITERS_A;  // 2
 
     // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_gpt_ring::NUM_CORES;
+    constexpr uint32_t num_a2a_steps_per_iter = moe_gpt_ring::NUM_CORES;  // 12
 
-    // The number of tiles to send in each step
-    // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_gpt_ring::IN2_TILES_PER_STEP_A;  // max(num_w0_w1_tiles_w)
+    // The number of tiles to send in each step (max of 7/8 = 8 for GPT-OSS)
+    constexpr uint32_t tiles_per_step = moe_gpt_ring::IN2_TILES_PER_STEP_A;  // 8
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
     //-------------------------------------------------------------------------
     uint32_t semaphore_addr = get_semaphore(ring_semaphore_id);
     volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
+
     const uint64_t neighbor_semaphore_noc_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, semaphore_addr);
 
-    // Size of each transfer in bytes
+    // Size of each transfer in bytes: 8 tiles * 2048 = 16384 bytes
     constexpr uint32_t a2a_xfer_bytes_per_step = tiles_per_step * in2_tile_size;
 
-    // Split into 2 packets
-    constexpr uint32_t a2a_packet_size = a2a_xfer_bytes_per_step / 2;
+    // NOC_MAX_BURST_SIZE = 8192 bytes on Wormhole. Split into packets of 4 tiles each
+    // (4 * 2048 = 8192 bytes = NOC_MAX_BURST_SIZE). 8 tiles / 4 tiles per packet = 2 packets.
+    constexpr uint32_t a2a_tiles_per_packet = 4;
+    constexpr uint32_t a2a_packet_size = a2a_tiles_per_packet * in2_tile_size;   // 8192
+    constexpr uint32_t a2a_num_packets = tiles_per_step / a2a_tiles_per_packet;  // 2
 
     // Source and destination addresses for the all2all
     const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
     const uint64_t neighbor_base_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, local_base_addr);
 
-    // Precompute buffer offsets
-    uint32_t LOCAL_BUFFER_OFFSET[num_a2a_steps_per_iter];
-    for (uint32_t i = 0; i < num_a2a_steps_per_iter; ++i) {
+    // 6 buffers for A2A intermediate data. 6 divides 12 (steps per iter),
+    // so buffer indices cycle back to 0 after a full ring rotation.
+    // 5 steps of slack between write and overwrite is sufficient for compute.
+    constexpr uint32_t NUM_A2A_BUFFERS = 6;
+    uint32_t LOCAL_BUFFER_OFFSET[NUM_A2A_BUFFERS];
+    for (uint32_t i = 0; i < NUM_A2A_BUFFERS; ++i) {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;
     }
+    // Reset semaphore to 0 for clean state on each invocation.
+    // When the program is cached and reused, the semaphore retains its value
+    // from the previous run. Resetting here is safe because:
+    // 1. The command queue guarantees all NOC activity from the previous
+    //    invocation has completed before this kernel starts.
+    // 2. All cores are waiting for cb_c2w_rdy (compute's SwiGLU) before
+    //    any ring activity begins, so no predecessor can write to our
+    //    semaphore before we reset it.
+    noc_semaphore_set(my_semaphore_ptr, 0);
     uint32_t semaphore_value = 0;
 
     // Set state for the data writes
@@ -113,8 +128,7 @@ void kernel_main() {
         cb_pop_front(cb_c2w_rdy, 1);
 
         // Take the data in cb_s2c_in2 and send it to the next core in the ring
-        // Ring synchronization: all cores participate regardless of whether they had CB work
-        // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
+        // GPT-OSS: 2 A2A iterations x 12 steps = 24 rotations per expert
         for (uint32_t i = 0; i < num_a2a_iters; ++i) {
             for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                 // Wait for current data to be ready in cb_s2c_in2
@@ -125,14 +139,25 @@ void kernel_main() {
                 cb_reserve_back(cb_w2c_rdy, 1);
                 cb_push_back(cb_w2c_rdy, 1);
 
-                // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
-                // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
-                const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
-                const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
+                // Write 8 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+                // Buffer index cycles with modulo, resetting at each iteration.
+                const uint32_t src_buf = step % NUM_A2A_BUFFERS;
+                const uint32_t dst_buf = (step + 1) % NUM_A2A_BUFFERS;
+                const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[src_buf];
+                const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[dst_buf];
 
-                noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
-                noc_async_write_one_packet_with_state</*posted=*/true>(
-                    local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
+                // Send as 2 packets of 4 tiles each (8192 bytes per packet)
+                for (uint32_t pkt = 0; pkt < a2a_num_packets; ++pkt) {
+                    uint32_t pkt_offset = pkt * a2a_packet_size;
+                    noc_async_write_one_packet_with_state</*posted=*/true>(
+                        local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
+                }
+
+                // Ensure all data packets are in the NOC before signaling readiness.
+                // Data writes (write_at_cmd_buf) and semaphore writes (write_at_cmd_buf)
+                // share the same command buffer, but without this flush the semaphore
+                // increment can overtake in-flight data packets at the destination.
+                noc_async_posted_writes_flushed();
 
                 // Signal neighbor that data is ready (increment their semaphore value)
                 noc_inline_dw_write_with_state<
@@ -145,6 +170,24 @@ void kernel_main() {
                 // Ensure writes have left the core before continuing
                 noc_async_posted_writes_flushed();
             }
+        }
+
+        // Cross-expert boundary barrier: after the ring loop, wait for the
+        // predecessor's FINAL write to our buf 0 before letting compute
+        // overwrite buf 0 with the next expert's SwiGLU.
+        //
+        // The predecessor's last A2A step (step 11, iter 1) writes to our
+        // dst_buf = (11+1)%12 = 0. The ring loop only waited for semaphore
+        // value (semaphore_value - 1) which confirms step 10's data, not
+        // step 11's. Here we wait for semaphore_value (set by ++semaphore_value
+        // on the last iteration), confirming the predecessor's step 11 write
+        // has landed at our L1.
+        if (expert_id < num_experts - 1) {
+            while ((*my_semaphore_ptr) < semaphore_value) {
+            };
+            // Signal compute that buf 0 is safe to overwrite
+            cb_reserve_back(cb_w2c_rdy, 1);
+            cb_push_back(cb_w2c_rdy, 1);
         }
     }
 }
