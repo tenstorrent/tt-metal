@@ -576,19 +576,22 @@ const HostTensor& Tensor::host_tensor() const& {
     return *host_tensor;
 }
 
+HostTensor& Tensor::host_tensor() & {
+    auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());
+    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got DeviceTensor");
+    return *host_tensor;
+}
+
 const DeviceTensor& Tensor::device_tensor() const& {
     const auto* device_tensor = std::get_if<DeviceTensor>(tensor_attributes.get());
     TT_FATAL(device_tensor != nullptr, "Expected Tensor with DeviceTensor, got HostTensor");
     return *device_tensor;
 }
 
-DeviceTensor Tensor::device_tensor() && {
+DeviceTensor& Tensor::device_tensor() & {
     auto* device_tensor = std::get_if<DeviceTensor>(tensor_attributes.get());
     TT_FATAL(device_tensor != nullptr, "Expected Tensor with DeviceTensor, got HostTensor");
-    DeviceTensor result = std::move(*device_tensor);
-    // Reset current tensor to a default constructed DeviceTensor (move-from state)
-    tensor_attributes.reset();
-    return result;
+    return *device_tensor;
 }
 
 distributed::MeshDevice* Tensor::device() const {
