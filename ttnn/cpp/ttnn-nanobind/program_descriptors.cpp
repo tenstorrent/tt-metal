@@ -377,6 +377,10 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::format_descriptors,
             "Collection of format descriptors for different sections of the buffer")
         .def_rw(
+            "remote_format_descriptors",
+            &tt::tt_metal::CBDescriptor::remote_format_descriptors,
+            "Remote format descriptors for GlobalCircularBuffer CBs")
+        .def_rw(
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")
@@ -409,6 +413,23 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     True if a global circular buffer pointer is set, False otherwise.
+            )pbdoc")
+        .def(
+            "set_global_circular_buffer",
+            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::experimental::GlobalCircularBuffer& gcb) {
+                self.global_circular_buffer = &gcb;
+            },
+            nb::keep_alive<1, 2>(),
+            nb::arg("global_circular_buffer"),
+            R"pbdoc(
+                Set the GlobalCircularBuffer for this CB descriptor.
+
+                The CB will use the GlobalCircularBuffer's address space for
+                cross-core data transfer. The GlobalCircularBuffer must outlive
+                this CBDescriptor.
+
+                Args:
+                    global_circular_buffer: The GlobalCircularBuffer to associate with this CB.
             )pbdoc")
         .def(
             "buffer_address",

@@ -4555,6 +4555,127 @@ class TestOpGraphExecution:
         assert passing_a, f"Branch A PCC: {pcc_a}"
         assert passing_b, f"Branch B PCC: {pcc_b}"
 
+    def test_2d_grid_two_branch_split(self, device, opgraph_tensors):
+        """Stem (1 RMS on 2x2 grid) -> Branch A (top row) + Branch B (bottom row).
+
+        Tests OpGraph branching with 2D rectangular core grids, exercising
+        the NOC multicast validation and barrier sync for non-trivial grid
+        shapes. All existing branching tests use 1D (single-row) grids.
+        """
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        # 2x2 grid: (0,0)-(1,1) = 4 cores
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        # Top row: (0,0)-(1,0)
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        # Bottom row: (0,1)-(1,1)
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = build_op_graph(
+            root_phases=[stem_op],
+            children=[
+                OpNode(branch_a_op),
+                OpNode(branch_b_op),
+            ],
+            device=device,
+        )
+
+        outputs = composite.launch([fused])
+
+        golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
+        golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[0][1])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
+
+    def test_2d_grid_nested_branching(self, device, opgraph_tensors):
+        """Stem (2x4 grid) -> Branch A (2x2 top) with 2 leaf children + Branch B (2x2 bottom).
+
+        Tests nested OpGraph branching with 2D rectangular grids at every level.
+
+        Tree structure:
+            Stem (2x4 grid, 8 cores) -> Branch A (2x2 top) -> Leaf A1 (1x2 left)
+                                                              -> Leaf A2 (1x2 right)
+                                      -> Branch B (2x2 bottom)
+        """
+        from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        # Full 2x4 grid: cores (0,0)-(3,1), 8 cores
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+        # Top 2x2: (0,0)-(1,1), 4 cores
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        # Bottom 2x2: (2,0)-(3,1), 4 cores
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1))})
+        # Leaf A1: left column of branch_a: (0,0)-(0,1), 2 cores
+        leaf_a1_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))})
+        # Leaf A2: right column of branch_a: (1,0)-(1,1), 2 cores
+        leaf_a2_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        leaf_a1_op = rms_norm.rms_norm(
+            branch_a_op.output_tensors[0], core_range_set=leaf_a1_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+        leaf_a2_op = rms_norm.rms_norm(
+            branch_a_op.output_tensors[0], core_range_set=leaf_a2_range, weight=t["tt_weights"][3], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][4], epsilon=1e-5
+        )
+
+        fused = build_op_graph(
+            root_phases=[stem_op],
+            children=[
+                OpNode(
+                    branch_a_op,
+                    children=[
+                        OpNode(leaf_a1_op),
+                        OpNode(leaf_a2_op),
+                    ],
+                ),
+                OpNode(branch_b_op),
+            ],
+            device=device,
+        )
+
+        outputs = composite.launch([fused])
+
+        g_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        g_a = torch_rms_norm(g_stem, t["torch_weights"][1])
+        goldens = [
+            torch_rms_norm(g_a, t["torch_weights"][2]),
+            torch_rms_norm(g_a, t["torch_weights"][3]),
+            torch_rms_norm(g_stem, t["torch_weights"][4]),
+        ]
+        labels = ["A1", "A2", "B"]
+
+        for i, (golden, label) in enumerate(zip(goldens, labels)):
+            result = ttnn.to_torch(outputs[0][i])
+            passing, pcc = comp_pcc(golden, result, pcc=0.98)
+            assert passing, f"Branch {label} PCC: {pcc}"
+
     def test_child_outside_parent_rejected(self, device, opgraph_tensors):
         """Child core range extending beyond parent should be rejected.
 
