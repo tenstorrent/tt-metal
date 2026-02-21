@@ -70,10 +70,10 @@ namespace ttml::metal::ops::sdpa_bw::device {
  *        used during runtime argument setup.
  */
 struct SDPABackwardKVKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
+    tt::tt_metal::KernelHandle reader{};
+    tt::tt_metal::KernelHandle writer{};
+    tt::tt_metal::KernelHandle compute_group_1{};
+    tt::tt_metal::KernelHandle compute_group_2{};
 };
 
 /**
