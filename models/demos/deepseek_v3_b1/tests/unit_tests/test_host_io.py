@@ -12,7 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 
@@ -388,6 +388,181 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
     socket_interface_5.terminate(False)
     socket_interface_6.terminate(False)
     socket_interface_7.terminate(True)
+
+
+@pytest.mark.parametrize(
+    "tensor_size_bytes, fifo_size, num_iterations",
+    [
+        (64, 128, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "h2d_mode",
+    [
+        ttnn.H2DMode.HOST_PUSH,
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(7168),
+        }
+    ],
+    indirect=True,
+)
+def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
+    """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
+    pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    my_mesh_id = mesh_device.get_system_mesh_id()
+
+    is_pipeline_start = my_mesh_id == 0
+
+    if is_pipeline_start:
+        for stage in pipeline_config:
+            print(f"Stage {stage.stage_index}: {stage.entry_node_coord} -> {stage.exit_node_coord}")
+
+    num_procs = int(ttnn.distributed_context_get_size())
+    # Number of pipeline stages is equal to the number of processes + 1 for the loopback stage
+    assert len(pipeline_config) == num_procs + 1
+
+    pipeline_core_coord = ttnn.CoreCoord(0, 0)
+
+    if is_pipeline_start:
+        # Initialize HostIO interface
+        h2d_device_coord = pipeline_config[my_mesh_id].entry_node_coord
+        d2h_device_coord = pipeline_config[num_procs].exit_node_coord
+
+        print(
+            f"Creating Host IO Interface on First Pipeline stage. H2D Coord: {h2d_device_coord} D2H Coord: {d2h_device_coord}, H2D Drainer: {pipeline_config[my_mesh_id].exit_node_coord}, D2H Source: {pipeline_config[num_procs].entry_node_coord}"
+        )
+        h2d_socket = ttnn.H2DSocket(
+            mesh_device,
+            ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),
+            ttnn.BufferType.L1,
+            fifo_size,
+            h2d_mode,
+        )
+        d2h_socket = ttnn.D2HSocket(mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), fifo_size)
+
+        host_io = HostInterface(
+            h2d_socket,
+            d2h_socket,
+            tensor_size_bytes,
+            tensor_size_bytes,
+            core_to_core_socket_buffer_size=fifo_size,
+            h2d_downstream_core=ttnn.MeshCoreCoord(
+                pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord
+            ),  # H2D Socket connects to exit node of current stage
+            d2h_upstream_core=ttnn.MeshCoreCoord(
+                pipeline_config[num_procs].entry_node_coord, pipeline_core_coord
+            ),  # D2H Socket connects to entry node of last stage
+        )
+
+        # Initialize socket interfaces
+        print(
+            f"Creating Exit Socket Interface on First Pipeline stage. Exit Coord: {pipeline_config[my_mesh_id].exit_node_coord}, Next Entry Coord: {pipeline_config[my_mesh_id + 1].entry_node_coord}"
+        )
+        exit_socket_interface = SocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            tensor_size_bytes,
+            ttnn.MeshCoreCoord(
+                pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord
+            ),  # Connects exit node of current stage to entry node of next stage
+            ttnn.MeshCoreCoord(pipeline_config[my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+            upstream_socket=host_io.get_downstream_socket(),  # Drains data from H2D
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
+        )
+        print(
+            f"Creating Entry Socket Interface on Last Pipeline stage. Entry Coord: {pipeline_config[num_procs].entry_node_coord}, Prev Exit Coord: {pipeline_config[num_procs - 1].exit_node_coord}"
+        )
+        entry_socket_interface = SocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            tensor_size_bytes,
+            ttnn.MeshCoreCoord(
+                pipeline_config[num_procs - 1].exit_node_coord, pipeline_core_coord
+            ),  # Connects exit node of last stage to loopback stage
+            ttnn.MeshCoreCoord(pipeline_config[num_procs].entry_node_coord, pipeline_core_coord),
+            downstream_socket=host_io.get_upstream_socket(),  # Feeds data to D2H
+            sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+        print("Done creating socket interfaces")
+        host_io.run()
+        exit_socket_interface.run()
+        entry_socket_interface.run()
+
+        tensor_size_datums = tensor_size_bytes // 4
+        torch_input = torch.arange(i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.int32).reshape(
+            1, tensor_size_datums
+        )
+
+        input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.int32)
+        output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        h2d_socket.write_tensor(input_tensor)
+        d2h_socket.read_tensor(output_tensor)
+
+        result_torch = ttnn.to_torch(output_tensor)
+        match = torch.equal(torch_input, result_torch)
+        assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
+
+        ttnn.distributed_context_barrier()
+        print("Barrier passed")
+        host_io.terminate(False)
+        exit_socket_interface.terminate(False)
+        entry_socket_interface.terminate(True)
+
+    else:
+        print(
+            f"Creating Entry Socket Interface on Intermediate Pipeline stage. Entry Coord: {pipeline_config[my_mesh_id].entry_node_coord}, Prev Exit Coord: {pipeline_config[my_mesh_id - 1].exit_node_coord}"
+        )
+        entry_socket_interface = SocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            tensor_size_bytes,
+            ttnn.MeshCoreCoord(pipeline_config[my_mesh_id - 1].exit_node_coord, pipeline_core_coord),
+            ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, pipeline_core_coord),
+            downstream_core_coord=ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord),
+            sender_mesh=MeshWrapper(mesh_id=my_mesh_id - 1),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+        print(
+            f"Creating Exit Socket Interface on Intermediate Pipeline stage. Exit Coord: {pipeline_config[my_mesh_id].exit_node_coord}, Next Entry Coord: {pipeline_config[my_mesh_id + 1].entry_node_coord}"
+        )
+        exit_socket_interface = SocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            tensor_size_bytes,
+            ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, pipeline_core_coord),
+            ttnn.MeshCoreCoord(pipeline_config[my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+            upstream_socket=entry_socket_interface.get_downstream_socket(),
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1 if my_mesh_id < num_procs - 1 else 0),
+        )
+        entry_socket_interface.run()
+        exit_socket_interface.run()
+
+        ttnn.distributed_context_barrier()
+        print("Barrier passed")
+        entry_socket_interface.terminate(False)
+        exit_socket_interface.terminate(True)
 
 
 @pytest.mark.parametrize(

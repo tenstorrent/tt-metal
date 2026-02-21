@@ -23,7 +23,8 @@ namespace tt::tt_metal::experimental::scaleout {
 namespace {
 
 struct PhysicalPipelineStageConfig {
-    uint32_t tray_id;
+    uint32_t entry_node_tray_id;
+    uint32_t exit_node_tray_id;
     uint32_t entry_node_asic_location;
     uint32_t exit_node_asic_location;
 };
@@ -98,58 +99,11 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
-        {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 1, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 4, .entry_node_asic_location = 2, .exit_node_asic_location = 5},
-        {.tray_id = 3, .entry_node_asic_location = 5, .exit_node_asic_location = 2},
-        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
-
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 5},
-        {.tray_id = 3, .entry_node_asic_location = 5, .exit_node_asic_location = 2},
-        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 1},
-
-        {.tray_id = 3, .entry_node_asic_location = 1, .exit_node_asic_location = 7}};
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.entry_node_tray_id = 3, .exit_node_tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+        {.entry_node_tray_id = 4, .exit_node_tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 3}};
 
     const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
     std::vector<BlitzDecodePipelineStage> logical_pipeline_stage_configs;
@@ -160,11 +114,11 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
         auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(stage_config.tray_id),
+            tt::tt_metal::TrayID(stage_config.entry_node_tray_id),
             tt::tt_metal::ASICLocation(stage_config.entry_node_asic_location));
         auto exit_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(stage_config.tray_id),
+            tt::tt_metal::TrayID(stage_config.exit_node_tray_id),
             tt::tt_metal::ASICLocation(stage_config.exit_node_asic_location));
         logical_pipeline_stage_configs.emplace_back(BlitzDecodePipelineStage{
             .stage_index = stage_index,
