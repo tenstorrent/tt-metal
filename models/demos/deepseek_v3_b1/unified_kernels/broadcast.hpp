@@ -160,9 +160,11 @@ struct Broadcast {
 
                 // Configure fused route for payload + semaphore increment
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fused_header(0, 0, 1, true);
-                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
-                    UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
-                    fabric_connection, fused_route_id, starts, ranges, fused_header, CTArgs::tensor0_page_size);
+                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                        fabric_connection, fused_route_id, starts, ranges, fused_header, CTArgs::tensor0_page_size);
+                }
 
                 uint32_t num_total_targets =
                     CTArgs::num_targets_forward_direction + CTArgs::num_targets_backward_direction;
