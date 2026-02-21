@@ -590,20 +590,11 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
     }
     if constexpr (Core::is_matmul_core) {
-        // Matmul weights
+        // Fused weights CB: one setup for both matmul1 (q_a) and matmul2 (q_b) on q_ab cores
         constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
-        constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_per_core");
-        constexpr uint32_t matmul_out_w_per_core = get_named_compile_time_arg_val("matmul_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul_in1, matmul_k_num_tiles * matmul_out_w_per_core);
-    }
-    if constexpr (Core::is_matmul2_core) {
-        // Matmul2 CB indices and parameters from named compile-time args
-        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
-        constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
-        constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-
-        // Matmul2 weights (on all cores in main grid, 4 tiles per core)
-        unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
+        constexpr uint32_t fused_weights_tiles_per_core =
+            get_named_compile_time_arg_val("fused_weights_tiles_per_core");
+        unified_kernels::setup_sharded_buffer(matmul_in1, fused_weights_tiles_per_core);
     }
     if constexpr (Core::is_qnope_core) {
         // Matmul3 CB indices and parameters from named compile-time args
@@ -632,11 +623,11 @@ void kernel_main() {
     }
 
     if constexpr (Core::is_dkv_matmul_core) {
-        // Matmul weights (in1)
+        // Fused weights CB: setup on kv_a cores (same CB as matmul1/matmul2 on q_ab cores)
         constexpr uint32_t dkv_matmul_in1 = get_named_compile_time_arg_val("dkv_matmul_in1");
-        constexpr uint32_t dkv_matmul_out_w_per_core = get_named_compile_time_arg_val("dkv_matmul_out_w_per_core");
-        constexpr uint32_t dkv_matmul_k_num_tiles = get_named_compile_time_arg_val("dkv_matmul_k_num_tiles");
-        unified_kernels::setup_sharded_buffer(dkv_matmul_in1, dkv_matmul_k_num_tiles * dkv_matmul_out_w_per_core);
+        constexpr uint32_t fused_weights_tiles_per_core =
+            get_named_compile_time_arg_val("fused_weights_tiles_per_core");
+        unified_kernels::setup_sharded_buffer(dkv_matmul_in1, fused_weights_tiles_per_core);
     }
 
     if constexpr (Core::is_kv_rmsnorm_core) {

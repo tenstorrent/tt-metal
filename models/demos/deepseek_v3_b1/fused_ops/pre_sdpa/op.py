@@ -7,6 +7,7 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
@@ -148,16 +149,16 @@ class PreSDPA:
         input_tensor_mesh,
         intermediate_tensor_mesh,
         gamma_tensor,
-        matmul_weights_tensor,
+        matmul_weights_ot: OverlappedTensor,
         rmsnorm2_gamma_tensor,
-        matmul2_weights_tensor,
+        matmul2_weights_ot: OverlappedTensor,
         matmul3_weights_tensor,
         qrope_sin_tensor,
         qrope_cos_tensor,
         trans_mat_tensor,
         krope_cos_tensor,
         krope_sin_tensor,
-        dkv_matmul_weights_tensor,
+        dkv_matmul_weights_ot: OverlappedTensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_id,
@@ -181,9 +182,9 @@ class PreSDPA:
             input_tensor_mesh: Input mesh tensor (must be sharded on single core per device)
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
             gamma_tensor: Gamma/weight tensor (must be sharded, same shape as input)
-            matmul_weights_tensor: Matmul weights tensor (must be width sharded)
+            matmul_weights_ot: OverlappedTensor for q_a_proj (packed matmul1 weights)
             rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (1536 elements = 3 tiles of 16x32)
-            matmul2_weights_tensor: Matmul2 weights tensor (width sharded, shuffled for interleaved output)
+            matmul2_weights_ot: OverlappedTensor for q_b_proj (shuffled matmul2 weights)
             matmul3_weights_tensor: Matmul3 weights tensor (height sharded on Qnope grid, [128, 512] per core)
             qrope_sin_tensor: Sin tensor (sharded tensor for QRoPE)
             qrope_cos_tensor: Cos tensor (sharded tensor for QRoPE)
@@ -211,13 +212,15 @@ class PreSDPA:
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
 
+        # The 3 weight OverlappedTensors share one fused device tensor
+        fused_weights_tensor = matmul_weights_ot.fused_tensor
+
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
         gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
-        matmul_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor)
+        fused_weights_tensors_per_device = ttnn.get_device_tensors(fused_weights_tensor)
         rmsnorm2_gamma_tensors_per_device = ttnn.get_device_tensors(rmsnorm2_gamma_tensor)
-        matmul2_weights_tensors_per_device = ttnn.get_device_tensors(matmul2_weights_tensor)
         matmul3_weights_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor)
         qrope_sin_tensors_per_device = ttnn.get_device_tensors(qrope_sin_tensor)
         qrope_cos_tensors_per_device = ttnn.get_device_tensors(qrope_cos_tensor)
@@ -225,7 +228,6 @@ class PreSDPA:
         krope_cos_tensors_per_device = ttnn.get_device_tensors(krope_cos_tensor)
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        dkv_matmul_weights_tensors_per_device = ttnn.get_device_tensors(dkv_matmul_weights_tensor)
         dkv_rmsnorm_gamma_tensors_per_device = ttnn.get_device_tensors(dkv_rmsnorm_gamma_tensor)
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
@@ -291,39 +293,19 @@ class PreSDPA:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
 
-        # Matmul1 grid from weight shard spec (single packed weight tensor)
-        matmul_weights_sample = matmul_weights_tensors_per_device[0]
-        matmul_weights_memory_config = matmul_weights_sample.memory_config()
-        matmul_weights_core_grid = matmul_weights_memory_config.shard_spec.grid
-        if len(list(matmul_weights_core_grid.ranges())) != 1:
-            raise ValueError("matmul weights core grid must be a single rectangular range for packed K-split")
-        if matmul_weights_memory_config.shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
-            raise ValueError("matmul weights shard orientation must be ROW_MAJOR for packed K-split")
+        # Matmul1 grid from OverlappedTensor metadata (q_a_proj packed)
+        matmul_weights_core_grid = matmul_weights_ot.core_range_set
         matmul_bbox = matmul_weights_core_grid.bounding_box()
         matmul_grid_size = matmul_bbox.grid_size()
         matmul_num_cores = matmul_grid_size.x * matmul_grid_size.y
-        if matmul_weights_core_grid.num_cores() != matmul_num_cores:
-            raise ValueError("matmul core grid must be a single rectangular range for this packed K-split path")
-        if matmul_num_cores % 2 != 0:
-            raise ValueError(f"matmul core grid must have an even number of cores, got {matmul_num_cores}")
-        if matmul_num_cores != 96:
-            raise ValueError(f"matmul core grid must have 96 cores for this K-split path, got {matmul_num_cores}")
         matmul_half_num_cores = matmul_num_cores // 2
+        matmul_weights_shard_width = matmul_weights_ot.shard_shape[1]
+        matmul_out_w = matmul_weights_shard_width // matmul_weights_ot.tile_shape[1]
 
-        # Calculate per-core width in tiles for matmul1 (from shard spec)
-        matmul_weights_tile = matmul_weights_sample.get_tile()
-        matmul_weights_shard_shape = matmul_weights_memory_config.shard_spec.shape
-        matmul_weights_shard_width = matmul_weights_shard_shape[1]  # Width dimension
-        matmul_out_w = matmul_weights_shard_width // matmul_weights_tile.tile_shape[1]  # Per-core width in tiles
-
-        # Calculate per-core width in tiles for matmul2 (from shard spec)
-        matmul2_weights_sample = matmul2_weights_tensors_per_device[0]
-        matmul2_weights_memory_config = matmul2_weights_sample.memory_config()
-        matmul2_weights_core_grid = matmul2_weights_memory_config.shard_spec.grid
-        matmul2_weights_tile = matmul2_weights_sample.get_tile()
-        matmul2_weights_shard_shape = matmul2_weights_memory_config.shard_spec.shape
-        matmul2_weights_shard_width = matmul2_weights_shard_shape[1]  # Width dimension
-        matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tile.tile_shape[1]  # Per-core width in tiles
+        # Matmul2 grid from OverlappedTensor metadata (q_b_proj shuffled)
+        matmul2_weights_core_grid = matmul2_weights_ot.core_range_set
+        matmul2_weights_shard_width = matmul2_weights_ot.shard_shape[1]
+        matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_ot.tile_shape[1]
 
         # Extract matmul3 weights core grid (for inferring QNOPE grid dimensions)
         matmul3_weights_sample = matmul3_weights_tensors_per_device[0]
@@ -421,20 +403,10 @@ class PreSDPA:
         QNOPE_COLS = 8  # Number of QNOPE sender columns
         QROPE_COLS = 4  # Number of QROPE sender columns
 
-        # KV Cache Branch grid configuration
-        # DKV Matmul (9x2)
-        dkv_matmul_weights_sample = dkv_matmul_weights_tensors_per_device[0]
-        dkv_matmul_weights_memory_config = dkv_matmul_weights_sample.memory_config()
-        dkv_matmul_weights_core_grid = dkv_matmul_weights_memory_config.shard_spec.grid
-
-        # Calculate per-core width in tiles for matmul (from shard spec)
-        # Get shard width directly from shard_spec and divide by tile width from tensor
-        dkv_matmul_weights_tile = dkv_matmul_weights_sample.get_tile()
-        dkv_matmul_weights_shard_shape = dkv_matmul_weights_memory_config.shard_spec.shape
-        dkv_matmul_weights_shard_width = dkv_matmul_weights_shard_shape[1]  # Width dimension
-        dkv_matmul_out_w = (
-            dkv_matmul_weights_shard_width // dkv_matmul_weights_tile.tile_shape[1]
-        )  # Per-core width in tiles
+        # KV Cache Branch grid from OverlappedTensor metadata (kv_a_proj)
+        dkv_matmul_weights_core_grid = dkv_matmul_weights_ot.core_range_set
+        dkv_matmul_weights_shard_width = dkv_matmul_weights_ot.shard_shape[1]
+        dkv_matmul_out_w = dkv_matmul_weights_shard_width // dkv_matmul_weights_ot.tile_shape[1]
 
         # ========================================================================
         # Mcast grid configuration (decoupled from matmul weights tensor)
@@ -501,8 +473,12 @@ class PreSDPA:
         input_cb = 0
         gamma_cb = 1
         rmsnorm_output_cb = 2
+        # Fused weights CB: single CB for q_a (matmul1), q_b (matmul2), kv_a (dkv_matmul)
+        fused_weights_cb = 3
+        matmul_weights_cb = fused_weights_cb
+        matmul2_weights_cb = fused_weights_cb
+        dkv_matmul_weights_cb = fused_weights_cb
         # Matmul1 + gather-reduce + RMSNorm2 path
-        matmul_weights_cb = 3
         matmul_output_cb = 4
         matmul_input_cb = 5
         rmsnorm2_gamma_cb = 6  # Gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
@@ -511,7 +487,6 @@ class PreSDPA:
         rmsnorm2_output_cb = 9  # Output CB for RMSNorm2
         # Matmul2 + Matmul3 + QRoPE/CreateQHeads path
         matmul2_input_cb = 10  # Input CB for second matmul (1x1536 with 1x32 tiles)
-        matmul2_weights_cb = 11  # Weights CB for second matmul (width sharded, 4 tiles per core)
         matmul2_output_cb = 12  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
         matmul3_weights_cb = 13  # Weights CB for third matmul (height sharded on Qnope grid)
         matmul3_output_cb = 14  # Output CB for third matmul (Qnope final output)
@@ -524,7 +499,6 @@ class PreSDPA:
         qrope_cos_interm_cb = 21  # Cos intermediate CB for RoPE
         qrope_sin_interm_cb = 22  # Sin intermediate CB for RoPE
         # KV cache branch
-        dkv_matmul_weights_cb = 23  # DKV Matmul weights CB
         dkv_matmul_output_cb = 24  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
         kv_rmsnorm_input_cb = 25  # Input CB for KV Cache Branch RMSNorm
         kv_rmsnorm_gamma_cb = 26  # Gamma CB for KV Cache Branch RMSNorm
@@ -537,6 +511,13 @@ class PreSDPA:
         kv_cache_output_cb = 32  # Output CB for KV Cache Branch
         kv_cache_intermed_cb = 33  # Intermed CB for KV Cache Branch
         kv_cache_input_cb = 34  # Input CB for KV Cache Branch
+
+        # Fused weights: total tiles per core (from fused tensor shard)
+        fused_shard_shape = fused_weights_tensor.memory_config().shard_spec.shape
+        fused_tile = fused_weights_tensor.get_tile()
+        fused_tiles_per_core = (fused_shard_shape[0] // fused_tile.tile_shape[0]) * (
+            fused_shard_shape[1] // fused_tile.tile_shape[1]
+        )
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -615,6 +596,7 @@ class PreSDPA:
             ("matmul_in1", matmul_weights_cb),
             ("matmul_k_per_core", matmul_k_per_core),
             ("matmul_out_w_per_core", matmul_out_w),
+            ("fused_weights_tiles_per_core", fused_tiles_per_core),
         ]
         # BRISC: out
         matmul_brisc_named_compile_time_args = [
@@ -1069,21 +1051,24 @@ class PreSDPA:
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
                 gamma_tensor_device = gamma_tensors_per_device[device_idx]
-                matmul_weights_tensor_device = matmul_weights_tensors_per_device[device_idx]
+                fused_weights_tensor_device = fused_weights_tensors_per_device[device_idx]
                 rmsnorm2_gamma_tensor_device = rmsnorm2_gamma_tensors_per_device[device_idx]
-                matmul2_weights_tensor_device = matmul2_weights_tensors_per_device[device_idx]
                 matmul3_weights_tensor_device = matmul3_weights_tensors_per_device[device_idx]
                 qrope_cos_tensor_device = qrope_cos_tensors_per_device[device_idx]
                 qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
                 trans_mat_tensor_device = trans_mat_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
-                dkv_matmul_weights_tensor_device = dkv_matmul_weights_tensors_per_device[device_idx]
                 dkv_rmsnorm_gamma_tensor_device = dkv_rmsnorm_gamma_tensors_per_device[device_idx]
                 krope_cos_tensor_device = krope_cos_tensors_per_device[device_idx]
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
                 kv_cache_tensor_device = kv_cache_tensors_per_device[device_idx]
                 sdpa_kv_cache_buffer_device = sdpa_kv_cache_buffers_per_device[device_idx]
                 sdpa_out_interm_buffer_device = sdpa_out_interm_buffers_per_device[device_idx]
+
+                fused_base_addr = fused_weights_tensor_device.buffer_address()
+                matmul_weights_addr = fused_base_addr + matmul_weights_ot.byte_offset
+                matmul2_weights_addr = fused_base_addr + matmul2_weights_ot.byte_offset
+                dkv_matmul_weights_addr = fused_base_addr + dkv_matmul_weights_ot.byte_offset
 
                 # Get worker core from per-device input tensor shard grid
                 device_local = input_tensor_device.device()
@@ -1195,9 +1180,9 @@ class PreSDPA:
                     )
                 ]
 
-                # CB: Matmul weights (created from sharded tensor)
-                matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul_weights_cb, matmul_weights_tensor_device
+                # CB: Fused weights (single CB for matmul1/matmul2/dkv_matmul, backed by fused tensor)
+                fused_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    fused_weights_cb, fused_weights_tensor_device
                 )
 
                 # CB: Matmul input buffer (1x32 tiles, receives mcast data)
@@ -1325,11 +1310,6 @@ class PreSDPA:
                     )
                 ]
                 sdpa_out_interm_running_offset += matmul2_input_cb_descriptor.total_size  # +3072 B
-
-                # CB: Matmul2 weights (created from sharded tensor, 4 tiles per core)
-                matmul2_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul2_weights_cb, matmul2_weights_tensor_device
-                )
 
                 # CB 12: Matmul2 output buffer — overlap with sdpa_out_interm L1 buffer
                 # at offset 12352 B. This CB is consumed before SDPA runs.
@@ -1493,11 +1473,6 @@ class PreSDPA:
                 # Only allocated on receiver cores (SDPA Input grid) - senders no longer write here
                 create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     create_q_heads_out_cb, output_tensor_device
-                )
-
-                # CB: DKV Matmul weights buffer
-                dkv_matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    dkv_matmul_weights_cb, dkv_matmul_weights_tensor_device
                 )
 
                 # CB 24: DKV Matmul output — overlap with sdpa_out_interm L1 buffer
@@ -1779,13 +1754,16 @@ class PreSDPA:
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
                     + matmul_trisc_named_compile_time_args
+                    + [("matmul_in1_address", matmul_weights_addr)]
                     + gather_reduce_trisc_named_compile_time_args
                     + rmsnorm2_trisc_named_compile_time_args
                     + matmul2_trisc_named_compile_time_args
+                    + [("matmul2_in1_address", matmul2_weights_addr)]
                     + matmul3_trisc_named_compile_time_args
                     + qrope_trisc_named_compile_time_args
                     + create_q_heads_trisc_named_compile_time_args
                     + dkv_matmul_trisc_named_compile_time_args
+                    + [("dkv_matmul_in1_address", dkv_matmul_weights_addr)]
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args
                     + kv_cache_trisc_named_compile_time_args,
@@ -1880,7 +1858,7 @@ class PreSDPA:
                     in_cb_descriptor,
                     gamma_cb_descriptor,
                     rmsnorm_output_cb_descriptor,
-                    matmul_weights_cb_descriptor,
+                    fused_weights_cb_descriptor,  # CB 3: Fused weights (matmul1 + matmul2 + dkv_matmul)
                     matmul_output_cb_descriptor,
                     matmul_input_cb_descriptor,
                     rmsnorm2_gamma_cb_descriptor,  # CB 6: RMSNorm2 gamma
@@ -1888,7 +1866,6 @@ class PreSDPA:
                     gather_reduce_half1_scratch_cb_descriptor,  # CB 8: gather_reduce half1 scratch
                     rmsnorm2_output_cb_descriptor,  # CB 9: RMSNorm2 output
                     matmul2_input_cb_descriptor,  # CB 10: Matmul2 input
-                    matmul2_weights_cb_descriptor,  # CB 11: Matmul2 weights
                     matmul2_output_cb_descriptor,  # CB 12: Matmul2 output (intermediate)
                     matmul3_weights_cb_descriptor,  # CB 13: Matmul3 weights
                     matmul3_output_cb_descriptor,  # CB 14: Matmul3 output (Qnope final)
@@ -1900,7 +1877,6 @@ class PreSDPA:
                     qrope_rotated_input_interm_cb_descriptor,  # CB 20: Rotated input intermediate
                     qrope_cos_interm_cb_descriptor,  # CB 21: Cos intermediate
                     qrope_sin_interm_cb_descriptor,  # CB 22: Sin intermediate
-                    dkv_matmul_weights_cb_descriptor,  # CB 23: DKV Matmul weights
                     dkv_matmul_output_cb_descriptor,  # CB 24: DKV Matmul output
                     kv_rmsnorm_input_cb_descriptor,  # CB 25: KV RMSNorm input
                     kv_rmsnorm_gamma_cb_descriptor,  # CB 26: KV RMSNorm gamma
@@ -1953,16 +1929,14 @@ class PreSDPA:
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
                 gamma_tensor,
-                matmul_weights_tensor,
+                fused_weights_tensor,
                 rmsnorm2_gamma_tensor,
-                matmul2_weights_tensor,
                 matmul3_weights_tensor,
                 qrope_sin_tensor,
                 qrope_cos_tensor,
                 trans_mat_tensor,
                 krope_cos_tensor,
                 krope_sin_tensor,
-                dkv_matmul_weights_tensor,
                 dkv_rmsnorm_gamma_tensor,
                 kv_cache_tensor,
                 sdpa_kv_cache_buffer,
