@@ -21,6 +21,27 @@ and forwards it downstream, optionally using fabric connections for cross-device
 import ttnn
 
 
+class MeshWrapper:
+    def __init__(self, mesh_device=None, mesh_id=None):
+        self.mesh_device = mesh_device
+
+        if self.mesh_device is not None:
+            self.mesh_id = self.mesh_device.get_system_mesh_id()
+        else:
+            assert mesh_id is not None
+            self.mesh_id = mesh_id
+
+    def get_mesh_device(self):
+        return self.mesh_device
+
+    def get_mesh_id(self):
+        if self.mesh_id is None:
+            self.mesh_id = self.mesh_device.get_system_mesh_id()
+        else:
+            assert self.mesh_id == self.mesh_device.get_system_mesh_id()
+            return self.mesh_id
+
+
 class SocketInterface:
     def __init__(
         self,
@@ -33,29 +54,62 @@ class SocketInterface:
         downstream_socket=None,
         upstream_core_coord=None,
         downstream_core_coord=None,
-        mesh_device=None,
+        sender_mesh=None,
+        receiver_mesh=None,
     ):
-        if upstream_socket is not None:
-            self.upstream_socket = upstream_socket
-            assert upstream_core_coord is None
-        else:
-            socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
-            socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
-            socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
-            self.upstream_socket_pair = ttnn.create_socket_pair(mesh_device, mesh_device, socket_config)
-            # Initialize upstream as receiver socket
-            self.upstream_socket = self.upstream_socket_pair[1]
+        assert (
+            sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
+        ), "Either sender or receiver mesh device must be set"
 
-        if downstream_socket is not None:
-            self.downstream_socket = downstream_socket
-            assert downstream_core_coord is None
+        if sender_mesh.get_mesh_device() and receiver_mesh.get_mesh_device():
+            assert (
+                sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
+            ), "Sender and receiver mesh IDs must be the same when both MeshDevices are provided"
+            self.mesh_device = sender_mesh.get_mesh_device()
+            self.my_mesh_id = sender_mesh.get_mesh_id()
+            self.peer_mesh_id = receiver_mesh.get_mesh_id()
+            self.local_socket = True
         else:
-            socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
-            socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
-            socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
-            self.downstream_socket_pair = ttnn.create_socket_pair(mesh_device, mesh_device, socket_config)
-            # Initialize downstream as sender socket
-            self.downstream_socket = self.downstream_socket_pair[0]
+            self.mesh_device = (
+                sender_mesh.get_mesh_device() if sender_mesh.get_mesh_device() else receiver_mesh.get_mesh_device()
+            )
+            self.my_mesh_id = (
+                sender_mesh.get_mesh_id() if sender_mesh.get_mesh_device() else receiver_mesh.get_mesh_id()
+            )
+            self.peer_mesh_id = (
+                receiver_mesh.get_mesh_id() if sender_mesh.get_mesh_device() else sender_mesh.get_mesh_id()
+            )
+            self.local_socket = False
+
+        if sender_mesh.get_mesh_device():
+            # Initialize the upstream socket on the sender mesh, or reuse an existing socket if provided
+            if upstream_socket is not None:
+                # If an existing socket is provided, assert that it is on the sender mesh
+                assert self.upstream_socket.get_mesh_device().get_system_mesh_id() == sender_mesh.get_mesh_id()
+                self.upstream_socket = upstream_socket
+                assert upstream_core_coord is None
+            else:
+                # Upstream socket not provided, create a new socket, on the sender mesh
+                socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
+                socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+                socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+                self.upstream_socket_pair = ttnn.create_socket_pair(mesh_device, mesh_device, socket_config)
+                # Initialize upstream as receiver socket
+                self.upstream_socket = self.upstream_socket_pair[1]
+
+        if receiver_mesh.get_mesh_device():
+            if downstream_socket is not None:
+                # If an existing socket is provided, assert that it is on the receiver mesh
+                assert self.downstream_socket.get_mesh_device().get_system_mesh_id() == receiver_mesh.get_mesh_id()
+                self.downstream_socket = downstream_socket
+                assert downstream_core_coord is None
+            else:
+                socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
+                socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+                socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+                self.downstream_socket_pair = ttnn.create_socket_pair(mesh_device, mesh_device, socket_config)
+                # Initialize downstream as sender socket
+                self.downstream_socket = self.downstream_socket_pair[0]
 
         self.page_size = page_size
         self.send_core_coord = send_core_coord
@@ -64,12 +118,21 @@ class SocketInterface:
         # Create a socket between the sender and receiver cores
         socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
         socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
-
-        socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
-
-        self.intermed_socket_pair = ttnn.create_socket_pair(
-            self.upstream_socket.get_mesh_device(), self.downstream_socket.get_mesh_device(), socket_config
-        )
+        if self.local_socket:
+            # If running on a host/process where the sender and receiver meshes are the local mesh, create a local socket pair
+            socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+            self.internal_socket_pair = ttnn.create_socket_pair(
+                self.sender_mesh.get_mesh_device(), self.receiver_mesh.get_mesh_device(), socket_config
+            )
+        else:
+            # If running across multiple hosts/processes create s spclet
+            socket_config = ttnn.SocketConfig(
+                connections=[socket_connection],
+                memory_config=socket_memory_config,
+                sender_mesh_id=sender_mesh.get_mesh_id(),
+                receiver_mesh_id=receiver_mesh.get_mesh_id(),
+            )
+            self.internal_socket = ttnn.MeshSocket(self.mesh_device, socket_config)
 
         if self.send_core_coord.core_coord == self.recv_core_coord.core_coord:
             termination_semaphore_core_range = ttnn.CoreRangeSet(
@@ -215,19 +278,22 @@ class SocketInterface:
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.upstream_socket.get_mesh_device()
         )
-        sender_program = self._create_program(
-            self.upstream_socket.get_mesh_device(),
-            self.send_core_coord,
-            self.upstream_socket,
-            self.intermed_socket_pair[0],
-        )
+        if self.local_socket:
+            sender_program = self._create_program(
+                self.mesh_device,
+                self.send_core_coord,
+                self.upstream_socket,
+                self.internal_socket_pair[0],
+            )
 
-        receiver_program = self._create_program(
-            self.downstream_socket.get_mesh_device(),
-            self.recv_core_coord,
-            self.intermed_socket_pair[1],
-            self.downstream_socket,
-        )
+            receiver_program = self._create_program(
+                self.mesh_device,
+                self.recv_core_coord,
+                self.internal_socket_pair[1],
+                self.downstream_socket,
+            )
+        else:
+            program = self._create_program()
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         mesh_program_descriptor[
             ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
