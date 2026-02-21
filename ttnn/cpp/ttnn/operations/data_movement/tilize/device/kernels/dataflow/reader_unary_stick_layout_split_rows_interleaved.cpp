@@ -41,7 +41,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
-            base_src_noc_addr[j] = get_noc_addr(stick_id, s);
+            base_src_noc_addr[j] = s.get_noc_addr(stick_id);
             stick_id++;
         }
 

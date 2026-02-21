@@ -79,3 +79,36 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
         output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
 
         assert torch.equal(input_torch_tensor, output_torch_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("tensor_shape", [[4, 128, 128]])  # [3, 160, 160]
+@pytest.mark.parametrize("shard_shape", [[2, 64, 64]])
+@pytest.mark.parametrize(
+    "shard_core_grid",
+    [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})],
+)
+def test_tilize_row_major_to_nd_sharded(device, dtype, tensor_shape, shard_shape, shard_core_grid):
+    torch.manual_seed(42)
+
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+    # input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+
+    # for _ in range(30):
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+    ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config)
+    output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    assert torch.equal(input_torch_tensor, output_torch_tensor)

@@ -19,6 +19,8 @@ namespace ttnn::prim {
 void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    bool input_is_nd_sharded =
+        tensor_args.input_tensor.is_sharded() && !tensor_args.input_tensor.shard_spec().has_value();
     const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
@@ -42,7 +44,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
-    if (input_tensor_a.memory_config().is_sharded()) {
+    if (input_tensor_a.memory_config().is_sharded() && !input_is_nd_sharded) {
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
                 input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -70,23 +72,25 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
             "Input tensor shard orientation must be ROW_MAJOR but got {}",
             input_tensor_a.shard_spec().value().orientation);
-    } else {
-        TT_FATAL(
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Input tensor memory layout must be INTERLEAVED but got {}",
-            input_tensor_a.memory_config().memory_layout());
-        TT_FATAL(
-            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Output memory config layout must be INTERLEAVED but got {}",
-            operation_attributes.output_mem_config.memory_layout());
-    }
+    }  // else {
+    //     TT_FATAL(
+    //         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+    //         "Input tensor memory layout must be INTERLEAVED but got {}",
+    //         input_tensor_a.memory_config().memory_layout());
+    //     TT_FATAL(
+    //         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+    //         "Output memory config layout must be INTERLEAVED but got {}",
+    //         operation_attributes.output_mem_config.memory_layout());
+    // }
 }
 
 TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    bool input_is_nd_sharded =
+        tensor_args.input_tensor.is_sharded() && !tensor_args.input_tensor.shard_spec().has_value();
     const auto& input_tensor = tensor_args.input_tensor;
-    if (input_tensor.memory_config().is_sharded()) {
+    if (input_tensor.memory_config().is_sharded() && !input_is_nd_sharded) {
         auto mem_config =
             operation_attributes.output_mem_config.with_shard_spec(input_tensor.memory_config().shard_spec());
         return {TensorSpec(
@@ -112,6 +116,8 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    bool input_is_nd_sharded =
+        tensor_args.input_tensor.is_sharded() && !tensor_args.input_tensor.shard_spec().has_value();
     const auto& input_tensor_a = tensor_args.input_tensor;
 
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
@@ -121,7 +127,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         return ttnn::prim::TilizeSingleCoreProgramFactory{};
     }
 
-    if (input_tensor_a.memory_config().is_sharded()) {
+    if (input_tensor_a.memory_config().is_sharded() && !input_is_nd_sharded) {
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded tilize does not support sub core grid specification");
