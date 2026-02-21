@@ -15,6 +15,7 @@ Supports save_weights / load_weights for offline preparation and runtime load.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,7 +117,7 @@ class DeepSeekV3MoELayerWeights:
     shared_up_proj: OverlappedTensor
     shared_down_proj: ttnn.Tensor
 
-    # From get_tt_moe_routed_expert_weights (32 DRAM experts)
+    # From get_tt_moe_routed_expert_weights (256 DRAM experts)
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
@@ -134,7 +135,7 @@ class DeepSeekV3Weights:
 
 # Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
 _NUM_HEADS = 64
-# MoE routed experts (design doc §12).
+# MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = 32
 _QK_NOPE_HEAD_DIM = 128
 _V_HEAD_DIM = 128
@@ -290,6 +291,7 @@ def prepare_moe_decoder_layer_weights(
     up_list = []
     down_list = []
     for e in range(NUM_ROUTED_EXPERTS):
+        logger.info(f"Adding expert {e} to routed_gate_proj")
         gate_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight")].T.contiguous())
         up_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.up_proj.weight")].T.contiguous())
         down_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.down_proj.weight")].T.contiguous())
@@ -499,6 +501,7 @@ def save_layer(
 
         out_path = layer_dir / tensorbin_name
         t0 = time.perf_counter()
+        logger.info(f"Dumping fused tensor for {tensorbin_name}")
         ttnn.dump_tensor(out_path, group_fields[0][1].fused_tensor)
         elapsed = time.perf_counter() - t0
         logger.info(f"  dump_tensor {tensorbin_name}: {elapsed:.3f}s")
@@ -527,6 +530,7 @@ def save_layer(
             expert_dir = experts_dir / f"e_{e:03d}"
             expert_dir.mkdir(parents=True, exist_ok=True)
             t0 = time.perf_counter()
+            logger.info(f"Dumping fused tensor for expert {e} gate_proj.tensorbin")
             ttnn.dump_tensor(expert_dir / "gate_proj.tensorbin", layer.routed_gate_proj[e])
             ttnn.dump_tensor(expert_dir / "up_proj.tensorbin", layer.routed_up_proj[e])
             ttnn.dump_tensor(expert_dir / "down_proj.tensorbin", layer.routed_down_proj[e])
@@ -541,6 +545,7 @@ def save_layer(
             ("routed_down_proj.tensorbin", "routed_down_proj"),
         ]:
             t0 = time.perf_counter()
+            logger.info(f"Dumping fused tensor for {fname}")
             ttnn.dump_tensor(layer_dir / fname, getattr(layer, attr))
             logger.info(f"  dump_tensor {fname}: {time.perf_counter() - t0:.3f}s")
         standalone_tensors["routed_gate_proj"] = "routed_gate_proj.tensorbin"

@@ -25,6 +25,7 @@ import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3MoELayerWeights,
     deallocate_weights,
@@ -119,7 +120,7 @@ def _layer_state_dict(
         state[f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"] = torch.randn(
             shared_down_rows, shared_down_cols, generator=g, dtype=torch.bfloat16
         )
-        for e in range(32):
+        for e in range(NUM_ROUTED_EXPERTS):
             state[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(
                 2048, 7168, generator=g, dtype=torch.bfloat16
             )
@@ -224,9 +225,9 @@ def test_prepare_moe_layer_single_layer(device):
     assert layer.shared_gate_proj.tensor_shape == (7168, 256)
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
     assert hasattr(layer, "shared_down_proj")
-    assert len(layer.routed_gate_proj) == 32
-    assert len(layer.routed_up_proj) == 32
-    assert len(layer.routed_down_proj) == 32
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
 
 
 def test_save_load_dense_layer_single_layer(device, tmp_path):
@@ -316,7 +317,7 @@ def test_save_load_moe_layer_single_layer(device, tmp_path):
     assert (layer_dir / "gate_up.tensorbin").exists()
     assert (layer_dir / "shared_down_proj.tensorbin").exists()
     experts_dir = layer_dir / "experts"
-    for e in range(32):
+    for e in range(NUM_ROUTED_EXPERTS):
         expert_dir = experts_dir / f"e_{e:03d}"
         assert (expert_dir / "gate_proj.tensorbin").exists()
         assert (expert_dir / "up_proj.tensorbin").exists()
@@ -344,10 +345,10 @@ def test_save_load_moe_layer_single_layer(device, tmp_path):
     _assert_overlapped_tensors_match(orig.shared_gate_proj, layer.shared_gate_proj)
     _assert_overlapped_tensors_match(orig.shared_up_proj, layer.shared_up_proj)
     assert layer.shared_down_proj.shape == orig.shared_down_proj.shape
-    assert len(layer.routed_gate_proj) == 32
-    assert len(layer.routed_up_proj) == 32
-    assert len(layer.routed_down_proj) == 32
-    for e in range(32):
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
+    for e in range(NUM_ROUTED_EXPERTS):
         assert layer.routed_gate_proj[e].shape == orig.routed_gate_proj[e].shape
         assert layer.routed_up_proj[e].shape == orig.routed_up_proj[e].shape
         assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
@@ -419,8 +420,33 @@ def test_save_load_dense_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
         pytest.skip(f"Per-device grid {device_grid.x}x{device_grid.y} too small for blitz decode (need 12x10+)")
 
     state = _layer_state_dict(0, is_moe=False, for_multi_device=True)
+    t0 = time.perf_counter()
     weights = prepare_weights(state, submesh, num_layers=1, first_k_dense_replace=1)
+    elapsed = time.perf_counter() - t0
+    logger.info("prepare_weights (1 dense layer, 4x2 mesh): {:.3f} s", elapsed)
+    assert len(weights.layers) == 1
     orig = weights.layers[0]
+    assert isinstance(orig, DeepSeekV3DenseLayerWeights)
+    assert orig.q_a_proj.tensor_shape == (3584, 3072)
+    assert orig.q_b_proj.tensor_shape == (1536, 12288)
+    assert orig.kv_a_proj.tensor_shape == (7168, 576)
+    assert orig.o_proj.tensor_shape == (8192, 7168)
+    assert orig.attn_norm.tensor_shape == (1, 7168)
+    assert orig.q_norm.tensor_shape == (1, 1536)
+    assert orig.kv_norm.tensor_shape == (1, 512)
+    assert orig.ffn_norm.tensor_shape == (1, 7168)
+    assert orig.kv_b1_proj.tensor_shape == (8192, 512)
+    assert orig.kv_b2_proj.tensor_shape == (512, 8192)
+    assert hasattr(orig, "shared_gate_proj") and orig.shared_gate_proj is not None
+    assert hasattr(orig, "shared_up_proj") and orig.shared_up_proj is not None
+    assert hasattr(orig, "routed_gate_proj") and orig.routed_gate_proj is not None
+    assert hasattr(orig, "routed_up_proj") and orig.routed_up_proj is not None
+    assert hasattr(orig, "routed_down_proj") and orig.routed_down_proj is not None
+    # Early access to q_ab_kv_a fused_tensor (same as first tensor touched in save_layer)
+    logger.info("Early access: touching q_ab_kv_a fused_tensor (orig.q_a_proj.fused_tensor)...")
+    q_ab_kv_a_fused = orig.q_a_proj.fused_tensor
+    _ = q_ab_kv_a_fused.shape
+    logger.info("Early access: got shape {}", q_ab_kv_a_fused.shape)
     save_layer(
         orig,
         tmp_path,
@@ -489,14 +515,18 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     num_cores = device_grid.x * device_grid.y
     if num_cores < 128:
         pytest.skip(f"Per-device has {num_cores} compute cores; GATE_UP overlap spec requires 128 cores (13x10 grid)")
+    logger.info(f"Preparing MoE layer on 4x2 mesh with {num_cores} cores")
     state = _layer_state_dict(0, is_moe=True, for_multi_device=True, seed=43)
+    logger.info(f"State dict prepared")
     t0 = time.perf_counter()
+    logger.info(f"Preparing weights...")
     weights = prepare_weights(
         state,
         submesh,
         num_layers=1,
         first_k_dense_replace=0,
     )
+    logger.info(f"Weights prepared")
     elapsed = time.perf_counter() - t0
     logger.info("prepare_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
     assert len(weights.layers) == 1
@@ -516,9 +546,9 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.shared_gate_proj.tensor_shape == (7168, 256)
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
     assert hasattr(layer, "shared_down_proj")
-    assert len(layer.routed_gate_proj) == 32
-    assert len(layer.routed_up_proj) == 32
-    assert len(layer.routed_down_proj) == 32
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
 
 
 @pytest.mark.parametrize(
@@ -542,8 +572,35 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
         pytest.skip(f"Per-device has {num_cores} compute cores; GATE_UP overlap spec requires 128 cores")
 
     state = _layer_state_dict(0, is_moe=True, for_multi_device=True, seed=43)
+    t0 = time.perf_counter()
     weights = prepare_weights(state, submesh, num_layers=1, first_k_dense_replace=0)
+    elapsed = time.perf_counter() - t0
+    logger.info("prepare_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
+    assert len(weights.layers) == 1
     orig = weights.layers[0]
+    assert isinstance(orig, DeepSeekV3MoELayerWeights)
+    assert orig.q_a_proj.tensor_shape == (3584, 3072)
+    assert orig.q_b_proj.tensor_shape == (1536, 12288)
+    assert orig.kv_a_proj.tensor_shape == (7168, 576)
+    assert orig.o_proj.tensor_shape == (8192, 7168)
+    assert orig.gate_mm.tensor_shape == (7168, 256)
+    assert orig.attn_norm.tensor_shape == (1, 7168)
+    assert orig.q_norm.tensor_shape == (1, 1536)
+    assert orig.kv_norm.tensor_shape == (1, 512)
+    assert orig.ffn_norm.tensor_shape == (1, 7168)
+    assert orig.kv_b1_proj.tensor_shape == (8192, 512)
+    assert orig.kv_b2_proj.tensor_shape == (512, 8192)
+    assert orig.shared_gate_proj.tensor_shape == (7168, 256)
+    assert orig.shared_up_proj.tensor_shape == (7168, 256)
+    assert hasattr(orig, "shared_down_proj")
+    assert len(orig.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(orig.routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(orig.routed_down_proj) == NUM_ROUTED_EXPERTS
+    # Early access to q_ab_kv_a fused_tensor (same as first tensor touched in save_layer)
+    logger.info("Early access: touching q_ab_kv_a fused_tensor (orig.q_a_proj.fused_tensor)...")
+    q_ab_kv_a_fused = orig.q_a_proj.fused_tensor
+    _ = q_ab_kv_a_fused.shape
+    logger.info("Early access: got shape {}", q_ab_kv_a_fused.shape)
     save_layer(
         orig,
         tmp_path,
@@ -558,7 +615,7 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     assert (layer_dir / "gate_up.tensorbin").exists()
     assert (layer_dir / "shared_down_proj.tensorbin").exists()
     experts_dir = layer_dir / "experts"
-    for e in range(32):
+    for e in range(NUM_ROUTED_EXPERTS):
         expert_dir = experts_dir / f"e_{e:03d}"
         assert (expert_dir / "gate_proj.tensorbin").exists()
         assert (expert_dir / "up_proj.tensorbin").exists()
@@ -585,10 +642,10 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     _assert_overlapped_tensors_match(orig.shared_gate_proj, layer.shared_gate_proj)
     _assert_overlapped_tensors_match(orig.shared_up_proj, layer.shared_up_proj)
     assert layer.shared_down_proj.shape == orig.shared_down_proj.shape
-    assert len(layer.routed_gate_proj) == 32
-    assert len(layer.routed_up_proj) == 32
-    assert len(layer.routed_down_proj) == 32
-    for e in range(32):
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
+    for e in range(NUM_ROUTED_EXPERTS):
         assert layer.routed_gate_proj[e].shape == orig.routed_gate_proj[e].shape
         assert layer.routed_up_proj[e].shape == orig.routed_up_proj[e].shape
         assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
@@ -687,7 +744,7 @@ def test_load_4_layers_across_4_submeshes_4x2(bh_2d_mesh_device, tmp_path):
         assert hasattr(loaded[i], "shared_gate_proj") and loaded[i].shared_gate_proj is not None
         assert hasattr(loaded[i], "routed_gate_proj") and loaded[i].routed_gate_proj is not None
         assert loaded[i].routed_gate_proj.shape is not None
-    assert len(loaded[3].routed_gate_proj) == 32
-    assert len(loaded[3].routed_up_proj) == 32
-    assert len(loaded[3].routed_down_proj) == 32
+    assert len(loaded[3].routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(loaded[3].routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(loaded[3].routed_down_proj) == NUM_ROUTED_EXPERTS
     assert loaded[3].shared_down_proj is not None

@@ -127,7 +127,7 @@ So: **full HF tensors → prepare_weights (transform only) → blitz (shard to d
 
 ### 5.4 How HF weights map onto MoE and MLP implementation
 
-DeepSeek V3 has **two layer types**: the first few layers are **dense** (one MLP, no routing); the rest are **MoE** (router + shared expert + 32 routed experts). The table below maps HF state-dict keys to what **prepare_weights** produces and which **fused ops** in this directory consume them.
+DeepSeek V3 has **two layer types**: the first few layers are **dense** (one MLP, no routing); the rest are **MoE** (router + shared expert + 256 routed experts). The table below maps HF state-dict keys to what **prepare_weights** produces and which **fused ops** in this directory consume them.
 
 **Layer types in HF:**
 
@@ -148,7 +148,7 @@ DeepSeek V3 has **two layer types**: the first few layers are **dense** (one MLP
 **Summary:**
 
 - **Dense layers:** HF has one set of `mlp.gate_proj`, `mlp.up_proj`, `mlp.down_proj`. The **MlpOp** path (test_mlp.py) implements that single-expert MLP; **prepare_weights** does not yet load these three (Phase 2).
-- **MoE layers:** HF has (1) router `mlp.gate`, (2) shared expert `mlp.shared_experts.{gate,up,down}_proj`, (3) 32 routed experts `mlp.experts.{e}.{gate,up,down}_proj`. We **do** load (1) and (2) via prepare_weights → gate_mm, gate_up fusion, and shared_down_proj. The **MoeOp** uses gate_mm and the **SharedExpertOp** uses gate_up + shared_down_proj. Routed expert weights (3) are **not** in prepare_weights yet; the MoE op expects them in DRAM (e.g. from create_expert_matmul_tensors in tests).
+- **MoE layers:** HF has (1) router `mlp.gate`, (2) shared expert `mlp.shared_experts.{gate,up,down}_proj`, (3) 256 routed experts `mlp.experts.{e}.{gate,up,down}_proj`. We **do** load (1) and (2) via prepare_weights → gate_mm, gate_up fusion, and shared_down_proj. The **MoeOp** uses gate_mm and the **SharedExpertOp** uses gate_up + shared_down_proj. Routed expert weights (3) are **not** in prepare_weights yet; the MoE op expects them in DRAM (e.g. from create_expert_matmul_tensors in tests).
 
 So: **HF dense MLP** → MlpOp (one gate/up/down); **HF MoE** → MoeOp (router + SharedExpertOp for shared expert + DRAM experts for routed). prepare_weights currently feeds only attention + router + shared expert; dense MLP and routed experts are future work.
 
