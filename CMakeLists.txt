@@ -27,7 +27,7 @@ include(version)
 ParseGitDescribe()
 project(
     Metalium
-    VERSION ${VERSION_NUMERIC}
+    VERSION 0.0.1
     DESCRIPTION "Tenstorrent Metalium"
     HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
     LANGUAGES
