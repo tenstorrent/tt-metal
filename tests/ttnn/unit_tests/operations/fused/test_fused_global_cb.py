@@ -532,3 +532,83 @@ class TestFusedGlobalCB:
         result = ttnn.to_torch(outputs[1][0])
         passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
         assert passing, f"PCC mismatch: {pcc}"
+
+    @pytest.mark.parametrize("num_tiles", [1, 8])
+    def test_fused_mid_kernel_globalcb(self, device, num_tiles):
+        """GlobalCB push in Phase 0, then fused kernel continues with Phase 1.
+
+        Architecture:
+            Phase 0 (OpA): DRAM(input_a) → compute → GlobalCB push (c_31)
+            Phase 1 (OpB): DRAM(input_b) → compute → DRAM(output_b)
+            Consumer:      GlobalCB(c_31) → DRAM(output_recv)
+
+        The receiver gets data mid-kernel — Phase 0 pushes to the GlobalCB,
+        the barrier fires, and Phase 1 starts processing completely different
+        data while the receiver is still draining the GlobalCB.
+
+        Verifies:
+            - output_recv == input_a  (GlobalCB transfer from Phase 0)
+            - output_b   == input_b  (Phase 1 identity, runs after barrier)
+        """
+        torch.manual_seed(42)
+        shape = [1, 1, 32, 32 * num_tiles]
+        torch_input_a = torch.randn(shape, dtype=torch.bfloat16)
+        torch_input_b = torch.randn(shape, dtype=torch.bfloat16)
+
+        tt_input_a = ttnn.from_torch(
+            torch_input_a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_input_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_output_b = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_output_recv = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        sender_core = ttnn.CoreCoord(0, 0)
+        receiver_core = ttnn.CoreCoord(1, 0)
+        sender_range = ttnn.CoreRangeSet({ttnn.CoreRange(sender_core, sender_core)})
+        receiver_range = ttnn.CoreRangeSet({ttnn.CoreRange(receiver_core, receiver_core)})
+
+        gcb_size = TILE_SIZE_BF16 * 2
+        gcb = ttnn.create_global_circular_buffer(device, [(sender_core, receiver_range)], gcb_size)
+
+        # Phase 0: read input_a, push to GlobalCB
+        op_a = build_globalcb_sender_op(tt_input_a, sender_range, gcb, num_tiles)
+        # Phase 1: read input_b, write to output_b (completely independent data)
+        op_b = build_identity_op(tt_input_b, tt_output_b, sender_range, num_tiles)
+        # Receiver: drain GlobalCB → output_recv
+        consumer = build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
+
+        # Fuse: Phase 0 pushes to GlobalCB, barrier, Phase 1 does identity copy
+        fused = Sequential(op_a, op_b).build(device)
+        outputs = composite.launch([fused, consumer])
+
+        # Receiver got input_a via GlobalCB from Phase 0
+        result_recv = ttnn.to_torch(outputs[1][0])
+        passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
+        assert passing_recv, f"Receiver PCC mismatch: {pcc_recv}"
+
+        # Phase 1 identity output matches input_b
+        result_b = ttnn.to_torch(tt_output_b)
+        passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
+        assert passing_b, f"Phase 1 PCC mismatch: {pcc_b}"
