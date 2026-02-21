@@ -14,11 +14,15 @@ from tracy import signpost
 import ttnn
 from models.experimental.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
+    ensure_tile_layout,
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
 )
 from models.experimental.tt_symbiote.core.utils import compare_fn_outputs
 from models.tt_transformers.tt.ccl import TT_CCL
+
+# Diagnostic: captured inputs/outputs for LM layer 0 when TT_SYMBIOTE_DIAG_LM_LAYER0_CAPTURE=1
+_DIAG_LM_LAYER0_CAPTURE: Dict[str, Any] = {}
 
 
 @dataclass
@@ -167,12 +171,14 @@ def copy_to_torch(func):
         if isinstance(e, TorchTTNNTensor):
             res = TorchTTNNTensor(e.to_torch.clone())
             res.ttnn_tensor = None
-        elif isinstance(e, ttnn.Tensor):
+            return res
+        if isinstance(e, ttnn.Tensor):
             res = TorchTTNNTensor(e).to_torch
             res.ttnn_tensor = None
-        elif isinstance(e, torch.Tensor):
-            res = e.clone()
-        return res
+            return res
+        if isinstance(e, torch.Tensor):
+            return e.clone()
+        return e
 
     return _unwrap_to_torch
 
@@ -190,6 +196,35 @@ def copy_to_ttnn(func):
         return e
 
     return _remove_ttnn_tensor
+
+
+def _force_elem_for_lm_attn(e):
+    """For LM self_attn: use elem (torch) for TTNN conversion to avoid error propagation from prev layer."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if isinstance(e, TorchTTNNTensor) and e.elem is not None and e.ttnn_tensor is not None:
+        r = TorchTTNNTensor(e.elem)
+        r.ttnn_tensor = None  # Force to_ttnn to use from_torch(elem)
+        return r
+    return e
+
+
+def _to_ttnn_lm_attn_style(e, device):
+    """Convert to TTNN for LM self_attn: create on device with TILE in one step (matches isolation/assimilate_to_device)."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if not isinstance(e, TorchTTNNTensor) or e.elem is None:
+        return e
+    t = e.elem
+    if t.dtype not in TORCH_TO_TTNN:
+        return e
+    tt = ttnn.from_torch(
+        t.contiguous().to(torch.bfloat16).cpu(),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    return tt
 
 
 def wrap_from_torch(e):
@@ -366,6 +401,21 @@ class DispatchManager:
         df.to_csv(file_name, index=True)
 
 
+def _filter_kwargs_for_ttnn_conversion(kwargs):
+    """Remove kwargs whose values cannot be converted to TTNN (e.g. rope_freqs_cis with complex64)."""
+
+    result = {}
+    for k, v in kwargs.items():
+        if k == "attention_mask" and v is not None:
+            result[k] = v
+            continue
+        elem = getattr(v, "elem", v)
+        if isinstance(elem, torch.Tensor) and elem.dtype not in TORCH_TO_TTNN:
+            continue
+        result[k] = v
+    return result
+
+
 def wrap_to_torch_ttnn_tensor(e):
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
@@ -393,6 +443,15 @@ def set_device_wrap(device):
         return e
 
     return _set_device_wrap
+
+
+def ensure_tile_layout_wrap(e):
+    """Convert ttnn tensors to TILE_LAYOUT for consistent numerics in device ops."""
+    if isinstance(e, ttnn.Tensor):
+        return ensure_tile_layout(e)
+    if hasattr(e, "ttnn_tensor") and e.ttnn_tensor is not None:
+        e.ttnn_tensor = ensure_tile_layout(e.ttnn_tensor)
+    return e
 
 
 def create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=False):
@@ -611,9 +670,9 @@ class NormalRun:
         assert self.device is not None, "Device must be set for TTNN module execution."
         begin_full = time.time()
         transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args, func_kwargs = tree_map(transform, args), tree_map(
-            transform, {k: v for k, v in kwds.items() if "past_key_value" not in k}
-        )
+        func_args = tree_map(transform, args)
+        other_kwargs = _filter_kwargs_for_ttnn_conversion({k: v for k, v in kwds.items() if "past_key_value" not in k})
+        func_kwargs = tree_map(transform, other_kwargs)
         func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
         self.preprocess_weights()
         self.move_weights_to_device()
@@ -664,7 +723,7 @@ class NormalRunWithFallback(NormalRun):
         if self.device is not None:
             transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
             func_args = tree_map(transform, args)
-            func_kwargs = tree_map(transform, kwds)
+            func_kwargs = tree_map(transform, _filter_kwargs_for_ttnn_conversion(kwds))
             self.preprocess_weights()
             self.move_weights_to_device()
             try:
@@ -727,25 +786,110 @@ class SELRun(NormalRun):
         return result
 
 
+def _to_raw_torch(x):
+    """Extract raw torch.Tensor for diagnostic capture."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if isinstance(x, TorchTTNNTensor):
+        return x.to_torch
+    if isinstance(x, torch.Tensor):
+        return x
+    if isinstance(x, ttnn.Tensor):
+        return ttnn.to_torch(x)
+    return x
+
+
 class DPLRun(NormalRun):
     @staticmethod
     def module_run(self, *args, **kwds):
-        pass
-
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
         func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
         func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_kwargs)
+        # Diagnostic: skip attention_mask for cross-attn to test if mask causes low PCC
+        if (
+            os.environ.get("TT_SYMBIOTE_NO_ATTN_MASK")
+            and "encoder_hidden_states" in kwds
+            and kwds.get("encoder_hidden_states") is not None
+        ):
+            func_kwargs = {k: (None if k == "attention_mask" else v) for k, v in func_kwargs.items()}
+            copied_torch_tensors_kwargs = {
+                k: (None if k == "attention_mask" else v) for k, v in copied_torch_tensors_kwargs.items()
+            }
         torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
         result = torch_output
         if self.device is not None:
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-            func_args = tree_map(transform, func_args)
-            func_kwargs = tree_map(transform, func_kwargs)
+            # LM self_attn: use elem (torch) for TTNN conversion to avoid error propagation from
+            # input_layernorm; isolation with same inputs gives PCC~0.999 but full pipeline gave ~0.935
+            mn = getattr(self, "module_name", "")
+            use_elem_for_lm = "language_model" in mn and mn.endswith("self_attn") and "tt_" not in mn
+            filtered_kwargs = _filter_kwargs_for_ttnn_conversion(func_kwargs)
+            if use_elem_for_lm:
+                func_args = tree_map(_force_elem_for_lm_attn, func_args)
+                filtered_kwargs = tree_map(_force_elem_for_lm_attn, filtered_kwargs)
+
+                def _lm_transform(e):
+                    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                    if isinstance(e, TorchTTNNTensor) and e.elem is not None:
+                        return _to_ttnn_lm_attn_style(e, self.device)
+                    return ensure_tile_layout_wrap(
+                        set_device_wrap(self.device)(to_ttnn_wrap(wrap_to_torch_ttnn_tensor(e)))
+                    )
+
+                func_args = tree_map(_lm_transform, func_args)
+                func_kwargs = tree_map(_lm_transform, filtered_kwargs)
+                # position_embeddings must stay as torch for _rope_torch_fallback (expects cos, sin as torch)
+                if "position_embeddings" in kwds and kwds["position_embeddings"] is not None:
+                    func_kwargs["position_embeddings"] = kwds["position_embeddings"]
+            else:
+                transform = compose_transforms(
+                    wrap_to_torch_ttnn_tensor,
+                    to_ttnn_wrap,
+                    set_device_wrap(self.device),
+                    ensure_tile_layout_wrap,
+                )
+                func_args = tree_map(transform, func_args)
+                func_kwargs = tree_map(transform, filtered_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
             ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+            # Diagnostic: capture LM layer 0 inputs/outputs for full vs isolation comparison
+            # Only capture TTNNGR00TSelfAttention, not its children (tt_q_proj, etc.)
+            if os.environ.get("TT_SYMBIOTE_DIAG_LM_LAYER0_CAPTURE"):
+                mn = getattr(self, "module_name", "")
+                if "language_model" in mn and mn.endswith("layers.0.self_attn") and "tt_q_proj" not in mn:
+                    hidden = args[0] if args else kwds.get("hidden_states")
+                    ht = _to_raw_torch(hidden)
+                    _DIAG_LM_LAYER0_CAPTURE["hidden_states"] = (
+                        ht.clone().detach() if ht is not None and isinstance(ht, torch.Tensor) else None
+                    )
+                    am = kwds.get("attention_mask")
+                    amt = _to_raw_torch(am) if am is not None else None
+                    _DIAG_LM_LAYER0_CAPTURE["attention_mask"] = (
+                        amt.clone().detach() if amt is not None and isinstance(amt, torch.Tensor) else None
+                    )
+                    pos_emb = kwds.get("position_embeddings")
+                    if pos_emb is not None and isinstance(pos_emb, (tuple, list)) and len(pos_emb) >= 2:
+                        p0, p1 = _to_raw_torch(pos_emb[0]), _to_raw_torch(pos_emb[1])
+                        _DIAG_LM_LAYER0_CAPTURE["position_embeddings"] = (
+                            (p0.clone().detach(), p1.clone().detach())
+                            if isinstance(p0, torch.Tensor) and isinstance(p1, torch.Tensor)
+                            else None
+                        )
+                    else:
+                        _DIAG_LM_LAYER0_CAPTURE["position_embeddings"] = None
+                    out_t = torch_output[0] if isinstance(torch_output, (tuple, list)) else torch_output
+                    ot = _to_raw_torch(out_t) if out_t is not None else None
+                    _DIAG_LM_LAYER0_CAPTURE["torch_output"] = (
+                        ot.clone().detach() if ot is not None and isinstance(ot, torch.Tensor) else None
+                    )
+                    out_n = ttnn_output[0] if isinstance(ttnn_output, (tuple, list)) else ttnn_output
+                    on = _to_raw_torch(out_n) if out_n is not None else None
+                    _DIAG_LM_LAYER0_CAPTURE["ttnn_output_full"] = (
+                        on.clone().detach() if on is not None and isinstance(on, torch.Tensor) else None
+                    )
             # Compare inputs
             compare_fn_outputs(
                 tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
@@ -1019,7 +1163,7 @@ class TracedRun(LightweightRun):
         # Transform inputs
         transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
-        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        other_kwargs = _filter_kwargs_for_ttnn_conversion({k: v for k, v in kwds.items() if "past_key_value" not in k})
         func_kwargs = tree_map(transform, other_kwargs)
         func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
 

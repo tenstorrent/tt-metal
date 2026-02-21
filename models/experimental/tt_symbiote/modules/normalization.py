@@ -105,12 +105,16 @@ class TTNNRMSNorm(TTNNModule):
         return new_layer_norm
 
     def preprocess_weights_impl(self):
-        """Preprocess RMSNorm weights for TTNN."""
+        """Preprocess RMSNorm weights for TTNN. Weight must match last dim; pad to 32-align with 1.0."""
         if self.torch_layer is None:
             self._fallback_torch_layer = DeepseekV2RMSNorm(hidden_size=1)
-        self.tt_weight = ttnn.from_torch(
-            self.torch_layer.weight.unsqueeze(0).expand(32, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
+        w = self.torch_layer.weight.clone()
+        D = w.shape[0]
+        pad_d = (32 - (D % 32)) % 32
+        if pad_d > 0:
+            w = torch.nn.functional.pad(w, (0, pad_d), value=1.0)
+        w = w.unsqueeze(0)
+        self.tt_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
@@ -119,7 +123,17 @@ class TTNNRMSNorm(TTNNModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.torch_layer.variance_epsilon)
+        cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+        x = ttnn.rms_norm(
+            x,
+            weight=self.tt_weight,
+            epsilon=self.torch_layer.variance_epsilon,
+            compute_kernel_config=cfg,
+        )
         return x
 
 

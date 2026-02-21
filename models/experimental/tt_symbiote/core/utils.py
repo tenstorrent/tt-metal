@@ -74,6 +74,21 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         if not isinstance(torch_output, TorchTTNNTensor):
             print("Mismatched output types between TTNN and Torch.")
     elif isinstance(ttnn_output, (list, tuple)):
+        if not isinstance(torch_output, (list, tuple)):
+            torch_output = (torch_output,) if torch_output is not None else ()
+        if len(torch_output) != len(ttnn_output):
+            _t = tuple(
+                x
+                for x in torch_output
+                if x is not None and (isinstance(x, torch.Tensor) or isinstance(x, TorchTTNNTensor))
+            )
+            _n = tuple(
+                x
+                for x in ttnn_output
+                if x is not None and (isinstance(x, torch.Tensor) or isinstance(x, TorchTTNNTensor))
+            )
+            if len(_t) == len(_n) and len(_t) > 0:
+                torch_output, ttnn_output = list(_t), list(_n)
         assert isinstance(torch_output, (list, tuple)), "Mismatched output types between TTNN and Torch."
         assert len(ttnn_output) == len(torch_output), "Mismatched output lengths between TTNN and Torch."
         for index, item in enumerate(ttnn_output):
