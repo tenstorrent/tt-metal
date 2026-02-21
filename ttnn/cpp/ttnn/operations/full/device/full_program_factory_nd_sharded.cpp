@@ -31,21 +31,18 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
     auto data_format = datatype_to_dataformat_converter(dtype);
     const auto& distribution_spec = output.buffer()->buffer_distribution_spec().value();
     uint32_t num_shards = distribution_spec.num_shards();
-    const auto& ordered_cores_with_data = distribution_spec.cores_with_data();
-    uint32_t num_compute_cores = ordered_cores_with_data.size();
+    std::vector<CoreCoord> ordered_cores_with_data;
+    uint32_t num_compute_cores = distribution_spec.cores_with_data().size();
 
-    std::vector<CoreCoord> worker_cores;
-    if (memory_config.is_dram()) {  // For DRAM-sharded tensors, we just take the first n cores to use as compute cores
-                                    // when sharded across n DRAM banks.
-        const auto* device = output.device();
-        const auto grid_size = device->compute_with_storage_grid_size();
-        for (uint32_t i = 0; i < num_compute_cores; i++) {
-            worker_cores.push_back(CoreCoord(i % grid_size.x, i / grid_size.x));
-        }
+    if (memory_config.is_dram()) {  // For DRAM sharded tensors, we take one core that is optimal for each DRAM bank
+                                    // with a shard to use as our compute cores.
+        auto all_dram_workers =
+            output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+        ordered_cores_with_data.assign(all_dram_workers.begin(), all_dram_workers.begin() + num_compute_cores);
+    } else {
+        ordered_cores_with_data = distribution_spec.cores_with_data();
     }
-    const auto& compute_core_range = memory_config.is_dram()
-                                         ? CoreRangeSet(tt::stl::Span<const CoreCoord>(worker_cores))
-                                         : CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
 
@@ -68,14 +65,13 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
         compute_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
-    const auto& runtime_cores = memory_config.is_dram() ? worker_cores : ordered_cores_with_data;
     uint32_t start_shard_id = 0;
-    for (auto core : runtime_cores) {
+    for (auto core : ordered_cores_with_data) {
         SetRuntimeArgs(program, writer_id, core, {output.buffer()->address(), u.u32, start_shard_id});
         start_shard_id++;
     }
 
-    return {std::move(program), {writer_id, runtime_cores}};
+    return {std::move(program), {writer_id, ordered_cores_with_data}};
 }
 
 void FullNDShardedProgramFactory::override_runtime_arguments(

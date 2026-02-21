@@ -46,14 +46,14 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
     std::vector<CoreCoord> ordered_cores_with_data;
     CoreRangeSet compute_core_range;
     std::vector<CoreCoord> runtime_cores;
-    if (memory_config.is_dram()) {  // For DRAM-sharded tensors, we just take the first n cores to use as compute cores
-                                    // when sharded across n DRAM banks.
-        const auto* device = output.device();
-        const auto grid_size = device->compute_with_storage_grid_size();
-        num_compute_cores = std::min(num_compute_cores, num_shards);
-        for (uint32_t i = 0; i < num_compute_cores; i++) {
-            ordered_cores_with_data.push_back(CoreCoord(i % grid_size.x, i / grid_size.x));
-        }
+    if (memory_config.is_dram()) {  // For DRAM sharded tensors, we take one core that is optimal for each DRAM bank
+                                    // with a shard to use as our compute cores.
+        num_compute_cores =
+            std::min(num_compute_cores, num_shards);  // If the number of banks to shard over is more than the number
+                                                      // of. shards, only num_shards DRAM banks will have data.
+        auto all_dram_workers =
+            output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+        ordered_cores_with_data.assign(all_dram_workers.begin(), all_dram_workers.begin() + num_compute_cores);
         compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
         runtime_cores = ordered_cores_with_data;
     } else {
