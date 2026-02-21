@@ -1387,7 +1387,7 @@ class BlitzDecodeWeights:
         gate_proj_weights: torch.Tensor,
         up_proj_weights: torch.Tensor,
         down_proj_weights: torch.Tensor,
-    ) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor | None]:
+    ) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor]:
         """Create MLP shared-expert weights (SRAM) from full projection tensors.
 
         The full MLP projections contain ``9`` experts of width

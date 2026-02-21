@@ -76,6 +76,16 @@ class DeepSeekV3DenseLayerWeights:
     kv_b1_proj: OverlappedTensor
     kv_b2_proj: OverlappedTensor
 
+    # From get_tt_mlp_shared_expert_weights
+    shared_gate_proj: OverlappedTensor
+    shared_up_proj: OverlappedTensor
+    shared_down_proj: ttnn.Tensor
+
+    # From get_tt_mlp_routed_expert_weights (1 DRAM expert per device)
+    routed_gate_proj: ttnn.Tensor
+    routed_up_proj: ttnn.Tensor
+    routed_down_proj: ttnn.Tensor
+
 
 @dataclass
 class DeepSeekV3MoELayerWeights:
@@ -101,9 +111,15 @@ class DeepSeekV3MoELayerWeights:
     kv_b1_proj: OverlappedTensor
     kv_b2_proj: OverlappedTensor
 
-    # From get_tt_gate_up_proj_weights (shared expert)
+    # From get_tt_moe_shared_expert_weights (replaces get_tt_gate_up_proj_weights)
     shared_gate_proj: OverlappedTensor
     shared_up_proj: OverlappedTensor
+    shared_down_proj: ttnn.Tensor
+
+    # From get_tt_moe_routed_expert_weights (32 DRAM experts)
+    routed_gate_proj: list[ttnn.Tensor]
+    routed_up_proj: list[ttnn.Tensor]
+    routed_down_proj: list[ttnn.Tensor]
 
 
 DeepSeekV3LayerWeights = DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights
@@ -118,6 +134,8 @@ class DeepSeekV3Weights:
 
 # Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
 _NUM_HEADS = 64
+# MoE routed experts (design doc §12).
+NUM_ROUTED_EXPERTS = 32
 _QK_NOPE_HEAD_DIM = 128
 _V_HEAD_DIM = 128
 _KV_LORA_RANK = 512
@@ -210,10 +228,20 @@ def prepare_dense_decoder_layer_weights(
     q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a)
     kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2)
 
-    # TODO: replace with actual gate_mm when available.
+    # Dense layers have no gate_mm; pass dummy for o_proj/norms fusion.
     gate_mm_dummy = torch.zeros(7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device)
     o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm)
     o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
+
+    mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
+    mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
+    mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
+    shared_gate_proj, shared_up_proj, shared_down_proj = bdw.get_tt_mlp_shared_expert_weights(
+        mlp_gate, mlp_up, mlp_down
+    )
+    routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_mlp_routed_expert_weights(
+        mlp_gate, mlp_up, mlp_down
+    )
 
     return DeepSeekV3DenseLayerWeights(
         q_a_proj=q_a_proj,
@@ -226,6 +254,12 @@ def prepare_dense_decoder_layer_weights(
         ffn_norm=ffn_norm_ot,
         kv_b1_proj=kv_b1_proj,
         kv_b2_proj=kv_b2_proj,
+        shared_gate_proj=shared_gate_proj,
+        shared_up_proj=shared_up_proj,
+        shared_down_proj=shared_down_proj,
+        routed_gate_proj=routed_gate_proj,
+        routed_up_proj=routed_up_proj,
+        routed_down_proj=routed_down_proj,
     )
 
 
@@ -244,10 +278,27 @@ def prepare_moe_decoder_layer_weights(
     gate_mm = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
     shared_gate = state_dict[_key(layer_idx, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
     shared_up = state_dict[_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
+    shared_down = state_dict[_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
 
     o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm)
     o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
-    shared_gate_proj, shared_up_proj = bdw.get_tt_gate_up_proj_weights(shared_gate, shared_up)
+    shared_gate_proj, shared_up_proj, shared_down_proj = bdw.get_tt_moe_shared_expert_weights(
+        shared_gate, shared_up, shared_down
+    )
+
+    gate_list = []
+    up_list = []
+    down_list = []
+    for e in range(NUM_ROUTED_EXPERTS):
+        gate_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight")].T.contiguous())
+        up_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.up_proj.weight")].T.contiguous())
+        down_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.down_proj.weight")].T.contiguous())
+    gate_stacked = torch.stack(gate_list, dim=0)
+    up_stacked = torch.stack(up_list, dim=0)
+    down_stacked = torch.stack(down_list, dim=0)
+    routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
+        gate_stacked, up_stacked, down_stacked
+    )
 
     return DeepSeekV3MoELayerWeights(
         q_a_proj=q_a_proj,
@@ -263,6 +314,10 @@ def prepare_moe_decoder_layer_weights(
         kv_b2_proj=kv_b2_proj,
         shared_gate_proj=shared_gate_proj,
         shared_up_proj=shared_up_proj,
+        shared_down_proj=shared_down_proj,
+        routed_gate_proj=routed_gate_proj,
+        routed_up_proj=routed_up_proj,
+        routed_down_proj=routed_down_proj,
     )
 
 
@@ -299,6 +354,14 @@ def prepare_weights(
     return DeepSeekV3Weights(layers=layers)
 
 
+def _deallocate_tt_tensor(t: ttnn.Tensor, seen: set[int]) -> None:
+    """Deallocate a single ttnn.Tensor if not already deallocated (by id)."""
+    fid = id(t)
+    if fid not in seen:
+        seen.add(fid)
+        ttnn.deallocate(t, force=True)
+
+
 def deallocate_weights(weights: DeepSeekV3Weights) -> None:
     """Release device memory for all fused tensors in prepared weights.
 
@@ -312,6 +375,20 @@ def deallocate_weights(weights: DeepSeekV3Weights) -> None:
             if fid not in seen:
                 seen.add(fid)
                 ttnn.deallocate(ot.fused_tensor, force=True)
+        if hasattr(layer, "shared_down_proj"):
+            _deallocate_tt_tensor(getattr(layer, "shared_down_proj"), seen)
+        if isinstance(layer, DeepSeekV3MoELayerWeights):
+            for t in layer.routed_gate_proj:
+                _deallocate_tt_tensor(t, seen)
+            for t in layer.routed_up_proj:
+                _deallocate_tt_tensor(t, seen)
+            for t in layer.routed_down_proj:
+                _deallocate_tt_tensor(t, seen)
+        else:
+            assert isinstance(layer, DeepSeekV3DenseLayerWeights)
+            _deallocate_tt_tensor(layer.routed_gate_proj, seen)
+            _deallocate_tt_tensor(layer.routed_up_proj, seen)
+            _deallocate_tt_tensor(layer.routed_down_proj, seen)
 
 
 def _core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:
@@ -395,8 +472,6 @@ def save_layer(
     Creates one directory with manifest.json and per-fusion-group .tensorbin files.
     Caller must provide hf_model_name and hf_state_dict_name for the manifest.
     """
-    logger.info(f"Saving layer {layer_idx} to {path}...")
-
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     layer_dir = path / f"layer_{layer_idx:03d}"
@@ -413,6 +488,7 @@ def save_layer(
             by_fused[fid] = []
         by_fused[fid].append((name, ot))
 
+    save_layer_t0 = time.perf_counter()
     logger.info(f"Creating fusion groups for layer {layer_idx}...")
     fusion_groups: dict[str, dict] = {}
     for fid, group_fields in by_fused.items():
@@ -421,9 +497,11 @@ def save_layer(
             raise KeyError(f"Unknown field for fusion group: {group_fields[0][0]}")
         tensorbin_name = f"{group_name}.tensorbin"
 
-        logger.info(f"Saving {tensorbin_name}...")
-        ttnn.dump_tensor(layer_dir / tensorbin_name, group_fields[0][1].fused_tensor)
-        logger.info(f"Saved {tensorbin_name} to {layer_dir / tensorbin_name}...")
+        out_path = layer_dir / tensorbin_name
+        t0 = time.perf_counter()
+        ttnn.dump_tensor(out_path, group_fields[0][1].fused_tensor)
+        elapsed = time.perf_counter() - t0
+        logger.info(f"  dump_tensor {tensorbin_name}: {elapsed:.3f}s")
 
         fusion_groups[group_name] = {
             "tensorbin": tensorbin_name,
@@ -432,6 +510,44 @@ def save_layer(
     logger.info(f"Created fusion groups for layer {layer_idx}...")
 
     is_moe = isinstance(layer, DeepSeekV3MoELayerWeights)
+    standalone_tensors: dict[str, str] = {}
+
+    if hasattr(layer, "shared_down_proj"):
+        name = "shared_down_proj.tensorbin"
+        t0 = time.perf_counter()
+        ttnn.dump_tensor(layer_dir / name, layer.shared_down_proj)
+        logger.info(f"  dump_tensor {name}: {time.perf_counter() - t0:.3f}s")
+        standalone_tensors["shared_down_proj"] = name
+
+    if is_moe:
+        experts_dir = layer_dir / "experts"
+        experts_dir.mkdir(parents=True, exist_ok=True)
+        experts_t0 = time.perf_counter()
+        for e in range(NUM_ROUTED_EXPERTS):
+            expert_dir = experts_dir / f"e_{e:03d}"
+            expert_dir.mkdir(parents=True, exist_ok=True)
+            t0 = time.perf_counter()
+            ttnn.dump_tensor(expert_dir / "gate_proj.tensorbin", layer.routed_gate_proj[e])
+            ttnn.dump_tensor(expert_dir / "up_proj.tensorbin", layer.routed_up_proj[e])
+            ttnn.dump_tensor(expert_dir / "down_proj.tensorbin", layer.routed_down_proj[e])
+            elapsed = time.perf_counter() - t0
+            if e % 8 == 0 or e == NUM_ROUTED_EXPERTS - 1:
+                logger.info(f"  dump_tensor expert e_{e:03d} (gate+up+down): {elapsed:.3f}s")
+        logger.info(f"  dump_tensor all {NUM_ROUTED_EXPERTS} experts: {time.perf_counter() - experts_t0:.3f}s")
+    else:
+        for fname, attr in [
+            ("routed_gate_proj.tensorbin", "routed_gate_proj"),
+            ("routed_up_proj.tensorbin", "routed_up_proj"),
+            ("routed_down_proj.tensorbin", "routed_down_proj"),
+        ]:
+            t0 = time.perf_counter()
+            ttnn.dump_tensor(layer_dir / fname, getattr(layer, attr))
+            logger.info(f"  dump_tensor {fname}: {time.perf_counter() - t0:.3f}s")
+        standalone_tensors["routed_gate_proj"] = "routed_gate_proj.tensorbin"
+        standalone_tensors["routed_up_proj"] = "routed_up_proj.tensorbin"
+        standalone_tensors["routed_down_proj"] = "routed_down_proj.tensorbin"
+
+    logger.info(f"Saving manifest for layer {layer_idx}...")
     manifest = {
         "version": _MANIFEST_VERSION,
         "created_time": created,
@@ -441,9 +557,15 @@ def save_layer(
         "layer_idx": layer_idx,
         "layer_type": "moe" if is_moe else "dense",
         "fusion_groups": fusion_groups,
+        "standalone_tensors": standalone_tensors,
     }
+    if is_moe:
+        manifest["routed_experts"] = {"num_experts": NUM_ROUTED_EXPERTS}
+    else:
+        manifest["routed_mlp"] = True
     with open(layer_dir / "manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
+    logger.info(f"  save_layer total: {time.perf_counter() - save_layer_t0:.3f}s")
 
 
 def load_layer(
@@ -487,6 +609,17 @@ def load_layer(
         fused_kv = ttnn.load_tensor(layer_dir / kv_grp["tensorbin"], device=device)
         kv_b1_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b1_proj"])
         kv_b2_proj = _overlapped_tensor_from_dict(fused_kv, kv_grp["fields"]["kv_b2_proj"])
+
+        gu_grp = fusion_groups["gate_up"]
+        fused_gu = ttnn.load_tensor(layer_dir / gu_grp["tensorbin"], device=device)
+        shared_gate_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_gate_proj"])
+        shared_up_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_up_proj"])
+
+        standalone = manifest.get("standalone_tensors", {})
+        shared_down_proj = ttnn.load_tensor(layer_dir / standalone["shared_down_proj"], device=device)
+        routed_gate_proj = ttnn.load_tensor(layer_dir / standalone["routed_gate_proj"], device=device)
+        routed_up_proj = ttnn.load_tensor(layer_dir / standalone["routed_up_proj"], device=device)
+        routed_down_proj = ttnn.load_tensor(layer_dir / standalone["routed_down_proj"], device=device)
         logger.info(f"Loaded all dense tensors for layer {layer_idx}...")
 
         return DeepSeekV3DenseLayerWeights(
@@ -500,6 +633,12 @@ def load_layer(
             ffn_norm=ffn_norm,
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
+            shared_gate_proj=shared_gate_proj,
+            shared_up_proj=shared_up_proj,
+            shared_down_proj=shared_down_proj,
+            routed_gate_proj=routed_gate_proj,
+            routed_up_proj=routed_up_proj,
+            routed_down_proj=routed_down_proj,
         )
     else:
         logger.info(f"Loading all dense tensors for layer {layer_idx}...")
@@ -527,6 +666,19 @@ def load_layer(
         fused_gu = ttnn.load_tensor(layer_dir / gu_grp["tensorbin"], device=device)
         shared_gate_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_gate_proj"])
         shared_up_proj = _overlapped_tensor_from_dict(fused_gu, gu_grp["fields"]["shared_up_proj"])
+
+        standalone = manifest.get("standalone_tensors", {})
+        shared_down_proj = ttnn.load_tensor(layer_dir / standalone["shared_down_proj"], device=device)
+        num_experts = manifest.get("routed_experts", {}).get("num_experts", NUM_ROUTED_EXPERTS)
+        experts_dir = layer_dir / "experts"
+        routed_gate_proj = []
+        routed_up_proj = []
+        routed_down_proj = []
+        for e in range(num_experts):
+            expert_dir = experts_dir / f"e_{e:03d}"
+            routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
+            routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
+            routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
         logger.info(f"Loaded all MoE tensors for layer {layer_idx}...")
 
         return DeepSeekV3MoELayerWeights(
@@ -543,6 +695,10 @@ def load_layer(
             kv_b2_proj=kv_b2_proj,
             shared_gate_proj=shared_gate_proj,
             shared_up_proj=shared_up_proj,
+            shared_down_proj=shared_down_proj,
+            routed_gate_proj=routed_gate_proj,
+            routed_up_proj=routed_up_proj,
+            routed_down_proj=routed_down_proj,
         )
 
 
