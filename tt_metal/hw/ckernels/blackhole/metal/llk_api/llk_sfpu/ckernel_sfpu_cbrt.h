@@ -15,8 +15,9 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cube_root() {
-    sfpi::vFloat f32_third_128 = 0x1.555556p-9f;
-    sfpi::vInt magic = 0x548c2b4b;
+    sfpi::vFloat third_128 = 0x1.555556p-9f;
+    // Magic constant from paper, with MSB set to 1.
+    sfpi::vInt magic = 0xd48c2b4b;
     sfpi::vFloat rounding_bias = 8388608.0f;
 
 #pragma GCC unroll 8
@@ -45,31 +46,34 @@ inline void calculate_cube_root() {
         sfpi::vFloat f = sfpi::int32_to_float(i, 0);
 
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        f.get() =
-            __builtin_rvtt_sfpmad(f.get(), f32_third_128.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        f.get() = __builtin_rvtt_sfpmad(f.get(), third_128.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-        i = sfpi::exman9(f);
+        // f has exponent 23; i<<7 will have two high bits 10; use modified
+        // magic constant from paper with MSB=1 to cancel the MSB=1 of i<<7.
+        i = sfpi::reinterpret<sfpi::vInt>(f);
         i = magic - (i << 7);
 
         sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(i);
-        sfpi::vFloat c = (x * y) * (y * y);
-
-        y = y * (c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0);
-
-        // N-R
-        {
-            sfpi::vFloat d = x * (y * y);
-            sfpi::vFloat c = d * y + sfpi::vConstNeg1;
-            sfpi::vFloat f32_third = sfpi::addexp(f32_third_128, 7);
-            sfpi::vFloat t = c * f32_third + sfpi::vConstNeg1;
-            y = d * (t * t);
-        }
-
-        y = sfpi::setsgn(y, a);
 
         if constexpr (is_fp32_dest_acc_en) {
+            sfpi::vFloat c = (x * y) * (y * y);
+            y = y * (c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0);
+
+            sfpi::vFloat d = x * (y * y);
+            c = d * y + sfpi::vConstNeg1;
+            sfpi::vFloat third = sfpi::addexp(third_128, 7);
+            sfpi::vFloat t = c * third + sfpi::vConstNeg1;
+            d = sfpi::setsgn(d, a);
+            y = d * (t * t);
+
             sfpi::dst_reg[0] = y;
         } else {
+            sfpi::vFloat d = x * (y * y);
+            sfpi::vFloat c = d * y;
+            sfpi::vFloat t = c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0;
+            d = sfpi::setsgn(d, a);
+            y = d * (t * t);
+
             sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
         }
         sfpi::dst_reg++;
