@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+import socket
 
 from ttnn.distributed.ttrun import (
     RankBinding,
@@ -102,3 +103,66 @@ def test_mpi_export_uses_name_only_for_complex_dispatch_timeout_command(monkeypa
     assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in exported_tokens
     assert not any(token.startswith("TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=") for token in exported_tokens)
     assert "TT_VISIBLE_DEVICES=0,1" in exported_tokens
+
+
+def test_rank_environment_scopes_cache_and_logs_path_per_rank(monkeypatch, tmp_path):
+    monkeypatch.setenv("TT_METAL_CACHE", "/nfs/shared/tt-metal-cache")
+    monkeypatch.setenv("TT_METAL_LOGS_PATH", "/nfs/shared/tt-metal-logs")
+
+    binding = RankBinding(rank=3, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+    rank_suffix = f"{socket.gethostname()}_rank_3"
+
+    assert env["TT_METAL_CACHE"] == f"/nfs/shared/tt-metal-cache/{rank_suffix}"
+    assert env["TT_METAL_LOGS_PATH"] == f"/nfs/shared/tt-metal-logs/{rank_suffix}"
+
+
+def test_rank_environment_does_not_double_append_rank_scoped_suffix(monkeypatch, tmp_path):
+    rank_suffix = f"{socket.gethostname()}_rank_2"
+    monkeypatch.setenv("TT_METAL_CACHE", f"/nfs/shared/tt-metal-cache/{rank_suffix}")
+    monkeypatch.setenv("TT_METAL_LOGS_PATH", f"/nfs/shared/tt-metal-logs/{rank_suffix}")
+
+    binding = RankBinding(rank=2, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["TT_METAL_CACHE"] == f"/nfs/shared/tt-metal-cache/{rank_suffix}"
+    assert env["TT_METAL_LOGS_PATH"] == f"/nfs/shared/tt-metal-logs/{rank_suffix}"
+
+
+def test_rank_environment_preserves_explicit_global_env_rank_scoped_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("TT_METAL_CACHE", "/nfs/shared/tt-metal-cache")
+    monkeypatch.setenv("TT_METAL_LOGS_PATH", "/nfs/shared/tt-metal-logs")
+
+    binding = RankBinding(rank=4, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(
+        tmp_path,
+        binding,
+        global_env={"TT_METAL_CACHE": "/custom/global/cache", "TT_METAL_LOGS_PATH": "/custom/global/logs"},
+    )
+
+    env = get_rank_environment(binding, config)
+
+    assert env["TT_METAL_CACHE"] == "/custom/global/cache"
+    assert env["TT_METAL_LOGS_PATH"] == "/custom/global/logs"
+
+
+def test_rank_environment_preserves_explicit_rank_override_rank_scoped_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("TT_METAL_CACHE", "/nfs/shared/tt-metal-cache")
+    monkeypatch.setenv("TT_METAL_LOGS_PATH", "/nfs/shared/tt-metal-logs")
+
+    binding = RankBinding(
+        rank=5,
+        mesh_id=0,
+        mesh_host_rank=0,
+        env_overrides={"TT_METAL_CACHE": "/custom/rank/cache", "TT_METAL_LOGS_PATH": "/custom/rank/logs"},
+    )
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["TT_METAL_CACHE"] == "/custom/rank/cache"
+    assert env["TT_METAL_LOGS_PATH"] == "/custom/rank/logs"

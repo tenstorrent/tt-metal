@@ -6,6 +6,7 @@
 
 import os
 import shlex
+import socket
 import shutil
 import subprocess
 import sys
@@ -328,6 +329,16 @@ FORCE_NAME_ONLY_MPI_EXPORT_VARS = frozenset(
 
 MPI_ENV_VALUE_SPECIAL_CHARS = frozenset({" ", "\t", "\n", "\r", '"', "'", "`", "$", "|", "&", ";", "<", ">", "(", ")"})
 
+# Environment variables that should be isolated per MPI rank by appending
+# `<hostname>_rank_<rank>`.
+# This reduces shared-path contention (for example, NFS stale handles in multi-host jobs).
+RANK_SCOPED_PATH_ENV_VARS = frozenset(
+    {
+        "TT_METAL_CACHE",
+        "TT_METAL_LOGS_PATH",
+    }
+)
+
 
 def has_auto_passthrough_prefix(key: str) -> bool:
     """Return True when key starts with any configured pass-through prefix."""
@@ -415,6 +426,29 @@ def classify_mpi_env_exports(
     return direct_exports, name_only_exports, missing_launcher_keys
 
 
+def apply_rank_scoped_paths(env: Dict[str, str], rank: int, explicit_keys: set[str] | None = None) -> None:
+    """Scope selected filesystem paths per rank (in-place).
+
+    For each key in RANK_SCOPED_PATH_ENV_VARS, append `<hostname>_rank_<rank>`
+    unless already present.
+    Keys listed in explicit_keys are left unchanged so user-specified YAML overrides
+    preserve exact path semantics.
+    """
+    explicit_keys = explicit_keys or set()
+    hostname = socket.gethostname()
+    rank_dirname = f"{hostname}_rank_{rank}"
+    for key in RANK_SCOPED_PATH_ENV_VARS:
+        if key in explicit_keys:
+            continue
+        value = env.get(key)
+        if not value:
+            continue
+        scoped_path = Path(value)
+        if scoped_path.name == rank_dirname:
+            continue
+        env[key] = str(scoped_path / rank_dirname)
+
+
 def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
 
@@ -493,6 +527,11 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     env.update({k: os.path.expandvars(v) for k, v in config.global_env.items()})
     # Rank-specific overrides last (higher precedence)
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
+    explicit_rank_scoped_keys = {
+        key for key in RANK_SCOPED_PATH_ENV_VARS if key in config.global_env or key in binding.env_overrides
+    }
+    # Isolate cache/log paths per rank to avoid shared-path collisions.
+    apply_rank_scoped_paths(env, binding.rank, explicit_keys=explicit_rank_scoped_keys)
 
     return env
 
