@@ -27,8 +27,8 @@ inline void calculate_cube_root() {
 
         sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(x);
 
-        // The original paper wants i = `0x54a223b4 - i/3`.
-        // Since computing `i/3` is expensive, we note the following:
+        // The original paper wants i = 0x54a223b4 - i/3.
+        // Since computing i/3 is expensive, we note the following:
         // 1. x is positive, hence the MSB of i is always zero and i<2^31.
         // 2. dividing by 3 loses another bit, so the 2 high bits of i/3 are zero and i/3<2^30.
         // We would like to end up with a value < 2^23 so that we can use the
@@ -40,8 +40,8 @@ inline void calculate_cube_root() {
         // 1. f = (float)i; this is inexact for values larger than 2^24.
         // 2. Use a single SFPMAD to compute (f/3.0)/128.0, which is guaranteed to be smaller than 2^23,
         //    and add 2^23, shifting result into mantissa bits (rounding to nearest even).
-        // 3. Now we extract the mantissa bits, and left-shift by 7 to undo division by 128.0.
-        // This gives us approximately `i/3` but with low 7 bits all zero.
+        // 3. Left-shift by 7 to undo division by 128.0.
+        // This gives us approximately i/3 but with low 7 bits all zero, and high 2 bits 10.
 
         sfpi::vFloat f = sfpi::int32_to_float(i, 0);
 
