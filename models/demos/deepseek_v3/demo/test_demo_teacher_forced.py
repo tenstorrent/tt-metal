@@ -200,19 +200,21 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
         f"First 20 got     : {tt_generated_tokens[:20]}"
     )
 
+    # Check cross-batch divergence but defer xfail until after accuracy metrics are computed
+    batch_divergence_detail = None
     expected_tokens = results["generations"][0]["tokens"]
     for idx, gen in enumerate(results["generations"][1:], start=1):
         tokens = gen["tokens"]
         if tokens != expected_tokens:
             first_diff = next((i for i, (a, b) in enumerate(zip(expected_tokens, tokens)) if a != b), None)
             if first_diff is None:
-                detail = f"length mismatch: user0={len(expected_tokens)}, user{idx}={len(tokens)}"
+                batch_divergence_detail = f"length mismatch: user0={len(expected_tokens)}, user{idx}={len(tokens)}"
             else:
-                detail = (
+                batch_divergence_detail = (
                     f"first mismatch at token {first_diff}: "
                     f"user0={expected_tokens[first_diff]}, user{idx}={tokens[first_diff]}"
                 )
-            pytest.xfail(f"User outputs diverged across batch (issue #35509). {detail}")
+            break
 
     if "predicted_tokens" in first_gen:
         assert len(first_gen["predicted_tokens"]) == len(
@@ -342,3 +344,6 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
         f"{min_expected_top5:.2f}. Generated {len(tt_generated_tokens)} tokens, "
         f"reference has {ref_compared} generated tokens."
     )
+
+    if batch_divergence_detail is not None:
+        pytest.xfail(f"User outputs diverged across batch (issue #35509). {batch_divergence_detail}")
