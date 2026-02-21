@@ -177,7 +177,7 @@ class Generator(WarmupForwardMixin):
 
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
-        output_toks = torch.zeros(batch, 1, 1)
+        output_toks = torch.zeros(batch)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
@@ -282,7 +282,7 @@ class Generator(WarmupForwardMixin):
                 if use_batched_prefill:
                     # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
                     tt_tok_tensor = torch.stack(tt_tok, dim=0)
-                    output_toks = tt_tok_tensor[empty_slots].reshape(batch, 1, 1)
+                    output_toks = tt_tok_tensor[empty_slots].reshape(batch)
                 else:
                     output_toks[id] = tt_tok
 
@@ -367,14 +367,10 @@ class Generator(WarmupForwardMixin):
 
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
-            output_toks = sampled_tensor[empty_slots]  # Shape: [batch]
+            output_toks = sampled_tensor[empty_slots]
 
             if tt_log_probs is not None:
                 tt_lp = tt_log_probs
-                if isinstance(tt_lp, tuple):
-                    tt_lp = tt_lp[0]
-                if isinstance(tt_lp, list):
-                    tt_lp = tt_lp[0]
                 log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
                 prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
