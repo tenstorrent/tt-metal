@@ -243,8 +243,22 @@ def run(
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
 
-        # V2 format: use input_a_shape directly
-        input_shape = input_a_shape
+        # V2 format: parse input_a_shape if it's a string (from JSON)
+        if isinstance(input_a_shape, str):
+            # Shape comes as string like "(1, 1, 128, 2048)"
+            import ast
+
+            input_shape = ast.literal_eval(input_a_shape)
+        elif isinstance(input_a_shape, dict):
+            # Shape might come as dict in some formats - extract the actual shape
+            input_shape = input_a_shape.get("shape", input_a_shape.get("data", input_a_shape))
+            if isinstance(input_shape, str):
+                import ast
+
+                input_shape = ast.literal_eval(input_shape)
+        else:
+            input_shape = input_a_shape
+
         input_dtype = input_a_dtype
         layout = input_a_layout
         input_memory_config = input_a_memory_config
