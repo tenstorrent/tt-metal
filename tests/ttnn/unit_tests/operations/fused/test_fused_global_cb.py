@@ -20,7 +20,7 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
-from models.experimental.ops.descriptors.fusion import Sequential
+from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 from models.experimental.ops.descriptors import composite
 
 
@@ -462,9 +462,10 @@ class TestFusedGlobalCB:
         sender = build_direct_sender_op(tt_input, sender_range, gcb, num_tiles)
         consumer = build_globalcb_consumer_op(tt_output, receiver_range, gcb, num_tiles)
 
-        outputs = composite.launch([sender, consumer])
+        fused = Parallel(sender, consumer).build(device)
+        composite.launch([fused])
 
-        result = ttnn.to_torch(outputs[1][0])
+        result = ttnn.to_torch(tt_output)
         passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
         assert passing, f"PCC mismatch: {pcc}"
 
@@ -522,14 +523,12 @@ class TestFusedGlobalCB:
         op_b = build_globalcb_sender_op(tt_intermediate, sender_range, gcb, num_tiles)
         consumer = build_globalcb_consumer_op(tt_output, receiver_range, gcb, num_tiles)
 
-        # Fuse OpA + OpB on sender cores
-        fused = Sequential(op_a, op_b).build(device)
-
-        # Run fused + consumer together
-        outputs = composite.launch([fused, consumer])
+        # Fuse sender chain + consumer into one program
+        fused = Parallel(Sequential(op_a, op_b), consumer).build(device)
+        composite.launch([fused])
 
         # Verify: receiver output should match original input
-        result = ttnn.to_torch(outputs[1][0])
+        result = ttnn.to_torch(tt_output)
         passing, pcc = comp_pcc(torch_input, result, pcc=0.999)
         assert passing, f"PCC mismatch: {pcc}"
 
@@ -599,12 +598,12 @@ class TestFusedGlobalCB:
         # Receiver: drain GlobalCB → output_recv
         consumer = build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
-        # Fuse: Phase 0 pushes to GlobalCB, barrier, Phase 1 does identity copy
-        fused = Sequential(op_a, op_b).build(device)
-        outputs = composite.launch([fused, consumer])
+        # Fuse everything: Sequential(sender→identity) || consumer
+        fused = Parallel(Sequential(op_a, op_b), consumer).build(device)
+        composite.launch([fused])
 
         # Receiver got input_a via GlobalCB from Phase 0
-        result_recv = ttnn.to_torch(outputs[1][0])
+        result_recv = ttnn.to_torch(tt_output_recv)
         passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
         assert passing_recv, f"Receiver PCC mismatch: {pcc_recv}"
 
