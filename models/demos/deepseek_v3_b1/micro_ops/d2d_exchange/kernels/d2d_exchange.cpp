@@ -1,25 +1,25 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include <cstddef>
 #include <cstdint>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "pcie_noc_utils.h"
 #include "api/debug/dprint.h"
 
-// Get this value from MeshSocket struct on host
-constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
-constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);
-constexpr uint32_t page_size = get_compile_time_arg_val(2);
-constexpr bool pull_from_host = get_compile_time_arg_val(3);
-constexpr bool loopback_mode = get_compile_time_arg_val(4);
-constexpr uint32_t downstream_interface_index = get_compile_time_arg_val(5);
-constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(6);
-constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
-constexpr uint32_t num_whole_fabric_packets_link_0 = get_compile_time_arg_val(8);
-constexpr uint32_t num_whole_fabric_packets_link_1 = get_compile_time_arg_val(9);
-constexpr uint32_t partial_packet_size = get_compile_time_arg_val(10);
-constexpr bool use_fabric = get_compile_time_arg_val(11);
+constexpr uint32_t sender_socket_config_addr = get_compile_time_arg_val(0);
+constexpr uint32_t receiver_socket_config_addr = get_compile_time_arg_val(1);
+constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(2);
+constexpr uint32_t page_size = get_compile_time_arg_val(3);
+constexpr uint32_t num_whole_fabric_packets_link_0 = get_compile_time_arg_val(4);
+constexpr uint32_t num_whole_fabric_packets_link_1 = get_compile_time_arg_val(5);
+constexpr uint32_t whole_packet_size = get_compile_time_arg_val(6);
+constexpr uint32_t partial_packet_size = get_compile_time_arg_val(7);
+constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(8);
+constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(9);
+constexpr bool use_fabric_on_sender = get_compile_time_arg_val(10);
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -66,7 +66,7 @@ FORCE_INLINE void send_pages_over_socket(
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t l1_read_addr,
     uint64_t dst_addr) {
-    if constexpr (use_fabric) {
+    if constexpr (use_fabric_on_sender) {
         for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection,
@@ -107,42 +107,50 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
-    DPRINT << "Starting h2d receiver kernel" << ENDL();
+    // Build Fabric Connections
     size_t rt_args_idx = 0;
-
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
-    if constexpr (use_fabric) {
+    tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
+
+    if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
         downstream_fabric_connection_2 =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     }
-
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
-    SocketSenderInterface sender_socket = {};
-
-    sender_downstream_encoding downstream_enc;
-
-    if constexpr (!loopback_mode) {
-        sender_socket = create_sender_socket_interface(downstream_interface_index);
-        set_sender_socket_page_size(sender_socket, page_size);
-        downstream_enc = get_downstream_encoding(sender_socket, 0);
+    if constexpr (use_fabric_on_receiver) {
+        upstream_fabric_connection =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     }
+
+    SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(receiver_socket_config_addr);
+    set_sender_socket_page_size(sender_socket, page_size);
     set_receiver_socket_page_size(receiver_socket, page_size);
+    sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-    uint32_t read_addr_hi = receiver_socket.h2d.data_addr_hi;
-    uint32_t read_addr_lo = receiver_socket.h2d.data_addr_lo;
-    uint32_t pcie_xy_enc = receiver_socket.h2d.pcie_xy_enc;
+    DPRINT << "Starting d2d exchange kernel" << ENDL();
 
-    noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+    uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
+        downstream_enc.d2d.downstream_noc_x,
+        downstream_enc.d2d.downstream_noc_y,
+        sender_socket.downstream_bytes_sent_addr);
+    uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
+        receiver_socket.d2d.upstream_noc_x,
+        receiver_socket.d2d.upstream_noc_y,
+        receiver_socket.d2d.upstream_bytes_acked_addr);
+    uint64_t downstream_data_addr = get_noc_addr(
+        downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, sender_socket.downstream_fifo_addr);
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2 = nullptr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_socket_packet_header_addr = nullptr;
 
-    if constexpr (use_fabric) {
-        // Safe to use downstream_enc here: Fabric being enabled means that a socket will be used for downstream
-        // communication
+    volatile tt_l1_ptr uint32_t* termination_semaphore =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+
+    if constexpr (use_fabric_on_sender) {
         downstream_data_packet_header_addr =
             reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
         downstream_data_packet_header_addr_2 = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
@@ -154,77 +162,53 @@ void kernel_main() {
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
+    if constexpr (use_fabric_on_receiver) {
+        upstream_socket_packet_header_addr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+            get_write_ptr(fabric_packet_header_cb_id) + 2 * sizeof(PACKET_HEADER_TYPE));
 
-    volatile tt_l1_ptr uint32_t* termination_semaphore =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+        upstream_fabric_connection.open();
 
-    uint64_t downstream_bytes_sent_noc_addr = 0;
-    uint64_t downstream_data_addr = 0;
-
-    if constexpr (!loopback_mode) {
-        downstream_bytes_sent_noc_addr = get_noc_addr(
-            downstream_enc.d2d.downstream_noc_x,
-            downstream_enc.d2d.downstream_noc_y,
-            sender_socket.downstream_bytes_sent_addr);
-
-        downstream_data_addr = get_noc_addr(
-            downstream_enc.d2d.downstream_noc_x,
-            downstream_enc.d2d.downstream_noc_y,
-            sender_socket.downstream_fifo_addr);
+        fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
     while (true) {
-        // Wait for pages in H2D socket
+        socket_reserve_pages(sender_socket, 1);
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-        if constexpr (pull_from_host) {
-            // Pages available in H2D socket - read over PCIe
-            noc_async_wide_read_any_len_with_state(
-                NOC_INDEX,
-                pcie_xy_enc,
-                ((static_cast<uint64_t>(read_addr_hi) << 32) | read_addr_lo) + receiver_socket.read_ptr -
-                    receiver_socket.fifo_addr,
-                receiver_socket.read_ptr,
-                page_size);
-            noc_async_read_barrier();
-        }
 
-        if constexpr (loopback_mode) {
-            cb_reserve_back(downstream_interface_index, 1);
-            noc_async_write(
-                receiver_socket.read_ptr, get_noc_addr(get_write_ptr(downstream_interface_index)), page_size);
-            noc_async_write_barrier();
-            cb_push_back(downstream_interface_index, 1);
-        } else {
-            auto l1_read_addr = receiver_socket.read_ptr;
-            uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
+        auto l1_read_addr = receiver_socket.read_ptr;
+        uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
-            socket_reserve_pages(sender_socket, 1);
-            send_pages_over_socket(
-                sender_socket,
-                downstream_fabric_connection,
-                downstream_fabric_connection_2,
-                downstream_data_packet_header_addr,
-                downstream_data_packet_header_addr_2,
-                downstream_bytes_sent_noc_addr,
-                l1_read_addr,
-                dst_addr);
-        }
+        send_pages_over_socket(
+            sender_socket,
+            downstream_fabric_connection,
+            downstream_fabric_connection_2,
+            downstream_data_packet_header_addr,
+            downstream_data_packet_header_addr_2,
+            downstream_bytes_sent_noc_addr,
+            l1_read_addr,
+            dst_addr);
         socket_pop_pages(receiver_socket, 1);
-        // Notify Host that pages were popped from H2D socket
-        socket_notify_sender(receiver_socket);
-        invalidate_l1_cache();
+        if constexpr (use_fabric_on_receiver) {
+            fabric_socket_notify_sender_stateful(
+                receiver_socket,
+                upstream_fabric_connection,
+                upstream_socket_packet_header_addr,
+                upstream_bytes_acked_noc_addr);
+        } else {
+            socket_notify_sender(receiver_socket);
+        }
     }
 
+    update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
-    if constexpr (!loopback_mode) {
-        socket_barrier(sender_socket);
+
+    if constexpr (use_fabric_on_receiver) {
+        upstream_fabric_connection.close();
     }
 
-    noc_async_write_barrier();
-    noc_async_read_barrier();
-    if constexpr (use_fabric) {
+    if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }

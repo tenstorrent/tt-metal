@@ -16,6 +16,35 @@
 #include <llrt/llrt.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
+namespace {
+
+bool logical_cores_intersect(
+    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
+    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& current_cores) {
+    std::unordered_set<tt::tt_metal::CoreCoord> previous_cores_set;
+    std::unordered_set<tt::tt_metal::CoreCoord> current_cores_set;
+
+    for (const auto& previous_core_group : previous_cores) {
+        for (const auto& previous_core : previous_core_group) {
+            previous_cores_set.insert(previous_core);
+        }
+    }
+    for (const auto& current_core_group : current_cores) {
+        for (const auto& current_core : current_core_group) {
+            current_cores_set.insert(current_core);
+        }
+    }
+
+    for (const auto& core : current_cores_set) {
+        if (previous_cores_set.contains(core)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 namespace tt::tt_metal::distributed {
 
 SDMeshCommandQueue::SDMeshCommandQueue(
@@ -101,13 +130,33 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     auto lock = lock_api_function_();
-    wait_for_cores_idle();
+
+    if (!asynchronous_slow_dispatch_enabled_) {
+        wait_for_cores_idle();
+    }
+
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
+        const auto& program_cores = program.impl().logical_cores();
         for (const auto& coord : coord_range) {
-            if (mesh_device_->impl().is_local(coord)) {
-                auto* device = mesh_device_->impl().get_device(coord);
-                tt_metal::detail::LaunchProgram(device, program, false);
+            if (!mesh_device_->impl().is_local(coord)) {
+                continue;
             }
+            auto* device = mesh_device_->impl().get_device(coord);
+            if (asynchronous_slow_dispatch_enabled_) {
+                auto it = logical_cores_for_previous_workload_.find(device->id());
+                if (it != logical_cores_for_previous_workload_.end()) {
+                    const auto& previous_cores = it->second;
+                    // Only block before launching the current program if the previous program used the same cores
+                    if (logical_cores_intersect(previous_cores, program_cores)) {
+                        tt::llrt::internal_::wait_for_idle(device->id(), previous_cores);
+                        // Clear the active cores in use for this device, since we blocked
+                        // on them
+                        logical_cores_for_previous_workload_.erase(device->id());
+                    }
+                }
+            }
+
+            tt_metal::detail::LaunchProgram(device, program, false);
         }
     }
 
@@ -118,7 +167,23 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 if (blocking) {
                     tt_metal::detail::WaitProgramDone(device, program);
                 } else {
-                    logical_cores_for_previous_workload_[device->id()] = program.impl().logical_cores();
+                    if (!(asynchronous_slow_dispatch_enabled_ and
+                          logical_cores_for_previous_workload_.contains(device->id()))) {
+                        // Device had no active cores until this program was launched
+                        logical_cores_for_previous_workload_[device->id()] = program.impl().logical_cores();
+                    } else {
+                        // Device had active cores before this program was launched
+                        // Merge the active cores from the previous program with the active cores from the current
+                        // program
+                        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+                        auto program_cores = program.impl().logical_cores();
+                        for (uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
+                             core_type_index++) {
+                            auto& active_cores = logical_cores_for_previous_workload_[device->id()][core_type_index];
+                            auto curr_active_cores = program_cores[core_type_index];
+                            active_cores.insert(active_cores.end(), curr_active_cores.begin(), curr_active_cores.end());
+                        }
+                    }
                 }
             }
         }
@@ -173,5 +238,12 @@ void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<
 void SDMeshCommandQueue::record_end() { TT_THROW("Not supported for slow dispatch"); }
 
 void SDMeshCommandQueue::enqueue_trace(const MeshTraceId&, bool) { TT_THROW("Not supported for slow dispatch"); }
+
+void SDMeshCommandQueue::enable_asynchronous_slow_dispatch() { asynchronous_slow_dispatch_enabled_ = true; }
+
+void SDMeshCommandQueue::disable_asynchronous_slow_dispatch() {
+    wait_for_cores_idle();
+    asynchronous_slow_dispatch_enabled_ = false;
+}
 
 }  // namespace tt::tt_metal::distributed
