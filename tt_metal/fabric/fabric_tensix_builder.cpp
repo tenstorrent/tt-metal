@@ -44,6 +44,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
     auto device_id = all_active_devices.front()->id();
     const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    bool is_galaxy_cluster = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id);
 
     for (const auto& device : all_active_devices) {
@@ -75,8 +76,8 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
         std::vector<chan_id_t> non_dispatch_active_channels;
         std::set<routing_plane_id_t> non_dispatch_routing_planes;
         for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
-            dispatch_link_idx_ =
-                tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+            dispatch_link_idx_ = tt_metal::RelayMux::get_dispatch_link_index(
+                control_plane, is_galaxy_cluster, fabric_node_id, remote_fabric_node_id, device);
 
             for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
                 auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
