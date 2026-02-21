@@ -65,11 +65,11 @@ void kernel_main() {
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     // Constants for MoEGPT
-    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;
+    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
+    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;        // 240
 
-    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
+    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -77,22 +77,23 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;
-    constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;           // 2
+    constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;             // 10
+    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 10 * 2 = 20
+    // 4 * (90 / 10) / 2 = 18
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
+        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 18
+    // 18 * 8 / 2 = 72
     constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A / 2;  // 32 * 3 = 96
-    // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
+        w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A / 2;  // 72
 
     // W2 reading constants
-    constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;
-    constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
-    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;                     // 2
+    constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;                       // 10
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 10 * 2 = 20
+    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 90 / 10 = 9
+    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 9 / 2 = 18
+    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;               // 36
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -103,12 +104,16 @@ void kernel_main() {
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Offsets for layer_id
-    constexpr uint32_t w0_size_per_expert = num_w0_w1_tiles_h * 6 * w0_w1_tile_size;
+    // GPT-OSS: W0/W1 per expert = 90 height * 8 max width per core * tile_size (for W0 alone)
+    // w0_w1_total = 2 * that (interleaved W0+W1)
+    constexpr uint32_t w0_size_per_expert = num_w0_w1_tiles_h * 8 * w0_w1_tile_size;  // 90 * 8
     constexpr uint32_t w0_w1_total_size_per_expert = 2 * w0_size_per_expert;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
-    constexpr uint32_t w2_total_size_per_expert = 70 * 20 * w2_tile_size;  // We pad 64 to 70 tiles
+    // GPT-OSS: W2 per expert = 90 height * 8 max width per core * tile_size
+    // 90 height (no padding needed: 90/10=9 exact), 8 max tiles/core
+    constexpr uint32_t w2_total_size_per_expert = num_w2_tiles_h * 8 * w2_tile_size;  // 90 * 8
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
@@ -125,7 +130,7 @@ void kernel_main() {
     const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w0_w1);
 
     // Precompute slot addresses (avoid multiply in hot loop)
-    // Each slot holds 2 transactions (28 tiles)
+    // Each slot holds 1 block (20 tiles = 10 tiles/txn * 2 txns/block)
     const uint32_t slot_addr[NUM_SLOTS] = {
         w_cb_base_addr, w_cb_base_addr + w0_w1_bytes_per_block, w_cb_base_addr + 2 * w0_w1_bytes_per_block};
 

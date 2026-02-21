@@ -11,9 +11,7 @@
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
-#include "ckernel_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "swiglu_sfpu.h"
 #endif
 
 void kernel_main() {
@@ -46,11 +44,12 @@ void kernel_main() {
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;
 
     // Constants for MoEGPT
-    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;
+    // GPT-OSS: K=2880 -> 90 tiles height, N=2880 -> 90 tiles
+    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
+    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;        // 240
 
-    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
+    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -58,36 +57,37 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;
-    constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;           // 2
+    constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;             // 10
+    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 10 * 2 = 20
+    // blocks to read for 2 output element tiles (covers full K height, 4 tiles wide per block):
+    // 4 * (90 / 10) / 2 = 4 * 9 / 2 = 18
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
+        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 18
+    // blocks per expert = 18 * 8 / 2 = 72
     constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A /
-        2;  // 32 * 3 = 96
-            // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
+        w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A / 2;  // 72
 
     // W2 reading constants
-    constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;
-    constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
-    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;                     // 2
+    constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;                       // 10
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 10 * 2 = 20
+    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 90 / 10 = 9
+    // blocks for 4 output tiles: 4 * 9 / 2 = 18
+    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;  // 18
+    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;        // 36
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_gpt_ring::NUM_A2A_ITERS_A;
+    constexpr uint32_t num_a2a_iters = moe_gpt_ring::NUM_A2A_ITERS_A;  // 2
 
     // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_gpt_ring::NUM_CORES;
+    constexpr uint32_t num_a2a_steps_per_iter = moe_gpt_ring::NUM_CORES;  // 12
 
-    // The number of tiles to send in each step
-    // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_gpt_ring::IN2_TILES_PER_STEP_A;  // max(num_w0_w1_tiles_w)
+    // The number of tiles to send in each step (max of 7/8 = 8)
+    constexpr uint32_t tiles_per_step = moe_gpt_ring::IN2_TILES_PER_STEP_A;  // 8
 
     //-------------------------------------------------------------------------
     // Compute
@@ -95,7 +95,7 @@ void kernel_main() {
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2);
 
-    // Unpacker B is for input/activation and eltiwse inputs, so Float16_b
+    // Unpacker B is for input/activation and eltwise inputs, so Float16_b
     reconfig_data_format_srcb(cb_s2c_in);
 
     // Unpacker A is for W0,W1 and W2, so Bf4_b
@@ -104,8 +104,8 @@ void kernel_main() {
     // Initialize matmul for W0
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
-    // Initialize SFPU for SILU and eltwise multiply
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+    // Initialize SFPU for GPT-OSS SwiGLU activation
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -114,10 +114,23 @@ void kernel_main() {
     uint32_t out_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //---------------------------------------------------------------------
+        // Cross-expert boundary synchronization
+        // For expert > 0, wait for dm1 to confirm that our predecessor's last
+        // A2A write (which targets buf 0) has completed, so it's safe to
+        // overwrite buf 0 with this expert's SwiGLU output.
+        //---------------------------------------------------------------------
+        if (expert_id > 0) {
+            cb_wait_front(cb_w2c_rdy, 1);
+            cb_pop_front(cb_w2c_rdy, 1);
+        }
+
+        //---------------------------------------------------------------------
         // Compute in @ {W0,W1}
+        // GPT-OSS: 8 tiles/core (max), processed 2 at a time -> 4 iterations
         //---------------------------------------------------------------------
         for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
-            uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+            uint32_t in0_index =
+                expert_id * num_w0_w1_tiles_h;  // expert 0: 0, expert 1: 90, expert 2: 180, expert 3: 270
 
             tile_regs_acquire();
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
@@ -151,13 +164,12 @@ void kernel_main() {
             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
             //---------------------------------------------------------------------
-            // Apply SILU activation and then eltwise multiply
+            // Apply GPT-OSS SwiGLU activation
+            // SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
+            // Dest layout: [gate0, up0, gate1, up1] at tile indices [0, 1, 2, 3]
             //---------------------------------------------------------------------
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
 
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -172,14 +184,18 @@ void kernel_main() {
 
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
+        // GPT-OSS: W2 height=90, 18 blocks per iter, 2 iters
         //---------------------------------------------------------------------
-        uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+        uint32_t out_tile_index =
+            expert_id * num_w0_w1_tiles_h;  // expert 0: 0, expert 1: 90, expert 2: 180, expert 3: 270
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
             cb_wait_front(cb_w2c_rdy, 1);
 
-            uint32_t in2_offset = 0, in2_index = 0;
+            // 6-buffer cycling: each A2A step uses buf (step % 6).
+            // Matches dm1's scheme where step S reads from buf S % 6.
+            uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
 
             tile_regs_acquire();
 
@@ -187,17 +203,12 @@ void kernel_main() {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    // The last block has only 4 tiles of interest, so we exit early.
-                    if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                        cb_pop_front(cb_w2c_rdy, 1);
-                        break;
-                    }
-
                     if (dm1_tiles_remaining == 0) {
                         cb_pop_front(cb_w2c_rdy, 1);
                         cb_wait_front(cb_w2c_rdy, 1);
                         dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_offset = (in2_offset == tiles_per_step) ? 0 : tiles_per_step;
+                        in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
+                        in2_offset = in2_buf * tiles_per_step;
                         in2_index = in2_offset;
                     }
                     dm1_tiles_remaining--;
@@ -215,6 +226,12 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
+
+            // Pop the last cb_w2c_rdy entry that was waited on but not popped.
+            // Each iter starts with cb_wait_front(cb_w2c_rdy) and has 11 internal
+            // pop+wait transitions for 12 total steps. Without this final pop,
+            // cb_w2c_rdy stays full and dm1 deadlocks on cb_reserve_back.
+            cb_pop_front(cb_w2c_rdy, 1);
 
             tile_regs_commit();
 
