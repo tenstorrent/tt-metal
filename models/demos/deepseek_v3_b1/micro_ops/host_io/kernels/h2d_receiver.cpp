@@ -175,9 +175,11 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
+        DPRINT << "H2D Waiting for pages from Host" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "H2D Received pages from Host" << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -189,7 +191,7 @@ void kernel_main() {
                 page_size);
             noc_async_read_barrier();
         }
-
+        DPRINT << "Loopback mode: " << static_cast<int>(loopback_mode) << ENDL();
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(
@@ -199,8 +201,9 @@ void kernel_main() {
         } else {
             auto l1_read_addr = receiver_socket.read_ptr;
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
-
+            DPRINT << "H2D Wait for space in downstream socket" << ENDL();
             socket_reserve_pages(sender_socket, 1);
+            DPRINT << "H2D Send pages over socket" << ENDL();
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
@@ -210,11 +213,14 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 l1_read_addr,
                 dst_addr);
+            DPRINT << "H2D sent pages" << ENDL();
         }
+        DPRINT << "H2D Notify Host" << ENDL();
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);
         invalidate_l1_cache();
+        DPRINT << "H2D Invalidated L1 cache" << ENDL();
     }
 
     update_socket_config(receiver_socket);

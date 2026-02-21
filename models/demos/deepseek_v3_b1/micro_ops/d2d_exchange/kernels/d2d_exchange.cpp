@@ -172,7 +172,9 @@ void kernel_main() {
     }
 
     while (true) {
+        DPRINT << "D2D resesrving pages downstream" << ENDL();
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "D2D Waiting for pages from Upstream" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
@@ -180,6 +182,7 @@ void kernel_main() {
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
+        DPRINT << "D2D Sending pages over socket" << ENDL();
         send_pages_over_socket(
             sender_socket,
             downstream_fabric_connection,
@@ -189,7 +192,9 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
+        DPRINT << "D2D sent pages" << ENDL();
         socket_pop_pages(receiver_socket, 1);
+        DPRINT << "D2D Notify Upstream" << ENDL();
         if constexpr (use_fabric_on_receiver) {
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
@@ -199,6 +204,7 @@ void kernel_main() {
         } else {
             socket_notify_sender(receiver_socket);
         }
+        DPRINT << "D2D Invalidated L1 cache" << ENDL();
     }
 
     update_socket_config(sender_socket);

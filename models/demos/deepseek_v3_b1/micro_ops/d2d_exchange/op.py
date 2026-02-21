@@ -329,10 +329,10 @@ class SocketInterface:
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
         if sync_devices:
             if self.local_socket:
-                ttnn.synchronize_device(self.mesh_device)
-            else:
                 ttnn.synchronize_device(self.upstream_socket.get_mesh_device())
                 ttnn.synchronize_device(self.downstream_socket.get_mesh_device())
+            else:
+                ttnn.synchronize_device(self.mesh_device)
 
     def get_downstream_socket(self):
         return self.downstream_socket_pair[1]

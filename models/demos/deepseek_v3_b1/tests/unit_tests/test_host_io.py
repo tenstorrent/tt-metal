@@ -393,13 +393,20 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
 @pytest.mark.parametrize(
     "tensor_size_bytes, fifo_size, num_iterations",
     [
-        (64, 128, 1),
+        (64, 128, 512),
+        (64, 256, 512),
+        (64, 512, 512),
+        (64, 1024, 512),
+        (512, 1024, 512),
+        (1024, 2048, 128),
+        (32768, 65536, 128),
     ],
 )
 @pytest.mark.parametrize(
     "h2d_mode",
     [
         ttnn.H2DMode.HOST_PUSH,
+        ttnn.H2DMode.DEVICE_PULL,
     ],
 )
 @pytest.mark.parametrize(
@@ -430,10 +437,6 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
 
     is_pipeline_start = my_mesh_id == 0
 
-    if is_pipeline_start:
-        for stage in pipeline_config:
-            print(f"Stage {stage.stage_index}: {stage.entry_node_coord} -> {stage.exit_node_coord}")
-
     num_procs = int(ttnn.distributed_context_get_size())
     # Number of pipeline stages is equal to the number of processes + 1 for the loopback stage
     assert len(pipeline_config) == num_procs + 1
@@ -448,6 +451,9 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
         print(
             f"Creating Host IO Interface on First Pipeline stage. H2D Coord: {h2d_device_coord} D2H Coord: {d2h_device_coord}, H2D Drainer: {pipeline_config[my_mesh_id].exit_node_coord}, D2H Source: {pipeline_config[num_procs].entry_node_coord}"
         )
+        print(f"H2D Device Id: {mesh_device.get_device_id(h2d_device_coord)}")
+        print(f"H2D Drainer Device Id: {mesh_device.get_device_id(pipeline_config[my_mesh_id].exit_node_coord)}")
+
         h2d_socket = ttnn.H2DSocket(
             mesh_device,
             ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),
@@ -502,36 +508,35 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
             sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
             receiver_mesh=MeshWrapper(mesh_device),
         )
-        print("Done creating socket interfaces")
         host_io.run()
         exit_socket_interface.run()
         entry_socket_interface.run()
 
         tensor_size_datums = tensor_size_bytes // 4
-        torch_input = torch.arange(i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.int32).reshape(
-            1, tensor_size_datums
-        )
+        for i in range(num_iterations):
+            torch_input = torch.arange(i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.int32).reshape(
+                1, tensor_size_datums
+            )
 
-        input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.int32)
-        output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.int32)
+            output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        h2d_socket.write_tensor(input_tensor)
-        d2h_socket.read_tensor(output_tensor)
+            h2d_socket.write_tensor(input_tensor)
+            d2h_socket.read_tensor(output_tensor)
 
-        result_torch = ttnn.to_torch(output_tensor)
-        match = torch.equal(torch_input, result_torch)
-        assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
+            result_torch = ttnn.to_torch(output_tensor)
+            match = torch.equal(torch_input, result_torch)
+            assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
 
         ttnn.distributed_context_barrier()
-        print("Barrier passed")
         host_io.terminate(False)
         exit_socket_interface.terminate(False)
         entry_socket_interface.terminate(True)
 
     else:
         print(
-            f"Creating Entry Socket Interface on Intermediate Pipeline stage. Entry Coord: {pipeline_config[my_mesh_id].entry_node_coord}, Prev Exit Coord: {pipeline_config[my_mesh_id - 1].exit_node_coord}"
+            f"Creating Entry Socket Interface on Pipeline stage {my_mesh_id}. Entry Coord: {pipeline_config[my_mesh_id].entry_node_coord}, Prev Exit Coord: {pipeline_config[my_mesh_id - 1].exit_node_coord}"
         )
         entry_socket_interface = SocketInterface(
             tensor_size_bytes,
@@ -544,7 +549,7 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
             receiver_mesh=MeshWrapper(mesh_device),
         )
         print(
-            f"Creating Exit Socket Interface on Intermediate Pipeline stage. Exit Coord: {pipeline_config[my_mesh_id].exit_node_coord}, Next Entry Coord: {pipeline_config[my_mesh_id + 1].entry_node_coord}"
+            f"Creating Exit Socket Interface on Pipeline stage {my_mesh_id}. Exit Coord: {pipeline_config[my_mesh_id].exit_node_coord}, Next Entry Coord: {pipeline_config[my_mesh_id + 1].entry_node_coord}"
         )
         exit_socket_interface = SocketInterface(
             tensor_size_bytes,
@@ -560,7 +565,7 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
         exit_socket_interface.run()
 
         ttnn.distributed_context_barrier()
-        print("Barrier passed")
+
         entry_socket_interface.terminate(False)
         exit_socket_interface.terminate(True)
 
