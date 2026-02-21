@@ -108,4 +108,22 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     MetalContext::instance().set_fast_dispatch_mode(false);
 }
 
+void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
+    TT_FATAL(
+        !MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "{} can only be called when Fast Dispatch is disabled.",
+        __func__);
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    sd_mesh_cq.enable_asynchronous_slow_dispatch();
+}
+
+void DispatchContext::disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
+    TT_FATAL(
+        MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "{} can only be called when Fast Dispatch is enabled.",
+        __func__);
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    sd_mesh_cq.disable_asynchronous_slow_dispatch();
+}
+
 }  // namespace tt::tt_metal::experimental
