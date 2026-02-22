@@ -288,8 +288,8 @@ void kernel_main() {
                     if constexpr (qk_num_blocks > 1 && reuse_k) {
                         // Pipelined K: stream from DRAM block-by-block into K CB.
                         // Compute starts QK on the first block while later blocks
-                        // are still being fetched.  V is copied from K's L1 below
-                        // with a barrier before the next chunk overwrites it.
+                        // are still being fetched.
+                        // Non-paged equivalent: read_kv_mask_chunks_pipelined() in dataflow_common.hpp
                         uint32_t block_tiles = qk_in0_block_w * Sk_chunk_t_dynamic;
                         for (uint32_t block = 0; block < qk_num_blocks; ++block) {
                             cb_reserve_back(cb_k_in, block_tiles);

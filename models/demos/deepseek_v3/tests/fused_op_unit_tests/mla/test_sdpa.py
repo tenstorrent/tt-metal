@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unit tests for Flash MLA SDPA with DeepSeek V3 shapes and settings from mla1d.py.
+Unit tests for Flash MLA SDPA decode with DeepSeek V3 shapes and settings from mla1d.py.
 
-Tests the paged_flash_multi_latent_attention_decode and flash_mla_prefill ops
-using the exact shapes, memory configs, and compute kernel configs that
-MLA1D.decode_model_config / prefill_model_config generate.
+Tests paged_flash_multi_latent_attention_decode using the exact shapes,
+memory configs, and compute kernel configs that MLA1D.decode_model_config generates.
 """
 
 

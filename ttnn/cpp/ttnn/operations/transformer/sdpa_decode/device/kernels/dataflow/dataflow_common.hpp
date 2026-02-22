@@ -626,6 +626,38 @@ void read_v(
     cb_push_back(cb_v_in, v_chunk_tiles);
 }
 
+/**
+ * Copy V tiles from K's L1 buffer into the V CB (V-reuse path).
+ *
+ * When K and V share a tensor (reuse_k), V occupies the first vDHt
+ * columns of K's transposed layout in L1.  This helper reads those
+ * columns via L1-to-L1 noc_async_read and pushes them into the V CB.
+ *
+ * Safety: cb_pop_front (compute side) only advances the read pointer
+ * and does NOT clear L1.  The caller must ensure no new K data is
+ * written to k_base_read_ptr's L1 region until after this returns.
+ */
+template <uint32_t vDHt, uint32_t cb_v_in>
+inline void copy_v_from_k_cb(
+    uint64_t k_base_read_ptr,
+    uint32_t Sk_chunk_t,
+    uint32_t v_chunk_tiles,
+    uint32_t k_tile_bytes,
+    uint32_t v_tile_bytes) {
+    cb_reserve_back(cb_v_in, v_chunk_tiles);
+    uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+    for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+        uint64_t k_read_ptr = k_base_read_ptr + row * k_tile_bytes;
+        for (uint32_t col = 0; col < vDHt; ++col) {
+            noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
+            v_write_ptr += v_tile_bytes;
+            k_read_ptr += Sk_chunk_t * k_tile_bytes;
+        }
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_v_in, v_chunk_tiles);
+}
+
 template <
     uint32_t DHt,
     uint32_t vDHt,
@@ -683,23 +715,10 @@ void read_kv_mask_chunks(
                 PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
-        // Read V chunk (tranpose of K), from K's L1 buffer
         if constexpr (reuse_k) {
-            cb_reserve_back(cb_v_in, v_chunk_tiles);
-            uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-            uint64_t k_read_ptr = k_base_read_ptr;
-            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {       // Row of V
-                k_read_ptr = k_base_read_ptr + row * k_tile_bytes;  // Increment across K's Col
-
-                for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
-                    noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
-
-                    v_write_ptr += v_tile_bytes;
-                    k_read_ptr += Sk_chunk_t * k_tile_bytes;  // Strid across K's width
-                }
-            }
+            copy_v_from_k_cb<vDHt, cb_v_in>(k_base_read_ptr, Sk_chunk_t, v_chunk_tiles, k_tile_bytes, v_tile_bytes);
         } else {
-            // V is an independent tensor with its own layout (width = vDHt)
+            // V is an independent tensor with its own layout (width = vDHt, not DHt)
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
@@ -714,11 +733,10 @@ void read_kv_mask_chunks(
                     v_tile_id++;
                     v_write_ptr += v_tile_bytes;
                 }
-                // No padding to skip - V is an independent tensor with contiguous layout
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_v_in, v_chunk_tiles);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_v_in, v_chunk_tiles);
 
         // Update the starting tile id for next iteration
         k_start_tile_id += k_chunk_tiles;
@@ -731,11 +749,11 @@ void read_kv_mask_chunks(
 /**
  * Sub-blocked K streaming for non-paged attention with reuse_k.
  * K read from DRAM block-by-block into K CB via incremental reserve/push.
- * V reuse from K CB: V is copied from K's L1 into V CB with a
- * noc_async_read_barrier() before this function starts writing the next
- * chunk's K data.  cb_pop_front (compute side) only advances the read
- * pointer and does NOT clear L1, so V reuse is safe regardless of when
- * compute pops K.
+ *
+ * Note: The paged-attention equivalent is inlined in reader_decode_all.cpp
+ * (under `if constexpr (qk_num_blocks > 1 && reuse_k)`) because paged K
+ * tile IDs require page-table lookups that can't be abstracted without
+ * function pointers (unsuitable for device code).
  */
 template <
     uint32_t DHt,
@@ -797,24 +815,7 @@ void read_kv_mask_chunks_pipelined(
                 PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
-        // Copy V from K's L1 into V CB.  The barrier below guarantees V is
-        // fully copied before we loop back and overwrite K's L1 with the
-        // next chunk.  Compute's cb_pop_front on K only moves a pointer
-        // and never clears L1, so this is safe regardless of pop timing.
-        {
-            cb_reserve_back(cb_v_in, v_chunk_tiles);
-            uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                uint64_t k_read_ptr = k_base_read_ptr + row * k_tile_bytes;
-                for (uint32_t col = 0; col < vDHt; ++col) {
-                    noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
-                    v_write_ptr += v_tile_bytes;
-                    k_read_ptr += Sk_chunk_t * k_tile_bytes;
-                }
-            }
-            noc_async_read_barrier();  // V is now safe in V CB
-            cb_push_back(cb_v_in, v_chunk_tiles);
-        }
+        copy_v_from_k_cb<vDHt, cb_v_in>(k_base_read_ptr, Sk_chunk_t, v_chunk_tiles, k_tile_bytes, v_tile_bytes);
 
         k_start_tile_id += k_chunk_tiles;
     }

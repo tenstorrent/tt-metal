@@ -331,6 +331,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         // reader to stay ahead of compute (each block is ~2-4 DRAM reads),
         // while <=6 keeps per-block CB overhead low.  Fall back to 2 blocks
         // if DHt isn't divisible by 3-6 (still better than no pipelining).
+        // Common DHt values: 18 (DeepSeek V3 KVPE 576/32) -> 3 blocks,
+        //   4 (standard 128d) -> 4 blocks, 6 (192d) -> 3 blocks.
+        //   Odd/prime DHt falls through to qk_num_blocks=1 (no pipelining).
         for (uint32_t target_blocks = 3; target_blocks <= 6; ++target_blocks) {
             if (DHt % target_blocks == 0) {
                 qk_in0_block_w = DHt / target_blocks;
