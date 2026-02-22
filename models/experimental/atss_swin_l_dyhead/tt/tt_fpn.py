@@ -119,13 +119,15 @@ class TtFPN:
         laterals = []
         for i in range(self.num_ins):
             feat = inputs[i]
-            N, C, H, W = feat.shape
+            # N, C, H, W = feat.shape
+            N, H, W, C = feat.shape
 
-            nhwc = ttnn.permute(feat, (0, 2, 3, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            nhwc = ttnn.to_layout(nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # nhwc = ttnn.permute(feat, (0, 2, 3, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # nhwc = ttnn.to_layout(nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             lat, out_h, out_w, self.lateral_weights[i], self.lateral_biases[i] = self._conv2d(
-                nhwc,
+                # nhwc,
+                feat,
                 self.lateral_weights[i],
                 self.lateral_biases[i],
                 in_ch=C,
@@ -206,10 +208,11 @@ class TtFPN:
             extra_src = extra_out
 
         # Convert all outputs NHWC → NCHW
-        nchw_outs = []
-        for out in outs:
-            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            nchw = ttnn.permute(out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            nchw_outs.append(nchw)
+        # nchw_outs = []
+        # for out in outs:
+        #     out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        #     nchw = ttnn.permute(out, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        #     nchw_outs.append(nchw)
 
-        return nchw_outs
+        # return nchw_outs
+        return outs  # Returning NHWC Outputs
