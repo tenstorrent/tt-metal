@@ -27,7 +27,6 @@ from models.tt_transformers.tt.prefetcher import (
     Prefetcher,
     VERIFIED_MODEL_CONFIGS,
     is_prefetcher_supported,
-    generate_sender_receiver_mapping,
 )
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
