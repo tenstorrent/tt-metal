@@ -1,0 +1,1 @@
+add_subdirectory(softmax_single_core)
