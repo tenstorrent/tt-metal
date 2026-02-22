@@ -18,16 +18,9 @@ except ImportError:
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinear,
-    TTNNLinearIColShardedWRowSharded,
-    TTNNLinearIReplicatedWColSharded,
-)
-from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNRMSNorm
-from models.experimental.tt_symbiote.modules.rope import (
-    TTNNRotaryPositionEmbedding,
-    TTNNDistributedRotaryPositionEmbedding,
-)
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.normalization import TTNNRMSNorm
+from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
 
 
 class TorchSDPAAttention(torch.nn.Module):
@@ -730,336 +723,9 @@ class LlamaAttention(TTNNModule):
         return self.o_proj(attn_out), None
 
 
-class TTNNGlm4MoeLiteAttention(TTNNModule):
-    """TTNN-accelerated Multi-Latent Attention for Glm4MoeLite.
-
-    This implements the same MLA architecture as DeepSeek V3 but for Glm4MoeLite,
-    with latent compression for memory-efficient KV cache.
-    """
-
-    def __init__(self):
-        super().__init__()
-        # Will be set in from_torch
-        self.q_lora_rank = None
-        self.kv_lora_rank = None
-        self.qk_nope_head_dim = None
-        self.qk_rope_head_dim = None
-        self.qk_head_dim = None
-        self.v_head_dim = None
-        self.num_heads = None
-        self.scaling = None
-        self.is_causal = True
-
-        # Submodules (set in from_torch)
-        self.q_a_proj = None
-        self.q_a_layernorm = None
-        self.q_b_proj = None
-        self.kv_a_proj_with_mqa = None
-        self.kv_a_layernorm = None
-        self.kv_b_proj = None
-        self.o_proj = None
-        self.rope = None
-        self.sdpa = None
-
-    @classmethod
-    def from_torch(cls, torch_attn: "Glm4MoeLiteAttention"):
-        """Create TTNNGlm4MoeLiteAttention from PyTorch Glm4MoeLiteAttention.
-
-        Args:
-            torch_attn: PyTorch Glm4MoeLiteAttention module
-
-        Returns:
-            TTNNGlm4MoeLiteAttention instance
-        """
-        new_attn = cls()
-        new_attn._fallback_torch_layer = torch_attn
-
-        # Copy config parameters
-        new_attn.q_lora_rank = torch_attn.q_lora_rank
-        new_attn.kv_lora_rank = torch_attn.kv_lora_rank
-        new_attn.qk_nope_head_dim = torch_attn.qk_nope_head_dim
-        new_attn.qk_rope_head_dim = torch_attn.qk_rope_head_dim
-        new_attn.qk_head_dim = torch_attn.qk_head_dim
-        new_attn.v_head_dim = torch_attn.v_head_dim
-        new_attn.num_heads = torch_attn.num_heads
-        new_attn.scaling = torch_attn.scaling
-
-        # Convert Q projection path (if using LoRA)
-        if torch_attn.q_lora_rank is not None:
-            new_attn.q_a_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_a_proj)
-            new_attn.q_a_layernorm = TTNNDistributedRMSNorm.from_torch(torch_attn.q_a_layernorm)
-            new_attn.q_b_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_b_proj)
-        else:
-            # Direct Q projection (no LoRA)
-            new_attn.q_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_proj)
-
-        # Convert KV projection path (always uses MQA + LoRA)
-        new_attn.kv_a_proj_with_mqa = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.kv_a_proj_with_mqa)
-        new_attn.kv_a_layernorm = TTNNDistributedRMSNorm.from_torch(torch_attn.kv_a_layernorm)
-        new_attn.kv_b_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.kv_b_proj)
-
-        # Convert output projection
-        new_attn.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.o_proj)
-
-        # Initialize RoPE module
-        new_attn.rope = TTNNDistributedRotaryPositionEmbedding()
-
-        # Initialize SDPA module
-        new_attn.sdpa = TTNNSDPAAttention()
-        new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
-        new_attn.sdpa.program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(new_attn.core_grid.x, new_attn.core_grid.y),
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,
-        )
-        new_attn.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
-        return new_attn
-
-    def _forward_prefill(
-        self,
-        hidden_states: ttnn.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[ttnn.Tensor],
-        past_key_values: Optional["Cache"],
-        cache_position: Optional[torch.LongTensor],
-    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
-        """Forward pass for prefill mode (seq_len>1).
-
-        Args:
-            hidden_states: Input tensor [batch_size, seq_len, hidden_size]
-            position_embeddings: (cos, sin) tensors for RoPE
-            attention_mask: Optional attention mask
-            past_key_values: KV cache
-            cache_position: Cache position indices
-
-        Returns:
-            Tuple of (output_tensor, attention_weights)
-        """
-        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
-
-        # Ensure TILE layout
-        if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Q projection path
-        if self.q_lora_rank is not None:
-            q_latent = self.q_a_proj(hidden_states)
-            q_latent = self.q_a_layernorm(q_latent)
-            q_states = self.q_b_proj(q_latent)
-        else:
-            q_states = self.q_proj(hidden_states)
-
-        q_states = ttnn.experimental.all_gather_async(
-            q_states.to_ttnn,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-
-        # Reshape Q
-        q_states = ttnn.reshape(q_states, (batch_size, seq_length, self.num_heads, -1))
-        q_states = ttnn.permute(q_states, (0, 2, 1, 3))
-
-        # Split Q into nope and rope parts
-        q_pass = ttnn.slice(q_states, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
-        q_rot = ttnn.slice(
-            q_states,
-            (0, 0, 0, self.qk_nope_head_dim),
-            (batch_size, self.num_heads, seq_length, self.qk_head_dim),
-        )
-
-        # KV projection path
-        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-
-        compressed_kv = ttnn.experimental.all_gather_async(
-            compressed_kv.to_ttnn,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-
-        # Split compressed KV
-        k_pass = ttnn.slice(compressed_kv, (0, 0, 0), (batch_size, seq_length, self.kv_lora_rank))
-        k_rot = ttnn.slice(
-            compressed_kv,
-            (0, 0, self.kv_lora_rank),
-            (batch_size, seq_length, self.kv_lora_rank + self.qk_rope_head_dim),
-        )
-
-        # Process k_pass
-        k_pass = ttnn.rms_norm(k_pass)
-        k_pass = self.kv_b_proj(k_pass)
-        k_pass = ttnn.experimental.all_gather_async(
-            k_pass.to_ttnn,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-
-        k_pass = ttnn.reshape(k_pass, (batch_size, seq_length, self.num_heads, self.qk_nope_head_dim + self.v_head_dim))
-        k_pass = ttnn.permute(k_pass, (0, 2, 1, 3))
-
-        # Split into key and value
-        key_nope = ttnn.slice(k_pass, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
-        value_states = ttnn.slice(
-            k_pass,
-            (0, 0, 0, self.qk_nope_head_dim),
-            (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim + self.v_head_dim),
-        )
-
-        # Reshape k_rot for RoPE
-        k_rot = ttnn.reshape(k_rot, (batch_size, 1, seq_length, self.qk_rope_head_dim))
-
-        # Apply RoPE
-        cos, sin = position_embeddings
-        if len(cos.shape) == 3:
-            cos = ttnn.unsqueeze(cos, 1)
-        cos = ttnn.experimental.all_gather_async(
-            cos,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-        if len(sin.shape) == 3:
-            sin = ttnn.unsqueeze(sin, 1)
-        sin = ttnn.experimental.all_gather_async(
-            sin,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-        q_rot, k_rot = self.rope(q_rot, k_rot, cos, sin)
-
-        # Expand k_rot to match heads
-        k_rot = ttnn.repeat(k_rot.to_ttnn, (1, self.num_heads, 1, 1))
-
-        # Concatenate nope and rope parts
-        query_states = ttnn.concat([q_pass, q_rot.to_ttnn], dim=-1)
-        key_states = ttnn.concat([key_nope, k_rot], dim=-1)
-
-        # Update KV cache if provided
-        if past_key_values is not None:
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            torch_tensors = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
-            orig_shapes = [key_states.shape, value_states.shape]
-            torch_tensors = [
-                torch_tensor.to_torch[: orig_shape[0], : orig_shape[1], : orig_shape[2], : orig_shape[3]]
-                for orig_shape, torch_tensor in zip(orig_shapes, torch_tensors)
-            ]
-            key_states, value_states = past_key_values.update(
-                *torch_tensors,
-                self._fallback_torch_layer.layer_idx,
-                cache_kwargs,
-            )
-            key_states, value_states = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
-            key_states = ttnn.to_device(key_states.to_ttnn, self.device)
-            value_states = ttnn.to_device(value_states.to_ttnn, self.device)
-            key_states = ttnn.experimental.all_gather_async(
-                key_states,
-                dim=-1,
-                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-            )
-            value_states = ttnn.experimental.all_gather_async(
-                value_states,
-                dim=-1,
-                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-            )
-
-        # Pad value_states if needed
-        if self.qk_head_dim != self.v_head_dim:
-            pad_size = self.qk_head_dim - self.v_head_dim
-            value_states = ttnn.pad(value_states, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
-
-        # Scaled dot-product attention (causal for prefill)
-        attn_output = self.sdpa(
-            self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            dropout=0.0,
-            scaling=self.scaling,
-            is_causal=self.is_causal,
-            transpose_output=True,
-        ).to_ttnn
-
-        # Remove padding
-        if self.qk_head_dim != self.v_head_dim:
-            attn_output = attn_output[:, :, :, : self.v_head_dim]
-
-        # Reshape and output projection
-        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))
-        attn_output = self.o_proj(attn_output)
-
-        return attn_output, None
-
-    def forward(
-        self,
-        hidden_states: ttnn.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[ttnn.Tensor] = None,
-        past_key_values: Optional["Cache"] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        **kwargs,
-    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
-        """Forward pass with automatic decode/prefill dispatch.
-
-        Args:
-            hidden_states: Input tensor [batch_size, seq_len, hidden_size]
-            position_embeddings: (cos, sin) tensors for RoPE
-            attention_mask: Optional attention mask
-            past_key_values: KV cache
-            cache_position: Cache position indices
-            **kwargs: Additional arguments
-
-        Returns:
-            Tuple of (output_tensor, attention_weights)
-        """
-
-        return self._forward_prefill(
-            hidden_states,
-            position_embeddings,
-            attention_mask,
-            past_key_values,
-            cache_position,
-        )
-
-
-# GR00T-N1.6 Self-Attention
-#
-# DiT attn1 low PCC root cause (see test_gr00t_dit_attn_diagnostics.py):
-# - Diffusers AttnProcessor2_0: head_to_batch_dim(Q) -> (B*H, S, D); we use (B, H, S, D) via reshape+transpose.
-# - Both layouts produce same SDPA math; our flow: (B,S,H*D) -> reshape(B,S,H,D) -> transpose(B,H,S,D).
-# - DiT attn1: Q_len=2 (state+action), kv_len=72, head_dim=48; Vision: Q_len=kv_len~64, head_dim=64.
-# - TTNN SDPA requires logical_shape[3]==padded_shape[3]. We pad head_dim (72->96, 48->64) via ttnn.pad; pad output
-#   has logical=padded, so the check passes. Slice output back to original d_head after SDPA.
-# - TT_SYMBIOTE_DEBUG_ATTN_HEADS=1: log num_heads/num_kv_heads for cross-attn. TT_SYMBIOTE_DEBUG_ATTN_PAD=1: log pad values.
-#
 class TTNNGR00TSelfAttention(TTNNModule):
+    """GR00T self-attention: supports Qwen/SigLIP and diffusers layouts. Pads Q/K/V for TTNN SDPA tile alignment."""
+
     def __init__(self, config=None, torch_layer=None):
         super().__init__()
         self._torch_layer = torch_layer
@@ -1068,7 +734,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
         if isinstance(torch_layer, TTNNGR00TSelfAttention):
             return
 
-        # Support both Qwen/SigLIP (num_heads) and diffusers (heads, dim_head, inner_dim)
         if torch_layer is not None and hasattr(torch_layer, "heads") and hasattr(torch_layer, "inner_dim"):
             self.num_heads = torch_layer.heads
             dim_head = torch_layer.inner_dim // torch_layer.heads
@@ -1126,9 +791,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
     def _prepare_attention_mask_for_ttnn(
         self, attention_mask, batch_size, q_len, kv_len, q_pad, kv_pad, device, is_causal=False
     ):
-        """Convert VL-style mask (1=attend, 0=masked) to additive form [B, 1, q_padded, kv_padded] for TTNN SDPA.
-        Matches diffusers: (1 - mask) * -10000.0. Padded positions must get -10000 so softmax assigns ~0 prob -
-        otherwise we attend to zero-padded K/V and corrupt output."""
+        """VL-style mask to additive form for TTNN SDPA. Padded pos get -10000."""
         PAD_MASK_VALUE = -10000.0
         additive = None
 
@@ -1150,14 +813,12 @@ class TTNNGR00TSelfAttention(TTNNModule):
                     if os.environ.get("TT_SYMBIOTE_DEBUG_ATTN_MASK"):
                         print(f"[TTNNGR00TSelfAttention mask] encoder mask shape={additive.shape}", flush=True)
 
-        # Causal: mask future (add -10000 where kv_idx > q_idx)
         if is_causal:
             tri = torch.tril(torch.ones(q_len, kv_len, dtype=torch.float32))
             causal = (1.0 - tri) * PAD_MASK_VALUE
             causal = causal.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, q_len, kv_len)
             additive = causal if additive is None else additive + causal
 
-        # When we pad Q/K/V, padded positions must be masked with -10000
         if q_pad > 0 or kv_pad > 0:
             if additive is None:
                 additive = torch.zeros(batch_size, 1, q_len, kv_len, dtype=torch.bfloat16)
@@ -1170,7 +831,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return tt_mask
 
     def _pcc(self, a, b):
-        """Pearson correlation between two tensors (flattened)."""
         if not isinstance(a, torch.Tensor):
             a = a.to_torch if hasattr(a, "to_torch") else ttnn.to_torch(a)
         if not isinstance(b, torch.Tensor):
@@ -1181,22 +841,18 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
     def _rms_norm_torch_fallback(self, tt_tensor, tt_norm, device):
-        """Run RMSNorm in torch when possible for better PCC; fall back to TTNN on conversion failure."""
-        torch_norm = getattr(tt_norm, "torch_layer", None) or getattr(tt_norm, "_fallback_torch_layer", None)
-        if torch_norm is None:
-            return tt_norm(tt_tensor)
+        """Prefer TTNN (Tensix) path; fall back to torch only on failure."""
         try:
-            t = ttnn.to_torch(tt_tensor)
-        except Exception:
+            return tt_norm.forward(tt_tensor)
+        except Exception as e:
             if os.environ.get("TT_SYMBIOTE_DIAG_LM_ATTN_STAGES"):
                 _n = getattr(self, "module_name", "?")
                 if "self_attn" in str(_n):
-                    print(f"[DIAG_LM_ATTN] {_n} q/k_norm: TTNN (to_torch failed)", flush=True)
-            return tt_norm(tt_tensor)
-        if os.environ.get("TT_SYMBIOTE_DIAG_LM_ATTN_STAGES"):
-            _n = getattr(self, "module_name", "?")
-            if "self_attn" in str(_n):
-                print(f"[DIAG_LM_ATTN] {_n} q/k_norm: torch fallback", flush=True)
+                    print(f"[DIAG_LM_ATTN] {_n} q/k_norm: torch fallback ({e})", flush=True)
+        torch_norm = getattr(tt_norm, "torch_layer", None) or getattr(tt_norm, "_fallback_torch_layer", None)
+        if torch_norm is None:
+            raise RuntimeError("RMSNorm: TTNN failed and no torch fallback available.") from e
+        t = ttnn.to_torch(tt_tensor)
         with torch.no_grad():
             out = torch_norm(t)
         return ttnn.from_torch(
@@ -1204,7 +860,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
         )
 
     def _rope_torch_fallback(self, q_raw, k_raw, cos_torch, sin_torch, device):
-        """Run RoPE in torch when possible for better PCC; fall back to TTNN on conversion failure."""
         torch_rope = getattr(self.rope, "torch_layer", None) or getattr(self.rope, "_fallback_torch_layer", None)
         if torch_rope is None:
             cos_tt = ttnn.from_torch(
@@ -1247,7 +902,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
         if self.tt_q_proj is None:
             return hidden_states, None
 
-        # Ensure TILE layout at entry (matches isolation path; DPL can pass ROW_MAJOR)
         from models.experimental.tt_symbiote.core.utils import ensure_tile_layout
 
         h_raw = hidden_states.to_ttnn if hasattr(hidden_states, "to_ttnn") else hidden_states
@@ -1255,7 +909,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
             h_tile = ensure_tile_layout(h_raw)
             hidden_states = TorchTTNNTensor(h_tile) if hasattr(hidden_states, "to_ttnn") else h_tile
 
-        # Cross-attention: K,V from encoder_hidden_states (e.g. DiT attn1); else self-attention
         encoder_hidden_states = kwargs.get("encoder_hidden_states", None)
         attention_mask = kwargs.get("attention_mask", None)
         kv_src = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
@@ -1271,7 +924,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
         k_w = self.tt_k_proj(kv_src)
         v_w = self.tt_v_proj(kv_src)
 
-        # Diagnostic: compare projection outputs vs torch (only for cross-attn, e.g. DiT attn1)
         _env = os.environ.get("TT_SYMBIOTE_DIAG_ATTN_PCC")
         _tl = getattr(self, "_torch_layer", None)
         _enc = encoder_hidden_states is not None
@@ -1315,13 +967,9 @@ class TTNNGR00TSelfAttention(TTNNModule):
                         f"[DIAG_ATTN_PCC] {name} Q_proj={pcc_q:.4f} K_proj={pcc_k:.4f} V_proj={pcc_v:.4f}", flush=True
                     )
             except Exception as exc:
-                # TT_THROW from pytensor.cpp: device/mesh tensors cannot be converted to torch in this path
-                # (only HostStorage is supported). Use test_gr00t_dit_sdpa_only_comparison and
-                # test_gr00t_dit_projection_only_pcc to isolate SDPA vs projection PCC.
                 print(f"[DIAG_ATTN_PCC] {name} ERROR: {exc}", flush=True)
 
         def prepare_heads_on_device(t, num_heads, apply_pad=True):
-            """Reshape to [B,H,S,D] and optionally pad for SDPA. Norm/RoPE must run on unpadded data."""
             raw = t.to_ttnn if hasattr(t, "to_ttnn") else t
             if raw.layout != ttnn.TILE_LAYOUT:
                 raw = ttnn.to_layout(raw, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1337,7 +985,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
             pad_d = (32 - (d_head % 32)) % 32
 
             if apply_pad and (pad_s > 0 or pad_d > 0):
-                # TTNN SDPA requires logical_shape[3]==padded_shape[3]. Pad only when needed.
                 padding_config = [[0, 0], [0, 0], [0, pad_s], [0, pad_d]]
                 t_transposed = ttnn.pad(t_transposed, padding_config, value=0.0)
 
@@ -1345,8 +992,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
 
         is_self_attn = encoder_hidden_states is None
 
-        # LM self-attn: apply q_norm/k_norm and RoPE on UNPADDED [B,H,S,D]. Padding before norm dilutes
-        # variance (zeros included in mean(x^2)) and corrupts PCC vs reference.
         if is_self_attn and (
             self.tt_q_norm is not None or self.tt_k_norm is not None or kwargs.get("position_embeddings")
         ):
@@ -1380,7 +1025,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
                         ct = torch.nn.functional.pad(ct, (0, 0, 0, sq - ct.shape[1]), value=1.0)
                         st = torch.nn.functional.pad(st, (0, 0, 0, sq - st.shape[1]), value=0.0)
                     q_4d, k_4d = self._rope_torch_fallback(q_4d, k_4d, ct, st, hw_dev)
-            # Pad for SDPA
             if q_pad_s > 0 or q_pad_d > 0:
                 q_raw = ttnn.pad(q_4d, [[0, 0], [0, 0], [0, q_pad_s], [0, q_pad_d]], value=0.0)
             else:
@@ -1404,7 +1048,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
                     flush=True,
                 )
 
-        # GQA: repeat K,V to match Q heads when num_kv_heads < num_heads
         if self.num_kv_heads != self.num_heads:
             n_rep = self.num_heads // self.num_kv_heads
             k_t = k_raw.to_ttnn if hasattr(k_raw, "to_ttnn") else k_raw
@@ -1433,7 +1076,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
             attention_mask, b, q_len, kv_len, q_pad_s, kv_pad_s, hw_dev, is_causal=use_causal
         )
 
-        # 3. Hardware SDPA
         attn_out_raw = ttnn.transformer.scaled_dot_product_attention(
             q_raw,
             k_raw,
@@ -1453,9 +1095,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
         if merged_dev.layout != ttnn.TILE_LAYOUT:
             merged_dev = ttnn.to_layout(merged_dev, ttnn.TILE_LAYOUT)
 
-        # 5. Output Projection
-        # TTNNLinear yields wrong output (PCC ~-0.01) for merged tensor from ttnn reshape/transpose.
-        # Use torch fallback (tt_o_proj._fallback_torch_layer) for merged path.
         if self.tt_o_proj is not None:
             torch_linear = getattr(self.tt_o_proj, "torch_layer", None) or getattr(
                 self.tt_o_proj, "_fallback_torch_layer", None

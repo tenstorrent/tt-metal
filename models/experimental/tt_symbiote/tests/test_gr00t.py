@@ -21,6 +21,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Must import groot_utils before modules.* so run_config is patched with DistributedConfig
+from utils import groot_utils  # noqa: F401
+
 from modules.attention import TTNNGR00TSelfAttention
 from modules.linear import TTNNLinear
 from modules.normalization import TTNNLayerNorm

@@ -762,6 +762,36 @@ def handle_sigmoid(func, args, kwargs):
     return TorchTTNNTensor(ttnn.sigmoid(input_tensor.to_ttnn))
 
 
+def handle_tanh(func, args, kwargs):
+    """Handle tanh — run on Tensix."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(ttnn.tanh(ensure_tile_layout(input_tensor.to_ttnn)))
+
+
+def handle_exp(func, args, kwargs):
+    """Handle exp — run on Tensix."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(ttnn.exp(ensure_tile_layout(input_tensor.to_ttnn)))
+
+
+def handle_sqrt(func, args, kwargs):
+    """Handle sqrt — run on Tensix."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(ttnn.sqrt(ensure_tile_layout(input_tensor.to_ttnn)))
+
+
 def handle_squeeze(func, args, kwargs):
     """Handle squeeze operation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -1786,12 +1816,103 @@ def handle_gather(func, args, kwargs):
     return res
 
 
+# Full op mapping for default dispatcher (alnah005 tensor_operations minimal set + leftover from tensor_operations)
 def _get_func_to_ttnn_compatible():
-    from models.experimental.tt_symbiote.core.dispatchers.tensor_operations_dispatcher import (
-        func_to_ttnn_compatible,
-    )
-
-    return func_to_ttnn_compatible
+    return {
+        # alnah005 tensor_operations minimal set
+        "aten::view": handle_view,
+        "aten::transpose.int": handle_transpose,
+        "aten::mul.Tensor": handle_mul,
+        "aten::sub.Tensor": handle_sub,
+        "aten::div.Tensor": handle_div,
+        "aten::slice.Tensor": handle_slice,
+        "aten::neg": handle_neg,
+        "aten::cat": handle_cat,
+        "aten::add.Tensor": handle_add,
+        "aten::unsqueeze": handle_unsqueeze,
+        "aten::squeeze.dim": handle_squeeze,
+        "aten::expand": handle_expand,
+        "aten::mul.Scalar": handle_mul,
+        "aten::sub.Scalar": handle_sub,
+        "aten::add.Scalar": handle_add,
+        "aten::bmm": handle_bmm,
+        "aten::pow.Tensor_Scalar": handle_power,
+        "aten::stack": handle_stack,
+        "aten::addmm": handle_addmm,
+        "aten::permute": handle_permute,
+        "aten::mm": handle_bmm,
+        # leftover from tensor_operations
+        "aten::_unsafe_view": handle_view,
+        "aten::_softmax": handle_softmax,
+        "aten::mean.dim": handle_mean,
+        "aten::rsqrt": handle_rsqrt,
+        "aten::gelu": handle_gelu,
+        "aten::relu": handle_relu,
+        "aten::new_zeros": handle_new_zeros,
+        "aten::sigmoid": handle_sigmoid,
+        "aten::tanh": handle_tanh,
+        "aten::exp": handle_exp,
+        "aten::exp.default": handle_exp,
+        "aten::sqrt": handle_sqrt,
+        "aten::sqrt.default": handle_sqrt,
+        "aten::sum.dim_IntList": handle_sum,
+        "aten::sum": handle_sum,
+        "aten::sum.Scalar": handle_sum,
+        "aten::ge.Scalar": handle_ge,
+        "aten::gt.Scalar": handle_gt,
+        "aten::select.int": handle_select,
+        "aten::bernoulli.p": handle_bernoulli_p,
+        "aten::repeat": handle_repeat,
+        "aten::eq.Scalar": handle_eq,
+        "aten::eq.Tensor": handle_eq,
+        "aten::lt.Tensor": handle_lt,
+        "aten::where.self": handle_where,
+        "aten::split.Tensor": handle_split,
+        "aten::split_with_sizes": handle_split,
+        "aten::chunk": handle_chunk,
+        "aten::chunk.Tensor": handle_chunk,
+        "aten::chunk.default": handle_chunk,
+        "aten::contiguous": handle_contiguous,
+        "aten::_to_copy": handle_to_copy,
+        "aten::max.dim": handle_max,
+        "aten::zeros_like": handle_zeros_like,
+        "aten::index.Tensor": handle_index,
+        "aten::topk": handle_topk,
+        "aten::clamp": handle_clamp,
+        "aten::constant_pad_nd": handle_constant_pad_nd,
+        "aten::pad": handle_pad,
+        "aten::flatten.using_ints": handle_flatten_using_ints,
+        "aten::im2col": handle_im2col,
+        "aten::linear": handle_linear,
+        "aten::clone": handle_to_copy,
+        "aten::reshape": handle_reshape,
+        "aten::to.dtype": handle_to_dtype,
+        "aten::dropout": handle_dropout,
+        "aten::broadcast_tensors": handle_broadcast_tensors,
+        "aten::_safe_softmax": handle_softmax,
+        "aten::silu": handle_silu,
+        "aten::scatter_.value": handle_scatter_value_inplace,
+        "aten::bitwise_not": handle_bitwise_not,
+        "aten::gather": handle_gather,
+        "aten::native_layer_norm": handle_native_layer_norm,
+        "aten::mse_loss": handle_mse_loss,
+        "aten::pixel_unshuffle": handle_pixel_unshuffle,
+        "aten::pixel_unshuffle.default": handle_pixel_unshuffle,
+        "aten::unbind.int": handle_unbind,
+        "aten::narrow": handle_narrow,
+        "aten::narrow.Tensor": handle_narrow,
+        "aten::log": handle_log,
+        "aten::log.default": handle_log,
+        "aten::log_softmax": handle_log_softmax,
+        "aten::log_softmax.int": handle_log_softmax,
+        "aten::masked_fill.Scalar": handle_masked_fill_Scalar,
+        "aten::masked_fill.Tensor": handle_masked_fill_Tensor,
+        "aten::layer_norm": handle_native_layer_norm,
+        "aten::native_dropout": handle_dropout,
+        "aten::copy_": handle_copy_,
+        "aten::_scaled_dot_product_attention": handle_sdpa,
+        "aten::_scaled_dot_product_attention_flash_attention": handle_sdpa,
+    }
 
 
 def _log_fallback_op(func_name: str) -> None:

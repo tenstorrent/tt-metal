@@ -60,41 +60,22 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
     ttnn_output_tensors = []
     if isinstance(torch_output, TorchTTNNTensor):
         torch_output_tensors.append(torch_output.to_torch)
-    elif isinstance(torch_output, torch.Tensor):
-        torch_output_tensors.append(torch_output)
     elif isinstance(torch_output, (list, tuple)):
         for item in torch_output:
             if isinstance(item, TorchTTNNTensor):
                 torch_output_tensors.append(item.to_torch)
-            elif isinstance(item, torch.Tensor):
-                torch_output_tensors.append(item)
     if isinstance(ttnn_output, TorchTTNNTensor):
         ttnn_output.elem = None
         ttnn_output_tensors.append(ttnn_output.to_torch)
-        if not isinstance(torch_output, TorchTTNNTensor):
-            print("Mismatched output types between TTNN and Torch.")
+        assert isinstance(torch_output, TorchTTNNTensor), "Mismatched output types between TTNN and Torch."
     elif isinstance(ttnn_output, (list, tuple)):
-        if not isinstance(torch_output, (list, tuple)):
-            torch_output = (torch_output,) if torch_output is not None else ()
-        if len(torch_output) != len(ttnn_output):
-            _t = tuple(
-                x
-                for x in torch_output
-                if x is not None and (isinstance(x, torch.Tensor) or isinstance(x, TorchTTNNTensor))
-            )
-            _n = tuple(
-                x
-                for x in ttnn_output
-                if x is not None and (isinstance(x, torch.Tensor) or isinstance(x, TorchTTNNTensor))
-            )
-            if len(_t) == len(_n) and len(_t) > 0:
-                torch_output, ttnn_output = list(_t), list(_n)
         assert isinstance(torch_output, (list, tuple)), "Mismatched output types between TTNN and Torch."
         assert len(ttnn_output) == len(torch_output), "Mismatched output lengths between TTNN and Torch."
         for index, item in enumerate(ttnn_output):
             if isinstance(item, TorchTTNNTensor):
-                if not isinstance(torch_output[index], TorchTTNNTensor):
-                    print("Mismatched output types between TTNN and Torch.")
+                assert isinstance(
+                    torch_output[index], TorchTTNNTensor
+                ), "Mismatched output types between TTNN and Torch."
                 item.elem = None
                 ttnn_output_tensors.append(item.to_torch)
 
@@ -106,12 +87,7 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
         pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         diff = torch.abs(t_tensor - n_tensor)
-        if (
-            pcc < 0.999
-            or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1)
-            or pcc.isnan().any()
-            or diff.isnan().any()
-        ):
+        if pcc < 0.999 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
             passed = False
             print(
                 f"Warning: High discrepancy detected in operation {func_name}. "
