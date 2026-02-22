@@ -596,6 +596,7 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     debug_insert_delay((uint8_t)TransactionWrite);
 
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)                \
+    while (!noc_cmd_buf_ready(noc_id, read_cmd_buf));                                                              \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                                          \
         noc_id,                                                                                                    \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
@@ -604,6 +605,7 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
         NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_AT_LEN_BE),                                                 \
         false);
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                      \
+    while (!noc_cmd_buf_ready(noc_id, read_cmd_buf));                                                              \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                                          \
         noc_id,                                                                                                    \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, read_cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
@@ -612,6 +614,7 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
         l,                                                                                                         \
         false);
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)                \
+    while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                              \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                          \
         noc_id,                                                                                                     \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
@@ -620,6 +623,7 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
         NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE),                                                 \
         false);
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                      \
+    while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                              \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                          \
         noc_id,                                                                                                     \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
