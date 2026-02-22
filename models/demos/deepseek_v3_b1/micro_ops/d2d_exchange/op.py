@@ -121,10 +121,10 @@ class SocketInterface:
             # If running on a host/process where the sender and receiver meshes are the local mesh, create a local socket pair
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
             self.internal_socket_pair = ttnn.create_socket_pair(
-                self.sender_mesh.get_mesh_device(), self.receiver_mesh.get_mesh_device(), socket_config
+                sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
             )
         else:
-            # If running across multiple hosts/processes create s spclet
+            # If running across multiple hosts/processes create a single socket interface
             socket_config = ttnn.SocketConfig(
                 connections=[socket_connection],
                 memory_config=socket_memory_config,
