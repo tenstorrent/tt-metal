@@ -161,7 +161,7 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     data_per_device = []
     torch.manual_seed(42)
     for device_idx in range(8):
-        data = torch.full(tensor_shape, float(device_idx + 1), dtype=torch.bfloat16)
+        data = torch.randn(tensor_shape, dtype=torch.bfloat16)
         data_per_device.append(data)
 
     # Stack and reshape for mesh: [4, 2, 1, 7168]
