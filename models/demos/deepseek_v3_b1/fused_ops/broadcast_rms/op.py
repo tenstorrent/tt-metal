@@ -6,6 +6,7 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
@@ -51,6 +52,7 @@ class BroadcastRMSNorm:
         fp32_dest_acc_en=False,
         rsqrt_fast_approx=False,
         skip_ccl=False,
+        socket=None,
     ):
         """
         Execute fused Broadcast+RMSNorm operation.
@@ -86,23 +88,32 @@ class BroadcastRMSNorm:
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
 
-        # Calculate packet size and page info
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
-
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         tile = input_tensor_sample.tile
         tile_height, tile_width = tile.tile_shape
 
+        input_shape = input_tensor_sample.shape
         dtype = input_tensor_sample.dtype
-        element_size = 2
+        element_size = dtype_size(dtype)
         tile_id_start = 0
 
         # bcast cb info
-        input_shape = input_tensor_sample.shape
+        payload_size_bytes = input_shape[0] * input_shape[1] * element_size
+        packet_size_bytes = payload_size_bytes
         page_size_bytes = 32 * 32 * element_size  # interpret it as 32x32 tile to use the same cb as rmsnorm
-        input_num_pages = input_shape[0] * input_shape[1] * element_size // page_size_bytes
+        assert (
+            payload_size_bytes % page_size_bytes == 0
+        ), f"payload_size_bytes {payload_size_bytes} must be a multiple of page_size_bytes {page_size_bytes}"
+        input_num_pages = payload_size_bytes // page_size_bytes
         num_pages_per_packet = packet_size_bytes // page_size_bytes
+
+        socket_page_size = packet_size_bytes
+        assert socket_page_size % 16 == 0, f"socket_page_size {socket_page_size} must be 16-byte aligned"
+        assert socket_page_size == input_num_pages * page_size_bytes, (
+            f"single-shot requires socket_page_size {socket_page_size} == full payload "
+            f"{input_num_pages} * {page_size_bytes}"
+        )
 
         # CB indices for rms norm
         input_cb = 0
@@ -145,13 +156,12 @@ class BroadcastRMSNorm:
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
 
-                # CCL role calculation (only matters if not skipping CCL)
+                # CCL role calculation
+                is_sender = (row == sender_row) and (col == sender_col)
                 if skip_ccl:
-                    is_sender = False
                     is_secondary_sender = False
                     is_receiver = False
                 else:
-                    is_sender = (row == sender_row) and (col == sender_col)
                     is_secondary_sender = (
                         secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
                     )
@@ -191,11 +201,15 @@ class BroadcastRMSNorm:
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
 
-                rmsnorm_input_source_cb = input_cb
+                use_socket = socket is not None and is_sender
+                # In skip_ccl+socket mode, BRISC fills pkt_cb from socket; TRISC reads pkt_cb.
+                # In all other modes, TRISC reads input_cb (backed by intermediate or input tensor).
+                rmsnorm_input_source_cb = pkt_cb if (skip_ccl and use_socket) else input_cb
                 num_pages_to_read = input_num_pages
 
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
+                    ("use_socket", 1 if use_socket else 0),
                     # CCL broadcast writer args (dummy values when skip_ccl)
                     ("cb0_id", pkt_cb if not skip_ccl else 0),
                     ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
@@ -217,11 +231,21 @@ class BroadcastRMSNorm:
                     ("gamma_cb", gamma_cb),
                 ]
 
+                # BRISC reader is active when CCL is enabled OR when socket delivers data in skip_ccl mode
+                brisc_reader_active = not skip_ccl or use_socket
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
-                    ("is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("cb0_id", pkt_cb if brisc_reader_active else 0),
+                    ("num_pages_to_read", num_pages_to_read if brisc_reader_active else 0),
+                    ("is_sender", int(is_sender) if brisc_reader_active else 0),
+                    ("use_socket", 1 if use_socket else 0),
+                ]
+
+                # Socket runtime args for BRISC reader (zeros for non-socket cores)
+                brisc_common_runtime_args = [
+                    int(socket.get_config_buffer_address()) if use_socket else 0,  # socket_config_addr
+                    int(socket_page_size) if use_socket else 0,  # socket_page_size
+                    1 if use_socket else 0,  # socket_num_pages (single-shot)
                 ]
 
                 # Named compile-time args for TRISC (rmsnorm compute)
@@ -303,7 +327,11 @@ class BroadcastRMSNorm:
                 out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
                 out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
-                kernel_defines = [("SKIP_CCL", "1")] if skip_ccl else []
+                kernel_defines = []
+                if skip_ccl:
+                    kernel_defines.append(("SKIP_CCL", "1"))
+                if use_socket:
+                    kernel_defines.append(("ENABLE_SOCKET_READER", "1"))
 
                 # Unified kernel descriptor for fused op
                 unified_kernel = UnifiedKernelDescriptor(
@@ -313,6 +341,7 @@ class BroadcastRMSNorm:
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
                     ncrisc_common_runtime_args=writer_common_rt_args,
+                    brisc_common_runtime_args=brisc_common_runtime_args,
                     trisc_common_runtime_args=[epsilon_packed, scalar_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
