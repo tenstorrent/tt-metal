@@ -17,8 +17,22 @@ from ttnn.distributed.ttrun import (
 def _build_config(tmp_path: Path, binding: RankBinding, global_env: dict | None = None) -> TTRunConfig:
     mesh_graph_desc = tmp_path / "mesh_graph_desc.textproto"
     mesh_graph_desc.write_text("mesh_graph_desc: test\n")
+    # TTRunConfig requires contiguous ranks from 0; build bindings 0..binding.rank
+    rank_bindings = []
+    for r in range(binding.rank + 1):
+        if r == binding.rank:
+            rank_bindings.append(binding)
+        else:
+            rank_bindings.append(
+                RankBinding(
+                    rank=r,
+                    mesh_id=binding.mesh_id,
+                    mesh_host_rank=binding.mesh_host_rank,
+                    env_overrides={},
+                )
+            )
     return TTRunConfig(
-        rank_bindings=[binding],
+        rank_bindings=rank_bindings,
         global_env=global_env or {},
         mesh_graph_desc_path=mesh_graph_desc,
     )
