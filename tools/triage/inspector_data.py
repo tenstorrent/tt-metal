@@ -162,6 +162,22 @@ class InspectorRpcSerialized(InspectorData):
 
 # TODO: parse_inspector_logs types should have different field names and different return types (not dictionary, but named tuple with array of elements)
 
+# Default port from docopt; when this is used and rank env is set, effective port = base + rank (match C++ rtoptions).
+_DEFAULT_INSPECTOR_RPC_PORT = 50051
+
+
+def _get_rank_from_env() -> int:
+    """Return MPI/mesh rank from process env for rank-aware Inspector port, or -1 if not set.
+    Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so each process gets a distinct port; fallback to TT_MESH_HOST_RANK."""
+    for var in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "TT_MESH_HOST_RANK"):
+        val = os.environ.get(var)
+        if val is not None:
+            try:
+                return int(val)
+            except ValueError:
+                pass
+    return -1
+
 
 @triage_singleton
 def run(args, context) -> InspectorData:
@@ -177,10 +193,17 @@ def run(args, context) -> InspectorData:
             f"Invalid --inspector-rpc-port value '{rpc_port}'. Expected integer in range 1-65535."
         ) from exc
 
+    # When default port was used (not explicitly overridden), use rank-aware port so timeout-invoked
+    # triage on a non-zero rank connects to that rank's Inspector (C++ uses base + rank).
+    if rpc_port == str(_DEFAULT_INSPECTOR_RPC_PORT):
+        rank = _get_rank_from_env()
+        if rank >= 0:
+            rpc_port_int = min(_DEFAULT_INSPECTOR_RPC_PORT + rank, 65535)
+
     # First try to connect to Inspector RPC
     rpc_error: Exception | None = None
     try:
-        return InspectorRpcController(rpc_host, rpc_port)
+        return InspectorRpcController(rpc_host, rpc_port_int)
     except Exception as exc:
         rpc_error = exc
 

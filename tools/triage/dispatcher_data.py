@@ -124,11 +124,37 @@ class DispatcherData:
                 "TT_VISIBLE_DEVICES remapping. Retry with --dev=all or explicit --dev IDs."
             )
 
-        # Use unique_id for device lookup
-        device = run_checks.devices[0]
-        device_unique_id = device.unique_id
+        # Use the first device that has an Inspector build env (e.g. with --dev=all we may have more
+        # devices than this process's Inspector has build envs for; with multiprocess we connect to
+        # this rank's Inspector so only this rank's devices are in the cache).
+        device = None
+        device_unique_id = None
+        for d in run_checks.devices:
+            if d.unique_id in self._build_env_cache:
+                device = d
+                device_unique_id = d.unique_id
+                break
+        if device is None:
+            self._populate_build_env_cache(strict=True)
+            for d in run_checks.devices:
+                if d.unique_id in self._build_env_cache:
+                    device = d
+                    device_unique_id = d.unique_id
+                    break
+        if device is None:
+            unique_ids = [hex(d.unique_id) for d in run_checks.devices[:5]]
+            if len(run_checks.devices) > 5:
+                unique_ids.append("...")
+            raise TTTriageError(
+                "No device in the selected list has an Inspector build environment. "
+                "Check device-id mapping consistency between Inspector and debugger context. "
+                "In multiprocess runs, ensure triage connects to this rank's Inspector (e.g. rank-aware "
+                "--inspector-rpc-port or default port with OMPI_COMM_WORLD_RANK/PMI_RANK set). "
+                "Try --dev=in_use, and ensure TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1. "
+                f"Selected devices (unique_id): {', '.join(unique_ids)}."
+            )
 
-        build_env = self._get_build_env_for_device(device_unique_id)
+        build_env = self._build_env_cache[device_unique_id]
         # Use build_env for initial firmware paths
         brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
         idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")

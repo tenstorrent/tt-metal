@@ -197,7 +197,12 @@ def get_devices(
     else:
         device_ids = [int(id) for id in devices]
 
-    return [context.devices[id] for id in device_ids]
+    result = [context.devices[id] for id in device_ids]
+    # With --dev=all, only include devices that Inspector knows about (have metal device ID mapping),
+    # so triage does not iterate over devices that cannot be triaged (e.g. other ranks' devices).
+    if len(devices) == 1 and devices[0].lower() == "all":
+        result = [d for d in result if metal_device_id_mapping.has_unique_id(d.unique_id)]
+    return result
 
 
 @dataclass(frozen=True)
