@@ -889,7 +889,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return q_tt, k_tt
 
     def forward(self, hidden_states, *args, **kwargs):
-        """Projects hidden states to Q/K/V, applies norms and RoPE when configured, runs SDPA, projects output."""
         if self.tt_q_proj is None:
             return hidden_states, None
 
@@ -1074,6 +1073,23 @@ class TTNNGR00TSelfAttention(TTNNModule):
             attention_mask, b, q_len, kv_len, q_pad_s, kv_pad_s, hw_dev, is_causal=use_causal
         )
 
+        grid = hw_dev.compute_with_storage_grid_size()
+        q_chunk = 32
+        k_chunk = 32
+        for c in (32, 64, 96, 128, 160, 192, 224, 256):
+            if q_len % c == 0 and c <= 256:
+                q_chunk = c
+                break
+        for c in (32, 64, 96, 128, 160, 192, 224, 256):
+            if kv_len % c == 0 and c <= 256:
+                k_chunk = c
+                break
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,
+        )
         attn_out_raw = ttnn.transformer.scaled_dot_product_attention(
             q_raw,
             k_raw,
@@ -1081,6 +1097,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
             attn_mask=tt_attn_mask,
             is_causal=False,
             scale=float(d_head**-0.5),
+            program_config=program_config,
             compute_kernel_config=self.compute_kernel_config,
         )
 
