@@ -249,6 +249,26 @@ def handle_div(func, args, kwargs):
     return res
 
 
+def _ttnn_from_torchttnn_safe(t, device):
+    """Get valid ttnn tensor from TorchTTNNTensor; use elem when ttnn buffer deallocated (DPL)."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if not isinstance(t, TorchTTNNTensor):
+        return None
+    if t.ttnn_tensor is not None and hasattr(t.ttnn_tensor, "is_allocated") and t.ttnn_tensor.is_allocated():
+        return t.to_ttnn
+    if t.elem is not None:
+        dev = device or (t.ttnn_tensor.device() if t.ttnn_tensor is not None else None)
+        if dev is not None:
+            return ttnn.from_torch(
+                t.elem.detach().cpu().to(torch.bfloat16),
+                device=dev,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+    return None
+
+
 def handle_add(func, args, kwargs):
     """Handle addition operation. Uses CPU fallback when one operand is plain torch
     (e.g. vision tower output) to avoid SIGFPE from device add/layout on awkward shapes."""
@@ -267,14 +287,16 @@ def handle_add(func, args, kwargs):
         if device is None:
             raise RuntimeError("At least one of the inputs must be a TTNN tensor.")
         if isinstance(a, TorchTTNNTensor):
-            t_a_ttnn = ensure_tile_layout(a.to_ttnn)
+            t_a_ttnn = _ttnn_from_torchttnn_safe(a, device)
+            t_a_ttnn = ensure_tile_layout(t_a_ttnn) if t_a_ttnn is not None else ensure_tile_layout(a.to_ttnn)
         else:
             t_a_ttnn = ttnn.from_torch(
                 a.detach().to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
             )
             t_a_ttnn = ensure_tile_layout(t_a_ttnn)
         if isinstance(b, TorchTTNNTensor):
-            t_b_ttnn = ensure_tile_layout(b.to_ttnn)
+            t_b_ttnn = _ttnn_from_torchttnn_safe(b, device)
+            t_b_ttnn = ensure_tile_layout(t_b_ttnn) if t_b_ttnn is not None else ensure_tile_layout(b.to_ttnn)
         else:
             t_b_ttnn = ttnn.from_torch(
                 b.detach().to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
@@ -284,8 +306,10 @@ def handle_add(func, args, kwargs):
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
-    ttnn_tensor1 = ensure_tile_layout(input_tensor1.to_ttnn)
-    ttnn_tensor2 = ensure_tile_layout(input_tensor2.to_ttnn)
+    tt1 = _ttnn_from_torchttnn_safe(input_tensor1, device)
+    tt2 = _ttnn_from_torchttnn_safe(input_tensor2, device)
+    ttnn_tensor1 = ensure_tile_layout(tt1 if tt1 is not None else input_tensor1.to_ttnn)
+    ttnn_tensor2 = ensure_tile_layout(tt2 if tt2 is not None else input_tensor2.to_ttnn)
 
     res = TorchTTNNTensor(ttnn.add(ttnn_tensor1, ttnn_tensor2))
     _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
@@ -472,8 +496,8 @@ def handle_bmm(func, args, kwargs):
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
@@ -663,7 +687,7 @@ def handle_rsqrt(func, args, kwargs):
     input_tensor = args[0]
     if not isinstance(input_tensor, TorchTTNNTensor):
         input_tensor = TorchTTNNTensor(input_tensor)
-    return TorchTTNNTensor(ttnn.rsqrt(input_tensor.to_ttnn))
+    return TorchTTNNTensor(ttnn.rsqrt(input_tensor.to_ttnn, fast_and_approximate_mode=False))
 
 
 def handle_native_layer_norm(func, args, kwargs):
@@ -733,7 +757,7 @@ def handle_gelu(func, args, kwargs):
     input_tensor = args[0]
     if not isinstance(input_tensor, TorchTTNNTensor):
         input_tensor = TorchTTNNTensor(input_tensor)
-    return TorchTTNNTensor(ttnn.gelu(input_tensor.to_ttnn))
+    return TorchTTNNTensor(ttnn.gelu(input_tensor.to_ttnn, fast_and_approximate_mode=False))
 
 
 def handle_relu(func, args, kwargs):
@@ -1341,8 +1365,8 @@ def handle_addmm(func, args, kwargs):
         ttnn_tensor3 = ttnn.to_layout(ttnn_tensor3, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
@@ -1637,6 +1661,7 @@ def handle_constant_pad_nd(func, args, kwargs):
                 layout=ttnn.TILE_LAYOUT,
             )
             out = ttnn.concat([left_fill, out], dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.clone(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(left_fill)
             shape[dim] += left
         if right > 0:
@@ -1647,6 +1672,7 @@ def handle_constant_pad_nd(func, args, kwargs):
                 layout=ttnn.TILE_LAYOUT,
             )
             out = ttnn.concat([out, right_fill], dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.clone(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(right_fill)
             shape[dim] += right
     return TorchTTNNTensor(out)

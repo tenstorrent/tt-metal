@@ -765,12 +765,14 @@ class TTNNGR00TSelfAttention(TTNNModule):
 
     @classmethod
     def from_torch(cls, torch_layer, model_config=None):
+        """Builds TTNNGR00TSelfAttention from a PyTorch attention layer."""
         if isinstance(torch_layer, TTNNGR00TSelfAttention):
             return torch_layer
         config = getattr(torch_layer, "config", None)
         return cls(config=config, torch_layer=torch_layer)
 
     def _map_weights(self, torch_layer):
+        """Maps Q/K/V/O projections and optional Q/K norms from the torch layer."""
         for name, m in torch_layer.named_children():
             lname = name.lower()
             if any(x in lname for x in ["q_proj", "query", "to_q"]) and hasattr(m, "weight"):
@@ -791,7 +793,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
     def _prepare_attention_mask_for_ttnn(
         self, attention_mask, batch_size, q_len, kv_len, q_pad, kv_pad, device, is_causal=False
     ):
-        """VL-style mask to additive form for TTNN SDPA. Padded pos get -10000."""
+        """Converts attention mask to additive form for TTNN SDPA."""
         PAD_MASK_VALUE = -10000.0
         additive = None
 
@@ -831,6 +833,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return tt_mask
 
     def _pcc(self, a, b):
+        """Computes Pearson correlation coefficient between two tensors."""
         if not isinstance(a, torch.Tensor):
             a = a.to_torch if hasattr(a, "to_torch") else ttnn.to_torch(a)
         if not isinstance(b, torch.Tensor):
@@ -840,26 +843,13 @@ class TTNNGR00TSelfAttention(TTNNModule):
             return float("nan")
         return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
-    def _rms_norm_torch_fallback(self, tt_tensor, tt_norm, device):
-        """Prefer TTNN (Tensix) path; fall back to torch only on failure."""
-        try:
-            return tt_norm.forward(tt_tensor)
-        except Exception as e:
-            if os.environ.get("TT_SYMBIOTE_DIAG_LM_ATTN_STAGES"):
-                _n = getattr(self, "module_name", "?")
-                if "self_attn" in str(_n):
-                    print(f"[DIAG_LM_ATTN] {_n} q/k_norm: torch fallback ({e})", flush=True)
-        torch_norm = getattr(tt_norm, "torch_layer", None) or getattr(tt_norm, "_fallback_torch_layer", None)
-        if torch_norm is None:
-            raise RuntimeError("RMSNorm: TTNN failed and no torch fallback available.") from e
-        t = ttnn.to_torch(tt_tensor)
-        with torch.no_grad():
-            out = torch_norm(t)
-        return ttnn.from_torch(
-            out.contiguous().to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        )
+    def _rms_norm_on_device(self, tt_tensor, tt_norm, device):
+        """Applies RMSNorm on device."""
+        t = tt_tensor.to_ttnn if hasattr(tt_tensor, "to_ttnn") else tt_tensor
+        return tt_norm.forward(t)
 
     def _rope_torch_fallback(self, q_raw, k_raw, cos_torch, sin_torch, device):
+        """Applies RoPE via TTNN or torch fallback when to_torch fails."""
         torch_rope = getattr(self.rope, "torch_layer", None) or getattr(self.rope, "_fallback_torch_layer", None)
         if torch_rope is None:
             cos_tt = ttnn.from_torch(
@@ -899,6 +889,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return q_tt, k_tt
 
     def forward(self, hidden_states, *args, **kwargs):
+        """Projects hidden states to Q/K/V, applies norms and RoPE when configured, runs SDPA, projects output."""
         if self.tt_q_proj is None:
             return hidden_states, None
 
@@ -970,6 +961,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
                 print(f"[DIAG_ATTN_PCC] {name} ERROR: {exc}", flush=True)
 
         def prepare_heads_on_device(t, num_heads, apply_pad=True):
+            """Reshapes to (B, num_heads, seq, d_head), optionally pads to 32 for SDPA."""
             raw = t.to_ttnn if hasattr(t, "to_ttnn") else t
             if raw.layout != ttnn.TILE_LAYOUT:
                 raw = ttnn.to_layout(raw, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -999,9 +991,9 @@ class TTNNGR00TSelfAttention(TTNNModule):
             k_4d, _, kv_len, _, _, kv_pad_s, kv_pad_d = prepare_heads_on_device(k_w, self.num_kv_heads, apply_pad=False)
             hw_dev = q_4d.device()
             if self.tt_q_norm is not None:
-                q_4d = self._rms_norm_torch_fallback(q_4d, self.tt_q_norm, hw_dev)
+                q_4d = self._rms_norm_on_device(q_4d, self.tt_q_norm, hw_dev)
             if self.tt_k_norm is not None:
-                k_4d = self._rms_norm_torch_fallback(k_4d, self.tt_k_norm, hw_dev)
+                k_4d = self._rms_norm_on_device(k_4d, self.tt_k_norm, hw_dev)
             pos_emb = kwargs.get("position_embeddings", None)
             if pos_emb is not None:
                 cos, sin = pos_emb
@@ -1025,14 +1017,20 @@ class TTNNGR00TSelfAttention(TTNNModule):
                         ct = torch.nn.functional.pad(ct, (0, 0, 0, sq - ct.shape[1]), value=1.0)
                         st = torch.nn.functional.pad(st, (0, 0, 0, sq - st.shape[1]), value=0.0)
                     q_4d, k_4d = self._rope_torch_fallback(q_4d, k_4d, ct, st, hw_dev)
+
+            def _to_ttnn(t):
+                return t.to_ttnn if hasattr(t, "to_ttnn") else t
+
             if q_pad_s > 0 or q_pad_d > 0:
-                q_raw = ttnn.pad(q_4d, [[0, 0], [0, 0], [0, q_pad_s], [0, q_pad_d]], value=0.0)
+                q_t = _to_ttnn(q_4d)
+                q_raw = ttnn.pad(q_t, [[0, 0], [0, 0], [0, q_pad_s], [0, q_pad_d]], value=0.0)
             else:
-                q_raw = q_4d
+                q_raw = _to_ttnn(q_4d)
             if kv_pad_s > 0 or kv_pad_d > 0:
-                k_raw = ttnn.pad(k_4d, [[0, 0], [0, 0], [0, kv_pad_s], [0, kv_pad_d]], value=0.0)
+                k_t = _to_ttnn(k_4d)
+                k_raw = ttnn.pad(k_t, [[0, 0], [0, 0], [0, kv_pad_s], [0, kv_pad_d]], value=0.0)
             else:
-                k_raw = k_4d
+                k_raw = _to_ttnn(k_4d)
             v_raw, _, _, _, _, _, _ = prepare_heads_on_device(v_w, self.num_kv_heads, apply_pad=True)
         else:
             q_raw, b, q_len, h, d_head, q_pad_s, q_pad_d = prepare_heads_on_device(q_w, self.num_heads, apply_pad=True)

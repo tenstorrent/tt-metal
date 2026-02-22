@@ -3,18 +3,32 @@
 
 """GR00T utilities for TT Symbiote.
 
-Applies patches at import time to extend core (run_config, module, tensor, device_management)
-with GR00T-specific behavior: DPL run modes, distributed config, DiT attention compat,
-and tensor/device handling. Keeps core alnah005-clean; all GR00T logic lives here.
+Applies import-time patches to run_config, module, tensor, and device_management
+with GR00T-specific DPL modes, distributed config, DiT compatibility, and tensor handling.
 """
 
 import operator
 import os
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from functools import reduce, wraps
 from math import isqrt
 from typing import Any, Dict, Optional
+
+# -----------------------------------------------------------------------------
+# DPL thread-local state
+# -----------------------------------------------------------------------------
+
+_DPL_TORCH_REF_RUNNING = threading.local()
+
+
+def set_dpl_torch_ref_running(value: bool) -> None:
+    """Sets the thread-local flag indicating DPL torch reference execution.
+    When True, ops route through the torch path to avoid deallocated-buffer issues.
+    """
+    _DPL_TORCH_REF_RUNNING.value = value
+
 
 import torch
 import ttnn
@@ -35,11 +49,17 @@ from models.experimental.tt_symbiote.core.run_config import (
     wrap_from_torch,
     wrap_to_torch_ttnn_tensor,
 )
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import TORCH_TO_TTNN, ensure_tile_layout
 
 
-def compare_fn_outputs(torch_output, ttnn_output, func_name):
-    """Compare torch vs TTNN outputs via PCC. Replaces run_config.compare_fn_outputs for GR00T."""
+# -----------------------------------------------------------------------------
+# Output comparison and validation
+# -----------------------------------------------------------------------------
+
+
+def compare_fn_outputs(torch_output, ttnn_output, func_name) -> None:
+    """Compares torch and TTNN outputs using PCC threshold; reports discrepancies."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     torch_output_tensors = []
@@ -55,8 +75,8 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
             elif isinstance(item, torch.Tensor):
                 torch_output_tensors.append(item)
     if isinstance(ttnn_output, TorchTTNNTensor):
-        ttnn_output.elem = None
-        ttnn_output_tensors.append(ttnn_output.to_torch)
+        t_arr = ttnn_output.elem if ttnn_output.elem is not None else ttnn_output.to_torch
+        ttnn_output_tensors.append(t_arr)
         if not isinstance(torch_output, TorchTTNNTensor):
             print("Mismatched output types between TTNN and Torch.")
     elif isinstance(ttnn_output, (list, tuple)):
@@ -81,26 +101,30 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
             if isinstance(item, TorchTTNNTensor):
                 if not isinstance(torch_output[index], TorchTTNNTensor):
                     print("Mismatched output types between TTNN and Torch.")
-                item.elem = None
-                ttnn_output_tensors.append(item.to_torch)
+                t_arr = item.elem if item.elem is not None else item.to_torch
+                ttnn_output_tensors.append(t_arr)
 
     passed = True
     for t_tensor, n_tensor in zip(torch_output_tensors, ttnn_output_tensors):
         t_tensor = t_tensor.to(torch.float32)
         n_tensor = n_tensor.to(torch.float32)
         assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
-        pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         diff = torch.abs(t_tensor - n_tensor)
+        max_diff = torch.max(diff).item()
+        # When tensors are identical (max_diff==0), corrcoef yields NaN for constant vectors; treat as pass
+        if max_diff == 0.0 and not diff.isnan().any():
+            continue
+        pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         if (
             pcc < 0.999
-            or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1)
-            or pcc.isnan().item()
+            or (torch.median(diff) > torch.mean(diff) and max_diff > 1)
+            or (pcc.isnan().item() and max_diff > 0)
             or diff.isnan().any()
         ):
             passed = False
             print(
                 f"Warning: High discrepancy detected in operation {func_name}. "
-                f"PCC: {pcc.item()}, Max Abs Diff: {torch.max(diff).item()}, "
+                f"PCC: {pcc.item()}, Max Abs Diff: {max_diff}, "
                 f"Median Abs Diff: {torch.median(diff).item()}, "
                 f"Mean Abs Diff: {torch.mean(diff).item()}"
             )
@@ -113,39 +137,41 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         print(f"Operation {func_name} PCC < 0.99.")
 
 
+# -----------------------------------------------------------------------------
+# TTNN modules for GR00T
+# -----------------------------------------------------------------------------
+
+
 class TTNNEmbedding(TTNNModule):
-    """TTNN-accelerated Embedding layer (embedding lookup on device)."""
+    """Embedding lookup accelerated on TTNN device."""
 
     @classmethod
     def from_torch(cls, embedding: nn.Embedding):
-        """Create TTNNEmbedding from PyTorch Embedding layer."""
+        """Constructs TTNNEmbedding from a PyTorch nn.Embedding."""
         new_layer = cls()
         new_layer._fallback_torch_layer = embedding
         return new_layer
 
     def preprocess_weights_impl(self):
-        """Preprocess embedding weights for TTNN."""
+        """Converts embedding weights to TTNN bfloat16 row-major layout."""
         if self.torch_layer is None:
             return
         weight = self.torch_layer.weight
         self.tt_weight_host = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def move_weights_to_device_impl(self):
-        """Move weights to TTNN device."""
+        """Moves preprocessed weights onto the TTNN device."""
         if hasattr(self, "tt_weight_host") and self.tt_weight_host is not None:
             self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
 
     def deallocate_weights_impl(self):
-        """Deallocate weights from device."""
+        """Releases device memory used by embedding weights."""
         if hasattr(self, "tt_weight") and self.tt_weight is not None:
             ttnn.deallocate(self.tt_weight)
         super().deallocate_weights_impl()
 
     def forward(self, indices):
-        """Forward pass: embedding lookup on device.
-        indices: TorchTTNNTensor or ttnn.Tensor of shape (batch, seq_len) or (seq_len,)
-        ttnn.embedding requires indices in UINT32 dtype.
-        """
+        """Performs embedding lookup on device. Accepts (batch, seq_len) or (seq_len,) indices; converts to UINT32."""
         device = self.device
         ind_tt = getattr(indices, "to_ttnn", None) or indices
         if hasattr(indices, "elem") and indices.elem is not None and getattr(indices, "ttnn_tensor", None) is None:
@@ -175,11 +201,259 @@ class TTNNEmbedding(TTNNModule):
         return out
 
 
+class TTNNSigLIPPositionEmbedding(TTNNModule):
+    """2D position embedding for SigLIP: reshape, interpolate, and add on device."""
+
+    @classmethod
+    def from_torch(cls, embedding: nn.Embedding):
+        """Builds from PyTorch Embedding (interpreted as 2D grid)."""
+        new_layer = cls()
+        new_layer._fallback_torch_layer = embedding
+        weight = embedding.weight
+        new_layer.position_embedding_size = int(weight.shape[0] ** 0.5)
+        new_layer.embed_dim = weight.shape[1]
+        return new_layer
+
+    def preprocess_weights_impl(self):
+        """Reshapes weights (N, C) to (1, H, W, C) for TTNN NHWC layout."""
+        if self.torch_layer is None:
+            return
+        weight = self.torch_layer.weight
+        H = self.position_embedding_size
+        W = self.position_embedding_size
+        C = self.embed_dim
+        w_2d = weight.reshape(H, W, C)
+        self.tt_weight_host = ttnn.from_torch(w_2d.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def move_weights_to_device_impl(self):
+        """Moves preprocessed weights onto the TTNN device."""
+        if hasattr(self, "tt_weight_host") and self.tt_weight_host is not None:
+            self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+
+    def deallocate_weights_impl(self):
+        """Releases device memory used by position embedding weights."""
+        if hasattr(self, "tt_weight") and self.tt_weight is not None:
+            ttnn.deallocate(self.tt_weight)
+        super().deallocate_weights_impl()
+
+    def forward_with_patch_embeds(self, patch_embeds, spatial_shapes):
+        """Resizes position embeddings per spatial shape, adds to patch embeddings, returns wrapped result."""
+        device = self.device
+        batch_size = spatial_shapes.shape[0]
+        embed_dim = self.embed_dim
+        H0 = W0 = self.position_embedding_size
+
+        base = self.tt_weight
+        resized_list = []
+        for i in range(batch_size):
+            h, w = int(spatial_shapes[i, 0].item()), int(spatial_shapes[i, 1].item())
+            if h == H0 and w == W0:
+                out = base
+            else:
+                scale_h = h / H0
+                scale_w = w / W0
+                out = ttnn.upsample(
+                    base,
+                    scale_factor=(scale_h, scale_w),
+                    mode="bilinear",
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            out = ttnn.reshape(out, (1, h * w, embed_dim))
+            resized_list.append(out)
+
+        pos_emb = ttnn.concat(resized_list, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if hasattr(patch_embeds, "ttnn_tensor") and patch_embeds.ttnn_tensor is not None:
+            patch_tt = patch_embeds.ttnn_tensor
+        elif hasattr(patch_embeds, "to_ttnn"):
+            patch_tt = patch_embeds.to_ttnn(device=device)
+        else:
+            patch_tt = ttnn.from_torch(
+                patch_embeds.cpu().to(torch.bfloat16),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+        embeddings = ttnn.add(patch_tt, pos_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = wrap_to_torch_ttnn_tensor(embeddings)
+        if os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL":
+            out = _populate_elem_on_ttnn_result(out)
+        return out
+
+
+# -----------------------------------------------------------------------------
+# Vision embedding helpers
+# -----------------------------------------------------------------------------
+
+
+def ttnn_convert_images_to_patches(images: torch.Tensor, patch_size: int, device=None):
+    """Converts (B,C,H,W) images to (B*num_patches, p*p*C) patches. Uses TTNN when device set, else PyTorch."""
+    batch_size, num_channels, image_height, image_width = images.shape
+    assert image_height % patch_size == 0 and image_width % patch_size == 0
+    num_patches_height = image_height // patch_size
+    num_patches_width = image_width // patch_size
+
+    if device is None:
+        patched = images.reshape(
+            batch_size,
+            num_channels,
+            num_patches_height,
+            patch_size,
+            num_patches_width,
+            patch_size,
+        )
+        patched = patched.permute(0, 2, 4, 3, 5, 1)
+        return patched.reshape(batch_size * num_patches_height * num_patches_width, -1)
+
+    patched = images.to(torch.bfloat16)
+    tt = ttnn.from_torch(
+        patched,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    tt = ttnn.reshape(
+        tt,
+        (
+            batch_size,
+            num_channels,
+            num_patches_height,
+            patch_size,
+            num_patches_width,
+            patch_size,
+        ),
+    )
+    tt = ttnn.permute(tt, (0, 2, 4, 3, 5, 1))
+    tt = ttnn.reshape(tt, (batch_size * num_patches_height * num_patches_width, -1))
+    out = wrap_to_torch_ttnn_tensor(tt)
+    if os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL":
+        out = _populate_elem_on_ttnn_result(out)
+    return out
+
+
+def ttnn_split_patch_embeddings_to_windows_with_meta(patch_embeds, batch_hw, window_size, _self=None):
+    """Splits patch embeddings into windows with padding/unfold. Returns (all_tokens, win_meta_list, reverse_mapping)."""
+    from collections import defaultdict
+    from itertools import accumulate
+
+    import torch.nn.functional as F
+
+    batch_hw = batch_hw.tolist()
+    counts = [H * W for (H, W) in batch_hw]
+    starts = [0] + list(accumulate(counts))[:-1]
+
+    size2info = defaultdict(list)
+    for img_idx, ((H, W), start) in enumerate(zip(batch_hw, starts)):
+        size2info[(H, W)].append((img_idx, start))
+
+    all_windows = []
+    all_meta = []
+    for (H, W), info in size2info.items():
+        H, W = int(H), int(W)
+        B = len(info)
+        C = patch_embeds.shape[-1]
+        img_idxs, img_starts = zip(*info)
+
+        imgs = []
+        for st in img_starts:
+            flat = patch_embeds[0, st : st + H * W]
+            imgs.append(flat.transpose(0, 1).reshape(C, H, W))
+        batch_tensor = torch.stack(imgs, dim=0)
+
+        pad_h = (window_size - H % window_size) % window_size
+        pad_w = (window_size - W % window_size) % window_size
+        batch_padded = F.pad(batch_tensor, (0, pad_w, 0, pad_h))
+
+        H_pad, W_pad = H + pad_h, W + pad_w
+        n_h = H_pad // window_size
+        n_w = W_pad // window_size
+        n_windows = n_h * n_w
+
+        patches_unf = F.unfold(
+            batch_padded,
+            kernel_size=(window_size, window_size),
+            stride=(window_size, window_size),
+        )
+        patches = (
+            patches_unf.view(B, C, window_size * window_size, n_windows)
+            .permute(0, 3, 2, 1)
+            .reshape(-1, window_size * window_size, C)
+        )
+        all_windows.append(patches)
+
+        for b, img_idx in enumerate(img_idxs):
+            for win_id in range(n_windows):
+                i, j = divmod(win_id, n_w)
+                h0, w0 = i * window_size, j * window_size
+                h1 = min(h0 + window_size, H)
+                w1 = min(w0 + window_size, W)
+                all_meta.append(
+                    {
+                        "img_idx": img_idx,
+                        "patch_hw": (H, W),
+                        "win_xy": (h0, w0),
+                        "win_hw": (h1 - h0, w1 - w0),
+                    }
+                )
+
+    sorted_idx = sorted(
+        range(len(all_meta)),
+        key=lambda k: (
+            all_meta[k]["img_idx"],
+            all_meta[k]["win_xy"][0],
+            all_meta[k]["win_xy"][1],
+        ),
+    )
+    all_windows = torch.cat(all_windows, dim=0)
+    all_windows = all_windows[sorted_idx]
+    win_meta_list = [all_meta[i] for i in sorted_idx]
+
+    windows_list = []
+    for meta, win in zip(win_meta_list, all_windows):
+        h_eff, w_eff = meta["win_hw"]
+        valid_num = h_eff * w_eff
+        if valid_num == window_size * window_size:
+            windows_list.append(win)
+        else:
+            win = win.view(window_size, window_size, -1)[:h_eff, :w_eff, :].reshape(h_eff * w_eff, -1)
+            windows_list.append(win)
+
+    all_tokens = torch.cat(windows_list, dim=0).unsqueeze(0)
+
+    counts = [H * W for H, W in batch_hw]
+    starts = [0] + list(accumulate(counts))[:-1]
+    total_patches = sum(counts)
+    mapping = [None] * total_patches
+    offset = 0
+
+    for meta in win_meta_list:
+        img_idx = meta["img_idx"]
+        pH, pW = meta["patch_hw"]
+        h0, w0 = meta["win_xy"]
+        h_eff, w_eff = meta["win_hw"]
+        base = starts[img_idx]
+        for u in range(h_eff):
+            for v in range(w_eff):
+                orig_idx = base + (h0 + u) * pW + (w0) + v
+                p = u * w_eff + v
+                mapping[orig_idx] = offset + p
+        offset += h_eff * w_eff
+    reverse_mapping = torch.tensor(mapping, dtype=torch.long)
+
+    return all_tokens, win_meta_list, reverse_mapping
+
+
 _DIAG_LM_LAYER0_CAPTURE: Dict[str, Any] = {}
 
 
+# -----------------------------------------------------------------------------
+# DPL and tensor conversion helpers
+# -----------------------------------------------------------------------------
+
+
 def _filter_kwargs_for_ttnn_conversion(kwargs):
-    """Drop kwargs with unsupported dtypes for TTNN. Needed so to_ttnn doesn't fail on non-convertible tensors."""
+    """Filters kwargs to TTNN-supported dtypes; drops unconvertible tensors."""
     result = {}
     for k, v in kwargs.items():
         if k == "attention_mask" and v is not None:
@@ -193,7 +467,7 @@ def _filter_kwargs_for_ttnn_conversion(kwargs):
 
 
 def _force_elem_for_lm_attn(e):
-    """Force TorchTTNNTensor to elem-only (clear ttnn_tensor). LM self-attn path needs fresh to_ttnn conversion."""
+    """Replaces TorchTTNNTensor with elem-only wrapper for LM self-attn conversion path."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     if isinstance(e, TorchTTNNTensor) and e.elem is not None and e.ttnn_tensor is not None:
@@ -204,7 +478,7 @@ def _force_elem_for_lm_attn(e):
 
 
 def _to_ttnn_lm_attn_style(e, device):
-    """Convert elem to TTNN on device for LM self-attn. Uses elem (torch) to avoid stale ttnn_tensor."""
+    """Converts elem (torch tensor) to TTNN on device for LM self-attention."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     if not isinstance(e, TorchTTNNTensor) or e.elem is None:
@@ -222,7 +496,7 @@ def _to_ttnn_lm_attn_style(e, device):
 
 
 def ensure_tile_layout_wrap(e):
-    """Ensure ttnn.Tensor or TorchTTNNTensor.ttnn_tensor has TILE_LAYOUT. Required before SDPA."""
+    """Ensures ttnn tensor has TILE_LAYOUT (required before SDPA)."""
     if isinstance(e, ttnn.Tensor):
         return ensure_tile_layout(e)
     if hasattr(e, "ttnn_tensor") and e.ttnn_tensor is not None:
@@ -231,7 +505,7 @@ def ensure_tile_layout_wrap(e):
 
 
 def _to_raw_torch(x):
-    """Extract plain torch.Tensor from TorchTTNNTensor or ttnn.Tensor. For diagnostics/cloning."""
+    """Extracts plain torch.Tensor from TorchTTNNTensor or ttnn.Tensor."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     if isinstance(x, TorchTTNNTensor):
@@ -244,7 +518,7 @@ def _to_raw_torch(x):
 
 
 def _dtype_from_torch_args(args, kwds):
-    """Infer dtype from first floating tensor in args/kwds. Used to cast torch_layer for DPL consistency."""
+    """Infers dtype from the first floating-point tensor in args or kwds."""
     from torch.utils._pytree import tree_flatten
 
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -257,7 +531,7 @@ def _dtype_from_torch_args(args, kwds):
 
 
 def _cast_module_to_dtype(module, dtype):
-    """Cast module params/buffers to dtype. DPL needs torch_layer to match input dtype."""
+    """Casts module parameters and buffers to the given dtype."""
     if dtype is None:
         return
     for p in module.parameters():
@@ -268,19 +542,67 @@ def _cast_module_to_dtype(module, dtype):
             b.data = b.data.to(dtype)
 
 
+def _ensure_elem_for_dpl(e):
+    """Populates elem for TorchTTNNTensor when ttnn_tensor is allocated and elem is None."""
+    if isinstance(e, TorchTTNNTensor) and e.elem is None and e.ttnn_tensor is not None:
+        if hasattr(e.ttnn_tensor, "is_allocated") and e.ttnn_tensor.is_allocated():
+            e.elem = ttnn.to_torch(e.ttnn_tensor).to(e.device, e.dtype)
+    return e
+
+
+def _populate_elem_on_ttnn_result(e):
+    """Populates elem on TorchTTNNTensor when ttnn_tensor is allocated and elem is None."""
+    if isinstance(e, TorchTTNNTensor) and e.elem is None and e.ttnn_tensor is not None:
+        if hasattr(e.ttnn_tensor, "is_allocated") and e.ttnn_tensor.is_allocated():
+            e.elem = ttnn.to_torch(e.ttnn_tensor).to(e.device, e.dtype)
+    return e
+
+
 class DPLRunExtended(NormalRun):
-    """DPL run: run torch ref, then TTNN, compare, merge. For GR00T validation and debugging."""
+    """DPL mode: runs torch reference, then TTNN, compares and merges outputs."""
+
+    @staticmethod
+    def to_torch(self):
+        """Returns elem when ttnn buffer is deallocated; otherwise delegates to NormalRun."""
+        if self.elem is not None and self.ttnn_tensor is not None:
+            if hasattr(self.ttnn_tensor, "is_allocated") and not self.ttnn_tensor.is_allocated():
+                return self.elem
+        return NormalRun.to_torch(self)
+
+    @staticmethod
+    def torch_dispatch(cls, func, types, args=(), kwargs=None):
+        """Dispatches to torch path during ref run; when not in ref, runs both torch and TTNN, compares (PCC>=0.99), returns TTNN result. No CPU fallback."""
+        from models.experimental.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
+        from models.experimental.tt_symbiote.core.run_config import (
+            DispatchManager,
+            copy_to_torch,
+            create_new_ttnn_tensors_using_torch_output,
+        )
+
+        in_torch_ref = getattr(_DPL_TORCH_REF_RUNNING, "value", False)
+        if in_torch_ref:
+            return DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
+        # Aten-level PCC comparison: run torch ref + TTNN, compare, keep TTNN (no CPU fallback)
+        copied_torch_args = tree_map(copy_to_torch(func), args)
+        copied_torch_kwargs = tree_map(copy_to_torch(func), kwargs)
+        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_args, copied_torch_kwargs)
+        if can_dispatch_to_ttnn(func.name(), args, kwargs):
+            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
+            compare_fn_outputs(copied_torch_args, args, func.name())
+            compare_fn_outputs(result, ttnn_output, func.name())
+            result = create_new_ttnn_tensors_using_torch_output(result, ttnn_output, assign_ttnn_to_torch=True)
+        return tree_map(_populate_elem_on_ttnn_result, result)
 
     @staticmethod
     def module_run(self, *args, **kwds):
         from models.experimental.tt_symbiote.core import run_config
 
-        # Child modules (e.g. TTNNRotaryPositionEmbedding, RMSNorm) may not have torch_layer;
-        # delegate to NormalRun so they run TTNN-only without DPL comparison.
         if self.torch_layer is None:
             return NormalRun.module_run(self, *args, **kwds)
 
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        args = tree_map(_ensure_elem_for_dpl, args)
+        kwds = dict(tree_map(_ensure_elem_for_dpl, kwds))
         copied_torch_tensors_args = tree_map(run_config.copy_to_torch(self.__class__.__name__), args)
         copied_torch_tensors_kwargs = tree_map(run_config.copy_to_torch(self.__class__.__name__), kwds)
         func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
@@ -294,7 +616,11 @@ class DPLRunExtended(NormalRun):
             copied_torch_tensors_kwargs = {
                 k: (None if k == "attention_mask" else v) for k, v in copied_torch_tensors_kwargs.items()
             }
-        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
+        set_dpl_torch_ref_running(True)
+        try:
+            torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
+        finally:
+            set_dpl_torch_ref_running(False)
         result = torch_output
         if self.device is not None:
             mn = getattr(self, "module_name", "")
@@ -375,7 +701,7 @@ class DPLRunExtended(NormalRun):
 
 
 class DPLRunNoErrorPropExtended(NormalRun):
-    """DPL run without error propagation: run TTNN only, no comparison. Faster for inference."""
+    """DPL variant: TTNN-only execution without comparison (faster for inference)."""
 
     @staticmethod
     def module_run(self, *args, **kwds):
@@ -421,7 +747,7 @@ def _patched_basic_transformer_block_forward(
     encoder_attention_mask: Optional[torch.Tensor] = None,
     temb: Optional[torch.LongTensor] = None,
 ) -> torch.Tensor:
-    """Patched diffusers BasicTransformerBlock.forward for DiT: returns attn_output only (not full tuple)."""
+    """Patched BasicTransformerBlock.forward for DiT: returns attn output only (not full tuple)."""
     if self.norm_type == "ada_norm":
         norm_hidden_states = self.norm1(hidden_states, temb)
     else:
@@ -453,7 +779,7 @@ def _patched_basic_transformer_block_forward(
 
 
 def apply_gr00t_dit_attention_return_compat() -> bool:
-    """Patch diffusers BasicTransformerBlock for DiT attn1 return format. Call before GR00T DiT inference."""
+    """Patches BasicTransformerBlock for DiT attn1 return format. Call before GR00T inference."""
     try:
         from gr00t.model.modules import dit
     except ImportError:
@@ -470,18 +796,24 @@ def apply_gr00t_dit_attention_return_compat() -> bool:
 
 
 def post_process_ttnn_module_output(self, result):
-    """Wrap output as TorchTTNNTensor and apply set_output_tensors_config. Patched into NormalRun.module_run."""
+    """Wraps output as TorchTTNNTensor, populates elem in DPL, applies set_output_tensors_config."""
     result = tree_map(wrap_to_torch_ttnn_tensor, result)
+    if os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL":
+        result = tree_map(_populate_elem_on_ttnn_result, result)
     if getattr(self, "device_state", None) is not None:
         result = self.set_output_tensors_config(result)
     return result
 
 
 def _create_new_ttnn_tensors_using_torch_output_relaxed(torch_output, ttnn_output, assign_ttnn_to_torch=False):
-    """Assign ttnn to torch wrapper. Relaxed for GR00T: elem=None, list/tuple length mismatch OK."""
+    """Assigns ttnn tensors to torch wrappers; tolerant of shape/length mismatches for GR00T."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     if isinstance(torch_output, TorchTTNNTensor) and isinstance(ttnn_output, TorchTTNNTensor):
+        t_shp = getattr(torch_output, "shape", None)
+        n_shp = getattr(ttnn_output, "shape", None)
+        if t_shp is not None and n_shp is not None and t_shp != n_shp:
+            return torch_output
         torch_output.ttnn_tensor = ttnn_output.to_ttnn
         if not assign_ttnn_to_torch:
             torch_output.elem = None
@@ -501,8 +833,25 @@ def _create_new_ttnn_tensors_using_torch_output_relaxed(torch_output, ttnn_outpu
     return torch_output
 
 
+def _unwrap_to_torch_safe(func):
+    """Unwraps TorchTTNNTensor to torch, preferring elem when available to avoid deallocated-buffer errors."""
+    _orig = unwrap_to_torch(func)
+
+    def _safe(e):
+        if isinstance(e, TorchTTNNTensor):
+            if e.elem is not None and e.elem.device.type != "meta":
+                return e.elem
+            if e.ttnn_tensor is not None:
+                _ensure_elem_for_dpl(e)
+                if e.elem is not None:
+                    return e.elem
+        return _orig(e)
+
+    return _safe
+
+
 def _dispatch_to_torch_wrapper_gr00t(func, torch_args, torch_kwargs):
-    """Dispatch to torch. Handles padded view, im2col shape fixes, dtype cast for GR00T ops."""
+    """Dispatches to torch path with GR00T-specific handling for view, im2col, and dtype casting."""
     import time
 
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -514,8 +863,8 @@ def _dispatch_to_torch_wrapper_gr00t(func, torch_args, torch_kwargs):
         if isinstance(torch_args[0], TorchTTNNTensor) and torch_args[0].ttnn_tensor is not None:
             im2col_logical_shape = tuple(int(i) for i in torch_args[0].ttnn_tensor.shape)
     with no_dispatch():
-        func_args = list(tree_map(unwrap_to_torch(func), torch_args))
-        func_kwargs = dict(tree_map(unwrap_to_torch(func), torch_kwargs))
+        func_args = list(tree_map(_unwrap_to_torch_safe(func), torch_args))
+        func_kwargs = dict(tree_map(_unwrap_to_torch_safe(func), torch_kwargs))
         if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
             if isinstance(torch_args[0], TorchTTNNTensor) and isinstance(func_args[0], torch.Tensor):
                 t, shp = func_args[0], (
@@ -582,11 +931,22 @@ def _dispatch_to_torch_wrapper_gr00t(func, torch_args, torch_kwargs):
 
 
 def _copy_to_torch_extended(func):
-    """Copy TorchTTNNTensor or ttnn.Tensor to torch. Needed when GR00T passes raw ttnn.Tensor."""
+    """Copies TorchTTNNTensor or ttnn.Tensor to torch; prefers elem when deallocated."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     def _copy(e):
         if isinstance(e, TorchTTNNTensor):
+            if (
+                e.ttnn_tensor is not None
+                and hasattr(e.ttnn_tensor, "is_allocated")
+                and not e.ttnn_tensor.is_allocated()
+                and e.elem is not None
+            ):
+                return TorchTTNNTensor(e.elem.clone())
+            if e.elem is not None:
+                res = TorchTTNNTensor(e.elem.clone())
+                res.ttnn_tensor = None
+                return res
             res = TorchTTNNTensor(e.to_torch.clone())
             res.ttnn_tensor = None
             return res
@@ -602,7 +962,7 @@ def _copy_to_torch_extended(func):
 
 
 def get_default_distributed_tensor_config(mesh_device=None, torch_tensor=None, module_name=None):
-    """Lookup tensor config from DeviceInit state. Used by run_config.to_ttnn for distributed tensors."""
+    """Looks up distributed tensor config from DeviceInit state."""
     try:
         from models.experimental.tt_symbiote.utils.device_management import DeviceInit
 
@@ -623,7 +983,7 @@ def get_default_distributed_tensor_config(mesh_device=None, torch_tensor=None, m
 
 
 def _patch_module_for_gr00t(DistributedConfigCls):
-    """Add device_state, set_output_tensors_config, run_on_devices, DeviceArch to TTNNModule. Needed for multi-device."""
+    """Adds multi-device support to TTNNModule (device_state, output config, run_on_devices)."""
     import models.experimental.tt_symbiote.core.module as core_module
     from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -753,7 +1113,7 @@ def _patch_module_for_gr00t(DistributedConfigCls):
 
 
 def _patch_device_management_for_gr00t(DistributedConfigCls):
-    """Add DeviceInit, multi-device set_device, unwrap_ttnn, assimilate_to_device to device_management."""
+    """Extends device_management with GR00T multi-device init, set_device, unwrap_ttnn, and assimilate_to_device."""
     import time
 
     import models.experimental.tt_symbiote.utils.device_management as dm
@@ -871,7 +1231,7 @@ def _patch_device_management_for_gr00t(DistributedConfigCls):
         _set_device_recursive(obj)
 
     def unwrap_ttnn(tensor):
-        """Extract core tensor from TTNN/Symbiote wrappers (ttnn_tensor, value, tensor attrs). For assimilate_to_device."""
+        """Extracts the underlying tensor from TTNN/Symbiote wrappers."""
         if tensor is None:
             return None
         curr = tensor
@@ -880,7 +1240,7 @@ def _patch_device_management_for_gr00t(DistributedConfigCls):
         return curr
 
     def assimilate_to_device(tensor, device):
-        """Prepare tensor for GR00T inference: unwrap, complex->real, move to device in bfloat16 tile layout."""
+        """Prepares a tensor for GR00T inference on the given device."""
         if tensor is None:
             return None
         from models.experimental.tt_symbiote.core.utils import ensure_tile_layout
@@ -901,7 +1261,7 @@ def _patch_device_management_for_gr00t(DistributedConfigCls):
 
 
 def _patch_module_replacement_for_gr00t():
-    """Wrap initialize_module to call override_children_module_names for hierarchical naming (model_config, tensor_config)."""
+    """Patches initialize_module to assign hierarchical names to child modules."""
     import models.experimental.tt_symbiote.utils.module_replacement as mr
     from models.experimental.tt_symbiote.core.module import TTNNModule
 
@@ -921,7 +1281,7 @@ def _patch_module_replacement_for_gr00t():
 
 
 def _patch_tensor_for_gr00t():
-    """Add logical shape, torch.* arithmetic, set_distributed_tensor_config to TorchTTNNTensor for GR00T."""
+    """Extends TorchTTNNTensor with logical shape, torch arithmetic ops, and distributed config."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
     from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 
@@ -959,12 +1319,15 @@ def _patch_tensor_for_gr00t():
 
 
 def patch_run_config_for_gr00t():
-    """Apply all GR00T patches to run_config, module, tensor, device_management. Called at import."""
+    """Applies GR00T-specific patches to run_config, module, tensor, and device_management."""
     from models.experimental.tt_symbiote.core import run_config
+    from models.experimental.tt_symbiote.core import tensor as tensor_module
 
     run_config.compare_fn_outputs = compare_fn_outputs
     run_config._RUN_MODE_REGISTRY["DPL"] = DPLRunExtended
     run_config._RUN_MODE_REGISTRY["DPL_NO_ERROR_PROP"] = DPLRunNoErrorPropExtended
+    # Re-cache so tensor uses DPLRunExtended (tensor caches at import, before this patch)
+    tensor_module.TENSOR_RUN_IMPLEMENTATION = run_config.get_tensor_run_implementation()
 
     try:
         from models.tt_transformers.tt.ccl import TT_CCL

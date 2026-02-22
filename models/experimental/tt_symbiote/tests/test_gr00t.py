@@ -23,12 +23,16 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Must import groot_utils before modules.* so run_config is patched with DistributedConfig
 from utils import groot_utils  # noqa: F401
-from utils.groot_utils import TTNNEmbedding
+from utils.groot_utils import (
+    TTNNEmbedding,
+    TTNNSigLIPPositionEmbedding,
+    set_dpl_torch_ref_running,
+)
 
 from modules.attention import TTNNGR00TSelfAttention
 from modules.linear import TTNNLinear
 from modules.normalization import TTNNLayerNorm
-from modules.activation import TTNNSilu
+from modules.activation import TTNNGelu, TTNNSilu
 from modules.conv import TTNNConv2dNHWC
 from utils.device_management import set_device
 from utils.module_replacement import register_module_replacement_dict
@@ -189,10 +193,12 @@ def test_gr00t_inference_validation(device):
         nn.LayerNorm: TTNNLayerNorm,
         nn.Embedding: TTNNEmbedding,
         nn.SiLU: TTNNSilu,
+        nn.GELU: TTNNGelu,
         nn.Conv2d: TTNNConv2dNHWC,
         lang_layer.mlp.__class__: Qwen2MLP,
         lang_layer.self_attn.__class__: TTNNGR00TSelfAttention,
         vision_layer.self_attn.__class__: TTNNGR00TSelfAttention,
+        vision_layer.mlp.activation_fn.__class__: TTNNGelu,
         action_block.attn1.__class__: TTNNGR00TSelfAttention,
     }
     exclude_replacement = {
@@ -203,6 +209,55 @@ def test_gr00t_inference_validation(device):
     )
     set_device(model, device)
 
+    # Attach TTNN SigLIP position_embedding (reshape+interpolate+add on device); keep nn.Embedding in _modules
+    embeddings = model.backbone.model.vision_model.vision_model.embeddings
+    embeddings._ttnn_device = device
+    embeddings._ttnn_pos_emb = TTNNSigLIPPositionEmbedding.from_torch(embeddings.position_embedding)
+    new_pos_emb = embeddings._ttnn_pos_emb
+    new_pos_emb.set_model_config({"dtype": ttnn.bfloat16})
+    new_pos_emb._unique_name = "backbone.model.vision_model.vision_model.embeddings.position_embedding"
+    new_pos_emb.to_device(device)
+
+    # Monkey-patch Siglip2VisionEmbeddings.forward to use TTNNSigLIPPositionEmbedding when present
+    _Siglip2VisionEmbeddings_cls = type(embeddings)
+    _orig_forward = _Siglip2VisionEmbeddings_cls.forward
+
+    def _patched_vision_embeddings_forward(self, pixel_values):
+        bchw_list = [each.shape for each in pixel_values]
+        ttnn_dev = getattr(self, "_ttnn_device", None)
+        if ttnn_dev is not None:
+            pixel_values_cat = torch.cat(
+                [ttnn_convert_images_to_patches(each, self.patch_size, ttnn_dev) for each in pixel_values],
+                dim=0,
+            )
+        else:
+            pixel_values_cat = torch.cat(
+                [
+                    __import__(
+                        _Siglip2VisionEmbeddings_cls.__module__, fromlist=["convert_images_to_patches"]
+                    ).convert_images_to_patches(each, self.patch_size)
+                    for each in pixel_values
+                ],
+                dim=0,
+            )
+        target_dtype = self.patch_embedding.weight.dtype
+        patch_embeds = self.patch_embedding(pixel_values_cat.to(dtype=target_dtype))
+        spatial_shapes = self.get_spatial_shapes(bchw_list)
+        if hasattr(self, "_ttnn_pos_emb") and self._ttnn_pos_emb is not None:
+            embeddings_out = self._ttnn_pos_emb.forward_with_patch_embeds(patch_embeds, spatial_shapes)
+        else:
+            positional_embeddings = self.position_embedding.weight.reshape(
+                self.position_embedding_size, self.position_embedding_size, -1
+            )
+            resized = self.resize_positional_embeddings(positional_embeddings, spatial_shapes)
+            embeddings_out = patch_embeds + resized
+        windows_tensor, win_meta_list, reverse_mapping = ttnn_split_patch_embeddings_to_windows_with_meta(
+            embeddings_out, spatial_shapes, self.window_size, self
+        )
+        return windows_tensor, win_meta_list, spatial_shapes, reverse_mapping
+
+    _Siglip2VisionEmbeddings_cls.forward = _patched_vision_embeddings_forward
+
     for name, module in tqdm(transformed.items(), desc="Assimilating Weights"):
         if hasattr(module, "preprocess_weights"):
             t_start = time.time()
@@ -210,6 +265,18 @@ def test_gr00t_inference_validation(device):
             module.move_weights_to_device()
             t_end = time.time()
             DispatchManager.record_timing("Assimilation", name, module.__class__.__name__, {}, t_end - t_start)
+    if hasattr(new_pos_emb, "preprocess_weights"):
+        t_start = time.time()
+        new_pos_emb.preprocess_weights()
+        new_pos_emb.move_weights_to_device()
+        t_end = time.time()
+        DispatchManager.record_timing(
+            "Assimilation",
+            new_pos_emb._unique_name,
+            "TTNNSigLIPPositionEmbedding",
+            {},
+            t_end - t_start,
+        )
     _sync(device)
 
     max_len = int(os.environ.get("TT_SYMBIOTE_MAX_LENGTH", "256"))
@@ -246,31 +313,39 @@ def test_gr00t_inference_validation(device):
     }
 
     print("\n[RUNNING] Hardware Inference Pass...")
+    # In DPL mode, force torch path for all ops during inference to avoid "Buffer must be allocated" (elem=None)
+    _dpl_ref = os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL"
     with torch.inference_mode():
-        _ = model(inputs=real_inputs)
-        _sync(device)
-        _ = model(inputs=real_inputs)
-        _sync(device)
+        if _dpl_ref:
+            set_dpl_torch_ref_running(True)
+        try:
+            _ = model(inputs=real_inputs)
+            _sync(device)
+            _ = model(inputs=real_inputs)
+            _sync(device)
 
-        start_pass = time.time()
-        output = model(inputs=real_inputs)
-        _sync(device)
-        end_pass = time.time()
-        final_inference_s = end_pass - start_pass
-        DispatchManager.record_timing("Inference", "Full_Inference_Graph", "End-to-End", {}, final_inference_s)
+            start_pass = time.time()
+            output = model(inputs=real_inputs)
+            _sync(device)
+            end_pass = time.time()
+            final_inference_s = end_pass - start_pass
+            DispatchManager.record_timing("Inference", "Full_Inference_Graph", "End-to-End", {}, final_inference_s)
 
-        backbone_in, action_in = model.prepare_input(real_inputs)
+            backbone_in, action_in = model.prepare_input(real_inputs)
 
-        t0 = time.time()
-        backbone_out = model.backbone(backbone_in)
-        _sync(device)
-        t_backbone = time.time() - t0
+            t0 = time.time()
+            backbone_out = model.backbone(backbone_in)
+            _sync(device)
+            t_backbone = time.time() - t0
 
-        t0 = time.time()
-        _ = model.action_head(backbone_out, action_in)
-        _sync(device)
-        t_action = time.time() - t0
+            t0 = time.time()
+            _ = model.action_head(backbone_out, action_in)
+            _sync(device)
+            t_action = time.time() - t0
 
-        print(f"[PROFILE] Backbone_Total: {t_backbone:.6f}s  Action_Head_Total: {t_action:.6f}s")
-        print(f"[PROFILE] Final inference time (End-to-End): {final_inference_s:.6f}s")
+            print(f"[PROFILE] Backbone_Total: {t_backbone:.6f}s  Action_Head_Total: {t_action:.6f}s")
+            print(f"[PROFILE] Final inference time (End-to-End): {final_inference_s:.6f}s")
+        finally:
+            if _dpl_ref:
+                set_dpl_torch_ref_running(False)
     DispatchManager.save_stats_to_file("gr00t_full_perf_report.csv")
