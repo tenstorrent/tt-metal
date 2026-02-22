@@ -351,7 +351,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
             num_used_riscs_per_tensix_ = 2;
             break;
         case tt::tt_fabric::FabricTensixConfig::DISABLED:
-            // DISABLED mode: skip buffer allocation and config creation
+            // DISABLED mode: return false to skip buffer allocation and config creation in constructor
             return false;
         default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
     }
