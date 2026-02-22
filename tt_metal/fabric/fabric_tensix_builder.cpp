@@ -350,7 +350,9 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
             // UDM mode: 2 core types (MUX on BRISC + RELAY on NCRISC) per tensix core
             num_used_riscs_per_tensix_ = 2;
             break;
-        case tt::tt_fabric::FabricTensixConfig::DISABLED: num_used_riscs_per_tensix_ = 0; break;
+        case tt::tt_fabric::FabricTensixConfig::DISABLED:
+            // DISABLED mode: skip buffer allocation and config creation
+            return false;
         default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
     }
 
@@ -494,19 +496,11 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
 
-    // Early return if fabric tensix is explicitly disabled. Guard against unexpected 0 RISCs in other modes.
-    const auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        TT_FATAL(
-            num_used_riscs_per_tensix_ == 0,
-            "Fabric Tensix is DISABLED, but num_used_riscs_per_tensix_ ({}) is non-zero",
-            num_used_riscs_per_tensix_);
-        return;
-    }
+    // Guard against division by zero
     TT_FATAL(
         num_used_riscs_per_tensix_ > 0,
-        "Fabric Tensix is enabled (config = {}), but num_used_riscs_per_tensix_ is zero",
-        static_cast<int>(fabric_tensix_config));
+        "num_used_riscs_per_tensix_ must be greater than 0, but got {}",
+        num_used_riscs_per_tensix_);
 
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =
