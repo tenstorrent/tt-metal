@@ -350,9 +350,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
             // UDM mode: 2 core types (MUX on BRISC + RELAY on NCRISC) per tensix core
             num_used_riscs_per_tensix_ = 2;
             break;
-        case tt::tt_fabric::FabricTensixConfig::DISABLED:
-            // DISABLED mode: return false to skip buffer allocation and config creation in constructor
-            return false;
+        case tt::tt_fabric::FabricTensixConfig::DISABLED: num_used_riscs_per_tensix_ = 0; break;
         default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
     }
 
