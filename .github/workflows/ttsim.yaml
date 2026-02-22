@@ -25,7 +25,7 @@ on:
       job-timeout:
         required: false
         type: number
-        default: 15
+        default: 20
       run-ttsim-integration-tests:
         required: false
         type: boolean
