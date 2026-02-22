@@ -72,14 +72,14 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    _llk_math_matmul_init_no_mop_<static_cast<int>(MATH_FIDELITY)>(
+    _llk_math_matmul_init_no_mop_<MATH_FIDELITY>(
         TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, params->CT_DIM, params->RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (std::uint32_t j = 0; j < params->KT_DIM; j++)
     {
-        _llk_math_matmul_no_mop_<static_cast<int>(MATH_FIDELITY)>(0 /* dst_index */, params->CT_DIM, params->RT_DIM);
+        _llk_math_matmul_no_mop_<MATH_FIDELITY>(0 /* dst_index */, params->CT_DIM, params->RT_DIM);
     }
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

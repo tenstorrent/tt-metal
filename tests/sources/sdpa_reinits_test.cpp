@@ -126,14 +126,14 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_math_reduce_block_max_row_init_<1, false>();
 
     // Operation 0: Matmul FPU - Using experimental custom no-mop API
-    _llk_math_matmul_init_no_mop_<0, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
+    _llk_math_matmul_init_no_mop_<ckernel::MathFidelity::LoFi, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
 
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_math_wait_for_dest_available_<dest_sync0>();
         for (std::uint32_t kt = 0; kt < 1; kt++)
         {
-            _llk_math_matmul_no_mop_<0, 0>(0, 1, 1);
+            _llk_math_matmul_no_mop_<ckernel::MathFidelity::LoFi, 0>(0, 1, 1);
         }
         _llk_math_dest_section_done_<dest_sync0, false>();
     }
@@ -190,7 +190,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
         for (std::uint32_t kt = 0; kt < 1; kt++)
         {
-            _llk_math_matmul_no_mop_<0, 0>(0, 1, 1);
+            _llk_math_matmul_no_mop_<ckernel::MathFidelity::LoFi, 0>(0, 1, 1);
         }
         _llk_math_dest_section_done_<dest_sync3, false>();
     }
