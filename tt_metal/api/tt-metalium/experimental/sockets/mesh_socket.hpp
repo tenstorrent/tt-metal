@@ -177,9 +177,7 @@ private:
         data_buffer_(std::move(data_buffer)),
         config_buffer_(std::move(config_buffer)),
         config_(config),
-        socket_endpoint_type_(socket_endpoint_type),
-        rank_translation_table_{},
-        fabric_node_id_map_{} {}
+        socket_endpoint_type_(socket_endpoint_type) {}
     void process_host_ranks();
     void process_mesh_ids();
     static SocketConfig populate_mesh_ids(

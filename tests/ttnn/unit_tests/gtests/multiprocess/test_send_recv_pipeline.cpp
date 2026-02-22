@@ -273,6 +273,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
 
             auto run_intermed_step = [&]() {
                 ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
+                // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage) - False positive: intermed_send is initialized via structured binding at line 272
                 ttnn::experimental::send_async(intermediate_tensor, intermed_send);
                 ttnn::experimental::recv_async(intermediate_tensor, intermed_recv);
                 ttnn::experimental::send_async(intermediate_tensor, send_socket);
