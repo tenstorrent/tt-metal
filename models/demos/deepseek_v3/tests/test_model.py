@@ -3,7 +3,6 @@
 
 import errno
 import hashlib
-import json
 import re
 import tempfile
 from pathlib import Path
@@ -67,11 +66,6 @@ def _build_case_identity(
     }
 
 
-def _canonical_case_identity(case_identity: dict[str, str | int]) -> str:
-    # `sort_keys=True` makes the digest stable even if call sites reorder fields.
-    return json.dumps(case_identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
 def _case_reference_cache_filename(case_identity: dict[str, str | int]) -> str:
     # Primary filename format: deterministic, human-readable, and hash-free.
     return (
@@ -82,24 +76,8 @@ def _case_reference_cache_filename(case_identity: dict[str, str | int]) -> str:
     )
 
 
-def _hashed_case_reference_cache_filename(case_identity: dict[str, str | int]) -> str:
-    # Backward-compatible hashed filename used by previous versions.
-    digest_input = _canonical_case_identity(case_identity)
-    digest = hashlib.sha1(digest_input.encode("utf-8")).hexdigest()[:12]
-    return (
-        f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}."
-        f"mode_{case_identity['mode']}_seq_{case_identity['seq']}_batch_per_row_{case_identity['batch_per_row']}_"
-        f"mesh_{case_identity['mesh']}_decode_pos_{case_identity['decode_pos']}_layers_{case_identity['layers']}_"
-        f"max_seq_{case_identity['max_seq']}.{digest}.pt"
-    )
-
-
 def _case_reference_cache_path(cache_path: Path, case_identity: dict[str, str | int]) -> Path:
     return _default_reference_cache_dir(cache_path) / _case_reference_cache_filename(case_identity)
-
-
-def _hashed_case_reference_cache_path(cache_path: Path, case_identity: dict[str, str | int]) -> Path:
-    return _default_reference_cache_dir(cache_path) / _hashed_case_reference_cache_filename(case_identity)
 
 
 def _legacy_case_reference_cache_filename(case_key: str) -> str:
@@ -363,16 +341,6 @@ def run_test_forward_pass_dpmodel(
 
     cache_file = _case_reference_cache_path(cache_path, case_identity)
     cached_case = _load_case_reference_entry(cache_file)
-    if cached_case is None:
-        hashed_case_file = _hashed_case_reference_cache_path(cache_path, case_identity)
-        if hashed_case_file != cache_file:
-            cached_case = _load_case_reference_entry(hashed_case_file)
-            if isinstance(cached_case, dict):
-                if _try_save_case_reference_entry(cache_file, cached_case, reason="hashed per-case migration"):
-                    logger.info(
-                        f"Migrated hashed per-case reference baseline for case '{case_key}' "
-                        f"from {hashed_case_file} to {cache_file}"
-                    )
     if cached_case is None:
         legacy_case_file = _legacy_case_reference_cache_path(cache_path, case_key)
         if legacy_case_file != cache_file:
