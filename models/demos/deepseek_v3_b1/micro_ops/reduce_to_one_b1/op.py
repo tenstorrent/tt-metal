@@ -173,8 +173,8 @@ class ReduceToOneB1:
             worker_core_coord = ttnn.MeshCoreCoord(device_coord, worker_core)
 
             socket_connection = ttnn.SocketConnection(
-                worker_core_coord,  # sender (worker)
-                d2d0_socket_core,  # receiver (aggregator)
+                worker_core_coord,  # sender
+                d2d0_socket_core,  # receiver
             )
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, d2d_socket_buffer_size)
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
@@ -182,7 +182,7 @@ class ReduceToOneB1:
 
             d2d_socket_pairs.append(socket_pair)
 
-        # Create termination semaphore for worker cores + D2D_0 aggregator core
+        # Create termination semaphore for worker cores + D2D_0 core
         shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in shard_cores])
         d2d0_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(d2d0_core, d2d0_core)])
         worker_and_d2d0_cores = shard_grid.merge(d2d0_core_set)
@@ -384,7 +384,7 @@ class ReduceToOneB1:
         received_cb_r1 = 1  # Round 1: LEAF → ROOT*
         output_cb = 2  # Final output
         packet_cb = 3  # Packet staging
-        packet_header_cb = 4
+        packet_header_cb = 4  # Packet header (persistent)
         received_cb_r2 = 5  # Round 2: ROOT3 → ROOT2/ROOT1
         received_cb_r3 = 6  # Round 3: ROOT2 → ROOT1
         scratch_cb = 7  # Scratch for compute

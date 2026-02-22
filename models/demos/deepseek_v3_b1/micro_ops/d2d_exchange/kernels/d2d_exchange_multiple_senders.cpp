@@ -45,7 +45,6 @@ FORCE_INLINE bool socket_wait_for_pages_with_termination(
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t write_size) {
     noc_async_write(l1_read_addr, dst_addr, write_size);
-    // Flush here to ensure that NOC has picked up data before we pop pages in receiver socket.
     noc_async_writes_flushed();
 }
 
@@ -72,8 +71,7 @@ FORCE_INLINE void send_pages_over_socket(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2,
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t l1_read_addr,
-    uint64_t dst_addr,
-    uint32_t bytes_offset) {
+    uint64_t dst_addr) {
     if constexpr (use_fabric_on_sender) {
         for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
             write_data_to_remote_core_with_ack(
@@ -109,7 +107,7 @@ FORCE_INLINE void send_pages_over_socket(
                 partial_packet_size);
         }
     } else {
-        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr + bytes_offset, upstream_page_size);
+        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, upstream_page_size);
     }
 }
 
@@ -197,7 +195,6 @@ void kernel_main() {
         auto l1_read_addr = receiver_sockets[current_socket_idx].read_ptr;
         // Calculate offset within the downstream buffer for this socket's data
         uint32_t skt_offset = bytes_accumulated;
-        // Calculate the L1 address first, then create NOC address
         uint32_t dst_l1_addr = downstream_fifo_l1_addr + sender_socket.write_ptr + skt_offset;
         uint64_t dst_addr =
             get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, dst_l1_addr);
@@ -210,8 +207,7 @@ void kernel_main() {
             downstream_data_packet_header_addr_2,
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
-            dst_addr,
-            0);  // Pass 0 as offset since we already added it to dst_addr
+            dst_addr);
 
         socket_pop_pages(receiver_sockets[current_socket_idx], 1);
 

@@ -130,6 +130,8 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
+    DPRINT << "Starting d2d exchange kernel" << ENDL();
+
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -187,7 +189,6 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
-
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
             fabric_socket_notify_sender_stateful(
