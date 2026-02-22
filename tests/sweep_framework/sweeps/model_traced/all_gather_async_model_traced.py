@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
+from ttnn import ShardTensor2dMesh
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
@@ -238,58 +239,35 @@ def run(
     is_model_traced = input_a_shape is not None
 
     if is_model_traced:
-        # Model traced format - use defaults for multi-device setup
         if NUM_DEVICES < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
 
-        # V2 format: parse input_a_shape if it's a string (from JSON)
-        if isinstance(input_a_shape, str):
-            # Shape comes as string like "(1, 1, 128, 2048)"
-            import ast
-
-            input_shape = ast.literal_eval(input_a_shape)
-        elif isinstance(input_a_shape, dict):
-            # Shape might come as dict in some formats - extract the actual shape
-            input_shape = input_a_shape.get("shape", input_a_shape.get("data", input_a_shape))
-            if isinstance(input_shape, str):
-                import ast
-
-                input_shape = ast.literal_eval(input_shape)
-        else:
-            input_shape = input_a_shape
-
+        input_shape = input_a_shape
         input_dtype = input_a_dtype
         layout = input_a_layout
         input_memory_config = input_a_memory_config
 
-        # Parse output memory_config if it's a dict (from JSON vectors)
         if isinstance(memory_config, dict):
-            # Convert dict to ttnn.MemoryConfig
             mem_layout_str = memory_config.get("memory_layout", "")
             buffer_type_str = memory_config.get("buffer_type", "")
-            shard_spec = memory_config.get("shard_spec")
 
-            # Map buffer_type string to enum
             if buffer_type_str == "BufferType.DRAM" or buffer_type_str == "DRAM":
                 buffer_type_enum = ttnn.BufferType.DRAM
             elif buffer_type_str == "BufferType.L1" or buffer_type_str == "L1":
                 buffer_type_enum = ttnn.BufferType.L1
             else:
-                buffer_type_enum = ttnn.BufferType.DRAM  # default
+                buffer_type_enum = ttnn.BufferType.DRAM
 
-            # Map memory_layout string to layout enum
             if "SHARDED" in str(mem_layout_str):
-                # For sharded, we'd need to create a proper ShardSpec, but for now just use DRAM
                 output_memory_config = ttnn.DRAM_MEMORY_CONFIG
             elif "INTERLEAVED" in str(mem_layout_str):
                 output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_enum)
             else:
-                output_memory_config = ttnn.DRAM_MEMORY_CONFIG  # default
+                output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
-            output_memory_config = memory_config  # Already parsed
+            output_memory_config = memory_config
 
-        # Use defaults if not provided in traced config
         if num_links is None:
             num_links = 1
         if num_iters is None:
@@ -297,34 +275,44 @@ def run(
         if topology is None:
             topology = ttnn.Topology.Linear
 
-        # Determine mesh_shape from tensor_placement or default to (1, 2)
         if input_a_tensor_placement:
             mesh_device_shape = input_a_tensor_placement.get("mesh_device_shape")
             if mesh_device_shape and isinstance(mesh_device_shape, (list, tuple)):
                 mesh_shape = tuple(mesh_device_shape)
             else:
-                mesh_shape = (1, 2)  # Default
+                mesh_shape = (1, 2)
         else:
-            mesh_shape = (1, 2)  # Default
+            mesh_shape = (1, 2)
 
-        # Determine cluster_axis and fabric_config from mesh_shape
-        # If 1D mesh (one dimension is 1), use FABRIC_1D
-        if mesh_shape[0] == 1 or mesh_shape[1] == 1:
-            fabric_config = ttnn.FabricConfig.FABRIC_1D
-            cluster_axis = 0 if mesh_shape[0] > 1 else 1
-        else:
-            # 2D mesh
-            fabric_config = ttnn.FabricConfig.FABRIC_2D
-            cluster_axis = 1  # Default to axis 1 for 2D
-
-        # Use dim from traced config (required parameter)
         if dim is None:
             raise ValueError("dim is required for all_gather_async")
 
-        # Create reference output
-        replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
-        torch_input = torch.rand(input_shape).bfloat16()
-        torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
+        # Normalize negative dim
+        if dim < 0:
+            dim = len(input_shape) + dim
+
+        if cluster_axis is None:
+            if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+                cluster_axis = 0 if mesh_shape[0] > 1 else 1
+            else:
+                cluster_axis = 1 if dim > 1 else 0
+
+        if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D
+        else:
+            fabric_config = ttnn.FabricConfig.FABRIC_2D
+
+        replicate_dim = mesh_shape[cluster_axis]
+        is_2d_mesh = mesh_shape[0] > 1 and mesh_shape[1] > 1
+
+        # input_shape is the per-device shape; the gathered output multiplies dim by replicate_dim
+        output_shape = list(input_shape)
+        output_shape[dim] = input_shape[dim] * replicate_dim
+
+        # Golden: random tensor of the full gathered output shape.
+        # We shard it along dim to distribute across devices, then all_gather reconstructs it.
+        torch_reference = torch.rand(output_shape).bfloat16()
+        torch_input = torch_reference
     else:
         # Original generality/lead_model format
         # Create reference output
@@ -344,26 +332,28 @@ def run(
             return False, device_err, None, None
 
         if is_model_traced:
-            # V2 format: Create input tensor with mesh support if tensor_placement is provided
-            if input_a_tensor_placement:
-                # Import mesh utilities for V2 format
-                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import create_tensor_on_mesh
-
-                tt_input = create_tensor_on_mesh(
-                    torch_input,
-                    device,
-                    input_dtype,
-                    layout,
-                    input_memory_config,
-                    input_a_tensor_placement,
-                )
-            else:
-                # Fallback: Create input tensor directly with provided memory config
+            if is_2d_mesh:
+                # 2D mesh: shard along gather dim on cluster_axis, replicate on the other axis.
+                # This matches how _get_tensors works in test_minimal_all_gather_async.py.
+                if cluster_axis == 1:
+                    shard_dims = (None, dim)
+                else:
+                    shard_dims = (dim, None)
                 tt_input = ttnn.from_torch(
                     torch_input,
                     layout=layout,
+                    dtype=input_dtype,
                     memory_config=input_memory_config,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                    mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+                    device=device,
+                )
+            else:
+                tt_input = ttnn.from_torch(
+                    torch_input,
+                    layout=layout,
+                    dtype=input_dtype,
+                    memory_config=input_memory_config,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=dim),
                     device=device,
                 )
         else:
@@ -408,64 +398,40 @@ def run(
             try:
                 start_time = start_measuring_time()
 
-                # Match test_minimal_all_gather_async.py line 240-255
-                # When chunks_per_sync is not None, use signature 2 with persistent_output_buffer
-                # Otherwise use signature 1
+                tt_out_tensor = ttnn.experimental.all_gather_async(
+                    tt_input,
+                    persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
+                    dim=dim,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    num_links=num_links,
+                    memory_config=output_memory_config,
+                    topology=topology,
+                    subdevice_id=worker_sub_device_id,
+                    barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
+                    cluster_axis=cluster_axis,
+                    chunks_per_sync=chunks_per_sync,
+                    num_workers_per_link=num_workers_per_link,
+                    num_buffers_per_channel=num_buffers_per_channel,
+                )
 
-                if (
-                    chunks_per_sync is not None
-                    or num_workers_per_link is not None
-                    or num_buffers_per_channel is not None
-                ):
-                    # Signature 2: (input, persistent_output_buffer, dim, semaphore, ...)
-                    # test_minimal_all_gather_async.py line 240-255
-                    tt_out_tensor = ttnn.experimental.all_gather_async(
-                        tt_input,
-                        persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
-                        dim=dim,
-                        multi_device_global_semaphore=ccl_semaphore_handles[i],
-                        num_links=num_links,
-                        memory_config=output_memory_config,
-                        topology=topology,
-                        subdevice_id=worker_sub_device_id,
-                        barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
-                        cluster_axis=cluster_axis if cluster_axis is not None else None,
-                        chunks_per_sync=chunks_per_sync if chunks_per_sync is not None else None,
-                        num_workers_per_link=num_workers_per_link if num_workers_per_link is not None else None,
-                        num_buffers_per_channel=num_buffers_per_channel
-                        if num_buffers_per_channel is not None
-                        else None,
-                    )
-                else:
-                    # Signature 1: (input, dim, semaphore, ...)
-                    # test_minimals.py line 55-64
-                    tt_out_tensor = ttnn.experimental.all_gather_async(
-                        tt_input,
-                        dim,
-                        multi_device_global_semaphore=ccl_semaphore_handles[i],
-                        num_links=num_links,
-                        memory_config=output_memory_config,
-                        topology=topology,
-                        subdevice_id=worker_sub_device_id,
-                        barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
-                    )
-
-                # CRITICAL: Synchronize with sub_device_stall_group (like line 286)
                 ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
                 e2e_perf = stop_measuring_time(start_time)
             except Exception as e:
                 raise RuntimeError(f"Execution failed: {e}")
 
-        # Cleanup: reset sub-device stall group
         device.reset_sub_device_stall_group()
 
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            tt_output_tensor = ttnn.to_torch(t)
+        # After all_gather, every device in the gather group has the full tensor.
+        # Read a single device's output for comparison.
+        device_tensors = ttnn.get_device_tensors(tt_out_tensor)
+        tt_output_tensor = ttnn.to_torch(device_tensors[0])
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, torch_reference)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, torch_reference)
-            if not eq:
-                logger.error(f"output mismatch for tensor {i}")
-            return [(eq, output), e2e_perf]
+        # Trim tile padding to match expected shape
+        tt_output_tensor = tt_output_tensor[tuple(slice(0, s) for s in torch_reference.shape)]
+
+        if input_dtype == ttnn.bfloat16:
+            eq, output = comp_equal(tt_output_tensor, torch_reference)
+        else:
+            eq, output = comp_pcc(tt_output_tensor, torch_reference)
+
+        return [(eq, output), e2e_perf]
