@@ -13,7 +13,9 @@
 
 template <BroadcastType BType = BroadcastType::COL, std::uint32_t ct_dim = 1>
 inline void llk_unpack_AB_sub_bcast_col_init_custom(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose = 0) {
+    const std::uint32_t operandA, const std::uint32_t operandB, const bool transpose = false) {
+    static_cast<void>(operandB);
+    static_cast<void>(transpose);
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
