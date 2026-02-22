@@ -1072,7 +1072,7 @@ class MoeRoutedExpert:
 
         # Index mcast parameters
         index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
+        index_mcast_receiver_semaphore_id = 4
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
@@ -1084,7 +1084,7 @@ class MoeRoutedExpert:
 
         # Expert scale mcast parameters (different semaphores to avoid race condition with back-to-back mcasts)
         expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        expert_scale_mcast_receiver_semaphore_id = 4  # Different from index_mcast
+        expert_scale_mcast_receiver_semaphore_id = 5  # Different from index_mcast
         expert_scale_mcast_num_pages = 1
         expert_scale_mcast_data_size_bytes = expert_scale_tile_size
 
@@ -1604,6 +1604,12 @@ class MoeRoutedExpert:
             initial_value=0,
         )
 
+        index_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=index_mcast_receiver_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=0,
+        )
+
         expert_scale_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=expert_scale_mcast_receiver_semaphore_id,
             core_ranges=full_device_grid,
@@ -1758,6 +1764,7 @@ class MoeRoutedExpert:
             mcast_receiver_semaphore_descriptor,
             gather_noc0_semaphore_descriptor,
             gather_noc1_semaphore_descriptor,
+            index_mcast_receiver_semaphore_descriptor,
             expert_scale_mcast_receiver_semaphore_descriptor,
         ]
 
