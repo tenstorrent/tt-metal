@@ -192,7 +192,6 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
 
     # Get shard cores for core allocation
     shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
-    compute_grid = submesh_device.compute_with_storage_grid_size()
 
     # Pipeline (following SocketInterface pattern from test_host_io.py):
     # - D2D_0 aggregator: ROOT1 device @ (12,9) - aggregates from 8 worker cores, sends to D2D_1
@@ -229,8 +228,8 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
         aggregated_size_bytes,  # page_size
         aggregated_size_bytes * 2,  # socket_fifo_size
         aggregated_size_bytes,  # data_size_per_transfer
-        d2d1_sender_mesh_core,  # send_core_coord (ROOT1 @ (1,1)) - receives from D2D_0
-        d2d1_receiver_mesh_core,  # recv_core_coord (EXIT @ (2,2)) - sends to D2H
+        d2d1_sender_mesh_core,  # send_core_coord
+        d2d1_receiver_mesh_core,  # recv_core_coord
         upstream_socket=None,  # Will create from upstream_core_coord
         downstream_socket=host_io.get_upstream_socket(),  # Gets from HostInterface
         upstream_core_coord=d2d0_output_mesh_core,  # D2D_0 output core (sender)

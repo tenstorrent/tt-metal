@@ -116,7 +116,6 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
-    tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
 
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection =
@@ -153,7 +152,6 @@ void kernel_main() {
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2 = nullptr;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_socket_packet_header_addrs[8] = {nullptr};
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
@@ -169,14 +167,6 @@ void kernel_main() {
 
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
-    }
-
-    uint64_t upstream_bytes_acked_noc_addrs[8];
-    for (uint32_t i = 0; i < num_upstream_sockets; i++) {
-        upstream_bytes_acked_noc_addrs[i] = get_noc_addr(
-            receiver_sockets[i].d2d.upstream_noc_x,
-            receiver_sockets[i].d2d.upstream_noc_y,
-            receiver_sockets[i].d2d.upstream_bytes_acked_addr);
     }
 
     uint32_t current_socket_idx = 0;
