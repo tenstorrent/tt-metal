@@ -19,6 +19,7 @@
 #include "firmware_capability.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
+#include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
@@ -827,6 +828,14 @@ void MetalContext::set_fabric_config(
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
+
+    // Export channel trimming capture data before fabric config changes.
+    // Must happen while fabric_config_ is still active and fabric context is alive.
+    bool is_tearing_down_fabric = fabric_config == tt_fabric::FabricConfig::DISABLED &&
+        this->fabric_config_ != tt_fabric::FabricConfig::DISABLED;
+    if (is_tearing_down_fabric) {
+        tt::tt_fabric::export_channel_trimming_capture();
+    }
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
