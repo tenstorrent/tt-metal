@@ -118,8 +118,9 @@ void kernel_main() {
 
 #endif
 
-    // CCL Broadcast (also runs in socket-reader mode with skip_ccl)
-#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
+    // CCL Broadcast: runs on all cores in normal mode.
+    // In socket-reader + skip_ccl mode, only BRISC executes this path (socket recv via broadcast reader).
+#if !defined(SKIP_CCL) || (defined(ENABLE_SOCKET_READER) && defined(COMPILE_FOR_BRISC))
     deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
     bcast(bcast_args);
 #endif

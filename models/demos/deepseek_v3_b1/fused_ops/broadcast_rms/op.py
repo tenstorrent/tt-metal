@@ -202,10 +202,29 @@ class BroadcastRMSNorm:
                 range_hops_backward = num_targets_backward
 
                 use_socket = socket is not None and is_sender
-                # In skip_ccl+socket mode, BRISC fills pkt_cb from socket; TRISC reads pkt_cb.
-                # In all other modes, TRISC reads input_cb (backed by intermediate or input tensor).
-                rmsnorm_input_source_cb = pkt_cb if (skip_ccl and use_socket) else input_cb
                 num_pages_to_read = input_num_pages
+
+                # CB roles:
+                #   input_cb (0): RMSNorm input — always read by TRISC; has explicit page_size=2048 override.
+                #   pkt_cb   (1): Broadcast staging — used by NCRISC/BRISC in CCL mode only.
+                #
+                # Who delivers data into input_cb depends on mode:
+                #   CCL         (skip_ccl=False):           NCRISC signals it (intermediate_cb) after broadcast
+                #   local       (skip_ccl=True, no socket): NCRISC signals it directly
+                #   socket recv (skip_ccl=True, socket):    BRISC writes received payload here
+                #
+                # BRISC's broadcast CB:
+                #   CCL mode:    pkt_cb   (dummy-signal to NCRISC that source data is ready to broadcast)
+                #   socket mode: input_cb (BRISC writes received payload here; TRISC reads via page_size=2048)
+                #   local mode:  idle     (BRISC does nothing; value unused)
+                if not skip_ccl:
+                    brisc_bcast_cb = pkt_cb
+                elif use_socket:
+                    brisc_bcast_cb = input_cb
+                else:
+                    brisc_bcast_cb = 0  # BRISC idle in local skip_ccl mode
+
+                brisc_is_active = not skip_ccl or use_socket
 
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
@@ -225,23 +244,21 @@ class BroadcastRMSNorm:
                     ("range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("range_hops_backward", range_hops_backward if not skip_ccl else 0),
-                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
+                    ("rmsnorm_input_cb", input_cb),
                     ("rmsnorm_num_tiles", num_tiles),
                     ("intermediate_cb", input_cb if not skip_ccl else pkt_cb),
                     ("gamma_cb", gamma_cb),
                 ]
 
-                # BRISC reader is active when CCL is enabled OR when socket delivers data in skip_ccl mode
-                brisc_reader_active = not skip_ccl or use_socket
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("cb0_id", pkt_cb if brisc_reader_active else 0),
-                    ("num_pages_to_read", num_pages_to_read if brisc_reader_active else 0),
-                    ("is_sender", int(is_sender) if brisc_reader_active else 0),
+                    ("cb0_id", brisc_bcast_cb),
+                    ("num_pages_to_read", num_pages_to_read if brisc_is_active else 0),
+                    ("is_sender", int(is_sender) if brisc_is_active else 0),
                     ("use_socket", 1 if use_socket else 0),
                 ]
 
-                # Socket runtime args for BRISC reader (zeros for non-socket cores)
+                # Socket runtime args for BRISC (zeros when not using socket)
                 brisc_common_runtime_args = [
                     int(socket.get_config_buffer_address()) if use_socket else 0,  # socket_config_addr
                     int(socket_page_size) if use_socket else 0,  # socket_page_size
@@ -251,7 +268,7 @@ class BroadcastRMSNorm:
                 # Named compile-time args for TRISC (rmsnorm compute)
                 trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
+                    ("rmsnorm_input_cb", input_cb),
                     ("rmsnorm_gamma_cb", gamma_cb),
                     ("rmsnorm_output_cb", output_cb),
                     ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
