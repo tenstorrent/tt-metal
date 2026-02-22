@@ -15,6 +15,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 
 
 def create_fabric_router_config(max_payload_size):
@@ -1009,3 +1010,92 @@ def test_multi_host_loopback_pipeline_with_embedding(
 
         entry_socket_interface.terminate(False)
         exit_socket_interface.terminate(True)
+
+
+@pytest.mark.parametrize(
+    "vocab_size, embedding_dim",
+    [
+        (64, 14336),
+        (128, 7168),
+        (256, 3584),
+        (512, 1792),
+    ],
+)
+@pytest.mark.parametrize(
+    "token_fifo_size, embedding_fifo_factor",
+    [
+        (128, 2),
+        (256, 4),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(7168),
+        }
+    ],
+    indirect=True,
+)
+def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    pipeline_core_coord = ttnn.CoreCoord(0, 0)
+
+    embedding_dtype = torch.bfloat16
+    token_dtype = torch.uint32
+    token_size_bytes = 64
+    token_size_datums = token_size_bytes // dtype_size(token_dtype)
+
+    embedding_shape = (1, 1, vocab_size, embedding_dim)
+    embedding_fifo_size = embedding_dim * dtype_size(embedding_dtype) * embedding_fifo_factor
+
+    torch_embedding = torch.randn(embedding_shape, dtype=embedding_dtype)
+    embedding_tensor = ttnn.from_torch(
+        torch_embedding, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    embedding_tensor = ttnn.to_device(embedding_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    pipeline_block = PipelineBlock(
+        mesh_device,
+        pipeline_core_coord,
+        token_fifo_size,
+        embedding_fifo_size,
+        embedding_fifo_size,
+        embedding_tensor=embedding_tensor,
+    )
+    pipeline_block.run()
+
+    if pipeline_block.is_first_pipeline_stage():
+        for token_id in range(vocab_size):
+            torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
+            torch_input[0, 0] = token_id
+            input_tensor = ttnn.from_torch(
+                torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            torch_output = torch.zeros(1, embedding_shape[3], dtype=embedding_dtype)
+            output_tensor = ttnn.from_torch(
+                torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            pipeline_block.write_token(input_tensor)
+            pipeline_block.read_output(output_tensor)
+
+            result_torch = ttnn.to_torch(output_tensor).reshape(-1)
+            expected = torch_embedding[0, 0, token_id, :].reshape(-1)
+            match = torch.equal(expected, result_torch)
+            assert match, (
+                f"Token {token_id}: D2H output does not match embedding row!\n"
+                f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
+            )
+        logger.info(f"{vocab_size} token lookups verified successfully over multi-host pipeline")
+
+    pipeline_block.terminate()
