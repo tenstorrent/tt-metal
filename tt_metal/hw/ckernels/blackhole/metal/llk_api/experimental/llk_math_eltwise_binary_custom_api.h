@@ -22,13 +22,13 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
         num_faces, acc_to_dest);
 }
 
-template <std::uint32_t ct_dim = 1, bool is_fp32_dest_acc_en = false>
-inline void llk_math_eltwise_binary_sub_bcast_cols_custom(const std::uint32_t dst_index) {
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_math_eltwise_binary_sub_bcast_cols_custom(const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     LLK_ASSERT(
         (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
         "dst_index out of range");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_eltwise_binary_bcast_reuse_custom_<ct_dim>();
+    _llk_math_eltwise_binary_bcast_reuse_custom_(ct_dim);
     math::clear_dst_reg_addr();
 }

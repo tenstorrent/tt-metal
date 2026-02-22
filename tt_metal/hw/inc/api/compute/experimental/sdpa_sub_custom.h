@@ -18,18 +18,16 @@ namespace ckernel {
 
 #ifdef ARCH_BLACKHOLE
 
-template <uint32_t ct_dim>
-ALWI void sub_bcast_cols_init_short_custom(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_bcast_cols_init_short_custom(uint32_t icb0, uint32_t icb1, uint32_t ct_dim, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_sub_bcast_cols_init_custom<MATH_FIDELITY>(icb0, icb1)));
-    UNPACK((llk_unpack_AB_sub_bcast_col_init_custom<BroadcastType::COL, ct_dim>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_sub_bcast_col_init_custom<BroadcastType::COL>(icb0)));
 }
 
-template <uint32_t ct_dim>
 ALWI void sub_tiles_bcast_cols_custom(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    MATH((llk_math_eltwise_binary_sub_bcast_cols_custom<ct_dim, DST_ACCUM_MODE>(idst)));
-    UNPACK((llk_unpack_AB_sub_bcast_col_custom<BroadcastType::COL, ct_dim>(icb0, icb1, itile0, itile1)));
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t ct_dim) {
+    MATH((llk_math_eltwise_binary_sub_bcast_cols_custom<DST_ACCUM_MODE>(idst, ct_dim)));
+    UNPACK((llk_unpack_AB_sub_bcast_col_custom<BroadcastType::COL>(icb0, icb1, itile0, itile1, ct_dim)));
 }
 
 #endif
