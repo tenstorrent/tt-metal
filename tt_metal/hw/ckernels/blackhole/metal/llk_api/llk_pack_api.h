@@ -183,7 +183,7 @@ inline void llk_pack_untilize(
     const std::uint32_t num_faces = 4,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
-    static_assert(diagonal == false, "Diagonal packing is only supported on WH");
+    static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
