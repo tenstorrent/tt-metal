@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Union
@@ -56,7 +57,8 @@ def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     for sx, sy in left_senders:
         mapping[(sx, sy)] = [(x, sy) for x in range(1, num_receivers_per_sender + 1)]
     for sx, sy in right_senders:
-        cols = [x for x in range(8) if x != sx] + list(range(9, 11))
+        # Receivers for right senders: columns 8-10, plus columns 0-6 excluding sender column
+        cols = list(range(8, 11)) + [x for x in range(8) if x != right_sender_col]
         mapping[(sx, sy)] = [(x, sy) for x in cols[:num_receivers_per_sender]]
     return mapping
 
@@ -112,13 +114,13 @@ class PrefetcherCoreConfig:
 
     num_receiver_cores: int
     mesh_device: ttnn.MeshDevice
+    cfg: dict
     receiver_mapping_override: Optional[dict] = None  # {(x,y): [(rx,ry), ...]}
 
     def __post_init__(self):
-        cfg = ARCH_CONFIG["blackhole" if is_blackhole() else "wormhole"]
-        self._dram_banks = [ttnn.CoreCoord(b, 0) for b in cfg["dram_banks"]]
-        self._sender_cols, self._sender_rows = cfg["sender_cols"], cfg["sender_rows"]
-        self._receiver_cols = {k: tuple(v) for k, v in cfg["receiver_cols"].items()}
+        self._dram_banks = [ttnn.CoreCoord(b, 0) for b in self.cfg["dram_banks"]]
+        self._sender_cols, self._sender_rows = self.cfg["sender_cols"], self.cfg["sender_rows"]
+        self._receiver_cols = {k: tuple(v) for k, v in self.cfg["receiver_cols"].items()}
         self._use_override = self.receiver_mapping_override is not None
 
         # Process override: keys become senders, values become receivers
@@ -230,7 +232,6 @@ class Prefetcher(LightweightModule):
         num_tensors: int,
         num_layers: int,
         num_receiver_cores: int = None,
-        receiver_mapping_override: Optional[dict] = None,
     ):
         """
         Prefetcher class that prefetches tensors from DRAM to L1.
@@ -240,72 +241,81 @@ class Prefetcher(LightweightModule):
                 their receiver cores. This overrides the default column 0/7 sender placement.
         """
         ### Device, Global CB, Parameters
+        self.pf_config: dict = ARCH_CONFIG["blackhole"]
+        self.legal_receiver_cores: List[int] = self.pf_config["legal_receiver_cores"]
+        self.mesh_device: ttnn.MeshDevice = mesh_device
+        self.enable_performance_mode: bool = True
+        self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
+        self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
+        self.num_tensors: int = num_tensors
+        self.num_layers: int = num_layers
+        self.num_senders: int = len(self.pf_config["dram_banks"])
+        self.global_cb_size: int = 0  # Size of the global circular buffer in bytes storing prefetched matmul weights
+        self.max_tensor_block_size: int = 0  # Max tensor block size is the largest block size of a tensor in bytes
+        self.receiver_mapping_override: Optional[dict] = None
+        self.model_name = os.getenv("HF_MODEL", "")
+        assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
         assert (
-            is_blackhole()
-        ), "DRAM Prefetcher is currently only supported on Tenstorrent Blackhole devices on BH QB 2 (4 devices) and BH LB (8 devices). Model support is available for Llama-3.1-8B under the TT-transformers framework. Support for wormhole devices and other models is WIP."
-        self.global_cb = None
-        self.mesh_device = mesh_device
-        self.num_tensors = num_tensors
-        self.num_layers = num_layers
-        self.enable_performance_mode = True
-        self.worker_sub_device_id = None
-        self.global_cb_size = 0
-        self.receiver_mapping_override = receiver_mapping_override
-
-        # Determine num_receiver_cores - from override or default
-        if receiver_mapping_override:
-            # With override: num_receiver_cores is the number of receivers per sender
-            first_receivers = list(receiver_mapping_override.values())[0]
-            self.num_receiver_cores = len(first_receivers)
-        else:
-            self.num_receiver_cores = (
-                self.get_optimal_receiver_cores() if num_receiver_cores is None else num_receiver_cores
+            num_receiver_cores is None or num_receiver_cores in self.legal_receiver_cores
+        ), "num_receiver_cores must be in legal_receiver_cores"
+        if num_receiver_cores is not None:
+            assert is_prefetcher_supported(
+                self.model_name, self.mesh_device.get_num_devices(), num_receiver_cores * self.num_senders
+            ), "num_receiver_cores is not supported"
+            self.num_receiver_cores = num_receiver_cores
+            self.receiver_mapping_override = (
+                generate_sender_receiver_mapping(num_receiver_cores) if num_receiver_cores > 3 else None
             )
-            assert (
-                self.num_receiver_cores > 0 and self.num_receiver_cores <= 2
-            ), "Number of receiver cores must be greater than 0 and less than or equal to 2. Only a max of 2 receiver cores have been tested to be functional on BH/WH"
+        else:
+            for num_receivers in self.legal_receiver_cores:
+                if is_prefetcher_supported(
+                    self.model_name, self.mesh_device.get_num_devices(), num_receivers * self.num_senders
+                ):
+                    self.num_receiver_cores = num_receivers
+                    self.receiver_mapping_override = (
+                        generate_sender_receiver_mapping(num_receivers) if num_receivers > 3 else None
+                    )
+                    break
 
-        # Max tensor block size is the largest block size of a tensor in bytes
-        self.max_tensor_block_size = 0
         ### Core Config
         self.core_config = PrefetcherCoreConfig(
             num_receiver_cores=self.num_receiver_cores,
             mesh_device=self.mesh_device,
+            cfg=self.pf_config,
             receiver_mapping_override=self.receiver_mapping_override,
         )
-
-        # ring_size = num_receivers_per_sender * num_senders (i.e., total receiver cores)
-        num_senders = len(self.core_config.sender_cores(active=True))
-        self.ring_size = self.num_receiver_cores * num_senders
-
-        ### Prefetcher Hardcoded Core Ranges
+        self.ring_size = self.num_receiver_cores * self.num_senders
         self.dram_banks = self.core_config.dram_banks
 
-        # Dynamic worker core grid (for easily grabbing a sub core grid that is of mulitples of 8 cores)
-        self.dynamic_worker_core_grid = lambda num_cores: ttnn.CoreRangeSet(
-            # requested number of cores MUST be multiples of 8
-            [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(num_cores // 8, 7))]
-        )
-
-        # Worker core ranges for the worker sub device
-        if receiver_mapping_override:
-            # With override: collect all unique receiver cores from the mapping
-            all_receiver_coords = set()
-            for receivers in receiver_mapping_override.values():
-                for r in receivers:
-                    coord = r if isinstance(r, ttnn.CoreCoord) else ttnn.CoreCoord(r[0], r[1])
-                    all_receiver_coords.add((coord.x, coord.y))
-            # Create CoreRangeSet from individual cores
-            worker_ranges = [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_receiver_coords]
-            self.all_worker_cores_range_set = ttnn.CoreRangeSet(worker_ranges)
+        ### Worker core ranges for the worker sub device
+        if self.receiver_mapping_override:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            full_grid = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+            )
+            sender_cores = [
+                ttnn.CoreRange(ttnn.CoreCoord(s.x, s.y), ttnn.CoreCoord(s.x, s.y))
+                for s in self.core_config.sender_cores(active=True)
+            ]
+            sender_set = ttnn.CoreRangeSet(sender_cores)
+            self.all_worker_cores_range_set = full_grid.subtract(sender_set)
         else:
-            # Default: use receiver column ranges
             left_range = self.core_config._receiver_cols["left"]
             right_range = self.core_config._receiver_cols["right"]
             self.all_worker_cores_range_set = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(left_range[0], 0), ttnn.CoreCoord(left_range[1] - 1, 9))]
                 + [ttnn.CoreRange(ttnn.CoreCoord(right_range[0], 0), ttnn.CoreCoord(right_range[1] - 1, 9))]
             )
+
+        ### Dynamic worker core grid: num_cores must be multiple of 8, spans cols 1-6 rows 0-7, plus cols 8+ if needed
+        def dynamic_worker_core_grid(num_cores):
+            cols = num_cores // 8
+            ranges = [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(min(cols, 6), 7))]
+            if cols > 6:
+                ranges.append(ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(cols + 1, 7)))
+            return ttnn.CoreRangeSet(ranges)
+
+        self.dynamic_worker_core_grid = dynamic_worker_core_grid
 
         ### Prefetched Tensors
         self.callbacks = []
@@ -324,21 +334,6 @@ class Prefetcher(LightweightModule):
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
         self.callbacks.append(callback)
-
-    # Mapping from mesh shape (as tuple) to optimal number of receiver cores
-    OPTIMAL_RECEIVER_CORES = {
-        (1, 1): 2,
-        (1, 2): 2,
-        (1, 4): 2,
-        (1, 8): 1,
-    }
-
-    def get_optimal_receiver_cores(self):
-        mesh_shape = tuple(self.mesh_device.shape)
-        if mesh_shape not in self.OPTIMAL_RECEIVER_CORES:
-            supported = list(self.OPTIMAL_RECEIVER_CORES.keys())
-            raise ValueError(f"Mesh shape {mesh_shape} is not supported. Supported shapes: {supported}")
-        return self.OPTIMAL_RECEIVER_CORES[mesh_shape]
 
     def to_core_range_set(
         self, cores: List, return_list: bool = False
@@ -370,13 +365,9 @@ class Prefetcher(LightweightModule):
         # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again
         if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
             return
-
         self.mode = mode
-        # Get the sender and receiver cores
-        # Create a single config instance to ensure consistent state
         self.sender_cores = self.core_config.sender_cores
         self.receiver_cores = self.core_config.receiver_cores
-
         self.sender_receiver_mapping = list(
             zip(
                 self.sender_cores(),
@@ -459,7 +450,8 @@ class Prefetcher(LightweightModule):
         h, w = tensor.shape[-2], tensor.shape[-1]
         h_tiles, w_tiles = math.ceil(h / ttnn.TILE_SIZE), math.ceil(w / ttnn.TILE_SIZE)
         h_tiles_padded = math.ceil(h_tiles / self.ring_size) * self.ring_size
-        max_tensor_tiles = (h_tiles_padded * w_tiles) // self.ring_size
+        w_tiles_padded = math.ceil(w_tiles / self.ring_size) * self.ring_size
+        max_tensor_tiles = (h_tiles_padded * w_tiles_padded) // self.ring_size
         self.max_tensor_block_size = max(max_tensor_tiles * bytes_in_tile[tensor.dtype], self.max_tensor_block_size)
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())

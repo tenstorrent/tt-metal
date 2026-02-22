@@ -848,7 +848,9 @@ def test_demo_text(
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
-    use_prefetcher = use_prefetcher and is_prefetcher_supported(hf_dir, num_devices)
+    use_prefetcher = (
+        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+    )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
     if stress_test and token_accuracy:

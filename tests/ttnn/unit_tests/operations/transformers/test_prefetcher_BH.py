@@ -371,7 +371,7 @@ def run_prefetcher_all_matmuls(
     model_dims,
     enable_trace=True,
     receiver_mapping_override=None,
-    ring_size=16,
+    num_receiver_cores=None,
 ):
     """
     Run the prefetcher with all 5 matmuls (QKV, WO, FF1, FF3, FF2) for num_layers.
@@ -395,8 +395,7 @@ def run_prefetcher_all_matmuls(
         mesh_device=mesh_device,
         num_tensors=num_tensors_per_layer,
         num_layers=num_layers,
-        receiver_mapping_override=receiver_mapping_override,
-        num_receiver_cores=ring_size // 8,
+        num_receiver_cores=num_receiver_cores,
     )
 
     # Initialize prefetcher for decode mode
@@ -584,7 +583,7 @@ def run_prefetcher_all_matmuls(
 # Test Cases
 # =============================================================================
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -603,8 +602,8 @@ def run_prefetcher_all_matmuls(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "ring_size",
-    [16, 64, 80],  # 16 for default, 64 for 8-receiver per sender, 80 for 10-receiver per sender
+    "num_receiver_cores",
+    [1, 2, 3, 8, 10],
 )
 @pytest.mark.parametrize(
     "model_name",
@@ -626,7 +625,7 @@ def test_prefetcher_BH(
     function_level_defaults,
     silicon_arch_name,
     silicon_arch_blackhole,
-    ring_size,
+    num_receiver_cores,
     model_name,
     enable_trace,
 ):
@@ -644,20 +643,18 @@ def test_prefetcher_BH(
     - FF2: TP on hidden_dim dimension (K-sharded)
     """
     mesh_shape = tuple(mesh_device.shape)
-    if not is_prefetcher_supported(model_name, mesh_device.get_num_devices(), ring_size):
+    if not is_prefetcher_supported(model_name, mesh_device.get_num_devices(), num_receiver_cores * 8):
         pytest.skip(
-            f"Model {model_name} does not fit in global CB with {mesh_device.get_num_devices()} devices and ring_size={ring_size}"
+            f"Model {model_name} does not fit in global CB with {mesh_device.get_num_devices()} devices and num_receiver_cores={num_receiver_cores}"
         )
-    # Set up receiver mapping override if using ring size > 16 (64 or 80)
-    receiver_mapping = generate_sender_receiver_mapping(ring_size // 8) if ring_size > 16 else None
     logger.info(
         f"Testing DRAM Prefetcher + Ring Matmul for model {model_name} with dimensions: {VERIFIED_MODEL_CONFIGS[model_name]}"
     )
+    os.environ["HF_MODEL"] = model_name
     run_prefetcher_all_matmuls(
         mesh_device=mesh_device,
         num_layers=1,
         model_dims=VERIFIED_MODEL_CONFIGS[model_name],
         enable_trace=enable_trace,
-        receiver_mapping_override=receiver_mapping,
-        ring_size=ring_size,
+        num_receiver_cores=num_receiver_cores,
     )
