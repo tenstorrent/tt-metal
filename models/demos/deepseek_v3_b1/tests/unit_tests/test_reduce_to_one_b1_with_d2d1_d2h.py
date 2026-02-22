@@ -194,11 +194,6 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
     compute_grid = submesh_device.compute_with_storage_grid_size()
 
-    # Core allocation based on test_host_io pattern:
-    # IMPORTANT: Physical device mapping for submesh is:
-    #   - Physical device-0 = MeshCoordinate(1,1) = ROOT1
-    #   - Physical device-1 = MeshCoordinate(0,1) = EXIT
-    #
     # Pipeline (following SocketInterface pattern from test_host_io.py):
     # - D2D_0 aggregator: ROOT1 device @ (12,9) - aggregates from 8 worker cores, sends to D2D_1
     # - D2D_1 sender: ROOT1 device @ (1,1) - receives from D2D_0, sends cross-device
@@ -225,8 +220,6 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
         d2h_upstream_core=d2d1_receiver_mesh_core,  # D2D_1 receiver feeds into D2H
     )
     logger.info("Created HostInterface for D2H on EXIT device")
-
-    # Create SocketInterface for D2D_1: ROOT1 (sender) → EXIT (receiver)
 
     # Allocate D2D_0's output core
     d2d0_output_core = ttnn.CoreCoord(12, 9)  # Free core on ROOT1 device
@@ -293,8 +286,7 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
 
     # D2D_1 sends ONE aggregated page containing data from all 8 worker cores
     # Total bytes = 8 workers × 896 elements/worker × 2 bytes/element = 14,336 bytes
-    page_size = aggregated_size_bytes
-    total_bytes = page_size  # Single aggregated page
+    total_bytes = aggregated_size_bytes  # Single aggregated page
     logger.info(f"Reading 1 aggregated page of {total_bytes} bytes")
 
     num_elements = total_bytes // 2
