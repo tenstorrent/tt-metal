@@ -58,17 +58,17 @@ void kernel_main() {
             uint32_t tile_index = mt * Nt + nt;
             cb_reserve_back(cb_id_in, 1);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in);
-            noc_async_read_tile(0, src, l1_write_addr, tile_index);
+            noc_async_read_tile(tile_index, src, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in, 1);
         }
-    
+
         // for calculating exp and sum
         for (uint32_t nt = 0; nt < Nt; nt++) {
             uint32_t tile_index = mt * Nt + nt;
             cb_reserve_back(cb_id_in, 1);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in);
-            noc_async_read_tile(0, src, l1_write_addr, tile_index);
+            noc_async_read_tile(tile_index, src, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in, 1);
         }

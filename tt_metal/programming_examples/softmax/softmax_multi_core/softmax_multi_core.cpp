@@ -2,33 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Row-wise softmax example (single core).
+// Row-wise softmax example (multi-core).
 //
-// For each row i of an M×N input matrix, computes:
+// Extends softmax_single_core by distributing the Mt tile-row groups across
+// all available Tensix cores.  Each core independently runs the full four-pass
+// softmax (max → exp → sum → normalise) on its assigned subset of rows, so no
+// inter-core communication or intermediate buffers are required.
 //
-//   softmax(x)[i,j] = exp(x[i,j] − max_i) / Σ_k exp(x[i,k] − max_i)
+// Work split: Mt tile-row groups are divided across cores using split_work_to_cores.
+// Core i receives runtime args (mt_start, mt_count) and processes the mt_count
+// rows starting at tile-row group mt_start.
 //
-// where max_i = max_k x[i,k] is subtracted for numerical stability.
-//
-// The device implementation uses four compute passes per tile-row (mt):
+// Each core runs the same four passes as the single-core version:
 //
 //   Pass 1 — Row-wise max  (1 tile → cb_max[0])
-//     Reduce Nt input tiles; reduce_tile<MAX, REDUCE_ROW> accumulates the
-//     per-row maximum into DST.  Result tile packed to cb_max (col 0 = max).
-//
 //   Pass 2 — exp(x − max)  (Nt tiles → cb_max[1..Nt])
-//     For each of the Nt input tiles, subtract cb_max[0] (broadcast across
-//     columns) and apply exp.  Each result is pushed to the back of cb_max,
-//     leaving [row-max | exp[0] | … | exp[Nt-1]].  The row-max is then popped.
-//
 //   Pass 3 — Row sum → 1/sum  (1 tile → cb_sum)
-//     reduce_tile<SUM, REDUCE_ROW> accumulates the Nt exp tiles in cb_max
-//     (indexed by tile number, none popped).  recip_tile converts the sums to
-//     1/sum, which is packed to cb_sum (col 0 = 1/sum_r per row r).
-//
 //   Pass 4 — Normalise  (Nt tiles → cb_out)
-//     Each exp tile is popped from cb_max and multiplied by 1/sum (col 0 of
-//     cb_sum, broadcast across columns), producing the final softmax output.
 
 #include <fmt/base.h>
 #include <sys/types.h>
@@ -42,6 +32,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "tt-metalium/core_coord.hpp"
 
 using namespace tt::constants;
@@ -56,32 +47,29 @@ using namespace tt::tt_metal;
 // CPU reference: numerically stable row-wise softmax.
 void golden_softmax(const vector<bfloat16>& input, vector<bfloat16>& output, uint32_t M, uint32_t N) {
     for (uint32_t i = 0; i < M; i++) {
-        // Pass 1: row max for numerical stability.
         float row_max = -std::numeric_limits<float>::infinity();
         for (uint32_t j = 0; j < N; j++) {
             row_max = std::max(row_max, static_cast<float>(input[i * N + j]));
         }
-        // Pass 2: exp(x − max) and accumulate sum.
         float sum = 0.0f;
         for (uint32_t j = 0; j < N; j++) {
             float val = std::exp(static_cast<float>(input[i * N + j]) - row_max);
             output[i * N + j] = bfloat16(val);
             sum += val;
         }
-        // Pass 3: normalize.
         for (uint32_t j = 0; j < N; j++) {
             output[i * N + j] = bfloat16(static_cast<float>(output[i * N + j]) / sum);
         }
     }
 }
 
-// Row-wise softmax on the accelerator.
+// Row-wise softmax on the accelerator (multi-core).
 //
 // Parameters:
 //   input      - Tilized M×N input matrix (Mt×Nt tiles, each 32×32 bfloat16).
 //   output     - Destination for the softmax result (same Mt×Nt tile layout).
 //   M, N       - Matrix dimensions; both must be multiples of TILE_HEIGHT/TILE_WIDTH (32).
-void softmax_single_core(
+void softmax_multi_core(
     const vector<bfloat16>& input,
     vector<bfloat16>& output,
     uint32_t M,
@@ -91,13 +79,23 @@ void softmax_single_core(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
-    // Single Tensix core at {0, 0}.
-    CoreCoord core({0, 0});
 
     uint32_t Mt = M / TILE_HEIGHT;  // Number of tile rows.
     uint32_t Nt = N / TILE_WIDTH;   // Number of tile columns.
 
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+
+    // -------------------------------------------------------------------------
+    // Work distribution
+    // -------------------------------------------------------------------------
+    // Split Mt tile-row groups across all available Tensix cores.
+    // split_work_to_cores returns two groups:
+    //   core_group_1: cores that each handle work_per_core_1 row groups.
+    //   core_group_2: cores that each handle work_per_core_2 row groups (or 0 if Mt
+    //                 divides evenly).
+    auto core_grid = mesh_device->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
+        split_work_to_cores(core_grid, Mt);
 
     // -------------------------------------------------------------------------
     // DRAM buffers
@@ -110,8 +108,6 @@ void softmax_single_core(
     auto src_dram_buffer = distributed::MeshBuffer::create(input_buf_config, dram_config, mesh_device.get());
 
     // Scaler tile: one 32×32 tile, all values 1.0.
-    // The hardware reduce engine multiplies each input element by the scaler before
-    // accumulating; a value of 1.0 leaves inputs unscaled.
     distributed::ReplicatedBufferConfig scaler_buf_config{.size = single_tile_size};
     auto scaler_dram_buffer = distributed::MeshBuffer::create(scaler_buf_config, dram_config, mesh_device.get());
 
@@ -120,116 +116,120 @@ void softmax_single_core(
     auto dst_dram_buffer = distributed::MeshBuffer::create(output_buf_config, dram_config, mesh_device.get());
 
     // -------------------------------------------------------------------------
-    // Circular buffers
+    // Circular buffers (created on all_cores)
     // -------------------------------------------------------------------------
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
 
     // cb_in (c_0): Double-buffered input (2 tiles).
-    // The reader streams tiles here; the compute kernel consumes them one at a time.
-    // The small capacity allows the reader and compute to overlap.
     uint32_t in_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_in_config =
+    tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,
         CircularBufferConfig(2 * single_tile_size, {{in_cb_index, cb_data_format}})
-            .set_page_size(in_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_in_config);
+            .set_page_size(in_cb_index, single_tile_size));
 
-    // cb_scaler (c_1): Holds the constant scaler tile (all 1.0 values).
-    // Pushed once by the reader before any pass; never popped by the compute kernel,
-    // so it stays available throughout all three passes.
+    // cb_scaler (c_1): Constant 1.0 tile — pushed once, never popped.
     uint32_t scaler_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_scaler_config =
+    tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,
         CircularBufferConfig(single_tile_size, {{scaler_cb_index, cb_data_format}})
-            .set_page_size(scaler_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
+            .set_page_size(scaler_cb_index, single_tile_size));
 
-    // cb_max (c_2): Dual-purpose buffer shared by passes 1–4.
-    //   Pass 1 writes 1 row-max tile (col 0 = per-row maxima).
-    //   Pass 2 appends Nt exp(x − max) tiles at the back while keeping the
-    //   row-max tile at index 0 for bcast-sub; the row-max is popped at the
-    //   end of pass 2, leaving Nt exp tiles.
-    //   Passes 3 and 4 consume those Nt tiles.
-    //   Capacity: Nt + 1 to hold the row-max + Nt exp tiles simultaneously.
+    // cb_max (c_2): Row-max tile + Nt exp(x−max) tiles.
+    // Capacity: Nt+1 to hold the row-max and all Nt exp tiles simultaneously.
     uint32_t max_cb_index = CBIndex::c_2;
-    CircularBufferConfig cb_max_config =
+    tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,
         CircularBufferConfig((Nt + 1) * single_tile_size, {{max_cb_index, cb_data_format}})
-            .set_page_size(max_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_max_config);
+            .set_page_size(max_cb_index, single_tile_size));
 
-    // cb_sum (c_3): One tile per mt.  Pass 3 packs the per-row reciprocal sum
-    // (1/Σ exp(x − max)) here; pass 4 multiplies each exp tile by this value.
+    // cb_sum (c_3): 1/sum tile — one tile per mt, produced by pass 3, consumed by pass 4.
     uint32_t sum_cb_index = CBIndex::c_3;
-    CircularBufferConfig cb_sum_config =
+    tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,
         CircularBufferConfig(single_tile_size, {{sum_cb_index, cb_data_format}})
-            .set_page_size(sum_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_sum_config);
+            .set_page_size(sum_cb_index, single_tile_size));
 
-    // cb_out (c_16): Softmax output — same shape as the input (Mt×Nt tiles).
-    // Filled by the compute kernel; drained by the writer.
-    // Total size: Mt×Nt = (M/32)×(N/32) tiles (400 tiles for M=N=640).
+    // cb_out (c_16): Softmax output — Nt tiles capacity (one full row at a time).
+    // The compute kernel fills one row of Nt tiles; the writer drains them in parallel.
     uint32_t out_cb_index = CBIndex::c_16;
-    CircularBufferConfig cb_out_config =
-        CircularBufferConfig(Mt * Nt * single_tile_size, {{out_cb_index, cb_data_format}})
-            .set_page_size(out_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_out_config);
+    tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Nt * single_tile_size, {{out_cb_index, cb_data_format}})
+            .set_page_size(out_cb_index, single_tile_size));
 
     // -------------------------------------------------------------------------
-    // Kernels
+    // Kernels (created on all_cores)
     // -------------------------------------------------------------------------
-    // Reader (RISCV_1): loads input tiles and the scaler tile from DRAM into CBs.
-    // Must feed the input to cb_in three times (once per pass); between passes it
-    // re-reads the same Mt×Nt tile block from DRAM in row-major tile order.
+    // Reader (RISCV_1): loads input tiles (twice per row: pass 1 and pass 2) and
+    // the scaler tile from DRAM, starting from the assigned tile-row range.
     vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(*src_dram_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*scaler_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "softmax/softmax_single_core/kernels/dataflow/reader_softmax.cpp",
-        core,
+        OVERRIDE_KERNEL_PREFIX "softmax/softmax_multi_core/kernels/dataflow/reader_softmax_multi_core.cpp",
+        all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    // Writer (RISCV_0): writes the Mt×Nt final softmax tiles from cb_out to DRAM.
-    // Tiles arrive in row-major tile order from the compute kernel.
+    // Writer (RISCV_0): writes mt_count×Nt softmax tiles from cb_out to DRAM,
+    // at global tile indices [mt_start*Nt .. (mt_start+mt_count)*Nt).
     vector<uint32_t> writer_compile_time_args;
     TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "softmax/softmax_single_core/kernels/dataflow/writer_softmax.cpp",
-        core,
+        OVERRIDE_KERNEL_PREFIX "softmax/softmax_multi_core/kernels/dataflow/writer_softmax_multi_core.cpp",
+        all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args});
 
-    // Compute kernel: three-pass row-wise softmax.
-    //   Pass 1 — row max  → cb_max  (Mt tiles)
-    //   Pass 2 — exp-sum  → cb_sum  (Mt tiles)
-    //   Pass 3 — normalize → cb_out (Mt×Nt tiles)
-    // Mt and Nt are compile-time so inner loop bounds can be constant-folded.
-    vector<uint32_t> compute_compile_time_args = {Mt, Nt};
-    tt_metal::CreateKernel(
+    // Compute kernel: four-pass row-wise softmax.
+    // Nt is compile-time so inner loop bounds can be constant-folded.
+    // mt_count is runtime so each core can receive a different share of rows.
+    vector<uint32_t> compute_compile_time_args = {Nt};
+    auto compute_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "softmax/softmax_single_core/kernels/compute/softmax.cpp",
-        core,
+        OVERRIDE_KERNEL_PREFIX "softmax/softmax_multi_core/kernels/compute/softmax.cpp",
+        all_cores,
         tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_compile_time_args});
 
     // -------------------------------------------------------------------------
-    // Runtime arguments
+    // Per-core runtime arguments
     // -------------------------------------------------------------------------
-    uint32_t src_addr = src_dram_buffer->address();
+    // Iterate over core_group_1 and core_group_2 in tile-row order, assigning each
+    // core its [mt_start, mt_start + mt_count) slice of the Mt row groups.
+    uint32_t src_addr    = src_dram_buffer->address();
     uint32_t scaler_addr = scaler_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
+    uint32_t dst_addr    = dst_dram_buffer->address();
 
-    tt_metal::SetRuntimeArgs(program, reader_id, core, {src_addr, scaler_addr, Mt, Nt});
-    tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Nt});
-    // Compute kernel uses only compile-time arguments; no runtime args needed.
+    uint32_t mt_start = 0;
+    auto work_groups = {std::make_pair(core_group_1, work_per_core_1), std::make_pair(core_group_2, work_per_core_2)};
+
+    for (const auto& [ranges, mt_count] : work_groups) {
+        for (const auto& range : ranges.ranges()) {
+            for (const auto& core : range) {
+                tt_metal::SetRuntimeArgs(
+                    program, reader_id, core, {src_addr, scaler_addr, mt_start, mt_count, Nt});
+                tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, mt_start, mt_count, Nt});
+                tt_metal::SetRuntimeArgs(program, compute_id, core, {mt_count});
+
+                mt_start += mt_count;
+            }
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Upload inputs, execute, and read back
     // -------------------------------------------------------------------------
-    // Scaler tile: all 1.0 in bfloat16.
     vector<bfloat16> scaler_tile(TILE_HEIGHT * TILE_WIDTH, bfloat16(1.0f));
 
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, input, false);
@@ -270,7 +270,7 @@ int main() {
 
         // Allocate the output buffer: same tile layout as the input (Mt×Nt tiles).
         vector<bfloat16> result_tilized(M * N, bfloat16(0.0f));
-        softmax_single_core(src_tilized, result_tilized, M, N, mesh_device);
+        softmax_multi_core(src_tilized, result_tilized, M, N, mesh_device);
 
         // Untilize the result back to row-major for validation.
         vector<bfloat16> result = untilize_nfaces(result_tilized, M, N);
