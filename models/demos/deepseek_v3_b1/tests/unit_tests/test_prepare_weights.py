@@ -23,7 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
 from models.demos.deepseek_v3_b1.prepare_weights import (
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
@@ -225,9 +225,9 @@ def test_prepare_moe_layer_single_layer(device):
     assert layer.shared_gate_proj.tensor_shape == (7168, 256)
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
     assert hasattr(layer, "shared_down_proj")
-    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
+    assert hasattr(layer, "routed_gate_proj") and layer.routed_gate_proj is not None
+    assert hasattr(layer, "routed_up_proj") and layer.routed_up_proj is not None
+    assert hasattr(layer, "routed_down_proj") and layer.routed_down_proj is not None
 
 
 def test_save_load_dense_layer_single_layer(device, tmp_path):
@@ -316,12 +316,9 @@ def test_save_load_moe_layer_single_layer(device, tmp_path):
     layer_dir = tmp_path / "layer_000"
     assert (layer_dir / "gate_up.tensorbin").exists()
     assert (layer_dir / "shared_down_proj.tensorbin").exists()
-    experts_dir = layer_dir / "experts"
-    for e in range(NUM_ROUTED_EXPERTS):
-        expert_dir = experts_dir / f"e_{e:03d}"
-        assert (expert_dir / "gate_proj.tensorbin").exists()
-        assert (expert_dir / "up_proj.tensorbin").exists()
-        assert (expert_dir / "down_proj.tensorbin").exists()
+    assert (layer_dir / "routed_gate_proj.tensorbin").exists()
+    assert (layer_dir / "routed_up_proj.tensorbin").exists()
+    assert (layer_dir / "routed_down_proj.tensorbin").exists()
 
     deallocate_weights(weights)
     t0 = time.perf_counter()
@@ -345,15 +342,110 @@ def test_save_load_moe_layer_single_layer(device, tmp_path):
     _assert_overlapped_tensors_match(orig.shared_gate_proj, layer.shared_gate_proj)
     _assert_overlapped_tensors_match(orig.shared_up_proj, layer.shared_up_proj)
     assert layer.shared_down_proj.shape == orig.shared_down_proj.shape
-    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
-    for e in range(NUM_ROUTED_EXPERTS):
-        assert layer.routed_gate_proj[e].shape == orig.routed_gate_proj[e].shape
-        assert layer.routed_up_proj[e].shape == orig.routed_up_proj[e].shape
-        assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
+    assert layer.routed_gate_proj.shape == orig.routed_gate_proj.shape
+    assert layer.routed_up_proj.shape == orig.routed_up_proj.shape
+    assert layer.routed_down_proj.shape == orig.routed_down_proj.shape
 
     assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+
+
+def _moe_routed_expert_stacked_tensors(seed: int = 43):
+    """Build (num_experts, K, N) stacked gate/up and (num_experts, K_down, N_down) down for get_tt_moe_routed_expert_weights."""
+    g = torch.Generator().manual_seed(seed)
+    # MoE expert shapes: gate/up (K=7168, N=2048), down (2048, 7168)
+    gate_stacked = torch.randn(NUM_ROUTED_EXPERTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
+    up_stacked = torch.randn(NUM_ROUTED_EXPERTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
+    down_stacked = torch.randn(NUM_ROUTED_EXPERTS, 2048, 7168, generator=g, dtype=torch.bfloat16)
+    return gate_stacked, up_stacked, down_stacked
+
+
+def test_dump_load_routed_expert_weights(device, tmp_path):
+    """Test dump/load round-trip for MoE routed expert weights (one stacked tensor per projection). Uses BlitzDecodeWeights directly so it can run in slow dispatch."""
+    if not is_slow_dispatch():
+        pytest.skip("prepare_weights tests require slow dispatch mode (TT_METAL_SLOW_DISPATCH_MODE=1)")
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x < 12 or device_grid.y < 10:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for blitz decode (need 12x10+)")
+    num_cores = device_grid.x * device_grid.y
+    if num_cores < 128:
+        pytest.skip(f"Device has {num_cores} compute cores; GATE_UP overlap spec requires 128 cores")
+
+    gate_stacked, up_stacked, down_stacked = _moe_routed_expert_stacked_tensors(seed=43)
+    bdw = BlitzDecodeWeights(device)
+    routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
+        gate_stacked, up_stacked, down_stacked
+    )
+
+    expected_gate_shape = routed_gate_proj.shape
+    expected_up_shape = routed_up_proj.shape
+    expected_down_shape = routed_down_proj.shape
+
+    layer_dir = tmp_path / "layer_000"
+    layer_dir.mkdir(parents=True, exist_ok=True)
+    ttnn.dump_tensor(layer_dir / "gate_proj.tensorbin", routed_gate_proj)
+    ttnn.dump_tensor(layer_dir / "up_proj.tensorbin", routed_up_proj)
+    ttnn.dump_tensor(layer_dir / "down_proj.tensorbin", routed_down_proj)
+
+    del routed_gate_proj, routed_up_proj, routed_down_proj
+
+    logger.info("Loading routed experts back...")
+    t0 = time.perf_counter()
+    routed_gate_proj = ttnn.load_tensor(layer_dir / "gate_proj.tensorbin", device=device)
+    routed_up_proj = ttnn.load_tensor(layer_dir / "up_proj.tensorbin", device=device)
+    routed_down_proj = ttnn.load_tensor(layer_dir / "down_proj.tensorbin", device=device)
+    elapsed = time.perf_counter() - t0
+    logger.info("Loaded routed experts back in {:.3f}s", elapsed)
+    breakpoint()
+
+    assert routed_gate_proj.shape == expected_gate_shape
+    assert routed_up_proj.shape == expected_up_shape
+    assert routed_down_proj.shape == expected_down_shape
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_dump_load_routed_expert_weights_4x2(bh_2d_mesh_device, tmp_path):
+    """Test dump/load round-trip for MoE routed expert weights on 4x2 mesh (one stacked tensor per projection). Uses BlitzDecodeWeights directly so it can run in slow dispatch."""
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    gate_stacked, up_stacked, down_stacked = _moe_routed_expert_stacked_tensors(seed=43)
+    bdw = BlitzDecodeWeights(submesh)
+    logger.info("Getting routed expert weights...")
+    routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
+        gate_stacked, up_stacked, down_stacked
+    )
+    logger.info("Got routed expert weights")
+
+    expected_gate_shape = routed_gate_proj.shape
+    expected_up_shape = routed_up_proj.shape
+    expected_down_shape = routed_down_proj.shape
+
+    logger.info("Dumping routed experts to disk...")
+    layer_dir = tmp_path / "layer_000"
+    layer_dir.mkdir(parents=True, exist_ok=True)
+    ttnn.dump_tensor(layer_dir / "gate_proj.tensorbin", routed_gate_proj)
+    ttnn.dump_tensor(layer_dir / "up_proj.tensorbin", routed_up_proj)
+    ttnn.dump_tensor(layer_dir / "down_proj.tensorbin", routed_down_proj)
+    logger.info("Dumped routed experts to disk")
+
+    del routed_gate_proj, routed_up_proj, routed_down_proj
+
+    logger.info("Loading routed experts back onto the same submesh...")
+    t0 = time.perf_counter()
+    routed_gate_proj = ttnn.load_tensor(layer_dir / "gate_proj.tensorbin", device=submesh)
+    routed_up_proj = ttnn.load_tensor(layer_dir / "up_proj.tensorbin", device=submesh)
+    routed_down_proj = ttnn.load_tensor(layer_dir / "down_proj.tensorbin", device=submesh)
+    elapsed = time.perf_counter() - t0
+    logger.info("Loaded routed experts back onto the same submesh in {:.3f}s", elapsed)
+
+    breakpoint()
+
+    assert routed_gate_proj.shape == expected_gate_shape
+    assert routed_up_proj.shape == expected_up_shape
+    assert routed_down_proj.shape == expected_down_shape
 
 
 @pytest.mark.parametrize(
@@ -546,9 +638,9 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.shared_gate_proj.tensor_shape == (7168, 256)
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
     assert hasattr(layer, "shared_down_proj")
-    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
+    assert hasattr(layer, "routed_gate_proj") and layer.routed_gate_proj is not None
+    assert hasattr(layer, "routed_up_proj") and layer.routed_up_proj is not None
+    assert hasattr(layer, "routed_down_proj") and layer.routed_down_proj is not None
 
 
 @pytest.mark.parametrize(
@@ -593,9 +685,9 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     assert orig.shared_gate_proj.tensor_shape == (7168, 256)
     assert orig.shared_up_proj.tensor_shape == (7168, 256)
     assert hasattr(orig, "shared_down_proj")
-    assert len(orig.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(orig.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(orig.routed_down_proj) == NUM_ROUTED_EXPERTS
+    assert orig.routed_gate_proj is not None and orig.routed_gate_proj.shape is not None
+    assert orig.routed_up_proj is not None and orig.routed_up_proj.shape is not None
+    assert orig.routed_down_proj is not None and orig.routed_down_proj.shape is not None
     # Early access to q_ab_kv_a fused_tensor (same as first tensor touched in save_layer)
     logger.info("Early access: touching q_ab_kv_a fused_tensor (orig.q_a_proj.fused_tensor)...")
     q_ab_kv_a_fused = orig.q_a_proj.fused_tensor
@@ -614,12 +706,9 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     layer_dir = tmp_path / "layer_000"
     assert (layer_dir / "gate_up.tensorbin").exists()
     assert (layer_dir / "shared_down_proj.tensorbin").exists()
-    experts_dir = layer_dir / "experts"
-    for e in range(NUM_ROUTED_EXPERTS):
-        expert_dir = experts_dir / f"e_{e:03d}"
-        assert (expert_dir / "gate_proj.tensorbin").exists()
-        assert (expert_dir / "up_proj.tensorbin").exists()
-        assert (expert_dir / "down_proj.tensorbin").exists()
+    assert (layer_dir / "routed_gate_proj.tensorbin").exists()
+    assert (layer_dir / "routed_up_proj.tensorbin").exists()
+    assert (layer_dir / "routed_down_proj.tensorbin").exists()
 
     deallocate_weights(weights)
     t0 = time.perf_counter()
@@ -642,13 +731,9 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     _assert_overlapped_tensors_match(orig.shared_gate_proj, layer.shared_gate_proj)
     _assert_overlapped_tensors_match(orig.shared_up_proj, layer.shared_up_proj)
     assert layer.shared_down_proj.shape == orig.shared_down_proj.shape
-    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
-    for e in range(NUM_ROUTED_EXPERTS):
-        assert layer.routed_gate_proj[e].shape == orig.routed_gate_proj[e].shape
-        assert layer.routed_up_proj[e].shape == orig.routed_up_proj[e].shape
-        assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
+    assert layer.routed_gate_proj.shape == orig.routed_gate_proj.shape
+    assert layer.routed_up_proj.shape == orig.routed_up_proj.shape
+    assert layer.routed_down_proj.shape == orig.routed_down_proj.shape
 
     assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
 
@@ -744,7 +829,7 @@ def test_load_4_layers_across_4_submeshes_4x2(bh_2d_mesh_device, tmp_path):
         assert hasattr(loaded[i], "shared_gate_proj") and loaded[i].shared_gate_proj is not None
         assert hasattr(loaded[i], "routed_gate_proj") and loaded[i].routed_gate_proj is not None
         assert loaded[i].routed_gate_proj.shape is not None
-    assert len(loaded[3].routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(loaded[3].routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(loaded[3].routed_down_proj) == NUM_ROUTED_EXPERTS
+    assert loaded[3].routed_gate_proj is not None and loaded[3].routed_gate_proj.shape is not None
+    assert loaded[3].routed_up_proj is not None and loaded[3].routed_up_proj.shape is not None
+    assert loaded[3].routed_down_proj is not None and loaded[3].routed_down_proj.shape is not None
     assert loaded[3].shared_down_proj is not None

@@ -305,9 +305,9 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
         gate_stacked, up_stacked, down_stacked
     )
-    gate_proj_weights = gate_proj_expert_tensors[0]
-    up_proj_weights = up_proj_expert_tensors[0]
-    down_proj_weights = down_proj_expert_tensors[0]
+    gate_proj_weights = gate_proj_expert_tensors
+    up_proj_weights = up_proj_expert_tensors
+    down_proj_weights = down_proj_expert_tensors
     logger.info("Uploaded gate/up/down expert weights via BlitzDecodeWeights")
 
     # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──
@@ -822,9 +822,9 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
     gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
         gate_stacked, up_stacked, down_stacked
     )
-    gate_proj_weights = gate_proj_expert_tensors[0]
-    up_proj_weights = up_proj_expert_tensors[0]
-    down_proj_weights = down_proj_expert_tensors[0]
+    gate_proj_weights = gate_proj_expert_tensors
+    up_proj_weights = up_proj_expert_tensors
+    down_proj_weights = down_proj_expert_tensors
     logger.info("Uploaded gate/up/down expert weights via BlitzDecodeWeights")
 
     # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──

@@ -186,9 +186,9 @@ def create_mlp_tensors(device, mesh_mapper=None):
     gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
         gate_stacked, up_stacked, down_stacked
     )
-    gate_proj_weights = gate_proj_expert_tensors[0]
-    up_proj_weights = up_proj_expert_tensors[0]
-    down_proj_weights = down_proj_expert_tensors[0]
+    gate_proj_weights = gate_proj_expert_tensors
+    up_proj_weights = up_proj_expert_tensors
+    down_proj_weights = down_proj_expert_tensors
 
     # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──
     def _create_dram_mm_output(N_pad, per_core_N_val):

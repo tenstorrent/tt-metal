@@ -176,7 +176,7 @@ class DRAMStreamingMatmul:
         K = in0_shard_shape[1]
 
         # in1 is WIDTH_SHARDED on [K, N], shard shape is [K, per_core_N]
-        # When indexing is enabled, in1 has [K * num_experts, N] stacked experts
+        # When indexing is enabled, in1 may be [K * num_experts, N] stacked experts (one tensor)
         in1_shard_shape = input_b.memory_config().shard_spec.shape
         K_from_in1 = in1_shard_shape[0]
 
@@ -187,9 +187,13 @@ class DRAMStreamingMatmul:
 
         # Validate
         assert Mt == 1, f"Mt must be 1 for simplified matmul, got {Mt}"
-        # With indexing, in1 is the first expert tensor (K rows); other experts are contiguous in DRAM
-        # Kernel uses expert_idx * expert_size offset to access different experts
-        assert K == K_from_in1, f"K dimension mismatch: {K} vs {K_from_in1}"
+        if enable_indexing:
+            # Stacked experts: in1 has shape [num_experts * K, N]; kernel uses base + expert_idx * expert_size
+            assert K_from_in1 >= K and K_from_in1 % K == 0, (
+                f"When indexing, in1 K dimension must be a multiple of in0 K: " f"K_from_in1={K_from_in1}, K={K}"
+            )
+        else:
+            assert K == K_from_in1, f"K dimension mismatch: {K} vs {K_from_in1}"
 
         # Determine subblock_k (K subblock size in tiles)
         # Default to full K if not specified

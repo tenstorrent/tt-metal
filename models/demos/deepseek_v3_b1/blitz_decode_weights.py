@@ -1302,21 +1302,22 @@ class BlitzDecodeWeights:
         gate_proj_weights: torch.Tensor,
         up_proj_weights: torch.Tensor,
         down_proj_weights: torch.Tensor,
-    ) -> tuple[list[ttnn.Tensor], list[ttnn.Tensor], list[ttnn.Tensor]]:
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Create DRAM WIDTH_SHARDED expert weight tensors for routed MoE.
 
-        Each expert projection is uploaded as a separate WIDTH_SHARDED tensor
-        across all DRAM banks as ``bfloat4_b``.  Tiles within each bank's
-        shard are reordered from row-major to column-major so that K tiles
-        stream contiguously.
+        All experts for each projection are stacked into a single tensor and
+        uploaded with one ``ttnn.from_torch`` per projection (faster loading).
+        Tiles within each bank's shard are reordered from row-major to
+        column-major so that K tiles stream contiguously.  The kernel uses
+        base + expert_idx * expert_size to access each expert.
 
         Weights are replicated across all devices in a multi-device mesh.
 
-        Per-expert device layout::
+        Device layout (one tensor per projection)::
 
-            gate_proj_i  (K, N_padded)  WIDTH_SHARDED in DRAM
-            up_proj_i    (K, N_padded)  WIDTH_SHARDED in DRAM
-            down_proj_i  (K_down, N_down_padded)  WIDTH_SHARDED in DRAM
+            gate_proj  (num_experts * K, N_padded)  WIDTH_SHARDED in DRAM
+            up_proj    (num_experts * K, N_padded)  WIDTH_SHARDED in DRAM
+            down_proj  (num_experts * K_down, N_down_padded)  WIDTH_SHARDED in DRAM
 
         Args:
             gate_proj_weights: Stacked gate expert weights, shape
@@ -1327,20 +1328,28 @@ class BlitzDecodeWeights:
                 ``(num_experts, K_down, N_down)``.
 
         Returns:
-            ``(gate_expert_tensors, up_expert_tensors, down_expert_tensors)``
-            — three lists of device-resident ttnn.Tensors, one per expert.
-            The first tensor in each list can be used as the base address for
-            the op; all tensors must be kept alive to prevent deallocation.
+            ``(gate_tensor, up_tensor, down_tensor)`` — three device-resident
+            ttnn.Tensors, each containing all experts stacked along the first
+            dimension.  Pass the same tensor to the op with an index tensor;
+            the kernel uses expert_idx * expert_size to read the right expert.
         """
         device = self._device
         tile_w = 32
         num_banks = device.dram_grid_size().x
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
 
-        def upload(expert_weights: torch.Tensor) -> list[ttnn.Tensor]:
+        def upload(expert_weights: torch.Tensor) -> ttnn.Tensor:
             num_experts, K, N = expert_weights.shape
             N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
             per_core_N = N_padded // num_banks
+            if N_padded != N:
+                expert_weights = torch.nn.functional.pad(expert_weights, (0, N_padded - N))
+
+            # Shuffle all experts in one batch; _shuffle_dram_tiles supports [*, K, N].
+            w_shuffled = self._shuffle_dram_tiles(expert_weights, tile_w, num_banks)
+            # Stack experts along rows: (num_experts, K, N_padded) -> (num_experts * K, N_padded)
+            w_stacked = w_shuffled.reshape(num_experts * K, N_padded)
+            w_stacked = w_stacked.reshape(1, 1, num_experts * K, N_padded)
 
             dram_grid = ttnn.CoreRangeSet(
                 {
@@ -1350,31 +1359,18 @@ class BlitzDecodeWeights:
                     )
                 }
             )
-            shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+            shard_spec = ttnn.ShardSpec(dram_grid, [num_experts * K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
             mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
-            tensors = []
-            for i in range(num_experts):
-                w = expert_weights[i]
-                if N_padded != N:
-                    w = torch.nn.functional.pad(w, (0, N_padded - N))
-
-                w_shuffled = self._shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
-                w_shuffled = w_shuffled.reshape(1, 1, K, N_padded)
-
-                tensors.append(
-                    ttnn.from_torch(
-                        w_shuffled.contiguous(),
-                        dtype=ttnn.bfloat4_b,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=device,
-                        memory_config=mem_config,
-                        mesh_mapper=mesh_mapper,
-                    )
-                )
-                if (i + 1) % 32 == 0:
-                    logger.info(f"  Uploaded {i + 1}/{num_experts} experts")
-            return tensors
+            logger.info(f"  Uploading {num_experts} experts as one tensor (gate/up/down)")
+            return ttnn.from_torch(
+                w_stacked.contiguous(),
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=None,
+                memory_config=mem_config,
+                mesh_mapper=mesh_mapper,
+            )
 
         return upload(gate_proj_weights), upload(up_proj_weights), upload(down_proj_weights)
 
