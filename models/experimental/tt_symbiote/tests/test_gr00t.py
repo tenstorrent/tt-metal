@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Must import groot_utils before modules.* so run_config is patched with DistributedConfig
 from utils import groot_utils  # noqa: F401
+from utils.groot_utils import TTNNEmbedding
 
 from modules.attention import TTNNGR00TSelfAttention
 from modules.linear import TTNNLinear
@@ -186,6 +187,7 @@ def test_gr00t_inference_validation(device):
     op_mapping = {
         nn.Linear: TTNNLinear,
         nn.LayerNorm: TTNNLayerNorm,
+        nn.Embedding: TTNNEmbedding,
         nn.SiLU: TTNNSilu,
         nn.Conv2d: TTNNConv2dNHWC,
         lang_layer.mlp.__class__: Qwen2MLP,
@@ -193,7 +195,9 @@ def test_gr00t_inference_validation(device):
         vision_layer.self_attn.__class__: TTNNGR00TSelfAttention,
         action_block.attn1.__class__: TTNNGR00TSelfAttention,
     }
-    exclude_replacement = set()
+    exclude_replacement = {
+        "backbone.model.vision_model.vision_model.embeddings.position_embedding",
+    }
     transformed = register_module_replacement_dict(
         model, op_mapping, model_config={"dtype": ttnn.bfloat16}, exclude_replacement=exclude_replacement
     )

@@ -18,7 +18,10 @@ from typing import Any, Dict, Optional
 
 import torch
 import ttnn
+from torch import nn
 from torch.utils._pytree import tree_map
+
+from models.experimental.tt_symbiote.core.module import TTNNModule
 
 from models.experimental.tt_symbiote.core.run_config import (
     DispatchManager,
@@ -108,6 +111,68 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
             break
     if not passed:
         print(f"Operation {func_name} PCC < 0.99.")
+
+
+class TTNNEmbedding(TTNNModule):
+    """TTNN-accelerated Embedding layer (embedding lookup on device)."""
+
+    @classmethod
+    def from_torch(cls, embedding: nn.Embedding):
+        """Create TTNNEmbedding from PyTorch Embedding layer."""
+        new_layer = cls()
+        new_layer._fallback_torch_layer = embedding
+        return new_layer
+
+    def preprocess_weights_impl(self):
+        """Preprocess embedding weights for TTNN."""
+        if self.torch_layer is None:
+            return
+        weight = self.torch_layer.weight
+        self.tt_weight_host = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def move_weights_to_device_impl(self):
+        """Move weights to TTNN device."""
+        if hasattr(self, "tt_weight_host") and self.tt_weight_host is not None:
+            self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+
+    def deallocate_weights_impl(self):
+        """Deallocate weights from device."""
+        if hasattr(self, "tt_weight") and self.tt_weight is not None:
+            ttnn.deallocate(self.tt_weight)
+        super().deallocate_weights_impl()
+
+    def forward(self, indices):
+        """Forward pass: embedding lookup on device.
+        indices: TorchTTNNTensor or ttnn.Tensor of shape (batch, seq_len) or (seq_len,)
+        ttnn.embedding requires indices in UINT32 dtype.
+        """
+        device = self.device
+        ind_tt = getattr(indices, "to_ttnn", None) or indices
+        if hasattr(indices, "elem") and indices.elem is not None and getattr(indices, "ttnn_tensor", None) is None:
+            torch_ind = indices.elem
+            if not isinstance(torch_ind, torch.Tensor):
+                torch_ind = torch.tensor(torch_ind, dtype=torch.int64)
+            ind_tt = ttnn.from_torch(
+                torch_ind.cpu().to(torch.int64),
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        elif hasattr(ind_tt, "device"):
+            dev = ind_tt.device() if callable(ind_tt.device) else ind_tt.device
+            if dev is not None and dev != device:
+                ind_tt = ttnn.to_device(ind_tt, device)
+        if ind_tt.dtype != ttnn.uint32:
+            if ind_tt.layout != ttnn.TILE_LAYOUT:
+                ind_tt = ttnn.to_layout(ind_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ind_tt = ttnn.typecast(ind_tt, ttnn.uint32)
+        out = ttnn.embedding(
+            ind_tt,
+            self.tt_weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return out
 
 
 _DIAG_LM_LAYER0_CAPTURE: Dict[str, Any] = {}
@@ -210,9 +275,10 @@ class DPLRunExtended(NormalRun):
     def module_run(self, *args, **kwds):
         from models.experimental.tt_symbiote.core import run_config
 
-        assert (
-            self.torch_layer is not None
-        ), f"torch_layer must be set for DPLRun, {self} does not have torch_layer set."
+        # Child modules (e.g. TTNNRotaryPositionEmbedding, RMSNorm) may not have torch_layer;
+        # delegate to NormalRun so they run TTNN-only without DPL comparison.
+        if self.torch_layer is None:
+            return NormalRun.module_run(self, *args, **kwds)
 
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(run_config.copy_to_torch(self.__class__.__name__), args)
@@ -973,6 +1039,9 @@ def patch_run_config_for_gr00t():
     def _trace_enabled(cls):
         return cls
 
+    def _trace_disabled(cls):
+        return cls
+
     def _is_trace_enabled(module):
         return False
 
@@ -983,6 +1052,7 @@ def patch_run_config_for_gr00t():
         pass
 
     run_config.trace_enabled = _trace_enabled
+    run_config.trace_disabled = _trace_disabled
     run_config.is_trace_enabled = _is_trace_enabled
     run_config.disable_trace = _disable_trace
     run_config.TracedRun = TracedRunStub

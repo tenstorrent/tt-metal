@@ -87,14 +87,25 @@ def _cleanup_tensors(*tensor_deallocate_pairs):
 
 
 def handle_view(func, args, kwargs):
-    """Handle view operation."""
+    """Handle view operation. When physical volume != new_shape volume (padded buffer), flatten, slice to logical size, then reshape."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    import math
 
     input_tensor = args[0]
     if not isinstance(input_tensor, TorchTTNNTensor):
         input_tensor = TorchTTNNTensor(input_tensor)
-    new_shape = args[1]
-    return TorchTTNNTensor(ttnn.reshape(input_tensor.to_ttnn, new_shape))
+    new_shape = tuple(int(s) for s in args[1])
+    t = getattr(input_tensor, "ttnn_tensor", None) or input_tensor.to_ttnn
+    ttnn_shp = t.shape
+    new_vol = math.prod(new_shape)
+    old_vol = math.prod(int(s) for s in ttnn_shp)
+    if old_vol != new_vol:
+        t_flat = ttnn.reshape(t, (1, old_vol))
+        t_slice = ttnn.slice(t_flat, (0, 0), (1, new_vol), (1, 1))
+        t = t_slice
+    out = ttnn.reshape(t, new_shape)
+    return TorchTTNNTensor(out)
 
 
 def handle_unsafe_view(func, args, kwargs):
@@ -1506,10 +1517,59 @@ def handle_clamp(func, args, kwargs):
     return TorchTTNNTensor(ttnn.clamp(input_tensor.to_ttnn, min_val, max_val))
 
 
+def handle_embedding(func, args, kwargs):
+    """Handle aten::embedding — embedding lookup on device via ttnn.embedding.
+    args: (input/indices, weight, padding_idx=-1, scale_grad_by_freq=False, sparse=False)
+    """
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    indices = args[0]
+    weight = args[1]
+    padding_idx = int(args[2]) if len(args) > 2 else -1
+    pad_token = padding_idx if padding_idx >= 0 else None
+
+    weight_tt = getattr(weight, "ttnn_tensor", None) or (weight.to_ttnn if hasattr(weight, "to_ttnn") else None)
+    ind_tt = getattr(indices, "ttnn_tensor", None) or (indices.to_ttnn if hasattr(indices, "to_ttnn") else None)
+
+    device = None
+    if weight_tt is not None and hasattr(weight_tt, "device"):
+        dev_fn = weight_tt.device if callable(weight_tt.device) else (lambda: weight_tt.device)
+        device = dev_fn() if callable(dev_fn) else dev_fn
+    if device is None and ind_tt is not None and hasattr(ind_tt, "device"):
+        dev_fn = ind_tt.device if callable(ind_tt.device) else (lambda: ind_tt.device)
+        device = dev_fn() if callable(dev_fn) else dev_fn
+
+    if weight_tt is None:
+        weight_tt = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    if ind_tt is None:
+        torch_ind = (
+            indices.cpu().to(torch.int64) if hasattr(indices, "cpu") else torch.tensor(indices, dtype=torch.int64)
+        )
+        ind_tt = ttnn.from_torch(torch_ind, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    if device is not None:
+        if hasattr(ind_tt, "device") and (ind_tt.device() if callable(ind_tt.device) else ind_tt.device) != device:
+            ind_tt = ttnn.to_device(ind_tt, device)
+        if (
+            hasattr(weight_tt, "device")
+            and (weight_tt.device() if callable(weight_tt.device) else weight_tt.device) != device
+        ):
+            weight_tt = ttnn.to_device(weight_tt, device)
+
+    out = ttnn.embedding(
+        ind_tt,
+        weight_tt,
+        padding_idx=pad_token,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return TorchTTNNTensor(out)
+
+
 def handle_constant_pad_nd(func, args, kwargs):
     """Handle constant_pad_nd (F.pad mode='constant') for patch_embedding and similar.
-    Converts PyTorch pad list (last dim first, left/right per dim) to ttnn.pad format
-    (list of [before, after] per dimension, first dim first). Only end padding is supported on device."""
+    Converts PyTorch pad list (last dim first, left/right per dim) to ttnn.pad format.
+    Supports both left and right padding on device via concat when left padding is needed."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1519,7 +1579,9 @@ def handle_constant_pad_nd(func, args, kwargs):
     pad_list = list(args[1])
     value = float(args[2]) if len(args) > 2 else 0.0
 
-    t = input_tensor.to_ttnn
+    t = input_tensor
+    if isinstance(t, TorchTTNNTensor):
+        t = getattr(t, "ttnn_tensor", None) or t.to_ttnn
     t = ensure_tile_layout(t)
     rank = len(t.shape)
     if rank != 4:
@@ -1538,20 +1600,55 @@ def handle_constant_pad_nd(func, args, kwargs):
         raise ValueError(f"handle_constant_pad_nd: pad_list length must be <= 2*rank={2*rank}, got {len(pad_list)}")
 
     use_exact_padding = original_pad_len == 4
+    device = t.device() if hasattr(t, "device") and callable(t.device) else None
 
     padding_config = []
+    has_left_padding = False
     for i in range(rank):
         j = (rank - 1 - i) * 2
         left, right = int(pad_list[j]), int(pad_list[j + 1])
         if left != 0:
-            raise NotImplementedError(
-                "handle_constant_pad_nd: ttnn.pad on device does not support front (left) padding. Use CPU fallback."
-            )
+            has_left_padding = True
         if not use_exact_padding and i >= rank - 2 and right > 0:
             right = ((right + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         padding_config.append([left, right])
 
-    out = ttnn.pad(t, padding=padding_config, value=value)
+    if not has_left_padding:
+        out = ttnn.pad(t, padding=padding_config, value=value)
+        return TorchTTNNTensor(out)
+
+    # Left padding: build result via concat(left_fill, t, right_fill) per dimension
+    # Pad from last dim first (dim 3, 2, 1, 0)
+    shape = [int(s) for s in t.shape]
+    out = t
+    for dim in range(rank - 1, -1, -1):
+        left, right = padding_config[dim]
+        if left == 0 and right == 0:
+            continue
+        left_shape = shape.copy()
+        left_shape[dim] = left
+        right_shape = shape.copy()
+        right_shape[dim] = right
+        if left > 0:
+            left_fill = ttnn.from_torch(
+                torch.full(tuple(left_shape), value, dtype=torch.bfloat16),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            out = ttnn.concat([left_fill, out], dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(left_fill)
+            shape[dim] += left
+        if right > 0:
+            right_fill = ttnn.from_torch(
+                torch.full(tuple(right_shape), value, dtype=torch.bfloat16),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            out = ttnn.concat([out, right_fill], dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(right_fill)
+            shape[dim] += right
     return TorchTTNNTensor(out)
 
 
@@ -1618,7 +1715,7 @@ def handle_im2col(func, args, kwargs):
         raise NotImplementedError("handle_im2col: spatial size too small for kernel on TTNN.")
     out_h = H_logical // kH
     out_w = W_logical // kW
-    t = input_tensor.to_ttnn
+    t = getattr(input_tensor, "ttnn_tensor", None) or input_tensor.to_ttnn
     if H_logical != H or W_logical != W:
         t = ttnn.slice(t, (0, 0, 0, 0), (N, C, H_logical, W_logical), (1, 1, 1, 1))
     blocks = []
@@ -1879,6 +1976,7 @@ def _get_func_to_ttnn_compatible():
         "aten::index.Tensor": handle_index,
         "aten::topk": handle_topk,
         "aten::clamp": handle_clamp,
+        "aten::embedding": handle_embedding,
         "aten::constant_pad_nd": handle_constant_pad_nd,
         "aten::pad": handle_pad,
         "aten::flatten.using_ints": handle_flatten_using_ints,
@@ -2095,12 +2193,6 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
             elif rank != 4:
                 print("TTNN: aten::constant_pad_nd on device only supports rank 4 tensors.")
                 passed = False
-            else:
-                for k in range(0, len(pad_list), 2):
-                    if int(pad_list[k]) != 0:
-                        print("TTNN: aten::constant_pad_nd on device only supports end (right) padding.")
-                        passed = False
-                        break
     if func_name in ("aten::native_layer_norm", "aten::layer_norm"):
         if not any_ttnn_tensor or len(args) < 5:
             passed = False
@@ -2127,14 +2219,14 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
         if not any_ttnn_tensor or len(args) < 2:
             passed = False
     if func_name.startswith("aten::im2col") and len(args) >= 5:
-        _shp = getattr(args[0], "shape", None) if args else None
-        _in_block = passed and any_ttnn_tensor
-        if _in_block:
-            try:
-                inp = args[0]
-                shp = getattr(inp, "shape", None)
-                if shp is not None and len(shp) == 4:
-                    N, C = int(shp[0]), int(shp[1])
+        # im2col runs on device (DRAM/Tensix) with no default limit. Set TT_SYMBIOTE_IM2COL_MAX_DEVICE_NUMEL
+        # to a positive value (e.g. 500000) to cap and force CPU fallback for very large outputs.
+        _max_numel = int(os.environ.get("TT_SYMBIOTE_IM2COL_MAX_DEVICE_NUMEL", "0"))
+        if _max_numel > 0:
+            _shp = getattr(args[0], "shape", None) if args else None
+            if _shp is not None and len(_shp) == 4:
+                try:
+                    N, C = int(_shp[0]), int(_shp[1])
                     kr = args[1]
                     kH = int(kr[0]) if isinstance(kr, (list, tuple)) else int(kr)
                     kW = int(kr[1]) if isinstance(kr, (list, tuple)) else int(kr)
@@ -2142,23 +2234,18 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
                     sH = int(sr[0]) if isinstance(sr, (list, tuple)) else int(sr)
                     sW = int(sr[1]) if isinstance(sr, (list, tuple)) else int(sr)
                     if kH > 0 and kW > 0 and sH > 0 and sW > 0:
-                        H, W = int(shp[2]), int(shp[3])
-                        out_h, out_w = (H // sH), (W // sW)
-                        out_numel = N * C * kH * kW * out_h * out_w
-                        if os.environ.get("TT_SYMBIOTE_IM2COL_DEBUG", "0") == "1":
-                            print(
-                                f"[TTNN im2col debug] func_name={func_name!r} any_ttnn_tensor={any_ttnn_tensor} shape={shp} out_numel={out_numel} -> CPU={out_numel > 500_000}"
-                            )
-                        if out_numel > 500_000:
+                        H, W = int(_shp[2]), int(_shp[3])
+                        out_numel = N * C * kH * kW * (H // sH) * (W // sW)
+                        if out_numel > _max_numel:
                             passed = False
                             _log_fallback_op(func_name)
-            except (TypeError, IndexError, ValueError, Exception) as e:
-                if os.environ.get("TT_SYMBIOTE_IM2COL_DEBUG", "0") == "1":
-                    print(f"[TTNN im2col debug] exception {type(e).__name__}: {e} -> force CPU")
-                passed = False
-                _log_fallback_op(func_name)
+                except (TypeError, IndexError, ValueError):
+                    pass
         if os.environ.get("TT_SYMBIOTE_IM2COL_DEBUG", "0") == "1":
-            print(f"[TTNN im2col debug] after block: passed={passed} any_ttnn_tensor={any_ttnn_tensor} shape={_shp}")
+            _shp = getattr(args[0], "shape", None) if args else None
+            print(
+                f"[TTNN im2col debug] func_name={func_name!r} any_ttnn_tensor={any_ttnn_tensor} shape={_shp} passed={passed}"
+            )
     if func_name in _get_func_to_ttnn_compatible() and any_ttnn_tensor:
         return passed
     if func_name.startswith("aten::sum") and any_ttnn_tensor and passed:
