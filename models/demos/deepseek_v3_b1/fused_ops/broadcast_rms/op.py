@@ -192,26 +192,13 @@ class BroadcastRMSNorm:
                 range_hops_backward = num_targets_backward
 
                 rmsnorm_input_source_cb = input_cb
+                num_pages_to_read = input_num_pages
 
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    # CCL broadcast reader args (dummy values when skip_ccl)
-                    ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
-                    ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
-                    ("is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
-                    ("rmsnorm_num_tiles", num_tiles),
-                ]
-
-                brisc_named_compile_time_args = [
-                    ("skip_ccl", 1 if skip_ccl else 0),
                     # CCL broadcast writer args (dummy values when skip_ccl)
                     ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
+                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
                     ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
                     ("num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
                     ("num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
@@ -224,12 +211,17 @@ class BroadcastRMSNorm:
                     ("range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("range_hops_backward", range_hops_backward if not skip_ccl else 0),
-                    # RMSNorm/common args (always valid)
-                    # In multi-device mode, intermediate_cb = input_cb (CB 0) because broadcast
-                    # writes to CB 0 which is backed by intermediate_tensor_mesh
+                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
+                    ("rmsnorm_num_tiles", num_tiles),
                     ("intermediate_cb", input_cb if not skip_ccl else pkt_cb),
                     ("gamma_cb", gamma_cb),
-                    ("num_tiles", num_tiles),
+                ]
+
+                brisc_named_compile_time_args = [
+                    ("skip_ccl", 1 if skip_ccl else 0),
+                    ("cb0_id", pkt_cb if not skip_ccl else 0),
+                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
+                    ("is_sender", int(is_sender) if not skip_ccl else 0),
                 ]
 
                 # Named compile-time args for TRISC (rmsnorm compute)
@@ -264,13 +256,6 @@ class BroadcastRMSNorm:
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
                     num_connections = len(dst_nodes)
 
-                # Common runtime args for reader (broadcast args shared across cores)
-                reader_common_rt_args = [
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
-                    tile_id_start,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                ]
-
                 # Common runtime args for writer (broadcast args shared across cores)
                 writer_common_rt_args = []
                 if not skip_ccl:
@@ -282,8 +267,6 @@ class BroadcastRMSNorm:
                     writer_common_rt_args = [
                         int(intermediate_tensor_device.buffer_address()),  # tensor_address0
                         int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        tile_id_start,  # tile_id_start
-                        input_num_pages,  # tile_id_end
                         int(wait_output_semaphore),  # wait_output_semaphore
                         int(reset_global_semaphore),  # reset_global_semaphore
                         core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
@@ -308,18 +291,8 @@ class BroadcastRMSNorm:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB 2: packet buffer
-                pkt_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=pkt_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-                pkt_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=num_tiles * cb_page_size,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[pkt_cb_format],
-                )
+                # CB 2: ccl buffer
+                pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(pkt_cb, input_tensor_mesh)
 
                 # CB 3: Gamma (created from sharded gamma tensor)
                 gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor)
@@ -339,8 +312,7 @@ class BroadcastRMSNorm:
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
-                    ncrisc_common_runtime_args=reader_common_rt_args,
-                    brisc_common_runtime_args=writer_common_rt_args,
+                    ncrisc_common_runtime_args=writer_common_rt_args,
                     trisc_common_runtime_args=[epsilon_packed, scalar_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
@@ -351,7 +323,7 @@ class BroadcastRMSNorm:
                     defines=kernel_defines,
                     # Per-core runtime args: empty for BRISC (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
                 )
 
@@ -367,13 +339,13 @@ class BroadcastRMSNorm:
                     semaphores=[],
                 )
 
-                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
+                # Append fabric connection args to NCRISC kernel if needed (CCL mode only)
                 # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if not skip_ccl and num_connections > 0:
-                    # writer kernel is index 1 in the unified kernel descriptor list
-                    writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
+                    # NCRISC writer kernel is index 0 in the unified kernel descriptor list
+                    writer_rt_args_ref = program.kernels[0].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id, dst_nodes, [0], program, 1, worker_core  # kernel_idx (writer kernel)
+                        fabric_node_id, dst_nodes, [0], program, 0, worker_core
                     )
                     writer_rt_args_ref.extend(fabric_args)
 

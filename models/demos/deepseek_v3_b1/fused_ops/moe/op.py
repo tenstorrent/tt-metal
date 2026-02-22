@@ -177,6 +177,7 @@ class _MoeSharedExpertContext:
     b_compute_grid: Any
     a_cores_list: list
     b_cores_list: list
+    matmul_core_grid: Any
 
     # CB indices (flat for compile-time arg readability)
     gu_weights_cb: int
@@ -1983,7 +1984,8 @@ class MoeSharedExpertOp:
     @staticmethod
     def _setup_dimensions(
         device,
-        shared_gate_up_weights_tensor,
+        shared_gate_weights_overlapped,
+        shared_up_weights_overlapped,
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
         shared_output_tensor,
@@ -2021,7 +2023,8 @@ class MoeSharedExpertOp:
 
         Args:
             device: TT device (single chip)
-            shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
+            shared_gate_weights_overlapped: Gate proj OverlappedTensor (shares fused backing tensor with up)
+            shared_up_weights_overlapped: Up proj OverlappedTensor (shares fused backing tensor with gate)
             shared_down_mcast_dst_tensor: Destination tensor for down mcast (on mcast grid)
             shared_down_weights_tensor: Down projection weights tensor
             shared_output_tensor: Output tensor for shared expert
@@ -2056,7 +2059,6 @@ class MoeSharedExpertOp:
         Returns:
             _MoeSharedExpertContext
         """
-        from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
         # ==================================================================
         # CB indices
@@ -2083,13 +2085,29 @@ class MoeSharedExpertOp:
         gu_gather_data_size_bytes = input_tile_size  # each compute core sends 1 tile
 
         # ==================================================================
-        # Core grids
+        # Core grids — from OverlappedTensors
         # ==================================================================
+        shared_gate_up_weights_tensor = shared_gate_weights_overlapped.fused_tensor
+        a_compute_grid = shared_gate_weights_overlapped.core_range_set
+        b_compute_grid = shared_up_weights_overlapped.core_range_set
+        compute_core_grid = shared_gate_up_weights_tensor.memory_config().shard_spec.grid
+
+        # Per-core values (k_offset, sender_idx) depend on row-major ordering
+        # that must match the weight data layout produced by BDW's
+        # _crs_shard_permutation.  The OverlappedTensor CRS enumeration order
+        # differs from row-major, so we keep build_ab_grids() for the ordered
+        # lists while using the OverlappedTensor grids for CoreRangeSet membership.
+        from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+
         a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
-        compute_cores_list = a_cores_list + b_cores_list
-        compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
-        a_compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores_list])
-        b_compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores_list])
+        assert len(a_cores_list) == num_compute_cores
+        assert len(b_cores_list) == num_compute_cores
+        assert set((c.x, c.y) for c in a_cores_list) == set(
+            (c.x, c.y) for c in ttnn.corerange_to_cores(a_compute_grid)
+        ), "Gate cores from OverlappedTensor don't match build_ab_grids()"
+        assert set((c.x, c.y) for c in b_cores_list) == set(
+            (c.x, c.y) for c in ttnn.corerange_to_cores(b_compute_grid)
+        ), "Up cores from OverlappedTensor don't match build_ab_grids()"
 
         # NOC coordinates for gather destination (sender core)
         gather_dest_noc_core = device.worker_core_from_logical_core(sender_core)
@@ -2149,9 +2167,19 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
-        # Down Proj Matmul (SRAM matmul on 112 non-DRAM cores)
+        # Down Proj Matmul (SRAM matmul on non-DRAM cores)
         # ==================================================================
+        matmul_core_grid = shared_down_weights_tensor.memory_config().shard_spec.grid
+        num_matmul_cores = matmul_core_grid.num_cores()
+
         from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
+
+        assert (
+            num_matmul_cores == DownProj.NUM_MATMUL_CORES
+        ), f"Down weights tensor has {num_matmul_cores} cores, expected {DownProj.NUM_MATMUL_CORES}"
+        assert set((c.x, c.y) for c in ttnn.corerange_to_cores(matmul_core_grid)) == set(
+            (c.x, c.y) for c in ttnn.corerange_to_cores(DownProj.build_matmul_core_grid())
+        ), "Down weights matmul cores from tensor don't match DownProj.build_matmul_core_grid()"
 
         down_matmul_params = MoeOp.setup_sram_matmul(
             in0_cb=shared_down_mcast_dst_cb,
@@ -2163,23 +2191,23 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
-        # Residual Add (matmul_out + residual → residual_add_out on 112 cores)
+        # Residual Add (matmul_out + residual → residual_add_out on matmul cores)
         # ==================================================================
         residual_add_params = MoeSharedExpertOp.setup_residual_add(
             output_tensor=shared_residual_add_out_tensor,
             cb_out_index=shared_residual_add_out_cb,
-            num_matmul_cores=DownProj.NUM_MATMUL_CORES,
+            num_matmul_cores=num_matmul_cores,
             out_w_per_core=down_matmul_params["out_w"],
         )
 
         # ==================================================================
-        # Output Gather (112 matmul cores → sender)
+        # Output Gather (matmul cores → sender)
         # ==================================================================
         output_gather_params = MoeOp.setup_gather(
             device=device,
             receiver_core=sender_core,
-            sender_core_ranges=DownProj.build_matmul_core_grid(),
-            num_senders=DownProj.NUM_MATMUL_CORES,
+            sender_core_ranges=matmul_core_grid,
+            num_senders=num_matmul_cores,
             data_size_bytes_per_sender=down_matmul_params["out_w"] * tile_1x32_size,
             src_cb=shared_residual_add_out_cb,
             src_num_pages=down_matmul_params["out_w"],
@@ -2190,12 +2218,15 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
-        # Output Mcast (sender → 130 cores, 8 DRAM cores receive into add_cb_in1)
+        # Output Mcast (sender → all cores, DRAM cores receive into add_cb_in1)
         # ==================================================================
+        mcast_total_cores = mcast_grid.num_cores()
+        num_phantom_cores = sender_core.y  # col 12, rows 0..(sender.y-1)
+        num_dram_worker_cores = mcast_total_cores - num_matmul_cores - num_phantom_cores - 1
         output_mcast_params = MoeSharedExpertOp.setup_output_mcast(
             gather_dst_num_pages=output_gather_params["dst_num_pages"],
             tile_size=tile_1x32_size,
-            dst_num_pages=len(DownProj.DRAM_WORKER_POSITIONS),
+            dst_num_pages=num_dram_worker_cores,
         )
 
         # ==================================================================
@@ -2218,6 +2249,7 @@ class MoeSharedExpertOp:
             b_compute_grid=b_compute_grid,
             a_cores_list=a_cores_list,
             b_cores_list=b_cores_list,
+            matmul_core_grid=matmul_core_grid,
             # CB indices
             gu_weights_cb=shared_gu_weights_cb,
             gu_out_cb=shared_gu_out_cb,
@@ -2413,8 +2445,6 @@ class MoeSharedExpertOp:
         Returns:
             (unified_descs, per_core_descs) - lists to append to routed expert descriptors
         """
-        from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
-
         unified = [
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_shared_compute_core",
@@ -2442,7 +2472,7 @@ class MoeSharedExpertOp:
             ),
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_shared_mcast_receiver_core",
-                core_range=DownProj.build_matmul_core_grid(),
+                core_range=shared_ctx.matmul_core_grid,
                 value=1,
                 other_value=0,
             ),
@@ -2466,7 +2496,7 @@ class MoeSharedExpertOp:
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="shared_residual_add_core_idx",
                 core_values=[
-                    (core, idx) for idx, core in enumerate(ttnn.corerange_to_cores(DownProj.build_matmul_core_grid()))
+                    (core, idx) for idx, core in enumerate(ttnn.corerange_to_cores(shared_ctx.matmul_core_grid))
                 ],
                 other_value=0,
             ),
@@ -2866,7 +2896,8 @@ class MoeOp:
         rmsnorm_gamma_tensor,
         # Shared expert tensors
         shared_residual_mcast_src_tensor,
-        shared_gate_up_weights_tensor,
+        shared_gate_weights_overlapped,
+        shared_up_weights_overlapped,
         shared_residual_mcast_dst_tensor,
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
@@ -2894,6 +2925,8 @@ class MoeOp:
         Execute the full fused MoE operation (routed + shared expert).
 
         Args:
+            shared_gate_weights_overlapped: Gate proj OverlappedTensor.
+            shared_up_weights_overlapped: Up proj OverlappedTensor.
             num_iterations: Number of iterations to loop inside the kernel (default 1).
             reduce_intermediate_tensors: (Optional) List of 3 intermediate tensors for reduce rounds.
             reduce_output_tensor: (Optional) Final reduced output tensor on ROOT1 device.
@@ -2962,7 +2995,8 @@ class MoeOp:
 
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
-            shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
+            shared_gate_weights_overlapped=shared_gate_weights_overlapped,
+            shared_up_weights_overlapped=shared_up_weights_overlapped,
             shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
             shared_down_weights_tensor=shared_down_weights_tensor,
             shared_output_tensor=shared_output_tensor,
@@ -3095,7 +3129,7 @@ class MoeOp:
             rmsnorm_gamma_tensor,
             # Shared expert tensors
             shared_residual_mcast_src_tensor,
-            shared_gate_up_weights_tensor,
+            shared_gate_weights_overlapped.fused_tensor,
             shared_ag_gather_dst_tensor,
             shared_bg_gather_dst_tensor,
             shared_residual_mcast_dst_tensor,

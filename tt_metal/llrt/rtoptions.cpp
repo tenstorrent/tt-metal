@@ -1678,7 +1678,7 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
 }
 
-uint32_t RunTimeOptions::get_watcher_hash() const {
+std::string RunTimeOptions::get_watcher_hash() const {
     // These values will cause kernels / firmware to be recompiled if they change
     // Only the ones which have #define on the device side need to be listed here
     std::string hash_str;
@@ -1692,8 +1692,7 @@ uint32_t RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
-    std::hash<std::string> hash_fn;
-    return hash_fn(hash_str);
+    return hash_str;
 }
 
 // Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
