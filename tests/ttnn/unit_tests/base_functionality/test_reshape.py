@@ -742,6 +742,9 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
 
 
 @skip_with_llk_assert()
+@pytest.mark.xfail(
+    reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
+)
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [

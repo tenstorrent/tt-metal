@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_assert_enabled, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.activations import get_golden_function_for_activation
 
@@ -262,9 +262,9 @@ def test_matmul_reuse_config_sharded_fd_column(
 def test_matmul_reuse_config_sharded_tiny_tile(
     device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    if transpose_tile and tile_w == 16:
+    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
         pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32:
+    if not transpose_tile and tile_w == 16 and tile_h == 32 and is_llk_assert_enabled():
         pytest.skip("Known failure: tile_w=16, tile_h=32 without transpose")
 
     torch.manual_seed(0)
@@ -372,9 +372,9 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
-    if transpose_tile and tile_w == 16:
+    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
         pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias:
+    if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias and is_llk_assert_enabled():
         pytest.skip("Known failure: tile_w=16, tile_h=32 with bias")
 
     # PCC issue when height not equal to tile height
@@ -827,9 +827,9 @@ def test_matmul_2d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
-    if transpose_tile and tile_w == 16:
+    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
         pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32:
+    if not transpose_tile and tile_w == 16 and tile_h == 32 and is_llk_assert_enabled():
         pytest.skip("Known failure: tile_w=16, tile_h=32 without transpose")
 
     for _ in range(2):
@@ -989,9 +989,9 @@ def test_matmul_1d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
-    if transpose_tile and tile_w == 16:
+    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
         pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32:
+    if not transpose_tile and tile_w == 16 and tile_h == 32 and is_llk_assert_enabled():
         pytest.skip("Known failure: tile_w=16, tile_h=32 without transpose")
 
     for _ in range(2):
