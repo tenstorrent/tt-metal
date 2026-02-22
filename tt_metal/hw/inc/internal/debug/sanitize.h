@@ -32,6 +32,9 @@
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
 #include "eth_l1_address_map.h"
+#if !defined(WATCHER_DISABLE_CB_SANITIZE)
+#include "internal/circular_buffer_interface.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -224,6 +227,36 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
 #endif
     return DebugSanitizeOK;
 }
+
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+// Check whether an L1 address range [l1_addr, l1_addr+len) that falls within a
+// circular buffer stays within that buffer's allocated region.  Only runs on
+// BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
+// Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
+inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
+    for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        LocalCBInterface& cb = get_local_cb_interface(i);
+        if (cb.fifo_size == 0) {
+            continue;  // unused CB
+        }
+
+        uint32_t cb_start = cb.fifo_limit - cb.fifo_size;
+        uint32_t cb_end = cb.fifo_limit;
+
+        // Check if l1_addr falls inside this CB's region
+        if (l1_addr >= cb_start && l1_addr < cb_end) {
+            // Address is in this CB – verify the full transfer fits
+            // Use 64-bit arithmetic to avoid overflow on the end address.
+            if (static_cast<uint64_t>(l1_addr) + len > cb_end) {
+                return DebugSanitizeCBOutOfBounds;
+            }
+            return DebugSanitizeOK;
+        }
+    }
+    // Address is not inside any known CB; other checks will validate it.
+    return DebugSanitizeOK;
+}
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
 
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
@@ -466,6 +499,19 @@ void debug_sanitize_noc_and_worker_addr(
                 DebugSanitizeNocAlignment);
         }
     }
+
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+    // Check local L1 address against CB bounds (both read and write directions).
+    debug_sanitize_post_addr_and_hang(
+        noc_id,
+        noc_addr,
+        worker_addr,
+        len,
+        multicast,
+        dir,
+        DEBUG_SANITIZE_NOC_LOCAL,
+        debug_valid_cb_addr(worker_addr, len));
+#endif
 }
 
 void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {

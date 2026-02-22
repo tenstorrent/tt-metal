@@ -148,6 +148,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1,          // Disable write-only L1 sanitization
     TT_METAL_WATCHER_DISABLE_WAYPOINT,                        // Disable watcher waypoint feature
     TT_METAL_WATCHER_DISABLE_DISPATCH,                        // Disable watcher dispatch feature
+    TT_METAL_WATCHER_DISABLE_CB_SANITIZE,                     // Disable watcher circular buffer sanitization
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
 
     // ========================================
@@ -1053,6 +1054,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_disabled_features.insert(this->watcher_dispatch_str);
             break;
 
+        // TT_METAL_WATCHER_DISABLE_CB_SANITIZE
+        // Disables watcher circular buffer out-of-bounds sanitization when set to any value.
+        // Default: enabled
+        // Usage: export TT_METAL_WATCHER_DISABLE_CB_SANITIZE=1
+        case EnvVarID::TT_METAL_WATCHER_DISABLE_CB_SANITIZE:
+            this->watcher_disabled_features.insert(this->watcher_cb_sanitize_str);
+            break;
+
         // TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION
         // Enables NoC sanitization for linked transactions to catch more subtle errors.
         // Default: false (linked transaction sanitization disabled)
@@ -1345,7 +1354,8 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
         watcher_dispatch_str,
-        watcher_eth_link_status_str};
+        watcher_eth_link_status_str,
+        watcher_cb_sanitize_str};
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
@@ -1706,6 +1716,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_ring_buffer_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_stack_usage_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_cb_sanitize_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
