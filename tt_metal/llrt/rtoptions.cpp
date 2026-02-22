@@ -347,17 +347,11 @@ const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
 
 namespace {
-/** Return MPI/mesh rank from process environment, or -1 if not set. */
+/** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
+ * Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so that when multiple processes share TT_MESH_HOST_RANK=0
+ * (e.g. run_cluster_validation under mpirun), each still gets a distinct port. */
 int get_rank_from_env() {
-    const char* rank_str = std::getenv("TT_MESH_HOST_RANK");
-    if (rank_str) {
-        try {
-            return std::stoi(rank_str);
-        } catch (...) {
-            return -1;
-        }
-    }
-    rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
+    const char* rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
     if (rank_str) {
         try {
             return std::stoi(rank_str);
@@ -366,6 +360,14 @@ int get_rank_from_env() {
         }
     }
     rank_str = std::getenv("PMI_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("TT_MESH_HOST_RANK");
     if (rank_str) {
         try {
             return std::stoi(rank_str);
