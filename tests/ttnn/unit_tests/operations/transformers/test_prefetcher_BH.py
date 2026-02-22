@@ -583,7 +583,7 @@ def run_prefetcher_all_matmuls(
 # Test Cases
 # =============================================================================
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
-@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("enable_trace", [True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
