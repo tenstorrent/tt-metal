@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -327,9 +328,18 @@ void set_config_vars() {
     // be running fabric routers
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
 
-    // Only set these if they are not already set
+    // Only set these if they are not already set. When run under mpirun, use MPI rank
+    // so each process gets a distinct TT_MESH_HOST_RANK (and thus distinct Inspector RPC port).
     if (getenv("TT_MESH_HOST_RANK") == nullptr) {
-        setenv("TT_MESH_HOST_RANK", "0", 1);
+        const char* rank_str = getenv("OMPI_COMM_WORLD_RANK");
+        if (rank_str == nullptr) {
+            rank_str = getenv("PMI_RANK");
+        }
+        if (rank_str != nullptr) {
+            setenv("TT_MESH_HOST_RANK", rank_str, 1);
+        } else {
+            setenv("TT_MESH_HOST_RANK", "0", 1);
+        }
     }
     if (getenv("TT_MESH_ID") == nullptr) {
         setenv("TT_MESH_ID", "0", 1);
