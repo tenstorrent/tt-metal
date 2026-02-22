@@ -24,9 +24,6 @@ void kernel_main() {
     const uint32_t Kt = get_compile_time_arg_val(1);
     const uint32_t Nt = get_compile_time_arg_val(2);
 
-    uint32_t coreX = get_arg_val<uint32_t>(0);  // core X coordinate
-    uint32_t coreY = get_arg_val<uint32_t>(1);  // core Y coordinate
-
     constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
     constexpr tt::CBIndex cb_in2 = tt::CBIndex::c_2;
@@ -36,7 +33,7 @@ void kernel_main() {
     // and output circular buffers.
     mm_init(cb_in0, cb_in1, cb_out);
 
-    DPRINT << "Compute kernel started. Core: (" << coreX << ", " << coreY << ")" << ENDL();
+    DPRINT << "Compute kernel started." << ENDL();
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -51,6 +48,7 @@ void kernel_main() {
             // Perform the matrix multiplication for the current tile.
             // NOTE: This function also accumulates the result into the destination tile.
             matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
+            DPRINT << "Matmul tiles." << ENDL();
 
             // Mark the input tiles as used by popping them from the front of the circular buffers.
             cb_pop_front(cb_in0, 1);
@@ -61,6 +59,7 @@ void kernel_main() {
         cb_wait_front(cb_in2, 1);
         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in2);
         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in2, 0, 0);
+        DPRINT << "Add tiles." << ENDL();
         cb_pop_front(cb_in2, 1);
 
         // Commit and wait for the registers are populated with the results from the FPU

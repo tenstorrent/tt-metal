@@ -37,7 +37,12 @@ MatmulAddOperation::spec_return_value_t MatmulAddOperation::compute_output_specs
     return TensorSpec(
         Shape(out_shape),
         tt::tt_metal::TensorLayout(
-            tensor_args.a.dtype(), tt::tt_metal::PageConfig(tensor_args.a.layout()), MemoryConfig{}));
+            tensor_args.a.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.a.layout()),
+            MemoryConfig{
+                TensorMemoryLayout::INTERLEAVED,
+                BufferType::L1,
+            }));
 }
 
 MatmulAddOperation::tensor_return_value_t MatmulAddOperation::create_output_tensors(

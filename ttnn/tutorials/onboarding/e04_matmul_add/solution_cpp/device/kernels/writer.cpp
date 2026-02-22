@@ -11,12 +11,10 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);  // number of output tiles to write
     uint32_t start_id = get_arg_val<uint32_t>(2);   // starting tile ID for output tiles
-    uint32_t coreX = get_arg_val<uint32_t>(3);      // core X coordinate
-    uint32_t coreY = get_arg_val<uint32_t>(4);      // core Y coordinate
 
     constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
 
-    DPRINT << "Writer kernel started. Core: (" << coreX << ", " << coreY << ")" << ENDL();
+    DPRINT << "Writer kernel started." << ENDL();
 
     // Create the address generator for the output buffer. Due to us sharing buffer and circular buffer
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab

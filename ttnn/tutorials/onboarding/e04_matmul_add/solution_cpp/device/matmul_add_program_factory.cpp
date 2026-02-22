@@ -8,7 +8,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-
+#include <fmt/ostream.h>
+#include <cstdint>
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -23,6 +24,8 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
 
     auto a_shape = a.logical_shape();
     auto b_shape = b.logical_shape();
+
+    fmt::print("Creating program for MatmulAdd with A shape {}, B shape {}\n", a_shape, b_shape);
 
     uint32_t M = a_shape[-2];
     uint32_t K = a_shape[-1];
@@ -109,20 +112,18 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
                      b.buffer()->address(),  // Address of matrix B in DRAM
                      c.buffer()->address(),  // Address of matrix C in DRAM
                      work_offset,            // Starting offset for this core's work
-                     work_per_core,
-                     core.x,
-                     core.y});  // Amount of work for this core
+                     work_per_core});        // Amount of work for this core
 
                 // Set arguments for the writer kernel (data output)
                 tt_metal::SetRuntimeArgs(
-                    program, writer_id, core, {output.buffer()->address(), work_per_core, work_offset, core.x, core.y});
+                    program, writer_id, core, {output.buffer()->address(), work_per_core, work_offset});
                 // Set arguments for the compute kernel
                 tt_metal::SetRuntimeArgs(
                     program,
                     compute_id,
                     core,
                     {
-                        work_per_core, core.x, core.y  // Amount of work for this core
+                        work_per_core  // Amount of work for this core
                     });
                 work_offset += work_per_core;  // Update offset for next core
             }

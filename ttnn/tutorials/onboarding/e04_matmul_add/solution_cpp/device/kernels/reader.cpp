@@ -14,10 +14,8 @@ void kernel_main() {
     uint32_t src2_addr = get_arg_val<uint32_t>(2);
     uint32_t output_tile_start_id = get_arg_val<uint32_t>(3);  // starting tile ID for output tiles
     uint32_t num_output_tiles = get_arg_val<uint32_t>(4);      // number of output tiles to read
-    uint32_t coreX = get_arg_val<uint32_t>(5);                 // core X coordinate
-    uint32_t coreY = get_arg_val<uint32_t>(6);                 // core Y coordinate
 
-    DPRINT << "Reader kernel started. Core: (" << coreX << ", " << coreY << ")" << ENDL();
+    DPRINT << "Reader kernel started." << ENDL();
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
