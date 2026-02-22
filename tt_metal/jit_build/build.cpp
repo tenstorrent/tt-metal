@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -70,7 +71,15 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
 
 void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
-        std::filesystem::remove_all(dir_path);
+        if (!std::filesystem::exists(dir_path)) {
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::remove_all(dir_path, ec);
+        if (ec && ec.value() != ENOENT) {
+            log_warning(
+                tt::LogBuildKernels, "Failed to remove cache directory {}: {}", dir_path.string(), ec.message());
+        }
     }
 }
 

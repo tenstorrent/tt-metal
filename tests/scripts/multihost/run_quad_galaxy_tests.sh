@@ -56,6 +56,9 @@ setup_dual_galaxy_env() {
     mkdir -p logs
     mkdir -p generated/artifacts
 
+    export TT_METAL_CACHE="${TT_METAL_CACHE:-$(pwd)/.cache/tt-metal-cache}"
+    export TT_METAL_LOGS_PATH="${TT_METAL_LOGS_PATH:-$(pwd)/generated/logs}"
+
     sync
 
     if ! test -f "$RANKFILE"; then
@@ -80,6 +83,9 @@ setup_quad_galaxy_env() {
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
+
+    export TT_METAL_CACHE="${TT_METAL_CACHE:-$(pwd)/.cache/tt-metal-cache}"
+    export TT_METAL_LOGS_PATH="${TT_METAL_LOGS_PATH:-$(pwd)/generated/logs}"
 
     sync
 

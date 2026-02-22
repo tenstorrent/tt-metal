@@ -200,6 +200,8 @@ jobs:
 
           eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
 
+          export TT_METAL_CACHE="${GITHUB_WORKSPACE:-$PWD}/.cache/tt-metal-cache"
+          export TT_METAL_LOGS_PATH="${GITHUB_WORKSPACE:-$PWD}/generated/logs"
           export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="/opt/venv/bin/python3 /work/tools/tt-triage.py --disable-progress --dev=all 1>&2"
 
           python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py

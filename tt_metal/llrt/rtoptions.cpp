@@ -346,6 +346,56 @@ const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
 
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
 
+namespace {
+/** Return MPI/mesh rank from process environment, or -1 if not set. */
+int get_rank_from_env() {
+    const char* rank_str = std::getenv("TT_MESH_HOST_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("PMI_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    return -1;
+}
+}  // namespace
+
+uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
+    int rank = get_rank_from_env();
+    uint32_t base = inspector_settings.rpc_server_port;
+    if (rank >= 0) {
+        uint32_t port = base + static_cast<uint32_t>(rank);
+        if (port > 65535) {
+            port = 65535;
+        }
+        return static_cast<uint16_t>(port);
+    }
+    return static_cast<uint16_t>(base);
+}
+
+uint16_t RunTimeOptions::get_inspector_rpc_server_port() const { return get_effective_inspector_rpc_server_port(); }
+
+std::string RunTimeOptions::get_inspector_rpc_server_address() const {
+    return inspector_settings.rpc_server_host + ":" + std::to_string(get_effective_inspector_rpc_server_port());
+}
+
 // ============================================================================
 // ENVIRONMENT VARIABLE HANDLER
 // ============================================================================
