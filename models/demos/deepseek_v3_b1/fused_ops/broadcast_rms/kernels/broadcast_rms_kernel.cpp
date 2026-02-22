@@ -8,7 +8,7 @@
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
-#if !defined(SKIP_CCL)
+#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
 #include "../../../unified_kernels/broadcast.hpp"
 #endif
 #include "../../../unified_kernels/rmsnorm.hpp"
@@ -71,15 +71,18 @@ void kernel_main() {
 // -----------------------
 #if defined(COMPILE_FOR_BRISC)
 
-#if !defined(SKIP_CCL)
+#if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("num_pages_to_read"),
-        get_named_compile_time_arg_val("is_sender")>;
+        get_named_compile_time_arg_val("is_sender"),
+        get_named_compile_time_arg_val("use_socket")>;
 
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
-
-    bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
+        get_common_arg_val<uint32_t>(0),  // socket_config_addr
+        get_common_arg_val<uint32_t>(1),  // socket_page_size
+        get_common_arg_val<uint32_t>(2),  // socket_num_pages
+    };
 #endif
 
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
@@ -115,19 +118,25 @@ void kernel_main() {
 
 #endif
 
-    // CCL Broadcast
-#if !defined(SKIP_CCL)
+    // CCL Broadcast: runs on all cores in normal mode.
+    // In socket-reader + skip_ccl mode, only BRISC executes this path (socket recv via broadcast reader).
+#if !defined(SKIP_CCL) || (defined(ENABLE_SOCKET_READER) && defined(COMPILE_FOR_BRISC))
     deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
     bcast(bcast_args);
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
+    constexpr bool use_socket = get_named_compile_time_arg_val("use_socket") == 1;
     constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("gamma_cb");
     constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
 
     if constexpr (skip_ccl) {
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        // In socket mode BRISC signals rmsnorm_input_cb readiness via cb_push_back after socket recv;
+        // NCRISC must not call setup_sharded_buffer on it or it will double-signal the CB.
+        if constexpr (!use_socket) {
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+            unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        }
         unified_kernels::setup_sharded_buffer(gamma_cb, rmsnorm_num_tiles);
     } else {
         constexpr uint32_t intermediate_cb = get_named_compile_time_arg_val("intermediate_cb");
