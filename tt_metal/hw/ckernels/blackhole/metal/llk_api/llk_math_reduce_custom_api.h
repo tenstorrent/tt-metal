@@ -31,6 +31,11 @@ inline void llk_math_reduce_block_max_row_init() {
     _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>();
 }
 
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_mop_config() {
+    _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>();
+}
+
 /**
  * Performs block-based reduce_max_row operation across multiple tiles in the width dimension.
  *
@@ -52,3 +57,13 @@ inline void llk_math_reduce_block_max_row(const uint dst_index) {
 
     _llk_math_reduce_block_max_row_<block_ct_dim, is_fp32_dest_acc_en>(dst_index);
 }
+
+/**
+ * Reinitializes the block-based reduce_max_row operation after a matmul.
+ *
+ * This LLK API function is used only to re-initialize the address modifiers after a
+ * matmul operation in an SDPA inner loop. Please don't use this function as a substitute for
+ * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
+ * for a certain use case and the LLK team does not guarantee any degree of generality.
+ */
+inline void llk_math_reduce_block_max_row_reinit() { reduce_max_row_configure_addrmod_reinit(); }
