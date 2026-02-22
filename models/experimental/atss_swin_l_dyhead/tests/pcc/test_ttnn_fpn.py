@@ -71,7 +71,8 @@ def test_ttnn_fpn_vs_reference(device, atss_ckpt_path, atss_ref_model):
     ttnn_inputs = []
     for feat in backbone_feats:
         t = ttnn.from_torch(
-            feat,
+            # feat,
+            feat.permute(0, 2, 3, 1),  # nchw -> nhwc
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -86,7 +87,9 @@ def test_ttnn_fpn_vs_reference(device, atss_ckpt_path, atss_ref_model):
     # Compare per-level
     pcc_threshold = 0.98
     for i, (ref_feat, ttnn_feat) in enumerate(zip(ref_fpn_feats, ttnn_fpn_feats)):
-        ttnn_out = ttnn.to_torch(ttnn.from_device(ttnn_feat))
+        # ttnn_out = ttnn.to_torch(ttnn.from_device(ttnn_feat))
+        ttnn_out_nhwc = ttnn.to_torch(ttnn.from_device(ttnn_feat))
+        ttnn_out = torch.permute(ttnn_out_nhwc, (0, 3, 1, 2))  # NHWC -> NCHW to match reference
         assert (
             ttnn_out.shape == ref_feat.shape
         ), f"FPN level {i} shape mismatch: TTNN {ttnn_out.shape} vs ref {ref_feat.shape}"
