@@ -103,7 +103,7 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
             device->get_devices()[0], logical_core, capture_addr, capture_size, raw_data, CoreType::ETH);
 
         CaptureResults capture{};
-        std::memcpy(&capture, raw_data.data(), std::min(capture_size, raw_data.size() * sizeof(uint32_t)));
+        std::memcpy(static_cast<void*>(&capture), raw_data.data(), std::min(capture_size, raw_data.size() * sizeof(uint32_t)));
 
         results.push_back(EthCoreCaptureResult{physical_chip_id, logical_core, channel_id, capture});
     }
