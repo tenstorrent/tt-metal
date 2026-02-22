@@ -6,11 +6,12 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_logical_not() {
     static_assert(
         INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::LO16 ||

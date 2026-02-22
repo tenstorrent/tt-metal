@@ -465,7 +465,7 @@ When a compute kernel calls `sin_tile`, Metalium automatically selects the corre
 
 ```c++
 // tt_metal/hw/ckernels/grayskull/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -474,7 +474,7 @@ inline void calculate_sine() {
         // Assume v is bound [0:2pi]
         // phase shift [0:2pi] to [-pi:pi] and multiply result by -1
         v = v - 3.14159264f;
-        v = sfpu_sine_maclaurin_series<APPROXIMATION_MODE>(v);
+        v = sfpu_sine_maclaurin_series<APPROX_MODE>(v);
 
         // Use symmetrical properties of trig
         v *= -1;
@@ -490,14 +490,14 @@ For Blackhole (and Wormhole) processors, the availability of `float_to_int16` in
 
 ```c++
 // tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0] * FRAC_1_PI;
         vInt whole_v = float_to_int16(v, 0);
         v -= int32_to_float(whole_v, 0);
-        v = sfpu_sinpi<APPROXIMATION_MODE>(v);
+        v = sfpu_sinpi<APPROX_MODE>(v);
 
         v_if(whole_v & 1) { v = -v; }
         v_endif;

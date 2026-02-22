@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 
@@ -23,7 +24,11 @@ inline void llk_math_eltwise_binary_sfpu_add_int(
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::_add_int_<APPROXIMATE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
+        ckernel::sfpu::_add_int_<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            ITERATIONS,
+            INSTRUCTION_MODE,
+            SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
         odst,

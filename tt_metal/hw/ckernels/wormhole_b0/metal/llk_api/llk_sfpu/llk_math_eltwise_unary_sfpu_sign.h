@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_defs.h"
 #include "ckernel_sfpu_sign.h"
 
 namespace ckernel {
@@ -19,7 +20,10 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sign(
     uint dst_index, int vector_mode = (int)VectorMode::RC, uint exponent_size_8 = 1) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sign<APPROXIMATE>, dst_index, vector_mode, exponent_size_8);
+        ckernel::sfpu::calculate_sign<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise)>,
+        dst_index,
+        vector_mode,
+        exponent_size_8);
 }
 
 }  // namespace ckernel
