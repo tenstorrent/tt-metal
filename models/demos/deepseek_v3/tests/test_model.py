@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import errno
 import hashlib
 import json
 import re
@@ -72,6 +73,17 @@ def _canonical_case_identity(case_identity: dict[str, str | int]) -> str:
 
 
 def _case_reference_cache_filename(case_identity: dict[str, str | int]) -> str:
+    # Primary filename format: deterministic, human-readable, and hash-free.
+    return (
+        f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}."
+        f"mode_{case_identity['mode']}_seq_{case_identity['seq']}_batch_per_row_{case_identity['batch_per_row']}_"
+        f"mesh_{case_identity['mesh']}_decode_pos_{case_identity['decode_pos']}_layers_{case_identity['layers']}_"
+        f"max_seq_{case_identity['max_seq']}.pt"
+    )
+
+
+def _hashed_case_reference_cache_filename(case_identity: dict[str, str | int]) -> str:
+    # Backward-compatible hashed filename used by previous versions.
     digest_input = _canonical_case_identity(case_identity)
     digest = hashlib.sha1(digest_input.encode("utf-8")).hexdigest()[:12]
     return (
@@ -84,6 +96,10 @@ def _case_reference_cache_filename(case_identity: dict[str, str | int]) -> str:
 
 def _case_reference_cache_path(cache_path: Path, case_identity: dict[str, str | int]) -> Path:
     return _default_reference_cache_dir(cache_path) / _case_reference_cache_filename(case_identity)
+
+
+def _hashed_case_reference_cache_path(cache_path: Path, case_identity: dict[str, str | int]) -> Path:
+    return _default_reference_cache_dir(cache_path) / _hashed_case_reference_cache_filename(case_identity)
 
 
 def _legacy_case_reference_cache_filename(case_key: str) -> str:
@@ -181,6 +197,20 @@ def _save_case_reference_entry(path: Path, payload: dict) -> None:
             tmp_path.unlink()
 
 
+def _try_save_case_reference_entry(path: Path, payload: dict, *, reason: str) -> bool:
+    try:
+        _save_case_reference_entry(path, payload)
+        return True
+    except OSError as exc:
+        if exc.errno in (errno.EROFS, errno.EACCES, errno.EPERM):
+            logger.warning(
+                f"Unable to persist reference cache ({reason}) to {path}: {exc}. "
+                "Continuing with loaded/generated in-memory reference entry."
+            )
+            return False
+        raise
+
+
 def _expected_reference_output_shape(token_count: int, hf_config: PretrainedConfig) -> tuple[int, int, int]:
     return (1, token_count, hf_config.vocab_size)
 
@@ -210,7 +240,14 @@ def _generate_reference_case_entry(
             prefill_input = torch.randint(0, hf_config.vocab_size - 1, (batch_size, prefill_len), dtype=torch.long)
             prefill_seq_lens = torch.full((batch_size,), prefill_len, dtype=torch.long)
             _, _, prefill_cache = run_reference_with_attention(
-                reference_model, prefill_input, prefill_seq_lens, None, hf_config, "prefill", False
+                reference_model.model,
+                prefill_input,
+                prefill_seq_lens,
+                None,
+                hf_config,
+                "prefill",
+                False,
+                collect_output=False,
             )
             decode_input_caches = torch_cache_from_transformers(prefill_cache)
         else:
@@ -327,21 +364,31 @@ def run_test_forward_pass_dpmodel(
     cache_file = _case_reference_cache_path(cache_path, case_identity)
     cached_case = _load_case_reference_entry(cache_file)
     if cached_case is None:
+        hashed_case_file = _hashed_case_reference_cache_path(cache_path, case_identity)
+        if hashed_case_file != cache_file:
+            cached_case = _load_case_reference_entry(hashed_case_file)
+            if isinstance(cached_case, dict):
+                if _try_save_case_reference_entry(cache_file, cached_case, reason="hashed per-case migration"):
+                    logger.info(
+                        f"Migrated hashed per-case reference baseline for case '{case_key}' "
+                        f"from {hashed_case_file} to {cache_file}"
+                    )
+    if cached_case is None:
         legacy_case_file = _legacy_case_reference_cache_path(cache_path, case_key)
         if legacy_case_file != cache_file:
             cached_case = _load_case_reference_entry(legacy_case_file)
             if isinstance(cached_case, dict):
-                _save_case_reference_entry(cache_file, cached_case)
-                logger.info(
-                    f"Migrated legacy per-case reference baseline for case '{case_key}' "
-                    f"from {legacy_case_file} to {cache_file}"
-                )
+                if _try_save_case_reference_entry(cache_file, cached_case, reason="legacy per-case migration"):
+                    logger.info(
+                        f"Migrated legacy per-case reference baseline for case '{case_key}' "
+                        f"from {legacy_case_file} to {cache_file}"
+                    )
     if cached_case is None:
         legacy_cache = _load_legacy_reference_cache(_legacy_reference_cache_path(cache_path))
         cached_case = legacy_cache["cases"].get(case_key)
         if isinstance(cached_case, dict):
-            _save_case_reference_entry(cache_file, cached_case)
-            logger.info(f"Migrated legacy reference baseline for case '{case_key}' to {cache_file}")
+            if _try_save_case_reference_entry(cache_file, cached_case, reason="legacy monolithic migration"):
+                logger.info(f"Migrated legacy reference baseline for case '{case_key}' to {cache_file}")
     cached_reference_output = cached_case.get("reference_output") if isinstance(cached_case, dict) else None
     cached_shape = tuple(cached_reference_output.shape) if isinstance(cached_reference_output, torch.Tensor) else None
     needs_regen = (
@@ -363,8 +410,8 @@ def run_test_forward_pass_dpmodel(
             position_ids=position_ids,
             torch_input=torch_input,
         )
-        _save_case_reference_entry(cache_file, cached_case)
-        logger.info(f"Wrote reference baseline for case '{case_key}' to {cache_file}")
+        if _try_save_case_reference_entry(cache_file, cached_case, reason="newly generated case"):
+            logger.info(f"Wrote reference baseline for case '{case_key}' to {cache_file}")
     else:
         logger.info(f"Using cached reference baseline for case '{case_key}' from {cache_file}")
 
