@@ -57,6 +57,9 @@
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
 #include "../../unified_kernels/gated_reduce.hpp"
 #include "../../unified_kernels/residual_add.hpp"
+#ifdef ENABLE_REDUCE_TO_ONE
+#include "../../unified_kernels/reduce_to_one_b1.hpp"
+#endif
 
 // Compile-time role flags for dead code elimination via if constexpr.
 // Mirrors Python-side MoeRoutedExpertOp / MoeSharedExpertOp split.
@@ -80,6 +83,10 @@ struct Core {
     // Combined: cores that receive the input mcast
     static constexpr bool is_input_mcast_receiver =
         Routed::is_gate_mm_core || Routed::is_gate_proj_core || Shared::is_compute_core;
+
+    // Reduce-to-one core roles
+    static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
+    static constexpr bool is_reduce_fabric_core = get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
 };
 
 void kernel_main() {
@@ -220,6 +227,25 @@ void kernel_main() {
             // RMSNorm (reader — no-op)
             using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
             deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
+
+#ifdef ENABLE_REDUCE_TO_ONE
+            // ReduceToOneB1 (reader — receives data from fabric via semaphore waits)
+            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ReaderCTArgs<
+                get_named_compile_time_arg_val("reduce_device_role"),
+                get_named_compile_time_arg_val("reduce_num_tiles"),
+                get_named_compile_time_arg_val("reduce_local_cb"),
+                get_named_compile_time_arg_val("reduce_received_cb_r1"),
+                get_named_compile_time_arg_val("reduce_received_cb_r2"),
+                get_named_compile_time_arg_val("reduce_received_cb_r3"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+            // Reader runtime args (common RT args at configurable base)
+            deepseek_b1_ops::ReduceToOneB1::ReaderArgs reduce_rt_args{
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 0),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 1),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
+            };
+#endif
         } routed;
 
         struct Shared {
@@ -486,6 +512,30 @@ void kernel_main() {
             // RMSNorm (writer — no-op)
             using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
             deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
+
+#ifdef ENABLE_REDUCE_TO_ONE
+            // ReduceToOneB1 (writer — sends data via fabric or NOC)
+            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::WriterCTArgs<
+                get_named_compile_time_arg_val("reduce_device_role"),
+                get_named_compile_time_arg_val("reduce_num_tiles"),
+                get_named_compile_time_arg_val("reduce_payload_size_bytes"),
+                get_named_compile_time_arg_val("reduce_local_cb"),
+                get_named_compile_time_arg_val("reduce_scratch_cb"),
+                get_named_compile_time_arg_val("reduce_packet_cb"),
+                get_named_compile_time_arg_val("reduce_packet_header_cb"),
+                get_named_compile_time_arg_val("reduce_num_hops"),
+                get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
+                get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
+                get_named_compile_time_arg_val("reduce_output_core_noc_x"),
+                get_named_compile_time_arg_val("reduce_output_core_noc_y"),
+                get_named_compile_time_arg_val("reduce_num_workers"),
+                get_named_compile_time_arg_val("reduce_slot_size_bytes"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base")>;
+
+            deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
+            // Populated below after struct initialization
+#endif
         } routed;
 
         struct Shared {
@@ -589,6 +639,23 @@ void kernel_main() {
             };
         } shared;
     } moe;
+
+#ifdef ENABLE_REDUCE_TO_ONE
+    // Populate BRISC reduce runtime args (must be outside struct initializer)
+    constexpr size_t reduce_brisc_arg_start = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
+    if constexpr (Core::is_reduce_worker_core) {
+        moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),  // fabric_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),  // fabric_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),  // my_slot_idx
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),  // worker_sem_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),  // dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),  // dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),  // output_base_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),  // shard_idx
+        };
+    }
+#endif
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -714,9 +781,26 @@ void kernel_main() {
                 get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
                 get_named_compile_time_arg_val("rmsnorm_output_cb")>;  // rmsnorm_output_cb
             deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-                get_common_arg_val<uint32_t>(0),  // epsilon
-                get_common_arg_val<float>(1),     // scalar (1/sqrt(numel))
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 0),
+                get_common_arg_val<float>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 1),
             };
+
+#ifdef ENABLE_REDUCE_TO_ONE
+            // ReduceToOneB1 (compute — performs reduction)
+            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ComputeCTArgs<
+                get_named_compile_time_arg_val("reduce_device_role"),
+                get_named_compile_time_arg_val("reduce_num_tiles"),
+                get_named_compile_time_arg_val("reduce_local_cb"),
+                get_named_compile_time_arg_val("reduce_received_cb_r1"),
+                get_named_compile_time_arg_val("reduce_received_cb_r2"),
+                get_named_compile_time_arg_val("reduce_received_cb_r3"),
+                get_named_compile_time_arg_val("reduce_output_cb"),
+                get_named_compile_time_arg_val("reduce_scratch_cb"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+            // Compute has no runtime args
+            deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
+#endif
         } routed;
 
         struct Shared {
@@ -1055,14 +1139,33 @@ void kernel_main() {
         // 12. Eltwise Add: down_proj + shared_expert_output
         {
             DeviceZoneScopedN("ELTWISE_ADD");
+            constexpr bool add_pop_output =
+#ifdef ENABLE_REDUCE_TO_ONE
+                false;  // reduce_local_cb aliases add_cb_out — reduce will consume it
+#else
+                true;  // pop for looping
+#endif
             deepseek_b1_ops::EltwiseAdd::Op<
                 Moe::Routed::AddCTArgs,
                 Core::Routed::is_gate_proj_core,
-                true,  // PopInputs
-                true>  // PopOutput (for looping)
+                true,            // PopInputs
+                add_pop_output>  // PopOutput
                 add_op;
             add_op();
         }
+
+        // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh
+        //     Reduces final_output from all 8 devices to ROOT1 device
+#ifdef ENABLE_REDUCE_TO_ONE
+        {
+            DeviceZoneScopedN("REDUCE_TO_ONE");
+
+            // IsReduceCore includes both worker cores and fabric cores
+            constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
+            deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
+            reduce_op(moe.routed.reduce_rt_args);
+        }
+#endif
     };
 
     for (uint32_t i = 0; i < num_iterations; i++) {

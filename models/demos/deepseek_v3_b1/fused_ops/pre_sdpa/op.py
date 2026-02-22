@@ -1114,25 +1114,22 @@ class PreSDPA:
                 range_hops_forward = num_targets_forward
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
+                bcast_num_pages_to_read = bcast_num_pages
 
                 # ================================================================
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
-                bcast_ncrisc_named_compile_time_args = [
-                    ("skip_ccl", 1 if skip_ccl else 0),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
-                    ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                ]
-
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
+                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
+                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
+                ]
+
+                bcast_ncrisc_named_compile_time_args = [
+                    ("skip_ccl", 1 if skip_ccl else 0),
+                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
+                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
                     ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
                     ("bcast_num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
                     ("bcast_num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
@@ -1179,20 +1176,7 @@ class PreSDPA:
                 sdpa_kv_cache_running_offset = 0
 
                 # CB: CCL broadcast packet buffer
-                bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    bcast_pkt_cb,
-                    sdpa_kv_cache_buffer_device,
-                    address_offset=sdpa_kv_cache_running_offset,
-                    total_size=num_tiles * cb_page_size,
-                )
-                bcast_pkt_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=bcast_pkt_cb,
-                        data_format=data_format,
-                        page_size=cb_page_size,
-                        tile=tile_descriptor,
-                    )
-                ]
+                bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
                 sdpa_kv_cache_running_offset += bcast_pkt_cb_descriptor.total_size
 
                 # CB: RMSNorm output buffer
@@ -1697,8 +1681,7 @@ class PreSDPA:
                 # ================================================================
                 if skip_ccl:
                     # Single-device mode: empty broadcast args
-                    ncrisc_bcast_common_args = [0, 0, 0]  # tensor_address0, tile_id_start, tile_id_end
-                    brisc_bcast_common_args = [0] * 15
+                    ncrisc_bcast_common_args = [0] * 13
                     dst_nodes = []
                     fabric_node_id = None
                 else:
@@ -1728,16 +1711,8 @@ class PreSDPA:
                     num_connections = len(dst_nodes)
 
                     ncrisc_bcast_common_args = [
-                        int(input_tensor_device.buffer_address()),  # tensor_address0
-                        tile_id_start,  # tile_id_start
-                        bcast_num_pages,  # tile_id_end
-                    ]
-
-                    brisc_bcast_common_args = [
                         int(intermediate_tensor_device.buffer_address()),  # tensor_address0
                         int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        tile_id_start,  # tile_id_start
-                        bcast_num_pages,  # tile_id_end
                         int(wait_output_semaphore),
                         int(reset_global_semaphore),
                         core_noc_x,  # out_ready_sem_noc0_x
@@ -1787,7 +1762,6 @@ class PreSDPA:
                     ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + create_q_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
                     brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
-                    + rmsnorm_reader_named_compile_time_args
                     + mcast_sender_named_compile_time_args
                     + matmul_brisc_named_compile_time_args
                     + gather_reduce_receiver_named_compile_time_args
@@ -1800,8 +1774,7 @@ class PreSDPA:
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + kv_cache_brisc_named_compile_time_args,
                     # BRISC common runtime args: bcast args
-                    brisc_common_runtime_args=brisc_bcast_common_args
-                    + [int(kv_cache_tensor_device.buffer_address()), position_id],
+                    brisc_common_runtime_args=[int(kv_cache_tensor_device.buffer_address()), position_id],
                     # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + qrope + create_q_heads + dkv_matmul + kv_rmsnorm + krope
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
@@ -1895,7 +1868,7 @@ class PreSDPA:
                     # Per-core runtime args for fabric (BRISC only, on worker_core)
                     # Initialize empty args that will be populated by setup_routing_plane_connection
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
                     noc_mode=noc_mode,
                 )
@@ -1960,10 +1933,10 @@ class PreSDPA:
                     # Find the BRISC (writer) kernel whose core_ranges includes worker_core
                     for idx, kernel in enumerate(program.kernels):
                         if kernel.core_ranges.contains(worker_core) and (
-                            isinstance(kernel.config, ttnn.WriterConfigDescriptor)
+                            isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
                             or (
                                 isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
-                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_0
+                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
                             )
                         ):
                             writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
