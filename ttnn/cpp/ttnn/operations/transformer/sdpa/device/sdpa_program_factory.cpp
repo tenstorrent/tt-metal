@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -50,13 +51,16 @@ struct CoreChainInfo {
     CoreCoord prev_physical = CoreCoord{0, 0};
     CoreCoord next_physical = CoreCoord{0, 0};
     uint32_t next_core_q_chunks = 0;
+    bool use_mcast = false;
+    uint32_t mcast_num_dests = 0;    // num_dests for mcast API (includes self if injector inside rect)
+    uint32_t mcast_sender_wait = 0;  // number of actual receivers that signal back (always chain_size - 1)
 };
 
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = operation_attributes.use_mla ? tensor_args.k : tensor_args.v.value_or(tensor_args.k);
+    const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
     const auto& output_tensor = tensor_return_value;
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& page_table = tensor_args.page_table;
@@ -70,6 +74,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     auto program_config = operation_attributes.program_config;
     const bool use_mla = operation_attributes.use_mla;
+    const bool mla_kv_overlap = use_mla && !tensor_args.v.has_value();
     const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(input_tensor_q.logical_shape()[3]);
     const auto& sliding_window_size = operation_attributes.sliding_window_size;
 
@@ -87,8 +92,17 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.logical_shape();
+    const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
+    const uint32_t NVH = v_shape[1];
+
+    // In flash mla prefill, we have to support the case where NKH != NVH
+    // We are calling op with the following shapes:
+    // q - [B, NHQ, Sq, DH_qk]
+    // k - [B, 1, Sk, DH_qk]
+    // v - [B, NVH, Sk, DH_v]
+    // k head is in latent space, and is reused accross all q heads
 
     // Paged cache parameters when in chunked mode
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
@@ -144,7 +158,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NQH: {}", NQH);
-
+    log_debug(tt::LogOp, "NVH: {}", NVH);
     log_debug(tt::LogOp, "Sq: {}", Sq);
     log_debug(tt::LogOp, "Sk: {}", Sk);
     log_debug(tt::LogOp, "padded_Sq: {}", padded_Sq);
@@ -213,7 +227,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     auto* q_buffer = input_tensor_q.buffer();
     auto* k_buffer = input_tensor_k.buffer();
-    auto* v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
 
@@ -289,18 +303,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t qk_in0_block_w = DHt;
-    // max of Sk_chunk_t and dst_size
-    uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-    // If qk_out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
-    // row-major intermediate buffer.
-    uint32_t qk_out_subblock_h =
-        (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
 
-    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0 && Sq_chunk_t % 2 == 0) {
-        // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
-        qk_out_subblock_w = qk_out_subblock_w / 2;
-        qk_out_subblock_h = 2;
-    }
+    auto [qk_out_subblock_h, qk_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
@@ -308,9 +313,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
-    const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == vDHt) ? (std::min(Sq_chunk_t, dst_size / out_out_subblock_w)) : 1;
+
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -332,60 +336,24 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
-    const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
-    // Find log2 of stats_granularity using std
-    const uint32_t log2_stats_granularity = std::log2(stats_granularity);
-    // Assert that this is a power of 2
-    TT_FATAL(
-        stats_granularity == (1 << log2_stats_granularity),
-        "stats_granularity must be a power of 2. Got {}.",
-        stats_granularity);
-
-    const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
-    const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(
-        sub_exp_granularity == (1 << log2_sub_exp_granularity),
-        "sub_exp_granularity must be a power of 2. Got {}.",
-        sub_exp_granularity);
-
-    const uint32_t mul_bcast_granularity = std::min(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(
-        mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
-        "mul_bcast_granularity must be a power of 2. Got {}.",
-        mul_bcast_granularity);
-
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = std::log2(dht_granularity);
-    // Sometimes DHt is not a power of 2, so granularity should be 1
-    if (dht_granularity != (1 << log2_dht_granularity)) {
-        dht_granularity = 1;
-        log2_dht_granularity = 0;
+    // Each granularity must evenly divide its tile count to avoid dropping tiles
+    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
+    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
+    const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
+    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
+    // so the granularity must evenly divide both to avoid dropping tiles.
+    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
+    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
+        dht_granularity--;
     }
-    TT_FATAL(
-        dht_granularity == (1 << log2_dht_granularity),
-        "dht_granularity must be a power of 2. Got {}.",
-        dht_granularity);
-
-    // Reduce ops can use granularity of dst_size/2
-    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
-    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
-    TT_FATAL(
-        reduce_granularity == (1 << log2_reduce_granularity),
-        "reduce_granularity must be a power of 2. Got {}.",
-        reduce_granularity);
+    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
     log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
     log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
-    log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
     log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
-    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -401,6 +369,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       B,
                                                       NQH,
                                                       NKH,
+                                                      NVH,
                                                       Sqt,
                                                       Skt,
                                                       valid_Sqt,
@@ -420,7 +389,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
                                                       page_table_stick_size,
-                                                      (std::uint32_t)use_attention_sink};
+                                                      (std::uint32_t)use_attention_sink,
+                                                      (std::uint32_t)use_mla,
+                                                      (std::uint32_t)mla_kv_overlap,
+                                                      qk_out_subblock_h};
 
     // Placeholder semaphore IDs for KV chain forwarding (will be filled later if enabled)
     // Add these BEFORE TensorAccessorArgs to keep indexing consistent with kernel expectations
@@ -428,6 +400,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     reader_compile_time_args.push_back(0);  // sender_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -527,15 +500,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
     defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel =
         (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
@@ -545,39 +513,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
-
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
-
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    // NOTE: CreateKernel calls are deferred until after chain construction so that
+    // the mcast_enabled compile-time arg can be determined first.
 
     // Create circular buffers
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    tt::DataFormat v_df;
-    if (use_mla) {
-        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    } else {
-        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    }
+    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = attn_mask.has_value()
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                  : tt::DataFormat::Bfp4_b;
@@ -731,6 +674,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     std::vector<CoreChainInfo> core_chain_info(num_cores);
     const uint32_t total_heads = B * NQH;
     std::vector<std::vector<HeadSegmentRef>> head_segments;
+    uint32_t mcast_chains = 0;
 
     if (!is_causal && !is_chunked) {
         head_segments.resize(total_heads);
@@ -800,23 +744,23 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 continue;  // No chain needed for single core
             }
 
-            // Find first core with single head segment as chain start (injector)
+            // Find chain start (injector), rotating preferred position per head to
+            // spread injectors across different physical columns for DRAM BW.
+            const std::size_t preferred_start = head_id % segments.size();
             std::optional<std::size_t> chain_start_idx;
-            for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+
+            // First pass: prefer cores handling only one head segment
+            for (std::size_t offset = 0; offset < segments.size(); ++offset) {
+                std::size_t idx = (preferred_start + offset) % segments.size();
                 const auto& seg = segments[idx];
                 const auto& work = core_work[seg.core_idx];
 
-                // Skip cores that don't handle this head
                 if (seg.head_work_index >= work.head_work.size()) {
                     continue;
                 }
-
-                // Check if this core already participates in a chain (conflict detection)
                 if (core_chain_info[seg.core_idx].participates) {
-                    continue;  // Skip - already in a chain
+                    continue;
                 }
-
-                // Prefer cores handling only one head segment
                 if (work.head_work.size() == 1) {
                     chain_start_idx = idx;
                     break;
@@ -825,7 +769,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
             // If no single-segment core found, try any core not in a chain
             if (!chain_start_idx.has_value()) {
-                for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+                for (std::size_t offset = 0; offset < segments.size(); ++offset) {
+                    std::size_t idx = (preferred_start + offset) % segments.size();
                     const auto& seg = segments[idx];
                     if (!core_chain_info[seg.core_idx].participates) {
                         chain_start_idx = idx;
@@ -860,7 +805,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 segments.size(),
                 start);
 
-            for (std::size_t idx = start; idx < segments.size(); ++idx) {
+            // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1
+            // Exclude segments with different q_chunk_count than the injector (uneven tail).
+            std::vector<std::size_t> chain_order;
+            const auto& start_seg = segments[start];
+            const uint32_t ref_q_count =
+                core_work[start_seg.core_idx].head_work[start_seg.head_work_index].q_chunk_count;
+            for (std::size_t step = 0; step < segments.size(); ++step) {
+                std::size_t idx = (start + step) % segments.size();
                 const auto& seg = segments[idx];
                 const uint32_t core_idx = seg.core_idx;
 
@@ -868,19 +820,31 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                     continue;
                 }
 
-                const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
-                auto& chain = core_chain_info[core_idx];
-
-                // Check for conflict (core already in a different chain)
-                if (chain.participates) {
+                if (core_chain_info[core_idx].participates) {
                     log_debug(
                         tt::LogOp,
                         "WARNING: Core {} already participates in chain (batch={}, head={}), skipping rest",
                         core_idx,
-                        chain.batch,
-                        chain.head);
+                        core_chain_info[core_idx].batch,
+                        core_chain_info[core_idx].head);
                     break;
                 }
+
+                // Skip cores with different q_chunk_count (e.g. uneven tail)
+                const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
+                if (hw.q_chunk_count != ref_q_count) {
+                    continue;
+                }
+
+                chain_order.push_back(idx);
+            }
+
+            for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
+                const std::size_t idx = chain_order[pos];
+                const auto& seg = segments[idx];
+                const uint32_t core_idx = seg.core_idx;
+                const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
+                auto& chain = core_chain_info[core_idx];
 
                 chain.participates = true;
                 chain.batch = hw.batch;
@@ -888,28 +852,29 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 chain.q_chunk_start = hw.q_chunk_start;
                 chain.q_chunk_count = hw.q_chunk_count;
 
-                if (idx == start) {
+                if (pos == 0) {
                     chain.is_injector = true;
                 }
-                if (idx == segments.size() - 1) {
+                if (pos == chain_order.size() - 1) {
                     chain.is_sink = true;
                 }
 
-                // Set prev core coordinates
-                if (idx > start) {
-                    const uint32_t prev_core_idx = segments[idx - 1].core_idx;
+                // Set prev core coordinates (previous in wrap order)
+                if (pos > 0) {
+                    const uint32_t prev_core_idx = segments[chain_order[pos - 1]].core_idx;
                     if (prev_core_idx < core_work.size()) {
                         chain.prev_physical = core_work[prev_core_idx].physical_core;
                     }
                 }
 
-                // Set next core coordinates and q_chunk count
-                if (idx + 1 < segments.size()) {
-                    const uint32_t next_core_idx = segments[idx + 1].core_idx;
+                // Set next core coordinates and q_chunk count (next in wrap order)
+                if (pos + 1 < chain_order.size()) {
+                    const std::size_t next_idx = chain_order[pos + 1];
+                    const uint32_t next_core_idx = segments[next_idx].core_idx;
                     if (next_core_idx < core_work.size() &&
-                        segments[idx + 1].head_work_index < core_work[next_core_idx].head_work.size()) {
+                        segments[next_idx].head_work_index < core_work[next_core_idx].head_work.size()) {
                         chain.next_physical = core_work[next_core_idx].physical_core;
-                        const auto& next_hw = core_work[next_core_idx].head_work[segments[idx + 1].head_work_index];
+                        const auto& next_hw = core_work[next_core_idx].head_work[segments[next_idx].head_work_index];
                         chain.next_core_q_chunks = next_hw.q_chunk_count;
                     }
                 }
@@ -933,7 +898,171 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             "Chain construction complete: {} chains built, {} skipped due to conflicts",
             chains_built,
             chains_skipped);
+
+        // Third pass: Check multicast eligibility — all-or-nothing policy.
+        // First, check if ALL multi-core chains are eligible. Only if every chain
+        // qualifies do we configure mcast (compile-time decision for the kernel).
+        struct McastCandidate {
+            std::vector<uint32_t> core_indices;
+            uint32_t ref_q_chunks;
+        };
+        std::vector<McastCandidate> candidates;
+        bool all_eligible = true;
+        uint32_t total_multi_core_chains = 0;
+
+        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+            auto& segments = head_segments[head_id];
+            if (segments.size() < 2) {
+                continue;
+            }
+
+            // Collect chain core indices that actually participate in this head's chain
+            std::vector<uint32_t> chain_core_indices;
+            for (const auto& seg : segments) {
+                if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
+                    core_chain_info[seg.core_idx].batch == (head_id / NQH) &&
+                    core_chain_info[seg.core_idx].head == (head_id % NQH)) {
+                    chain_core_indices.push_back(seg.core_idx);
+                }
+            }
+
+            if (chain_core_indices.size() < 2) {
+                continue;
+            }
+
+            total_multi_core_chains++;
+
+            // Check eligibility condition 1: All physical cores share the same Y coordinate
+            const uint32_t ref_y = core_work[chain_core_indices[0]].physical_core.y;
+            bool same_row = true;
+            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
+                if (core_work[chain_core_indices[ci]].physical_core.y != ref_y) {
+                    same_row = false;
+                    break;
+                }
+            }
+
+            if (!same_row) {
+                all_eligible = false;
+                log_debug(tt::LogOp, "Head {}: mcast ineligible - cores span multiple rows", head_id);
+                break;
+            }
+
+            // Note: Physical X contiguity is NOT required. Harvested (non-worker) cores
+            // in the multicast rectangle safely discard the data.
+
+            // equal q_chunk_count is already guaranteed by the second pass chain construction
+            // filter (cores with mismatched q_chunk_count are excluded from chain_order).
+            const uint32_t ref_q_chunks = core_chain_info[chain_core_indices[0]].q_chunk_count;
+
+            candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
+        }
+
+        // Only configure mcast if ALL multi-core chains are eligible (all-or-nothing)
+        if (all_eligible && !candidates.empty()) {
+            mcast_chains = candidates.size();
+            for (const auto& cand : candidates) {
+                const uint32_t chain_size = cand.core_indices.size();
+                const uint32_t num_receivers = chain_size - 1;
+
+                // Find the injector (may not be at index 0 due to rotation)
+                uint32_t injector_idx = cand.core_indices[0];
+                for (const auto& ci : cand.core_indices) {
+                    if (core_chain_info[ci].is_injector) {
+                        injector_idx = ci;
+                        break;
+                    }
+                }
+
+                // Mcast rect covers the full row (min to max physical X across all chain cores).
+                // The mcast API excludes the source from destinations automatically.
+                uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
+                uint32_t max_x = min_x;
+                for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
+                    uint32_t x = core_work[cand.core_indices[ci]].physical_core.x;
+                    min_x = std::min(min_x, x);
+                    max_x = std::max(max_x, x);
+                }
+                const uint32_t injector_y = core_work[injector_idx].physical_core.y;
+                const CoreCoord rect_start = CoreCoord{min_x, injector_y};
+                const CoreCoord rect_end = CoreCoord{max_x, injector_y};
+
+                // When the injector is geometrically inside the mcast rect (not at min or max X),
+                // the hardware counts it as a destination slot, so num_dests must include it.
+                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
+                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
+                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+
+                // Configure injector
+                auto& injector_chain = core_chain_info[injector_idx];
+                injector_chain.use_mcast = true;
+                injector_chain.prev_physical = rect_start;  // mcast rect start
+                injector_chain.next_physical = rect_end;    // mcast rect end
+                injector_chain.mcast_num_dests = mcast_num_dests;
+                injector_chain.mcast_sender_wait = num_receivers;
+                injector_chain.next_core_q_chunks = cand.ref_q_chunks;
+
+                // Configure receivers (all non-injector cores)
+                for (const auto& ci : cand.core_indices) {
+                    if (ci == injector_idx) {
+                        continue;
+                    }
+                    auto& receiver_chain = core_chain_info[ci];
+                    receiver_chain.use_mcast = true;
+                    receiver_chain.prev_physical = core_work[injector_idx].physical_core;
+                    receiver_chain.next_physical = CoreCoord{0, 0};
+                    receiver_chain.next_core_q_chunks = 0;
+                    receiver_chain.is_sink = true;
+                }
+
+                log_debug(
+                    tt::LogOp,
+                    "Head: mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect ({},{}) to "
+                    "({},{})",
+                    num_receivers,
+                    injector_idx,
+                    core_work[injector_idx].physical_core.x,
+                    mcast_num_dests,
+                    rect_start.x,
+                    rect_start.y,
+                    rect_end.x,
+                    rect_end.y);
+            }
+        }
+
+        log_info(
+            tt::LogOp,
+            "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
+            mcast_chains,
+            total_multi_core_chains);
     }
+
+    // Update mcast_enabled compile-time arg now that chain construction is complete
+    reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
+
+    // Create kernels (deferred until after chain construction for mcast_enabled flag)
+    auto reader_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
+        core_grid,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+
+    auto writer_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
+        core_grid,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+
+    auto compute_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
+        core_grid,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_compile_time_args,
+            .defines = defines});
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -1002,6 +1131,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
             reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
             reader_args.push_back(chain.next_core_q_chunks);
+            reader_args.push_back(chain.mcast_num_dests);
+            reader_args.push_back(chain.mcast_sender_wait);
         }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
@@ -1061,18 +1192,17 @@ void SDPAProgramFactory::override_runtime_arguments(
 
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
     const bool is_chunked = operation_attributes.chunk_start_idx.has_value() || flexible_chunked;
-    const bool use_mla = operation_attributes.use_mla;
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
 
-    auto *q_buffer = tensor_args.q.buffer();
-    auto *k_buffer = tensor_args.k.buffer();
-    auto *v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
-    auto *mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
-    auto *attention_sink_buffer =
+    auto* q_buffer = tensor_args.q.buffer();
+    auto* k_buffer = tensor_args.k.buffer();
+    auto* v_buffer = tensor_args.v.value_or(tensor_args.k).buffer();
+    auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
+    auto* attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
 
-    auto *out0_buffer = tensor_return_value.buffer();
+    auto* out0_buffer = tensor_return_value.buffer();
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();

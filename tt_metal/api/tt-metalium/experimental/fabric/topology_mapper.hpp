@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <unordered_set>
 #include <vector>
@@ -11,6 +12,13 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
+
+namespace tt {
+class Cluster;
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -79,25 +87,36 @@ public:
      * @param local_mesh_binding Reference to the local mesh binding object containing mesh binding information
      */
     TopologyMapper(
-        const MeshGraph& mesh_graph,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const LocalMeshBinding& local_mesh_binding);
-
-    // Construct a TopologyMapper with fixed ASIC-position pinnings (tray, location).
-    // These pins must reference devices on the current host; if infeasible, construction will throw with details.
-    TopologyMapper(
+        const tt::Cluster& cluster,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+
+    // Construct a TopologyMapper with fixed ASIC-position pinnings.
+    // Each pinning maps a FabricNodeId to one or more ASIC positions (tray, location).
+    // For one-to-one pinnings, use a vector with a single position.
+    // These pins must reference devices on the current host; if infeasible, construction will throw with details.
+    TopologyMapper(
+        const tt::Cluster& cluster,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings,
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
     TopologyMapper(
+        const tt::Cluster& cluster,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
 
     /**
      * @brief Get logical mesh graph connectivity
@@ -293,9 +312,15 @@ public:
      * @return MeshGraph A mesh graph that matches the physical topology
      */
     static MeshGraph generate_mesh_graph_from_physical_system_descriptor(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, FabricConfig fabric_config);
+        const tt::Cluster& cluster,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode);
 
 private:
+    const std::reference_wrapper<const tt::Cluster> cluster_;
+    const std::reference_wrapper<const tt_metal::distributed::multihost::DistributedContext> distributed_context_;
+
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs
      *
@@ -303,7 +328,7 @@ private:
      * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
      * to the ASIC IDs of the physical descriptor.
      */
-    void build_mapping();
+    void build_mapping(const Cluster& cluster);
 
     /**
      * @brief Initialize chip_topology_mapping_ map with all ASICs from physical system descriptor
@@ -341,32 +366,6 @@ private:
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping() const;
 
     /**
-     * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs
-     *
-     * This function performs the core topology mapping by creating bidirectional mappings between logical fabric nodes
-     * (from the mesh graph) and physical ASIC IDs (from the physical system descriptor). It uses a constraint
-     * satisfaction algorithm to find valid mappings that preserve the logical connectivity structure in the physical
-     * topology.
-     *
-     * The algorithm:
-     * 1. Validates that the logical graph can fit within the physical topology
-     * 2. Uses degree-based pruning and forward checking to efficiently search for valid mappings
-     * 3. Maintains consistency by ensuring logical edges are present in the physical topology
-     * 4. Updates chip_topology_mapping_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
-     *
-     * @param mesh_id Mesh ID
-     * @param adjacency_map_physical Physical adjacency maps for each mesh
-     * @param adjacency_map_logical Logical adjacency maps for each mesh
-     * @param host_name_to_mesh_rank Mapping of host names to mesh ranks
-     */
-    void populate_fabric_node_id_to_asic_id_mappings(
-        MeshId mesh_id,
-        const PhysicalAdjacencyMap& adjacency_map_physical,
-        const LogicalAdjacencyMap& adjacency_map_logical,
-        const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
-        const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
-
-    /**
      * @brief Broadcast chip info to hosts
      *
      * Broadcasts chip topology info (including tray_id and asic_location) to target hosts.
@@ -390,8 +389,9 @@ private:
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
-    const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
+    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings_;
     bool generate_mapping_locally_ = false;
+    std::chrono::duration<float> topology_mapping_timeout_;
 
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
@@ -432,10 +432,12 @@ private:
      * - Verifies tray IDs and ASIC locations match the Physical System Descriptor
      * - Ensures physical chip IDs map correctly to ASIC IDs via cluster API for local chips
      */
-    void verify_topology_mapping() const;
+    void verify_topology_mapping(const Cluster& cluster) const;
 
-    void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const;
-    void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
+    void print_logical_adjacency_map(
+        const ::tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const;
+    void print_physical_adjacency_map(
+        const ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const;
 };
 
 }  // namespace tt::tt_fabric

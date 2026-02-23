@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include "impl/context/metal_context.hpp"
 
@@ -29,10 +30,9 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topolo
     return os;
 }
 
-std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
+std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh(const ControlPlane& control_plane) const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
         // We can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
@@ -49,8 +49,7 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
-uint32_t FabricContext::get_max_1d_hops_from_topology() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+uint32_t FabricContext::get_max_1d_hops_from_topology(const ControlPlane& control_plane) const {
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Extract mesh shapes from topology
@@ -65,8 +64,7 @@ uint32_t FabricContext::get_max_1d_hops_from_topology() const {
     return compute_max_1d_hops(mesh_shapes);
 }
 
-uint32_t FabricContext::get_max_2d_hops_from_topology() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+uint32_t FabricContext::get_max_2d_hops_from_topology(const ControlPlane& control_plane) const {
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Extract mesh shapes from topology
@@ -104,11 +102,12 @@ uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) 
     return Limits::MAX_2D_ROUTE_BUFFER_SIZE;
 }
 
-void FabricContext::compute_packet_specifications() {
+void FabricContext::compute_packet_specifications(
+    const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch) {
     // Query topology to determine optimal header sizes
     if (is_2D_routing_enabled_) {
         // 2D mode: query topology and validate against limits
-        max_2d_hops_ = get_max_2d_hops_from_topology();
+        max_2d_hops_ = get_max_2d_hops_from_topology(control_plane);
 
         if (max_2d_hops_ == 0) {
             log_warning(
@@ -132,7 +131,7 @@ void FabricContext::compute_packet_specifications() {
         routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(max_2d_hops_);
     } else {
         // 1D mode: query topology and validate against limits
-        max_1d_hops_ = get_max_1d_hops_from_topology();
+        max_1d_hops_ = get_max_1d_hops_from_topology(control_plane);
 
         if (max_1d_hops_ == 0) {
             log_warning(
@@ -156,8 +155,8 @@ void FabricContext::compute_packet_specifications() {
     }
 
     // Compute actual packet sizes based on topology
-    packet_header_size_bytes_ = compute_packet_header_size_bytes();
-    max_payload_size_bytes_ = compute_max_payload_size_bytes();
+    packet_header_size_bytes_ = compute_packet_header_size_bytes(control_plane);
+    max_payload_size_bytes_ = compute_max_payload_size_bytes(hal, arch);
     channel_buffer_size_bytes_ = packet_header_size_bytes_ + max_payload_size_bytes_;
 }
 
@@ -205,9 +204,8 @@ size_t FabricContext::get_udm_header_size(uint32_t route_buffer_size) const {
     return get_2d_header_size(route_buffer_size) + sizeof(tt::tt_fabric::UDMControlFields);
 }
 
-size_t FabricContext::compute_packet_header_size_bytes() const {
-    bool udm_enabled =
-        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+size_t FabricContext::compute_packet_header_size_bytes(const ControlPlane& control_plane) const {
+    bool udm_enabled = control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
 
     if (udm_enabled) {
         TT_FATAL(is_2D_routing_enabled_, "UDM mode only supports 2D routing");
@@ -221,10 +219,10 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
     return get_1d_header_size(routing_1d_extension_words_);
 }
 
-size_t FabricContext::compute_max_payload_size_bytes() const {
+size_t FabricContext::compute_max_payload_size_bytes(const tt_metal::Hal& hal, tt::ARCH arch) const {
     // If user provided override, validate and use it
     if (router_config_.max_packet_payload_size_bytes.has_value()) {
-        return validate_and_apply_packet_size(router_config_.max_packet_payload_size_bytes.value());
+        return validate_and_apply_packet_size(hal, arch, router_config_.max_packet_payload_size_bytes.value());
     }
     // Default behavior
     if (is_2D_routing_enabled_) {
@@ -233,8 +231,14 @@ size_t FabricContext::compute_max_payload_size_bytes() const {
     return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
 }
 
-FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config) :
-    router_config_(router_config) {
+FabricContext::FabricContext(
+    const ControlPlane& control_plane,
+    const tt_metal::Hal& hal,
+    tt::ARCH arch,
+    bool is_ubb_galaxy,
+    tt::tt_fabric::FabricConfig fabric_config,
+    const FabricRouterConfig& router_config) :
+    router_config_(router_config), is_ubb_galaxy_(is_ubb_galaxy) {
     // === Initialization order critical - dependencies flow downward ===
     // fabric_config_ → topology_ → routing flags → packet specs
 
@@ -246,7 +250,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config, const Fa
 
     // Step 2: Derive topology (depends on: fabric_config_)
     this->topology_ = FabricContext::get_topology_from_config(fabric_config);
-    this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
+    this->wrap_around_mesh_ = this->check_for_wrap_around_mesh(control_plane);
 
     // Step 3: Compute routing flags (depends on: topology_)
     this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
@@ -256,10 +260,10 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config, const Fa
     this->compute_routing_mode();
 
     // Step 5: Compute packet specifications (depends on: routing flags)
-    this->compute_packet_specifications();
+    this->compute_packet_specifications(control_plane, hal, arch);
 
     // Step 6: Additional independent configs
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = control_plane.get_fabric_tensix_config();
     this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
     // Compute intermesh VC configuration (requires ControlPlane to be initialized)
@@ -288,11 +292,10 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     return false;
 }
 
-bool FabricContext::has_z_router_on_device(const FabricNodeId& fabric_node_id) const {
+bool FabricContext::has_z_router_on_device(
+    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const {
     // Check if this fabric node has Z router ethernet channels
     // Query control plane for active channels and check if any have Z direction
-
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Try to get active channels - if node doesn't exist, the map lookup will return empty
     auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
@@ -344,7 +347,7 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
         return true;
     }
     if (topology_ == Topology::Torus) {
-        const auto fabric_type = get_fabric_type(fabric_config_);
+        const auto fabric_type = get_fabric_type(fabric_config_, is_ubb_galaxy_);
         // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
         const bool is_north_south =
             (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
@@ -359,7 +362,7 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     return false;
 }
 
-std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() const {
+std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(const ControlPlane& control_plane) const {
     std::map<std::string, std::string> defines;
 
     // Only emit defines if routing mode has been computed
@@ -371,8 +374,7 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() co
     defines["ROUTING_MODE"] = std::to_string(routing_mode_);
 
     // Add UDM mode define - only define it when enabled (not "0"), since header checks with #ifdef
-    bool udm_enabled =
-        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    bool udm_enabled = control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
     if (udm_enabled) {
         defines["UDM_MODE"] = "1";
     }
@@ -438,10 +440,8 @@ void FabricContext::compute_routing_mode() {
     routing_mode_ = mode;
 }
 
-size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) const {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    tt::ARCH arch = hal.get_arch();
-
+size_t FabricContext::validate_and_apply_packet_size(
+    const tt_metal::Hal& hal, tt::ARCH arch, size_t requested_size) const {
     // Get architecture-specific limit from single source of truth
     size_t max_allowed = FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(arch);
 
@@ -455,7 +455,7 @@ size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) cons
     TT_FATAL(requested_size > 0, "Packet size must be greater than 0");
 
     // Validate alignment (must be L1-aligned for NOC transfers)
-    const auto alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    const auto alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
     TT_FATAL(requested_size % alignment == 0, "Packet size {} must be {}-byte aligned", requested_size, alignment);
 
     return requested_size;

@@ -56,6 +56,7 @@ void bind_fabric_api(nb::module_& mod) {
         .value("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING)
         .value("FABRIC_1D_NEIGHBOR_EXCHANGE", tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE)
         .value("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D)
+        .value("FABRIC_2D_TORUS_XY", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY)
         .value(
             "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
@@ -204,6 +205,20 @@ void bind_fabric_api(nb::module_& mod) {
                 program_descriptor: ProgramDescriptor to add semaphores/defines to (mutated)
                 kernel_idx: Index of the kernel in the program descriptor
                 worker_core: Logical core coordinate of the worker
+        )");
+
+    mod.def(
+        "get_tt_fabric_packet_header_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
+        R"(
+            Returns the fabric packet header size in bytes.
+        )");
+
+    mod.def(
+        "get_tt_fabric_max_payload_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
+        R"(
+            Returns the maximum fabric packet payload size in bytes.
         )");
 }
 

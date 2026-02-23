@@ -173,6 +173,9 @@ void kernel_main() {
 
     // Gather compute args (no-op for TRISC)
     deepseek_b1_ops::Gather::ComputeArgs gather_args{};
+
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ========================================================================
@@ -209,20 +212,11 @@ void kernel_main() {
         Core::is_mcast_receiver_core,  // IsReceiverCore (for CB reserve/push)
         true>                          // pop_src
         mcast;
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast.init(mcast_args);
-    }
-#endif
+    mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST1");
         mcast(mcast_args);
     }
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast.teardown();
-    }
-#endif
 
     // ========================================================================
     // Mcast2: (12,9) -> 129 receivers in 13x10 grid
@@ -235,20 +229,11 @@ void kernel_main() {
         Core::is_mcast_receiver_core,  // IsReceiverCore
         true>                          // pop_src
         mcast2;
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast2.init(mcast2_args);
-    }
-#endif
     {
         DeviceZoneScopedN("MCAST2");
         mcast2(mcast2_args);
     }
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast2.teardown();
-    }
-#endif
+    mcast.teardown();
 
     // ========================================================================
     // Matmul: [1, K] x [K, N_per_core] -> [1, N_per_core] on 112 cores

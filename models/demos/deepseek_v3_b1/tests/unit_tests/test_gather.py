@@ -91,7 +91,7 @@ def create_scattered_input_tensor(device, torch_input, sender_cores, shard_shape
     [
         (
             32,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 4),
                 ttnn.CoreCoord(11, 7),
@@ -100,7 +100,7 @@ def create_scattered_input_tensor(device, torch_input, sender_cores, shard_shape
         ),  # q_a_proj output, if on 48 cores (could also do 6x8 instead of 12x4 grid)
         (
             32,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
                 ttnn.CoreCoord(11, 7),
@@ -118,7 +118,7 @@ def create_scattered_input_tensor(device, torch_input, sender_cores, shard_shape
         ),  # kv_a_proj output, 16 cores (Gather only a subset for kv_a_layernorm)
         (
             128,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRange(
                 ttnn.CoreCoord(4, 0),
                 ttnn.CoreCoord(11, 7),

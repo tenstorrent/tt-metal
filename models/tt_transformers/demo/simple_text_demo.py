@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -25,8 +26,9 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
 models_not_supported_for_device_sampling = ["Mistral-7B"]
@@ -209,6 +211,7 @@ def prepare_generator_args(
     page_params,
     paged_attention,
     num_layers,
+    use_prefetcher,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -238,6 +241,7 @@ def prepare_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             num_layers=num_layers,
+            use_prefetcher=use_prefetcher,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -618,7 +622,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
@@ -739,6 +743,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
+# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -746,6 +751,10 @@ def prepare_generator_args(
         lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=["performance", "accuracy"],
+)
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -795,10 +804,12 @@ def test_demo_text(
     model_location_generator,
     num_layers,
     mode,
+    use_prefetcher,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
@@ -835,6 +846,9 @@ def test_demo_text(
     enable_trace = request.config.getoption("--enable_trace") or enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
+    use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
+    use_prefetcher = use_prefetcher and is_prefetcher_supported(num_devices)
+    global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -849,9 +863,6 @@ def test_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
-
-    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
-    global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
     hf_dir = os.getenv("HF_MODEL", "")
     if "phi-3-mini-128k-instruct" in hf_dir.lower():
@@ -928,6 +939,7 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
         num_layers=num_layers,
+        use_prefetcher=use_prefetcher,
     )
 
     # Skip ci-eval tests on P100 devices
@@ -989,6 +1001,7 @@ def test_demo_text(
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
+
         if batch_idx != 0:
             for i in range(len(model)):
                 for layer in model[i].layers:
@@ -1114,7 +1127,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits, log_probs = generator.decode_forward_text(
+            logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,

@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat, precompute_freqs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 
 
@@ -28,6 +29,7 @@ class RotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling],
         use_qk_fused: bool = False,
         datatype=ttnn.bfloat16,
+        prefetcher: Optional[Prefetcher] = None,
     ):
         super().__init__()
 

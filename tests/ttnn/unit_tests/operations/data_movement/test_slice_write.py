@@ -120,7 +120,7 @@ def test_slice_write_nd(rank, layout, device):
     tt_in = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG)
 
     # Perform the slice write
-    ttnn.slice_write(tt_in, tt_out, begins, ends, strides)
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
 
     # Compare full tensors and the written region explicitly
     out_host = ttnn.to_torch(tt_out)

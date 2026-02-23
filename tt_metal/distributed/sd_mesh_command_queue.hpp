@@ -10,7 +10,7 @@ namespace tt::tt_metal::distributed {
 
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
 protected:
-    void write_shard_to_device(
+    bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
@@ -57,6 +57,16 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+
+    void enable_asynchronous_slow_dispatch();
+    void disable_asynchronous_slow_dispatch();
+
+private:
+    void wait_for_cores_idle();
+
+    std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
+
+    bool asynchronous_slow_dispatch_enabled_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed

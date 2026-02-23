@@ -21,11 +21,11 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.3.4"
+        default: "v1.3.5"
       job-timeout:
         required: false
         type: number
-        default: 15
+        default: 20
       run-ttsim-integration-tests:
         required: false
         type: boolean

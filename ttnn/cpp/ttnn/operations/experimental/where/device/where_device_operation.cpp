@@ -5,6 +5,7 @@
 
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operation_concepts.hpp"
 
@@ -30,12 +31,6 @@ static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... oth
     bool all_shapes_match = ((shape_a == other_tensors.logical_shape()) && ...);
 
     TT_FATAL(all_shapes_match, "Not all input shapes match tensor_a's shape");
-}
-
-WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    ZoneScopedN("WhereDeviceOperation::select_program_factory");
-    return ElementWiseMultiCoreWhereProgram{};
 }
 
 static void validate_memory_config(
@@ -95,22 +90,19 @@ WhereDeviceOperation::tensor_return_value_t WhereDeviceOperation::create_output_
 tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     TT_FATAL(
-        std::holds_alternative<DeviceStorage>(args.condition_tensor.storage()),
+        is_device_tensor(args.condition_tensor),
         "Unexpected type {} for condition_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.condition_tensor.storage()));
+        args.condition_tensor.storage_type());
     TT_FATAL(
-        std::holds_alternative<DeviceStorage>(args.true_value_tensor.storage()),
+        is_device_tensor(args.true_value_tensor),
         "Unexpected type {} for true_value_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.true_value_tensor.storage()));
+        args.true_value_tensor.storage_type());
     TT_FATAL(
-        std::holds_alternative<DeviceStorage>(args.false_value_tensor.storage()),
+        is_device_tensor(args.false_value_tensor),
         "Unexpected type {} for false_value_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.false_value_tensor.storage()));
-
-    auto program_factory = select_program_factory(attributes, args);
+        args.false_value_tensor.storage_type());
     return operation::hash_operation<WhereDeviceOperation>(
         attributes,
-        program_factory.index(),
         args.condition_tensor.memory_config(),
         args.condition_tensor.dtype(),
         args.true_value_tensor.memory_config(),

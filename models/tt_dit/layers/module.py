@@ -99,6 +99,7 @@ class Module(ABC):
         module_key_prefix: str,
         missing_keys: MutableSequence[str],
         unexpected_keys: MutableSequence[str],
+        on_host: bool,
     ) -> None:
         state_dict = dict(state_dict)
         self._prepare_torch_state(state_dict)
@@ -112,6 +113,7 @@ class Module(ABC):
                     module_key_prefix=f"{module_key_prefix}{name}.",
                     missing_keys=missing_keys,
                     unexpected_keys=unexpected_keys,
+                    on_host=on_host,
                 )
             except LoadingError:
                 raise
@@ -122,7 +124,7 @@ class Module(ABC):
         for name, parameter in self.named_parameters():
             if name in state_dict:
                 try:
-                    parameter.load_torch_tensor(state_dict.pop(name))
+                    parameter.load_torch_tensor(state_dict.pop(name), on_host=on_host)
                 except LoadingError as err:
                     msg = f"while loading '{module_key_prefix}{name}': {err}"
                     raise LoadingError(msg) from err
@@ -132,12 +134,30 @@ class Module(ABC):
         for name in state_dict:
             unexpected_keys.append(f"{module_key_prefix}{name}")
 
-    def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
+    def load_torch_state_dict(
+        self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True, on_host: bool = False
+    ) -> IncompatibleKeys:
+        """Load PyTorch state dict into module parameters.
+
+        Args:
+            state_dict: Mapping of parameter names to PyTorch tensors.
+            strict: If `True`, raises ValueError on missing or unexpected keys.
+            on_host: If `True`, keeps tensors in host memory. This is used when saving the module
+                to disk, since for device tensors, every shard is currently stored to disk, even
+                for replicated tensors, leading to redundant copies of data.
+
+        Returns:
+            `IncompatibleKeys` containing lists of missing and unexpected keys.
+        """
         missing_keys = []
         unexpected_keys = []
 
         self._load_torch_state_dict_inner(
-            state_dict, module_key_prefix="", missing_keys=missing_keys, unexpected_keys=unexpected_keys
+            state_dict,
+            module_key_prefix="",
+            missing_keys=missing_keys,
+            unexpected_keys=unexpected_keys,
+            on_host=on_host,
         )
 
         if strict and (missing_keys or unexpected_keys):
@@ -155,58 +175,24 @@ class Module(ABC):
     def load_state_dict(self, state_dict: Mapping[str, torch.Tensor]) -> None:
         self.load_torch_state_dict(state_dict)
 
-    def save(self, directory: str | Path, /) -> None:
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
-        directory.mkdir(exist_ok=True)
+        directory.mkdir(exist_ok=True, parents=True)
 
         for name, child in self.named_children():
-            child.save(directory / name)
+            child.save(directory, prefix=f"{prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            parameter.save(directory / f"{name}.tensorbin")
+            parameter.save(directory / f"{prefix}{name}.tensorbin")
 
-    def load(self, directory: str | Path, /) -> None:
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
-        if not directory.exists():
-            msg = f"directory does not exist: {directory}"
-            raise RuntimeError(msg)
 
         for name, child in self.named_children():
-            child.load(directory / name)
+            child.load(directory, prefix=f"{prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            path = directory / f"{name}.tensorbin"
-            try:
-                parameter.load(path)
-            except LoadingError as err:
-                msg = f"{err} while loading '{path}'"
-                raise LoadingError(msg) from err
-
-        self._is_loaded = True
-
-    def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
-        cache_dict = {}
-
-        for name, child in self.named_children():
-            child_cache_dict = child.to_cached_state_dict(f"{path_prefix}{name}.")
-            cache_dict.update({f"{name}.{k}": v for k, v in child_cache_dict.items()})
-
-        for name, parameter in self.named_parameters():
-            cache_dict[name] = path = f"{path_prefix}{name}.tensorbin"
-            parameter.save(path)
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict: Mapping[str, str]) -> None:
-        def substate(state: Mapping[str, str], key: str) -> dict[str, str]:
-            prefix = f"{key}."
-            return {k.removeprefix(prefix): v for k, v in state.items() if k.startswith(prefix)}
-
-        for name, child in self.named_children():
-            child.from_cached_state_dict(substate(cache_dict, name))
-
-        for name, parameter in self.named_parameters():
-            path = cache_dict[name]
+            path = directory / f"{prefix}{name}.tensorbin"
             try:
                 parameter.load(path)
             except LoadingError as err:
@@ -381,13 +367,13 @@ class Parameter:
         self.on_host = on_host
         self._data = None
 
-    def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
+    def load_torch_tensor(self, torch_tensor: torch.Tensor, /, *, on_host: bool = False) -> None:
         shape = tuple(torch_tensor.shape)
         if shape != self.total_shape:
             msg = f"expected tensor shape {self.total_shape}, got {shape}"
             raise LoadingError(msg)
 
-        self.data = tensor.from_torch(
+        data = tensor.from_torch(
             torch_tensor,
             device=self.device,
             layout=self.layout,
@@ -395,14 +381,20 @@ class Parameter:
             memory_config=self.memory_config,
             pad_value=self.pad_value,
             mesh_axes=self.mesh_axes,
-            on_host=self.on_host,
+            on_host=self.on_host or on_host,
         )
+        self._set_data(data, allow_on_host=on_host)
 
     def save(self, path: str | Path, /) -> None:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str | Path, /) -> None:
-        self.data = ttnn.load_tensor(path, device=None if self.on_host else self.device)
+        try:
+            tensor = ttnn.load_tensor(path, device=None if self.on_host else self.device)
+        except RuntimeError as err:
+            msg = f"TT-NN error «{err}»"
+            raise LoadingError(msg) from err
+        self.data = tensor
 
     @property
     def data(self) -> ttnn.Tensor:
@@ -413,8 +405,7 @@ class Parameter:
 
     @data.setter
     def data(self, value: ttnn.Tensor) -> None:
-        self._check_data(value)
-        self._data = value
+        self._set_data(value)
 
     def deallocate(self) -> None:
         """Deallocate the parameter's device memory."""
@@ -422,10 +413,14 @@ class Parameter:
             ttnn.deallocate(self._data)
             self._data = None
 
-    def _check_data(self, value: ttnn.Tensor) -> None:
+    def _set_data(self, value: ttnn.Tensor, *, allow_on_host: bool = False) -> None:
         if self.on_host:
             if value.device() is not None:
                 msg = "expected host tensor, got device tensor"
+                raise LoadingError(msg)
+        elif value.device() is None:
+            if not allow_on_host:
+                msg = "expected device tensor, got host tensor"
                 raise LoadingError(msg)
         elif value.device() != self.device:
             msg = "device mismatch"
@@ -446,3 +441,5 @@ class Parameter:
         if value.shape != self.local_shape:
             msg = f"shape mismatch: expected {self.local_shape}, got {tuple(value.shape)}"
             raise LoadingError(msg)
+
+        self._data = value

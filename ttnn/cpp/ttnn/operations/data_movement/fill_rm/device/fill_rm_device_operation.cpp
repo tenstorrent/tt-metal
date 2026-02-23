@@ -9,17 +9,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
-
-FillRMDeviceOperation::program_factory_t FillRMDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return FillRMProgramFactory{};
-}
-
-void FillRMDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void FillRMDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;

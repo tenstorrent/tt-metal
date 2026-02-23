@@ -73,7 +73,8 @@ def _get_dynamic_padding(configuration: Union[MaxPool2dConfiguration, Conv2dConf
     kh, kw = configuration.kernel_size
     sh, sw = configuration.stride
     dh, dw = configuration.dilation
-    oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)  # change the output size according to stride ! ! !
+    # change the output size according to stride ! ! !
+    oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)
     pad_h = max((oh - 1) * sh + (kh - 1) * dh + 1 - ih, 0)
     pad_w = max((ow - 1) * sw + (kw - 1) * dw + 1 - iw, 0)
 
@@ -195,6 +196,6 @@ class TtSeparableConvBlock:
         x = self.pointwise_conv(x)
 
         if self.activation:
-            x = x * ttnn.sigmoid_accurate(x, True)
+            x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
 
         return x

@@ -24,19 +24,32 @@ pytestmark = pytest.mark.use_module_device
         (-2147483648, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_min_int32(input_shapes, low_a, high_a, low_b, high_b, device):
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.int32,
+        ttnn.uint32,
+    ],
+)
+def test_binary_min_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_dtype, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
     torch_input_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
     torch_input_b = torch_input_b[:num_elements].reshape(input_shapes)
 
+    if ttnn_dtype == ttnn.uint32:
+        # convert uint32 to int64 to make PyTorch happy
+        # everything is converted to int32 for the final equality check
+        torch_input_a = torch_input_a.to(torch.uint32).to(torch.int64)
+        torch_input_b = torch_input_b.to(torch.uint32).to(torch.int64)
+
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    golden = golden_function(torch_input_a, torch_input_b, device=device).to(torch.int32)
 
     tt_in_a = ttnn.from_torch(
         torch_input_a,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -44,7 +57,7 @@ def test_binary_min_int32(input_shapes, low_a, high_a, low_b, high_b, device):
 
     tt_in_b = ttnn.from_torch(
         torch_input_b,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -66,16 +79,29 @@ def test_binary_min_int32(input_shapes, low_a, high_a, low_b, high_b, device):
         (11, 53),
     ],
 )
-def test_binary_min_fill_val_int32(input_shapes, input_a_val, input_b_val, device):
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.int32,
+        ttnn.uint32,
+    ],
+)
+def test_binary_min_fill_val_int32(input_shapes, input_a_val, input_b_val, ttnn_dtype, device):
     torch_input_a = torch.ones(input_shapes, dtype=torch.int32) * input_a_val
     torch_input_b = torch.ones(input_shapes, dtype=torch.int32) * input_b_val
 
+    if ttnn_dtype == ttnn.uint32:
+        # convert uint32 to int64 to make PyTorch happy
+        # everything is converted to int32 for the final equality check
+        torch_input_a = torch_input_a.to(torch.uint32).to(torch.int64)
+        torch_input_b = torch_input_b.to(torch.uint32).to(torch.int64)
+
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    golden = golden_function(torch_input_a, torch_input_b, device=device).to(torch.int32)
 
     tt_in_a = ttnn.from_torch(
         torch_input_a,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -83,7 +109,7 @@ def test_binary_min_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
 
     tt_in_b = ttnn.from_torch(
         torch_input_b,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -109,7 +135,14 @@ def test_binary_min_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
         (-2147483648, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device):
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.int32,
+        ttnn.uint32,
+    ],
+)
+def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, ttnn_dtype, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shape_a)).item()), 1)
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shape_a)
@@ -118,12 +151,18 @@ def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     torch_input_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
     torch_input_b = torch_input_b[:num_elements].reshape(input_shape_b)
 
+    if ttnn_dtype == ttnn.uint32:
+        # convert uint32 to int64 to make PyTorch happy
+        # everything is converted to int32 for the final equality check
+        torch_input_a = torch_input_a.to(torch.uint32).to(torch.int64)
+        torch_input_b = torch_input_b.to(torch.uint32).to(torch.int64)
+
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    golden = golden_function(torch_input_a, torch_input_b, device=device).to(torch.int32)
 
     tt_in_a = ttnn.from_torch(
         torch_input_a,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -131,7 +170,7 @@ def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
 
     tt_in_b = ttnn.from_torch(
         torch_input_b,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -155,15 +194,28 @@ def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         (-2147483648, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device):
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.int32,
+        ttnn.uint32,
+    ],
+)
+def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, ttnn_dtype, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
     torch_input_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
     torch_input_b = torch_input_b[:num_elements].reshape(input_shapes)
 
+    if ttnn_dtype == ttnn.uint32:
+        # convert uint32 to int64 to make PyTorch happy
+        # everything is converted to int32 for the final equality check
+        torch_input_a = torch_input_a.to(torch.uint32).to(torch.int64)
+        torch_input_b = torch_input_b.to(torch.uint32).to(torch.int64)
+
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    golden = golden_function(torch_input_a, torch_input_b, device=device).to(torch.int32)
 
     output_tensor = torch.zeros(input_shapes, dtype=torch.int32)
 
@@ -171,7 +223,7 @@ def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device
 
     tt_in_a = ttnn.from_torch(
         torch_input_a,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -179,7 +231,7 @@ def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device
 
     tt_in_b = ttnn.from_torch(
         torch_input_b,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -187,7 +239,7 @@ def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device
 
     tt_out = ttnn.from_torch(
         output_tensor,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

@@ -74,7 +74,7 @@ class CLIPTokenizerEncoderPair:
             eos_token_id=2,  # default EOS token ID for CLIP
         )
 
-        model.load_state_dict(torch_model.state_dict())
+        model.load_torch_state_dict(torch_model.state_dict())
 
         return model
 
