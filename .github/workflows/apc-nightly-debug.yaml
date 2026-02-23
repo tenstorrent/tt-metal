@@ -71,8 +71,8 @@ jobs:
 
   blackhole-nightly-debug:
     name: blackhole nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
-    needs: determine-watcher
-    if: ${{ github.event_name == 'schedule' || inputs.run-blackhole-tests }}
+    needs: [determine-watcher, apc-nightly-debug]
+    if: ${{ always() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) && needs.determine-watcher.result == 'success' }}
     strategy:
       matrix:
         platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
