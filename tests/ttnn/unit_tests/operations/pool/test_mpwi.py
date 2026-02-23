@@ -8,7 +8,7 @@ import math
 import pytest
 
 from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
-from models.common.utility_functions import is_llk_assert_enabled, skip_with_llk_assert
+from models.common.utility_functions import is_llk_assert_enabled
 
 
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
