@@ -77,8 +77,6 @@ public:
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
-    std::shared_ptr<ContextDescriptor> get_context_descriptor();
-
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
     void initialize_device_manager(
@@ -181,9 +179,6 @@ private:
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
 
-    std::shared_ptr<ContextDescriptor> create_context_descriptor(
-        int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
-
     bool initialized_ = false;
     bool force_reinit_ = false;
 
@@ -206,15 +201,6 @@ private:
 
     // Mutex to protect bank-to-NOC table generation (called concurrently during device initialization)
     mutable std::mutex bank_to_noc_tables_mutex_;
-
-    // Written to device as part of FW init, device-specific
-    std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
-    std::unordered_map<ChipId, std::vector<int32_t>> l1_bank_offset_map_;
-    std::unordered_map<ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;
-    std::unordered_map<ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
-
-    std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_col_to_virtual_col_;
-    std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_row_to_virtual_row_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;

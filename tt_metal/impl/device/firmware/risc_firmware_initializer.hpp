@@ -47,19 +47,8 @@ public:
     // Used by MetalContext during teardown (same order as init).
     void teardown_simulator_ethernet_cores();
 
-    // Two-phase init to preserve exact order with MetalContext (set_internal_routing, dprint, watcher between phases).
-    // Order: run_async_build_phase -> (caller: set_internal_routing, dprint attach, watcher init) -> run_launch_phase.
-    void run_async_build_phase(const std::set<tt::ChipId>& device_ids);
-    void run_launch_phase(const std::set<tt::ChipId>& device_ids);
-
-    // Copy bank and worker maps into caller-provided maps (used by MetalContext after init).
-    void copy_maps_to(
-        std::unordered_map<tt::ChipId, std::vector<int32_t>>& dram_bank_offset_map,
-        std::unordered_map<tt::ChipId, std::vector<int32_t>>& l1_bank_offset_map,
-        std::unordered_map<tt::ChipId, std::vector<uint16_t>>& dram_bank_to_noc_xy,
-        std::unordered_map<tt::ChipId, std::vector<uint16_t>>& l1_bank_to_noc_xy,
-        std::unordered_map<tt::ChipId, std::vector<uint8_t>>& worker_logical_col_to_virtual_col,
-        std::unordered_map<tt::ChipId, std::vector<uint8_t>>& worker_logical_row_to_virtual_row) const;
+    void build_risc_fw(const std::set<tt::ChipId>& device_ids);
+    void launch_risc_fw(const std::set<tt::ChipId>& device_ids);
 
 private:
     void clear_l1_state(tt::ChipId device_id);
@@ -98,7 +87,7 @@ private:
 
     tt_fabric::ControlPlane* control_plane_;
     dispatch_core_manager& dispatch_core_manager_;
-    size_t fw_compile_hash_;
+    [[maybe_unused]] size_t fw_compile_hash_;
     uint8_t num_hw_cqs_;
     size_t worker_l1_unreserved_start_;
 

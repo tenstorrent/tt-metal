@@ -55,6 +55,7 @@ public:
         fabric_udm_mode_(fabric_udm_mode),
         fabric_manager_(fabric_manager),
         router_config_(router_config) {}
+    ~ContextDescriptor() { log_info(tt::LogMetal, "ContextDescriptor destructor"); }
 
     const Hal& hal() const { return *hal_; }
     Cluster& cluster() const { return *cluster_; }
@@ -86,11 +87,12 @@ private:
         const Hal& hal,
         Cluster& cluster,
         const llrt::RunTimeOptions& rtoptions,
-        tt::tt_fabric::FabricConfig fabric_config,
-        tt::tt_fabric::FabricReliabilityMode reliability_mode,
-        tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
-        tt::tt_fabric::FabricUDMMode fabric_udm_mode,
-        tt::tt_fabric::FabricManagerMode fabric_manager,
+        tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        tt::tt_fabric::FabricUDMMode fabric_udm_mode = tt::tt_fabric::FabricUDMMode::DISABLED,
+        tt::tt_fabric::FabricManagerMode fabric_manager = tt::tt_fabric::FabricManagerMode::DEFAULT,
         tt::tt_fabric::FabricRouterConfig router_config = tt::tt_fabric::FabricRouterConfig{},
         int num_cqs = 1,
         int l1_small_size = 0,
@@ -115,8 +117,6 @@ private:
         fabric_udm_mode_(fabric_udm_mode),
         fabric_manager_(fabric_manager),
         router_config_(router_config) {}
-
-    ContextDescriptor() = default;
 
     // Dependencies
     const Hal* hal_ = nullptr;

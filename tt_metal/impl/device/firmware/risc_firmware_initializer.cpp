@@ -55,32 +55,42 @@ RiscFirmwareInitializer::RiscFirmwareInitializer(
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
 
-    // ControlPlane may be replaced during runtime and it's needed for teardown to figure out which ethernet cores are
-    // active It gets replaced when the Fabric mode changes
-    // MetalContext::instance().subscribe_context_descriptor_state(this);
+    // Initialize some container members to allow threadsafe operations on them
+    dram_bank_offset_map_.reserve(cluster_.all_chip_ids().size());
+    l1_bank_offset_map_.reserve(cluster_.all_chip_ids().size());
+    dram_bank_to_noc_xy_.reserve(cluster_.all_chip_ids().size());
+    l1_bank_to_noc_xy_.reserve(cluster_.all_chip_ids().size());
+    worker_logical_col_to_virtual_col_.reserve(cluster_.all_chip_ids().size());
+    worker_logical_row_to_virtual_row_.reserve(cluster_.all_chip_ids().size());
+    for (ChipId device_id : cluster_.all_chip_ids()) {
+        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
+    }
 }
 
-RiscFirmwareInitializer::~RiscFirmwareInitializer() = default;
+RiscFirmwareInitializer::~RiscFirmwareInitializer() { log_info(tt::LogMetal, "RiscFirmwareInitializer destructor"); }
 
 void RiscFirmwareInitializer::init(
     const std::vector<Device*>& /*devices*/, const std::unordered_set<InitializerKey>& /*init_done*/) {
-    TT_THROW("RiscFirmwareInitializer::init is not implemented. Use init_by_device_ids instead.");
+    TT_THROW("First call run_async_build_phase and then run_launch_phase instead");
 }
 
-void RiscFirmwareInitializer::init_by_device_ids(const std::set<tt::ChipId>& device_ids) {
-    run_async_build_phase(device_ids);
-    run_launch_phase(device_ids);
-    initialized_ = true;
+void RiscFirmwareInitializer::init_by_device_ids(const std::set<tt::ChipId>& /*device_ids*/) {
+    TT_THROW("First call build_risc_fw and then run_launch_phase instead");
 }
 
-void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& device_ids) {
+void RiscFirmwareInitializer::build_risc_fw(const std::set<tt::ChipId>& device_ids) {
     ZoneScopedN("FW builds and Device Inits");
 
     std::vector<std::shared_future<void>> futures;
     futures.reserve(device_ids.size());
 
     for (tt::ChipId device_id : device_ids) {
-        futures.emplace_back(detail::async([this, device_id, fw_compile_hash_]() {
+        futures.emplace_back(detail::async([this, device_id]() {
             // Clear L1/DRAM if requested - skip for mock devices
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
                 if (rtoptions_.get_clear_l1()) {
@@ -117,7 +127,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     }
 }
 
-void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& device_ids) {
+void RiscFirmwareInitializer::launch_risc_fw(const std::set<tt::ChipId>& device_ids) {
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
@@ -128,21 +138,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             initialize_and_launch_firmware(device_id);
         }
     }
-}
-
-void RiscFirmwareInitializer::copy_maps_to(
-    std::unordered_map<tt::ChipId, std::vector<int32_t>>& out_dram_bank_offset_map,
-    std::unordered_map<tt::ChipId, std::vector<int32_t>>& out_l1_bank_offset_map,
-    std::unordered_map<tt::ChipId, std::vector<uint16_t>>& out_dram_bank_to_noc_xy,
-    std::unordered_map<tt::ChipId, std::vector<uint16_t>>& out_l1_bank_to_noc_xy,
-    std::unordered_map<tt::ChipId, std::vector<uint8_t>>& out_worker_logical_col_to_virtual_col,
-    std::unordered_map<tt::ChipId, std::vector<uint8_t>>& out_worker_logical_row_to_virtual_row) const {
-    out_dram_bank_offset_map = dram_bank_offset_map_;
-    out_l1_bank_offset_map = l1_bank_offset_map_;
-    out_dram_bank_to_noc_xy = dram_bank_to_noc_xy_;
-    out_l1_bank_to_noc_xy = l1_bank_to_noc_xy_;
-    out_worker_logical_col_to_virtual_col = worker_logical_col_to_virtual_col_;
-    out_worker_logical_row_to_virtual_row = worker_logical_row_to_virtual_row_;
+    initialized_ = true;
 }
 
 void RiscFirmwareInitializer::configure() {}

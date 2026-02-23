@@ -141,11 +141,26 @@ void MetalContext::initialize_device_manager(
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-    device_manager_->initialize(
-        device_ids,
-        init_profiler,
-        initialize_fabric_and_dispatch_fw,
-        create_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size));
+    TT_ASSERT(hal_ != nullptr);
+    TT_ASSERT(cluster_ != nullptr);
+    context_descriptor_ = std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
+        *hal_,
+        *cluster_,
+        rtoptions_,
+        fabric_config_,
+        fabric_reliability_mode_,
+        fabric_tensix_config_,
+        fabric_udm_mode_,
+        fabric_manager_,
+        fabric_router_config_,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        worker_l1_size,
+        dispatch_core_config_,
+        l1_bank_remap_,
+        rtoptions_.get_mock_cluster_desc_path()));
+    device_manager_->initialize(device_ids, init_profiler, initialize_fabric_and_dispatch_fw, context_descriptor_);
 }
 
 void MetalContext::initialize(
@@ -242,15 +257,17 @@ void MetalContext::initialize(
         return;
     }
 
-    // Clear state, build FW (delegated to RiscFirmwareInitializer; order of actions must match exactly)
     auto all_devices = cluster_->all_chip_ids();
     std::set<ChipId> device_ids(all_devices.begin(), all_devices.end());
 
-    auto descriptor = create_context_descriptor(num_hw_cqs_, 0, 0, worker_l1_size_);
+    // Use a different ContextDescriptor for FW init because user specified settings don't matter at this point
     risc_firmware_initializer_ = std::make_unique<RiscFirmwareInitializer>(
-        descriptor, get_control_plane(), *dispatch_core_manager_, fw_compile_hash);
+        std::shared_ptr<ContextDescriptor>(new ContextDescriptor(*hal_, *cluster_, rtoptions_)),
+        get_control_plane(),
+        *dispatch_core_manager_,
+        fw_compile_hash);
 
-    risc_firmware_initializer_->run_async_build_phase(device_ids);
+    risc_firmware_initializer_->build_risc_fw(device_ids);
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
@@ -264,15 +281,7 @@ void MetalContext::initialize(
     }
     watcher_server_->init_devices();
 
-    risc_firmware_initializer_->run_launch_phase(device_ids);
-
-    risc_firmware_initializer_->copy_maps_to(
-        dram_bank_offset_map_,
-        l1_bank_offset_map_,
-        dram_bank_to_noc_xy_,
-        l1_bank_to_noc_xy_,
-        worker_logical_col_to_virtual_col_,
-        worker_logical_row_to_virtual_row_);
+    risc_firmware_initializer_->launch_risc_fw(device_ids);
 
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
@@ -361,16 +370,6 @@ void MetalContext::teardown() {
 
     noc_debug_state_.reset();
 
-    // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
-    // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
-    // when context is re-initialized).
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
-
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
         experimental::disable_mock_mode();
@@ -457,30 +456,6 @@ void MetalContext::reinitialize_for_real_hardware() {
     teardown_base_objects();
     initialize_base_objects();
 
-    // Clear and reinitialize device-specific maps: they contain data computed from the old cluster_/hal_ objects and
-    // must be cleared after switching to the new cluster configuration.
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
-
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-    for (ChipId device_id : cluster_->all_chip_ids()) {
-        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
-    }
-
     teardown_dispatch_state();
     initialized_ = false;
 
@@ -549,22 +524,6 @@ MetalContext::MetalContext() {
     }
 
     initialize_base_objects();
-
-    // Initialize some container members to allow threadsafe operations on them later
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-    for (ChipId device_id : cluster_->all_chip_ids()) {
-        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
-    }
 
     device_manager_ = std::make_unique<DeviceManager>();
 }
@@ -806,27 +765,6 @@ tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { r
 tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabric_udm_mode_; }
 
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
-
-std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
-    int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-    return std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
-        *hal_,
-        *cluster_,
-        rtoptions_,
-        fabric_config_,
-        fabric_reliability_mode_,
-        fabric_tensix_config_,
-        fabric_udm_mode_,
-        fabric_manager_,
-        fabric_router_config_,
-        num_hw_cqs,
-        l1_small_size,
-        trace_region_size,
-        worker_l1_size,
-        dispatch_core_config_,
-        l1_bank_remap_,
-        rtoptions_.get_mock_cluster_desc_path()));
-}
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {

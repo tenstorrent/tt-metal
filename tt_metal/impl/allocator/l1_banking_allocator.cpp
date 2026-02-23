@@ -208,7 +208,9 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .disable_interleaved = false});
     TT_FATAL(
         config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
-        "Reserved size must be less than bank size");
+        "Reserved size {} must be less than bank size {}",
+        config.l1_small_size,
+        config.worker_l1_size - config.l1_unreserved_base);
     TT_FATAL(
         config.l1_small_size % config.l1_alignment == 0,
         "Reserved size must be aligned to L1 allocator alignment {}",
