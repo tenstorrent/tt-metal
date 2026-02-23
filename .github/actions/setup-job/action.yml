@@ -122,7 +122,6 @@ runs:
         echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
         echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
-        echo "TT_METAL_RISCV_DEBUG_INFO=0" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
 
         if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
