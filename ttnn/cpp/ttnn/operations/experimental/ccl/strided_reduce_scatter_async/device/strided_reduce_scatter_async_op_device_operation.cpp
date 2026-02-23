@@ -58,6 +58,15 @@ void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
             intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
             "Intermediate tensor page config must match input tensor page config");
 
+        // Ring uses single-batch intermediate (kernels address with no batch offset).
+        auto expected_inter_shape = input_tensor.logical_shape();
+        expected_inter_shape[0] = 1;
+        TT_FATAL(
+            intermediate_tensor.logical_shape() == expected_inter_shape,
+            "Intermediate tensor shape must be single-batch (batch dim 1), expected {} but got {}",
+            expected_inter_shape,
+            intermediate_tensor.logical_shape());
+
         if (operation_attributes.optional_intermediate_mem_config.has_value()) {
             TT_FATAL(
                 intermediate_tensor.memory_config() == operation_attributes.optional_intermediate_mem_config.value(),
@@ -102,7 +111,16 @@ spec_return_value_t StridedReduceScatterAsyncDeviceOperation::compute_output_spe
             adjusted_intermediate_mem_config = intermediate_mem_config;
         }
     } else {
-        adjusted_intermediate_mem_config = intermediate_mem_config;
+        // Ring: intermediate buffer holds one batch at a time (kernels use no batch offset).
+        inter_shape[0] = 1;
+        if (intermediate_mem_config.is_sharded() &&
+            !operation_attributes.optional_intermediate_mem_config.has_value()) {
+            auto intermediate_shard_spec = intermediate_mem_config.shard_spec().value();
+            intermediate_shard_spec.shape[0] = 1;
+            adjusted_intermediate_mem_config = intermediate_mem_config.with_shard_spec(intermediate_shard_spec);
+        } else {
+            adjusted_intermediate_mem_config = intermediate_mem_config;
+        }
     }
 
     auto output_shape = input_tensor.logical_shape();
