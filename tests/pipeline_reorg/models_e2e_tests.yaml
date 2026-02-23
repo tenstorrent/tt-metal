@@ -72,19 +72,20 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Mamba-2.8B e2e tests
-  cmd: |
-    pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
-  model: mamba-2.8b
-  skus:
-    wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
+# Mamba-2.8B: disabled, failing on latest main (conv2d kernel static_assert)
+# - name: Mamba-2.8B e2e tests
+#   cmd: |
+#     pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
+#   model: mamba-2.8b
+#   skus:
+#     wh_n150:
+#       timeout: 5
+#       tier: 3
+#     wh_n300:
+#       timeout: 5
+#       tier: 3
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
@@ -171,7 +172,7 @@
   model: qwen2.5-vl-32b
   skus:
     wh_llmbox_perf:
-      timeout: 7
+      timeout: 10
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

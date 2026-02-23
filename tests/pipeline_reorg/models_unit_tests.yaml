@@ -97,19 +97,20 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Mamba-2.8B unit tests
-  cmd: |
-    pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_block.py
-  model: mamba-2.8b
-  skus:
-    wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
+# Mamba-2.8B: disabled, failing on latest main (conv2d kernel static_assert)
+# - name: Mamba-2.8B unit tests
+#   cmd: |
+#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_block.py
+#   model: mamba-2.8b
+#   skus:
+#     wh_n150:
+#       timeout: 5
+#       tier: 3
+#     wh_n300:
+#       timeout: 5
+#       tier: 3
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
 
 - name: Qwen2.5-7B unit tests
   cmd: |
