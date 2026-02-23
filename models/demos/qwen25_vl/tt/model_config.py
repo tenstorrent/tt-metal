@@ -173,6 +173,11 @@ class VisionModelArgs(ModelArgs):
 
         x_1BSH = x_bsh.unsqueeze(0)
 
+        if force_replicated:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        else:
+            mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(
             x_1BSH,
@@ -180,8 +185,7 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # todo)) refactor this code to make the intent clear, which is data parallelism
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            mesh_mapper=mesh_mapper,
         )
         return xs_1BSH
 

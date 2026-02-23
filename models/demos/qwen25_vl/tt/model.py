@@ -358,23 +358,24 @@ class DropInVisionTransformer(torch.nn.Module):
                 .unsqueeze(0)
             )
             # Convert to TT tensors on the mesh device
+            vision_mesh_mapper = (
+                ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0)
+                if self.model_args.is_galaxy
+                else ttnn.ReplicateTensorToMesh(self.model_args.mesh_device)
+            )
             cos = ttnn.from_torch(
                 cos_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                mesh_mapper=vision_mesh_mapper,
             )
             sin = ttnn.from_torch(
                 sin_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                mesh_mapper=vision_mesh_mapper,
             )
             rot_mats = [cos, sin]
 

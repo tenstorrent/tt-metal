@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
-from models.tt_transformers.tt.common import Mode, copy_host_to_device
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
@@ -160,39 +160,9 @@ class Generator(WarmupForwardMixin):
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        # Check if batched prefill is possible:
-        # - batch > 1
-        # - total tokens fit in device DRAM for intermediate tensors
-        #   (hidden state = total_tokens × hidden_dim × 2 bytes must fit in free DRAM)
-        # - page table available (needed for per-user KV cache fill)
-        # - not requiring chunked prefill (batch_seq_len within chunk limit)
-        # - not Galaxy (TG KV cache handling not supported in batched path)
-        #
-        # Memory limit: each intermediate tensor is total_tokens × hidden_dim × dtype_size.
-        # During attention output + all_reduce, ~2 such tensors coexist.
-        # Conservative limit: 32k total tokens works safely on N300 for 7B models.
+        use_trace = False  # Traced prefill not yet supported for Qwen 2.5 VL
+
         total_tokens = batch_seq_len * batch
-        max_batched_tokens = 32 * 1024
-        use_batched_prefill = (
-            batch > 1
-            and total_tokens <= max_batched_tokens
-            and page_table is not None
-            and batch_seq_len <= self.model_args.max_prefill_chunk_size
-            and not self.model_args.is_galaxy
-        )
-
-        if use_batched_prefill:
-            logger.info(f"Using batched prefill: {batch} users × {batch_seq_len} tokens = {total_tokens} total tokens")
-            return self.__batched_prefill_forward_text(
-                tokens, rot_mats, page_table, kv_cache, prompt_lens, batch, batch_seq_len
-            )
-
-        # Trace-based prefill is not currently supported for Qwen2.5-VL because the model
-        # uses pre-computed embeddings (large bfloat16 tensors) as inputs, which don't fit
-        # in the trace region. Standard models use small uint32 token IDs as trace inputs.
-        # TODO: Enable trace when the model can accept token IDs or trace_region_size is dynamic.
-        use_trace = False
-
         if batch > 1:
             if use_trace:
                 logger.info(
@@ -202,7 +172,6 @@ class Generator(WarmupForwardMixin):
             else:
                 logger.info(
                     f"Using sequential prefill: {batch} users × {batch_seq_len} tokens = {total_tokens} total tokens"
-                    + (f" (exceeds {max_batched_tokens} batched limit)" if total_tokens > max_batched_tokens else "")
                 )
 
         block_size = get_block_size(kv_cache) if kv_cache is not None else None
@@ -261,95 +230,6 @@ class Generator(WarmupForwardMixin):
                 output_logits[user_id] = self.model.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-
-        return output_logits
-
-    def __batched_prefill_forward_text(self, tokens, rot_mats, page_table, kv_cache, prompt_lens, batch, padded_len):
-        """
-        Process all users in a single forward pass by concatenating their tokens and RoPE.
-        This is significantly faster than sequential per-user prefill for batch > 1.
-        """
-        logger.info(f"Batched prefill: {batch} users, padded_len={padded_len}")
-        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
-
-        # Build per-user last_token_idx and page tables
-        last_token_indices = []
-        user_page_tables = []
-        block_size = get_block_size(kv_cache)
-        num_blocks = num_blocks_in_seq(padded_len, block_size)
-
-        for user_id in range(batch):
-            seq_len = int(prompt_lens[user_id])
-            last_token_indices.append(seq_len - 1)
-            # Get per-user page table (slice by user first, then truncate to needed blocks)
-            pt_user = self._ttt_generator._get_prefill_user_page_table(
-                page_table[user_id : user_id + 1], kv_cache, seq_len
-            )
-            # Ensure all page tables have the same number of columns
-            if pt_user.shape[1] < num_blocks:
-                padding = torch.zeros(1, num_blocks - pt_user.shape[1], dtype=torch.int32)
-                pt_user = torch.cat([pt_user, padding], dim=1)
-            else:
-                pt_user = pt_user[:, :num_blocks]
-            user_page_tables.append(pt_user)
-
-        # Stack page tables: [batch, num_blocks]
-        batched_page_table = torch.cat(user_page_tables, dim=0)
-
-        # Concatenate tokens from all users along seq dim: [1, batch * padded_len, hidden]
-        # tokens shape: [batch, padded_len, hidden]
-        concat_tokens = tokens.reshape(1, batch * padded_len, tokens.shape[-1])
-
-        # Concatenate rot_mats along seq dim: (cos[batch, 1, seq, hd], sin[batch, 1, seq, hd])
-        # First slice each user's rot_mats to padded_len, then reshape to concatenate
-        hd = rot_mats[0].shape[-1]
-        cos_per_user = rot_mats[0][:, :, :padded_len, :]  # [batch, 1, padded_len, hd]
-        sin_per_user = rot_mats[1][:, :, :padded_len, :]  # [batch, 1, padded_len, hd]
-        concat_cos = cos_per_user.reshape(1, 1, batch * padded_len, hd)
-        concat_sin = sin_per_user.reshape(1, 1, batch * padded_len, hd)
-        concat_rot_mats = (concat_cos, concat_sin)
-
-        # Prepare inputs
-        prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
-            concat_tokens,
-            rot_mats=concat_rot_mats,
-            page_table=batched_page_table,
-        )
-
-        # Forward pass with batch_size
-        # Use get_last_token=-1 to return full hidden states (we extract per-user logits after)
-        tt_hidden = self.model.ttnn_prefill_forward(
-            prefill_input,
-            rot_mats_global=rot_mats_prefill,
-            user_id=list(range(batch)),
-            page_table=page_table_tt,
-            get_last_token=-1,
-            kv_cache=kv_cache,
-            batch_size=batch,
-        )
-
-        # Extract per-user logits from hidden states [1, 1, batch*padded_len, hidden]
-        lm_head_input_mem_cfg = self.model.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
-        for user_id in range(batch):
-            lt_idx = last_token_indices[user_id]
-            offset = user_id * padded_len
-            get_last = (lt_idx // 32) * 32 + offset
-            # Slice the 32-token tile containing the last token
-            tile = ttnn.slice(tt_hidden, (0, 0, get_last, 0), (1, 1, get_last + 32, tt_hidden.shape[-1]))
-            # Apply norm + LM head
-            tile = self.model.norm(tile, mode=Mode.PREFILL)
-            if lm_head_input_mem_cfg.is_sharded():
-                tile = ttnn.interleaved_to_sharded(tile, lm_head_input_mem_cfg)
-            logits = self.model.lm_head(tile)
-            logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            output_logits[user_id] = self.model.process_output_prefill(logits.cpu(), last_token_idx=(lt_idx % 32))
-
-        ttnn.deallocate(tt_hidden)
-        ttnn.deallocate(prefill_input)
-        if page_table_tt is not None:
-            ttnn.deallocate(page_table_tt)
-
-        logger.info(f"Finished batched prefill for {batch} users up to {padded_len} tokens, Starting decode...")
 
         return output_logits
 
