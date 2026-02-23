@@ -1,6 +1,6 @@
-name: "Debug nightly run"
+name: "apc nightly debug run"
 
-run-name: "Debug nightly run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
+run-name: "apc nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
 
 on:
   schedule:
@@ -44,7 +44,7 @@ jobs:
           fi
 
   apc-nightly-debug:
-    name: APC debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    name: apc nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: determine-watcher
     strategy:
       matrix:
@@ -61,7 +61,7 @@ jobs:
       run-t3000-apc-fast-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
 
   blackhole-nightly-debug:
-    name: Blackhole debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    name: blackhole nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: determine-watcher
     strategy:
       matrix:
