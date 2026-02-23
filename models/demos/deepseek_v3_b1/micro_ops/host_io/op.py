@@ -48,6 +48,8 @@ class HostInterface:
         d2h_upstream_core=ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
         embedding_tensor=None,
         loopback_mode=False,
+        embedding_cb_index=None,
+        fabric_packet_header_cb_index=None,
     ):
         self.h2d_socket = h2d_socket
         self.d2h_socket = d2h_socket
@@ -139,9 +141,11 @@ class HostInterface:
             ), f"Expected embedding tensor to be DRAM interleaved with page size {self.embedding_page_size} bytes for shape {self.embedding_tensor.shape}"
             # Tensor is DRAM interleaved, and row major. Page size is inner dim stride.
             self.embedding_page_size = self.embedding_tensor.shape[3] * dtype_size(self.embedding_tensor.dtype)
-            self.embedding_cb_index = 2
+            self.embedding_cb_index = 2 if embedding_cb_index is None else embedding_cb_index
 
-        self.fabric_packet_header_cb_index = 1
+        self.fabric_packet_header_cb_index = (
+            1 if fabric_packet_header_cb_index is None else fabric_packet_header_cb_index
+        )
         self.num_fwd_links = 2
         self.num_bwd_links = 1
 
