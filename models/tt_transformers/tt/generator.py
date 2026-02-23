@@ -788,22 +788,34 @@ class Generator(WarmupForwardMixin):
                 # so using absolute indexes.
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
 
-                (
-                    chunk_prefill_input,
-                    chunk_rot_mats_global_prefill,
-                    chunk_rot_mats_local_prefill,
-                    page_table_tt,
-                    chunk_page_table_tt,
-                    chunk_user_id_tensor,
-                ) = self.model[model_id].prepare_inputs_prefill(
+                chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
-                    batch_size=batch_size,  # Use actual batch_size
+                    batch_size=batch_size,
                     user_id=CHUNK_USER_ID,
                     **kwargs,
                 )
+                if batch_size > 1:
+                    (
+                        chunk_prefill_input,
+                        chunk_rot_mats_global_prefill,
+                        chunk_rot_mats_local_prefill,
+                        page_table_tt,
+                        chunk_page_table_tt,
+                        chunk_user_id_tensor,
+                    ) = chunk_inputs
+                else:
+                    (
+                        chunk_prefill_input,
+                        chunk_rot_mats_global_prefill,
+                        chunk_rot_mats_local_prefill,
+                        page_table_tt,
+                        chunk_page_table_tt,
+                    ) = chunk_inputs
+                    chunk_user_id_tensor = None
+
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats_global=chunk_rot_mats_global_prefill,
@@ -824,20 +836,25 @@ class Generator(WarmupForwardMixin):
                 else:
                     del tt_logits
         else:
-            (
-                prefill_input,
-                rot_mats_global_prefill,
-                rot_mats_local_prefill,
-                page_table_tt,
-                _,
-                user_id_tensor,
-            ) = self.model[model_id].prepare_inputs_prefill(
+            inputs = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
-                batch_size=batch_size,  # Use actual batch_size
+                batch_size=batch_size,
                 user_id=user_id,
                 **kwargs,
             )
+            if batch_size > 1:
+                (
+                    prefill_input,
+                    rot_mats_global_prefill,
+                    rot_mats_local_prefill,
+                    page_table_tt,
+                    _,
+                    user_id_tensor,
+                ) = inputs
+            else:
+                prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _ = inputs
+                user_id_tensor = None
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
@@ -847,7 +864,7 @@ class Generator(WarmupForwardMixin):
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
-                batch_size=batch_size,  # Actual batch size for KV cache logic
+                batch_size=batch_size,
                 user_id_tensor=user_id_tensor,
             )
             return tt_logits
