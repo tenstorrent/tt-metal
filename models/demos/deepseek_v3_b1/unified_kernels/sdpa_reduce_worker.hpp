@@ -221,6 +221,7 @@ struct SdpaChunkSender {
 template <
     bool SDPA_EXP_APPROX_MODE,
     bool normalize,
+    bool untilize,
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
@@ -232,19 +233,40 @@ ALWI void sdpa_tail_streaming(
     uint32_t cb_l1,
     uint32_t cb_l2,
     uint32_t cb_l_out) {
-    ckernel::sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
-        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
+    constexpr bool dense = untilize;
+    constexpr uint32_t total_size = num_l_chunks * block_size;
+    ckernel::sdpa_tail_ms_reduce<
+        SDPA_EXP_APPROX_MODE,
+        normalize,
+        untilize ? total_size : block_size,
+        scale_fp32,
+        vector_mode,
+        false,
+        dense>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
-    for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
-        cb_wait_front(cb_l1, (chunk + 1) * block_size);
-        cb_wait_front(cb_l2, (chunk + 1) * block_size);
-        cb_reserve_back(cb_l_out, block_size);
+    // TODO: Unit test perf seemed better if we operated on all chunks
+    // Retest in streaming context since unit test doesn't need to wait for input
+    if constexpr (untilize) {
+        pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
+        cb_wait_front(cb_l1, total_size);
+        cb_wait_front(cb_l2, total_size);
+        cb_reserve_back(cb_l_out, total_size);
+        ckernel::sdpa_tail_l_block<total_size, 1, untilize, dense, false>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        cb_push_back(cb_l_out, total_size);
+        pack_untilize_uninit(cb_l_out);
+    } else {
+        bool acquire_regs = !normalize;
+        for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+            cb_wait_front(cb_l1, (chunk + 1) * block_size);
+            cb_wait_front(cb_l2, (chunk + 1) * block_size);
+            cb_reserve_back(cb_l_out, block_size);
 
-        uint32_t tile_index = chunk * block_size;
-        bool acquire_regs = !(normalize && chunk == 0);
-        ckernel::sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, tile_index, acquire_regs);
-
-        cb_push_back(cb_l_out, block_size);
+            uint32_t tile_index = chunk * block_size;
+            ckernel::sdpa_tail_l_block<block_size, 1, untilize, dense, false>(
+                cb_l1, cb_l2, cb_l_out, tile_index, 0, acquire_regs);
+            acquire_regs = true;
+            cb_push_back(cb_l_out, block_size);
+        }
     }
 
     // Finalize the worker/neighbor MS without popping the previous-round MS.
@@ -296,6 +318,7 @@ ALWI void sdpa_forward_data(
 template <
     bool SDPA_EXP_APPROX_MODE,
     bool normalize,
+    bool untilize,
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
@@ -311,9 +334,16 @@ ALWI void sdpa_tail_streaming_conditional(
     bool local_valid) {
     // Only local valid - copy local data to output
     if (!neighbor_valid && local_valid) {
+        // TODO: Can be optimized to just division
         if constexpr (normalize) {
-            sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
-                cb_prev_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l2, cb_l2, cb_l_out);
+            sdpa_tail_streaming<
+                SDPA_EXP_APPROX_MODE,
+                normalize,
+                untilize,
+                block_size,
+                scale_fp32,
+                num_l_chunks,
+                vector_mode>(cb_prev_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l2, cb_l2, cb_l_out);
         } else {
             sdpa_forward_data(cb_prev_max_sum, cb_cur_max_sum, num_l_chunks, cb_l2, cb_l_out, block_size);
         }
@@ -322,9 +352,16 @@ ALWI void sdpa_tail_streaming_conditional(
 
     // Only neighbor valid - copy neighbor data to output
     if (neighbor_valid && !local_valid) {
+        // TODO: Can be optimized to just division
         if constexpr (normalize) {
-            sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
-                cb_worker_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l1, cb_l1, cb_l_out);
+            sdpa_tail_streaming<
+                SDPA_EXP_APPROX_MODE,
+                normalize,
+                untilize,
+                block_size,
+                scale_fp32,
+                num_l_chunks,
+                vector_mode>(cb_worker_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l1, cb_l1, cb_l_out);
         } else {
             sdpa_forward_data(cb_worker_max_sum, cb_cur_max_sum, num_l_chunks, cb_l1, cb_l_out, block_size);
         }
@@ -338,7 +375,7 @@ ALWI void sdpa_tail_streaming_conditional(
     }
 
     // Both valid - perform normal SDPA reduction
-    sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
+    sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, untilize, block_size, scale_fp32, num_l_chunks, vector_mode>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
 }
 
@@ -679,44 +716,16 @@ struct SdpaReduceWorker {
                 }
 
                 cb_wait_front(WriterCT::cb_l_out, WriterCT::scatter_num_tiles);
-                uint32_t src_base = get_read_ptr(WriterCT::cb_l_out);
+                uint32_t src_addr = get_read_ptr(WriterCT::cb_l_out);
 
-                // Reuse R1 result L buffer as temp scratch
-                uint32_t temp_base = get_read_ptr(WriterCT::cb_r1_result_l);
-
-                constexpr uint32_t row_face_words = WriterCT::scatter_row_face_size / sizeof(uint32_t);
                 constexpr uint32_t scatter_payload_bytes =
                     WriterCT::scatter_num_tiles * WriterCT::scatter_dst_tile_size;
 
                 for (uint32_t row = 0; row < WriterCT::scatter_num_rows; row++) {
-                    for (uint32_t t = 0; t < WriterCT::scatter_num_tiles; t++) {
-                        uint32_t src_tile = src_base + t * WriterCT::scatter_src_tile_size;
-                        uint32_t dst_tile = temp_base + t * WriterCT::scatter_dst_tile_size;
-
-                        // Copy Face 0 row
-                        volatile tt_l1_ptr uint32_t* src_f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            src_tile + row * WriterCT::scatter_row_face_size);
-                        volatile tt_l1_ptr uint32_t* dst_f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile);
-#pragma GCC unroll 8
-                        for (uint32_t w = 0; w < row_face_words; w++) {
-                            dst_f0[w] = src_f0[w];
-                        }
-
-                        // Copy Face 1 row
-                        volatile tt_l1_ptr uint32_t* src_f1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            src_tile + WriterCT::scatter_face_size + row * WriterCT::scatter_row_face_size);
-                        volatile tt_l1_ptr uint32_t* dst_f1 =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile + WriterCT::scatter_row_face_size);
-#pragma GCC unroll 8
-                        for (uint32_t w = 0; w < row_face_words; w++) {
-                            dst_f1[w] = src_f1[w];
-                        }
-                    }
-
                     uint64_t dest_noc_addr =
                         get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], scatter_dest_l1_addr);
-                    noc_async_write(temp_base, dest_noc_addr, scatter_payload_bytes);
-                    noc_async_writes_flushed();
+                    noc_async_write(src_addr, dest_noc_addr, scatter_payload_bytes);
+                    src_addr += scatter_payload_bytes;
 
                     // Signal scatter arrival on destination core (used by fused ops
                     // to synchronize downstream stages like matmul1)
@@ -728,8 +737,12 @@ struct SdpaReduceWorker {
                         noc_semaphore_inc(sem_addr, 1);
                     }
                 }
-
-                noc_async_write_barrier();
+                if constexpr (WriterCT::scatter_arrival_enabled) {
+                    noc_async_atomic_barrier();
+                } else {
+                    noc_async_write_barrier();
+                }
+                cb_pop_front(WriterCT::cb_l_out, WriterCT::scatter_num_tiles);
             }
         }
 #endif  // COMPILE_FOR_BRISC
@@ -775,6 +788,7 @@ struct SdpaReduceWorker {
             sdpa_tail_streaming_conditional<
                 EXP_APPROX_MODE,
                 false /* no normalize - R1 doesn't normalize */,
+                false /* untilize - R1 doesn't untilize */,
                 ComputeCT::block_size,
                 ComputeCT::scale_fp32,
                 ComputeCT::num_l_chunks,
@@ -792,9 +806,12 @@ struct SdpaReduceWorker {
             bool local_r1_valid = local_valid || r1_neighbor_valid;
             bool r2_neighbor_r1_valid = r2_neighbor_valid;
 
+            // TODO: This is because only the reduction can currently perform untilize
+            static_assert(ComputeCT::final_reduction, "Final reduction must be enabled");
             sdpa_tail_streaming_conditional<
                 EXP_APPROX_MODE,
                 ComputeCT::final_reduction,
+                true /* untilize */,
                 ComputeCT::block_size,
                 ComputeCT::scale_fp32,
                 ComputeCT::num_l_chunks,
