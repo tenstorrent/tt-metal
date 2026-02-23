@@ -25,6 +25,7 @@
 #include "internal/ethernet/erisc.h"
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 
 uint8_t noc_index;
@@ -324,7 +325,7 @@ int __attribute__((noinline)) main(void) {
 
                 flush_erisc_icache();
                 uint32_t kernel_config_base =
-                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
+                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];

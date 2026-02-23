@@ -19,6 +19,7 @@
 #if !defined(UCK_CHLKC_MATH)
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/hw_thread.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
@@ -173,15 +174,18 @@ int main(int argc, char* argv[]) {
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
 #endif
 
-        rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                            launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset);
-        crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                             launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset);
+        rta_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  launch_msg->kernel_config.rta_offset[internal_::get_hw_thread_idx()].rta_offset);
+        crta_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  launch_msg->kernel_config.rta_offset[internal_::get_hw_thread_idx()].crta_offset);
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
         // Initialize RTA count from L1 memory
         // Set to 0 if: 1. offset is sentinel (no args set)
         //              2. memory contains known garbage pattern 0xBEEF#### (uninitialized slot)
-        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+        if (launch_msg->kernel_config.rta_offset[internal_::get_hw_thread_idx()].rta_offset ==
+                RTA_CRTA_NO_ARGS_SENTINEL ||
             ((rta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
             rta_count = 0;
         } else {
@@ -192,7 +196,8 @@ int main(int argc, char* argv[]) {
         // Initialize CRTA count from L1 memory
         // Set to 0 if: 1. offset is sentinel (no common args set)
         //              2. memory contains known garbage pattern 0xBEEF#### (unicast mode, kernel has no CRTAs)
-        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+        if (launch_msg->kernel_config.rta_offset[internal_::get_hw_thread_idx()].crta_offset ==
+                RTA_CRTA_NO_ARGS_SENTINEL ||
             ((crta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
             crta_count = 0;
         } else {

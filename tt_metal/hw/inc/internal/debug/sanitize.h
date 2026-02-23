@@ -24,6 +24,7 @@
     defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
+#include "internal/hw_thread.h"
 
 #include "internal/dataflow/dataflow_cmd_bufs.h"
 #include "hostdev/dev_msgs.h"
@@ -246,7 +247,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         v[noc_id].noc_addr = noc_addr;
         v[noc_id].l1_addr = l1_addr;
         v[noc_id].len = len;
-        v[noc_id].which_risc = PROCESSOR_INDEX;
+        v[noc_id].which_risc = internal_::get_hw_thread_idx();
         v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
         v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
         v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
@@ -641,9 +642,15 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
     bool delay = false;
     switch (transaction_type) {
-        case TransactionRead: delay = (v[0].read_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
-        case TransactionWrite: delay = (v[0].write_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
-        case TransactionAtomic: delay = (v[0].atomic_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
+        case TransactionRead:
+            delay = (v[0].read_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
+        case TransactionWrite:
+            delay = (v[0].write_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
+        case TransactionAtomic:
+            delay = (v[0].atomic_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
         default: break;
     }
     if (delay) {

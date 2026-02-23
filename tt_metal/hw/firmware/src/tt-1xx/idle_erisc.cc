@@ -22,6 +22,7 @@
 #include "internal/circular_buffer_interface.h"
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "internal/debug/stack_usage.h"
 
@@ -170,7 +171,7 @@ int main() {
             run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, PROCESSOR_INDEX);
+                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, internal_::get_hw_thread_idx());
 
             // Run the ERISC kernel
             int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
