@@ -85,6 +85,9 @@ volatile tt_l1_ptr profiler_msg_buffer_t* profiler_data_buffer =
 #if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY)
 constexpr uint32_t myRiscID = 0;
 #else
+// TODO: Update for Quasar - PROCESSOR_INDEX is not defined for Quasar DM/TRISC
+// because kernels may run as a single binary across multiple hardware threads.
+// Need to use internal_::get_hw_thread_idx() but that requires non-constexpr handling
 constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 #endif
 

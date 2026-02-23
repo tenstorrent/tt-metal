@@ -6,6 +6,7 @@
 // #include "risc_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "internal/dataflow_buffer_init.h"
@@ -116,8 +117,7 @@ void device_setup() {
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
@@ -163,8 +163,7 @@ inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_S
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
