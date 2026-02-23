@@ -37,6 +37,7 @@ using DeviceIdentifier = std::variant<
     std::pair<MeshId, MeshCoordinate>  // [mesh_id, [row, col]]
     >;
 
+using CoreConfig = std::variant<tt::tt_metal::CoreCoord, std::string>;
 // A map to hold various parametrization options parsed from the YAML.
 using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
@@ -44,7 +45,7 @@ using ParametrizationOptionsMap = std::unordered_map<std::string, Parametrizatio
 // Parsed structures (before resolution) - use DeviceIdentifier
 struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
-    std::optional<CoreCoord> core;
+    std::optional<CoreConfig> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
@@ -62,7 +63,7 @@ struct ParsedTrafficPatternConfig {
 
 struct ParsedSenderConfig {
     DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreCoord> core;
+    std::optional<CoreConfig> core;
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests

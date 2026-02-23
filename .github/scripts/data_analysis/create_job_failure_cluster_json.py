@@ -3,7 +3,7 @@ Script to convert job failure cluster data from slack-output-analysis action
 to pydantic model and save as JSON for upload to database.
 
 This script:
-1. Reads error_report.json from workspace root (output by slack-output-analysis action)
+1. Reads incremental_error_report.json from workspace root (output by slack-output-analysis action)
 2. Transforms data to ensure all required fields are populated (handles None values)
 3. Creates JobFailureCluster pydantic model instances
 4. Serializes to JSON and saves to generated/job_failure_cluster/
@@ -58,14 +58,14 @@ def find_job_failure_cluster_data():
     """
     Find job failure cluster data file.
 
-    The slack-output-analysis action outputs error_report.json in the root
+    The slack-output-analysis action outputs incremental_error_report.json in the root
     of the workspace.
     """
-    data_file = pathlib.Path("error_report.json")
+    data_file = pathlib.Path("incremental_error_report.json")
 
     if not data_file.exists():
         raise FileNotFoundError(
-            f"Could not find error_report.json in workspace root ({data_file.absolute()}). "
+            f"Could not find incremental_error_report.json in workspace root ({data_file.absolute()}). "
             "Make sure the slack-output-analysis action has run successfully."
         )
 

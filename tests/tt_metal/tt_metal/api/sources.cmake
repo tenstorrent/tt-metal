@@ -1,0 +1,53 @@
+# Source files for tt_metal api tests
+# Module owners should update this file when adding/removing/renaming source files
+
+set(UNIT_TESTS_API_SOURCES
+    allocator/test_free_list_opt_allocator.cpp
+    allocator/test_l1_banking_allocator.cpp
+    allocator/test_overlapped_bank_manager.cpp
+    circular_buffer/test_CircularBuffer_allocation.cpp
+    circular_buffer/test_CircularBuffer_creation.cpp
+    circular_buffer/test_CircularBuffer_non_blocking.cpp
+    circular_buffer/test_CircularBuffer_wrapping.cpp
+    core_coord/test_CoreRange_adjacent.cpp
+    core_coord/test_CoreRange_contains.cpp
+    core_coord/test_CoreRange_intersects.cpp
+    core_coord/test_CoreRange_iterator.cpp
+    core_coord/test_CoreRange_merge.cpp
+    core_coord/test_CoreRangeSet_construct.cpp
+    core_coord/test_CoreRangeSet_contains.cpp
+    core_coord/test_CoreRangeSet_intersects.cpp
+    core_coord/test_CoreRangeSet_merge.cpp
+    dataflow_buffer/test_dataflow_buffer.cpp
+    dataflow_buffer/test_dataflow_buffer_configs.cpp
+    distribution_spec/test_buffer_distribution_spec.cpp
+    tensor/test_tensor_sharding.cpp
+    test_banked.cpp
+    test_bit_utils.cpp
+    test_buffer_region.cpp
+    test_compile_time_args.cpp
+    test_compile_defines.cpp
+    test_direct.cpp
+    test_dram_to_l1_multicast.cpp
+    test_dram.cpp
+    test_global_circular_buffers.cpp
+    test_global_semaphores.cpp
+    test_host_buffer.cpp
+    test_kernel_compile_cache.cpp
+    test_kernel_creation.cpp
+    test_memory_pin.cpp
+    test_noc.cpp
+    test_runtime_args.cpp
+    test_semaphores.cpp
+    test_shape_base.cpp
+    test_sharded_l1_buffer.cpp
+    test_simple_dram_buffer.cpp
+    test_simple_l1_buffer.cpp
+    test_soc_descriptor.cpp
+    test_stream_scratch_register.cpp
+    test_tilize_untilize.cpp
+    test_worker_config_buffer.cpp
+    test_blockfloat_common.cpp
+    test_duplicate_kernel.cpp
+    test_core_local_mem_api.cpp
+)

@@ -2,16 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_binary.h"
 
 #include "sort_common.hpp"
 
-namespace NAMESPACE {
 /*
 This sorting algorithm is based on Bitonic Merge Sort and operates on input data arranged in tiles.
 
@@ -67,7 +66,7 @@ Calculation of each row:
   3. **Data Saving**:
       - The tiles are now fully sorted along the desired dimension and ready to be saved.
  */
-void MAIN {
+void kernel_main() {
     // Runtime args
     const uint32_t core_loop_count = get_arg_val<uint32_t>(0);
 
@@ -212,5 +211,3 @@ void MAIN {
         transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, Wt);
     }  // Ht loop
 }
-
-}  // namespace NAMESPACE

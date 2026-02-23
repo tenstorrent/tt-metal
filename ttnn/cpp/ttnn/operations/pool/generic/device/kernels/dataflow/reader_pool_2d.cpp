@@ -25,6 +25,7 @@
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
+// WARNING: This function assumes n is even
 ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
     // simplest impl:
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
@@ -422,12 +423,12 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
-    constexpr uint32_t config_in_dram = get_compile_time_arg_val(46);
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(47);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(48);
-    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(49);
-    constexpr uint32_t reader_page_size = get_compile_time_arg_val(50);
-    constexpr uint32_t reader_tensor_args_index = 51;
+    constexpr uint32_t config_in_dram = get_compile_time_arg_val(51);
+    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(52);
+    constexpr uint32_t config_page_size = get_compile_time_arg_val(53);
+    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(54);
+    constexpr uint32_t reader_page_size = get_compile_time_arg_val(55);
+    constexpr uint32_t reader_tensor_args_index = 56;
 
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;

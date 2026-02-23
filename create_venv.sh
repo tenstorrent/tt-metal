@@ -19,6 +19,9 @@ OPTIONS:
     --force               Overwrite existing virtual environment without prompting.
                           By default, warns and prompts for confirmation if the
                           target directory exists and is not empty.
+    --bundle-python       Deep-copy the Python interpreter into the venv instead of
+                          using symlinks. This makes the venv fully self-contained
+                          and portable, at the cost of increased disk space.
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -57,6 +60,7 @@ EOF
 ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
+BUNDLE_PYTHON="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -83,6 +87,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             FORCE_OVERWRITE="true"
+            shift
+            ;;
+        --bundle-python)
+            BUNDLE_PYTHON="true"
             shift
             ;;
         --help|-h)
@@ -123,7 +131,7 @@ validate_python_version() {
     minor=$((10#$minor))
 
     # Require Python 3.10+
-    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 8 ]]; }; then
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 10 ]]; }; then
         echo "Error: Python version must be 3.10 or higher (got: $version)" >&2
         echo "Supported versions: 3.10, 3.11, etc." >&2
         exit 1
@@ -205,11 +213,22 @@ validate_env_dir() {
 # Apply Configuration
 # ============================================================================
 
-# Apply configuration with precedence: arguments > env vars > defaults
+# Determine script directory (used for locating sibling scripts and OS detection)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Import functions for detecting OS
+. "$SCRIPT_DIR/install_dependencies.sh" --source-only
+detect_os
+
+# Apply configuration with precedence: arguments > OS detection > default
 # Python version
 if [ -n "$ARG_PYTHON_VERSION" ]; then
     VENV_PYTHON_VERSION="$ARG_PYTHON_VERSION"
-elif [ -z "${VENV_PYTHON_VERSION:-}" ]; then
+elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "24.04" ]; then
+    VENV_PYTHON_VERSION="3.12"
+elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
+    VENV_PYTHON_VERSION="3.10"
+else
     VENV_PYTHON_VERSION="3.10"
 fi
 
@@ -280,31 +299,74 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
-uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
+
+# Patch activate for POSIX sh (Docker/CI use /bin/sh; relocatable activate uses $BASH_SOURCE)
+# Use 'if' to prevent set -e from exiting on patch failure
+if PATCH_OUTPUT=$("${SCRIPT_DIR}/scripts/patch_activate_posix.sh" "$PYTHON_ENV_DIR" 2>&1); then
+  if echo "$PATCH_OUTPUT" | grep -q "Skip"; then
+    echo "INFO: patch_activate_posix.sh skipped (venv activate not relocatable or already patched)"
+  else
+    echo "INFO: $PATCH_OUTPUT"
+  fi
+else
+  echo "WARNING: patch_activate_posix.sh failed (rc=$?): $PATCH_OUTPUT" >&2
+fi
+
 source "$PYTHON_ENV_DIR/bin/activate"
 
-# Import functions for detecting OS (use absolute path from SCRIPT_DIR)
-. "$SCRIPT_DIR/install_dependencies.sh" --source-only
-detect_os
+# Install uv into the venv at the same version as the invoking uv
+UV_CURRENT_VERSION=$(uv --version | cut -d' ' -f2)
+echo "Installing uv ${UV_CURRENT_VERSION} into venv..."
+uv pip install "uv==${UV_CURRENT_VERSION}"
 
 # PyTorch CPU index URL for all uv pip commands
 PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
 
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    uv pip install --extra-index-url "$PYTORCH_INDEX" setuptools wheel==0.45.1
+    uv pip install --extra-index-url "$PYTORCH_INDEX" \
+        --index-strategy unsafe-best-match \
+        setuptools==80 wheel==0.45.1
 else
     echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
-    uv pip install --upgrade wheel setuptools
+    uv pip install --upgrade wheel setuptools==80
 fi
 
 echo "Installing dev dependencies"
 # Use --extra-index-url for PyTorch CPU wheels and index-strategy for transitive deps
-uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-match -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
+# no-build-isolation as a workaround for setuptools/mmcv
+uv pip install --extra-index-url "$PYTORCH_INDEX" \
+    --index-strategy unsafe-best-match \
+    --no-build-isolation \
+    -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
 
 echo "Installing tt-metal"
 uv pip install -e .
 
+# Create .pth files for ttml
+# This allows using pre-built ttml from build_metal.sh --build-tt-train
+SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
+
+TTML_SRC_DIR="$SCRIPT_DIR/tt-train/sources/ttml"
+TTML_BUILD_DIR="$SCRIPT_DIR/build/tt-train/sources/ttml"
+
+# Add ttml Python source code, if available
+if [ -d "$TTML_SRC_DIR" ]; then
+    echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+    echo "  Created: $SITE_PACKAGES/ttml.pth"
+else
+    echo "  Skipping ttml.pth creation (directory not found: $TTML_SRC_DIR)"
+fi
+
+# Add the built _ttml C++ extension (.so file), if available
+# Uses the 'build' symlink which points to the active build directory (e.g., build_Release)
+if [ -d "$TTML_BUILD_DIR" ]; then
+    echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+    echo "  Created: $SITE_PACKAGES/_ttml.pth"
+else
+    echo "  Skipping _ttml.pth creation (directory not found: $TTML_BUILD_DIR)"
+fi
 # Do not install hooks when this is a worktree
 if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
     echo "Generating git hooks"
@@ -313,5 +375,16 @@ if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
 else
     echo "In worktree: not generating git hooks"
 fi
+
+# Bundle Python interpreter into the venv if requested
+if [[ "$BUNDLE_PYTHON" == "true" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    "${SCRIPT_DIR}/scripts/bundle_python_into_venv.sh" "$PYTHON_ENV_DIR" --force
+fi
+
+# Compile bytecode at the end to take advantage of parallelism
+echo "Compiling bytecode (for improved startup performance)..."
+python -m compileall -j 0 -q "$PYTHON_ENV_DIR/lib" 2>/dev/null || true
+echo "Bytecode compilation completed"
 
 echo "If you want stubs, run ./scripts/build_scripts/create_stubs.sh"

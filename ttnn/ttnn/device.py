@@ -24,6 +24,11 @@ Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 get_max_worker_l1_unreserved_size = ttnn._ttnn.device.get_max_worker_l1_unreserved_size
+get_optimal_dram_bank_to_logical_worker_assignment = (
+    ttnn._ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment
+)
+enable_asynchronous_slow_dispatch = ttnn._ttnn.device.enable_asynchronous_slow_dispatch
+disable_asynchronous_slow_dispatch = ttnn._ttnn.device.disable_asynchronous_slow_dispatch
 
 open_device = ttnn._ttnn.device.open_device
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
@@ -46,7 +51,14 @@ def close_device(device: "ttnn.device.Device"):
         Closing device 0
 
     """
-    synchronize_device(device)
+    # Try to synchronize first, but don't let failures prevent device close.
+    # If synchronize fails (e.g., due to device timeout/hang), we still need
+    # to close the device to release handles and allow subsequent operations.
+    try:
+        synchronize_device(device)
+    except Exception:
+        logger.exception("close_device: synchronize_device failed. Continuing with device close.")
+
     ttnn._ttnn.device.close_device(device)
 
 
@@ -63,13 +75,6 @@ def is_wormhole_b0(device=None):
         return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
     ARCH_NAME = ttnn._ttnn.device.get_arch_name()
     return "wormhole_b0" in ARCH_NAME
-
-
-def is_grayskull(device=None):
-    if device is not None:
-        return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
-    ARCH_NAME = ttnn._ttnn.device.get_arch_name()
-    return "grayskull" in ARCH_NAME
 
 
 def is_blackhole(device=None):

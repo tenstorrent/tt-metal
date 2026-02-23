@@ -56,6 +56,9 @@ void bind_fabric_api(nb::module_& mod) {
         .value("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING)
         .value("FABRIC_1D_NEIGHBOR_EXCHANGE", tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE)
         .value("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D)
+        .value("FABRIC_2D_TORUS_XY", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY)
+        .value("FABRIC_2D_TORUS_X", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X)
+        .value("FABRIC_2D_TORUS_Y", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y)
         .value(
             "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
@@ -163,6 +166,61 @@ void bind_fabric_api(nb::module_& mod) {
                 program_descriptor: ProgramDescriptor to add semaphores to (mutated)
                 worker_core: Logical core coordinate of the worker
                 core_type: Core type (WORKER or ETH), defaults to WORKER
+        )");
+
+    mod.def(
+        "setup_routing_plane_connection",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+           const std::vector<uint32_t>& connection_link_indices,
+           tt::tt_metal::ProgramDescriptor& program_descriptor,
+           size_t kernel_idx,
+           tt::tt_metal::CoreCoord worker_core) {
+            std::vector<uint32_t> fabric_args;
+
+            tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+                src_fabric_node_id,
+                dst_nodes,
+                connection_link_indices,
+                program_descriptor,
+                kernel_id,
+                worker_core,
+                fabric_args);
+
+            return fabric_args;
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_nodes"),
+        nb::arg("connection_link_indices"),
+        nb::arg("program_descriptor"),
+        nb::arg("kernel_idx"),
+        nb::arg("worker_core"),
+        R"(
+            Sets up routing plane connection manager: returns necessary runtime args and appends
+            SemaphoreDescriptors and defines to the given ProgramDescriptor.
+            This API supports both 1D and 2D fabric routing.
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_nodes: List of FabricNodeIds of destination chips (one per route)
+                connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)
+                program_descriptor: ProgramDescriptor to add semaphores/defines to (mutated)
+                kernel_idx: Index of the kernel in the program descriptor
+                worker_core: Logical core coordinate of the worker
+        )");
+
+    mod.def(
+        "get_tt_fabric_packet_header_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
+        R"(
+            Returns the fabric packet header size in bytes.
+        )");
+
+    mod.def(
+        "get_tt_fabric_max_payload_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
+        R"(
+            Returns the maximum fabric packet payload size in bytes.
         )");
 }
 

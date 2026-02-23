@@ -4,13 +4,14 @@
 
 from loguru import logger
 import pytest
+from models.common.utility_functions import nearest_32
 
 import torch
 
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
-from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
@@ -598,13 +599,24 @@ def run_unary_with_aprox_mode_fruit_test(
 @pytest.mark.parametrize("approx_mode", [True, False])
 @pytest.mark.parametrize("vector_mode", [4])
 def test_sigmoid_fruit(device, h, w, memory_type, shard_shape, vector_mode, approx_mode):
+    class sigmoid_wrap:
+        def __init__(self):
+            self.golden_function = ttnn.sigmoid.golden_function
+
+        def __call__(self, input_tensor, vector_mode, fast_and_approximate_mode):
+            return ttnn.sigmoid(
+                input_tensor,
+                vector_mode=vector_mode,
+                mode=ttnn.SigmoidMode.FastApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
+            )
+
     run_unary_with_aprox_mode_fruit_test(
         device,
         h,
         w,
         memory_type,
         shard_shape,
-        ttnn.sigmoid,
+        sigmoid_wrap(),
         vector_mode=vector_mode,
         approx_mode=approx_mode,
         pcc=0.999,
@@ -681,3 +693,34 @@ def test_shard_untilize2(device):
     output_tensor = ttnn.to_torch(output_tensor)
     assert torch_tensor.shape == output_tensor.shape
     assert torch.allclose(torch_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param(None, id="empty"),
+        pytest.param((1, 1, 9, 79), id="9x79"),
+        pytest.param((1, 1, 512, 512), id="512x512"),
+        pytest.param((1, 1, 513, 513), id="513x513"),
+    ],
+)
+def test_tensor_to_tile_layout_shape_verification(device, shape):
+    """Regression test for issue 19309: Tensor.to(Layout) does not pad tensor and throws"""
+    if shape is None:
+        pt_tensor = torch.empty(0, dtype=torch.bfloat16, requires_grad=False)
+    else:
+        pt_tensor = torch.rand(torch.Size(shape), requires_grad=False).bfloat16()
+
+    initial_shape = pt_tensor.shape  # store initial shape
+
+    output_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)  # should not throw
+    result_shape = output_tensor.padded_shape  # store result shape
+
+    # Layout verification
+    assert ttnn.TILE_LAYOUT == output_tensor.layout
+    # Padding verification: shape comparison
+    if 4 == len(initial_shape):
+        assert result_shape[-2] == nearest_32(initial_shape[-2])
+        assert result_shape[-1] == nearest_32(initial_shape[-1])
+    else:
+        assert 32 == result_shape[0]

@@ -49,17 +49,15 @@ void bind_binary_backward_ops(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -125,17 +123,15 @@ void bind_binary_backward_concat(
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -216,17 +212,15 @@ void bind_binary_backward_addalpha(
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -303,17 +297,15 @@ void bind_binary_backward_bias_gelu(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {8}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -395,17 +387,15 @@ void bind_binary_backward_sub_alpha(
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -475,17 +465,15 @@ void bind_binary_backward_rsub(
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -552,17 +540,15 @@ void bind_binary_bw_mul(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -661,17 +647,15 @@ void bind_binary_bw(
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -779,17 +763,15 @@ void bind_binary_bw_div(
         Supports broadcasting.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -894,17 +876,15 @@ void bind_binary_backward_overload(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -973,17 +953,15 @@ void bind_binary_backward_assign(
             rounding_mode (str, optional): Round mode for the operation. Defaults to `None`.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
         )doc",
         operation.base_name(),

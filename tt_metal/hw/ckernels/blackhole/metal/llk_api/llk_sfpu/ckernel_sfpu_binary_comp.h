@@ -106,4 +106,37 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     }
 }
 
+// Float32 binary comparison
+// TODO: Add support for ne, gt, lt, ge, le operations
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    static_assert(RELATIONAL_OP == SfpuType::eq, "Supported operation types: eq ");
+    constexpr uint dst_tile_size_sfpi = 32;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat result = 0.0f;
+
+        if constexpr (RELATIONAL_OP == SfpuType::eq) {
+            sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0);
+            sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
+            sfpi::vInt in0_abs = in0_bits & 0x7FFFFFFF;
+            sfpi::vInt in1_abs = in1_bits & 0x7FFFFFFF;
+
+            // Standard float comparison (handles normal values and NaN correctly)
+            // Note: In Blackhole, (-0.0 == 0.0) returns false
+            v_if((in0 == in1) || (in0_abs == 0 && in1_abs == 0)) { result = 1.0f; }
+            // Special handling for infinity
+            v_elseif((in0_bits == in1_bits) && ((in0_abs == 0x7F800000))) { result = 1.0f; }
+            v_endif;
+        }
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg++;
+    }
+}
+
 }  //  namespace ckernel::sfpu

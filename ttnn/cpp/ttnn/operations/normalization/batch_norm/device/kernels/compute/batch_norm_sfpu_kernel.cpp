@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 
 #include <cstdint>
-
-namespace NAMESPACE {
 
 ALWI void batchnorm_bcast_tiles(
     uint32_t cb_bcast,
@@ -156,7 +154,7 @@ ALWI void batchnorm_bcast_tiles(
     }
 }
 
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
@@ -224,4 +222,3 @@ void MAIN {
 
     cb_pop_front(cb_eps, onetile);
 }
-}  // namespace NAMESPACE

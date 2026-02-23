@@ -189,7 +189,6 @@ class MLP(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
             "linear_pc_gen": MLP.ProgramConfigData(
@@ -206,7 +205,6 @@ class MLP(AbstractModule):
                 dim=3,  # We are scattering across the feature dimension (last one)
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -273,7 +271,6 @@ class MLP(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=input_memory_config,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -310,7 +307,6 @@ class MLP(AbstractModule):
             "reduce_scatter_async": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 dim=3,  # We are scattering across the feature dimension (last one)
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
@@ -431,6 +427,7 @@ class MLP(AbstractModule):
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_layers, _, seq_len, _ = x.shape
+        original_seq_len = seq_len
 
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
@@ -439,7 +436,14 @@ class MLP(AbstractModule):
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
+        pad_rows = 0
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
+            if seq_len % cfg["max_rows"] != 0:
+                pad_rows = cfg["max_rows"] - (seq_len % cfg["max_rows"])
+                x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                ttnn.deallocate(x)
+                x = x_padded
+                seq_len += pad_rows
             x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
             seq_len = cfg["max_rows"]
 
@@ -478,6 +482,8 @@ class MLP(AbstractModule):
         _, num_chunks, _, output_dim = output.shape
         if num_chunks > 1:
             output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
+            if pad_rows > 0:
+                output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output

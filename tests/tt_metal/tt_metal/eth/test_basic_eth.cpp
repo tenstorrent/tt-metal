@@ -305,6 +305,7 @@ bool noc_reader_and_writer_kernels(
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     auto eth_readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);

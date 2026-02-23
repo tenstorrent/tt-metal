@@ -1,7 +1,7 @@
 add_library(ttnn_op_examples ${LIB_TYPE})
 add_library(TTNN::Ops::Examples ALIAS ttnn_op_examples)
 
-target_precompile_headers(ttnn_op_examples REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_examples REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_examples)
 
 set_target_properties(

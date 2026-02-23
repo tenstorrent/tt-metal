@@ -306,4 +306,4 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         if rope_deltas_list is not None:
             super().update_rope_deltas(rope_deltas_list)
 
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)

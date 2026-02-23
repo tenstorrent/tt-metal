@@ -12,6 +12,7 @@
 
 #include <ttnn/tensor/types.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/unreachable.hpp>
 
 namespace ttnn {
 namespace ttnn_dtype_traits::detail {
@@ -292,9 +293,30 @@ constexpr DataType get_ttnn_datatype_from_dtype(nbdlp::dtype dt) noexcept {
     return DataType::INVALID;
 }
 
+constexpr PyDType get_PyDType_from_dtype(nb::dlpack::dtype dt) {
+    switch (static_cast<DtypeID>(nbdlp_dtype_to_int(dt))) {
+        case DtypeID::UINT64: return PyDType::UINT64;
+        case DtypeID::INT64: return PyDType::INT64;
+        case DtypeID::UINT32: return PyDType::UINT32;
+        case DtypeID::INT32: return PyDType::INT32;
+        case DtypeID::UINT16: return PyDType::UINT16;
+        case DtypeID::INT16: return PyDType::INT16;
+        case DtypeID::UINT8: return PyDType::UINT8;
+        case DtypeID::INT8: return PyDType::INT8;
+        case DtypeID::FLOAT64: return PyDType::FLOAT64;
+        case DtypeID::FLOAT32: return PyDType::FLOAT32;
+        case DtypeID::FLOAT16: return PyDType::FLOAT16;
+        case DtypeID::BFLOAT16: return PyDType::BFLOAT16;
+        default:
+            TT_THROW("get_ttnn_datatype_from_dtype: got unexpected dlpack dtype. code: {}, bits: {}", dt.code, dt.bits);
+    }
+
+    ttsl::unreachable();
+}
+
 }  // namespace ttnn_dtype_traits::detail
 
 using ttnn_dtype_traits::detail::get_dtype_from_ttnn_datatype;
+using ttnn_dtype_traits::detail::get_PyDType_from_dtype;
 using ttnn_dtype_traits::detail::get_ttnn_datatype_from_dtype;
-
 }  // namespace ttnn
