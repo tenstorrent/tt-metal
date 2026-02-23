@@ -66,12 +66,11 @@ jobs:
           ref: ${{ inputs.run_url != '' && steps.get-run-ref.outputs.head_sha || github.ref }}
 
       - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@ebanerjee/enable-old-triage
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@port-refactoring-9
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
           copilot-pat: ${{ secrets.AUTO_TRIAGE_TOKEN }}
-          run-url: ${{ inputs.run_url }}
           slack_ts: ${{ inputs.slack_ts }}
           allow-pings: true
           send-slack-message: ${{ inputs.send-slack-message }}
