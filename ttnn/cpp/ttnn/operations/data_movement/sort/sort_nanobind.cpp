@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "sort_nanobind.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -67,24 +68,17 @@ void bind_sort_operation(nb::module_& mod) {
             - Interleaved: DRAM and L1
     )doc";
 
-    mod.def(
-        "sort",
-        [](const ttnn::Tensor& input_tensor,
-           const int8_t dim,
-           const bool descending,
-           const bool stable,
-           std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors,
-           const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-            return ttnn::sort(input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
-        },
+    ttnn::bind_function<"sort">(
+        mod,
         doc,
+        &ttnn::sort,
         nb::arg("input_tensor").noconvert(),
         nb::arg("dim") = -1,
         nb::arg("descending") = false,
         nb::arg("stable") = false,
         nb::kw_only(),
-        nb::arg("out") = nb::none(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("out") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

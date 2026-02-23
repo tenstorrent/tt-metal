@@ -59,7 +59,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
-            nb::arg("reshape_map_mode") = ttnn::TileReshapeMapMode::CACHE,
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
             nb::arg("sub_core_grid") = nb::none()),
 
         // Overload 2: logical_shape and padded_shape (ttnn::Shape, ttnn::Shape)
@@ -78,24 +78,25 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
-            nb::arg("reshape_map_mode") = ttnn::TileReshapeMapMode::CACHE,
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
             nb::arg("sub_core_grid") = nb::none()),
 
         // Overload 3: shape vector (SmallVector<int32_t>)
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                tt::stl::Span<const int32_t>,
-                const std::optional<MemoryConfig>&,
-                const std::optional<PadValue>&,
-                TileReshapeMapMode,
-                const std::optional<CoreRangeSet>&>(&ttnn::reshape),
+            +[](const ttnn::Tensor& input_tensor,
+                const ttnn::SmallVector<int32_t>& shape,
+                const std::optional<MemoryConfig>& memory_config,
+                const std::optional<PadValue>& pad_value,
+                const ttnn::TileReshapeMapMode reshape_tile_mode,
+                const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return ttnn::reshape(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
+            },
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
-            nb::arg("reshape_map_mode") = ttnn::TileReshapeMapMode::CACHE,
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
             nb::arg("sub_core_grid") = nb::none()));
 }
 
