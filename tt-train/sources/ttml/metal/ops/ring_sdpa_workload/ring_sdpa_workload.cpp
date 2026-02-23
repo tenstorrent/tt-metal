@@ -122,16 +122,12 @@ RingSDPAProgramFactory::cached_mesh_workload_t RingSDPAProgramFactory::create_me
         tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
 
         // Create single-device tensors
-        auto query_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(query_storage)), query.tensor_spec(), tensor_topology);
-        auto key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(key_storage)), key.tensor_spec(), tensor_topology);
-        auto value_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(value_storage)), value.tensor_spec(), tensor_topology);
-        auto output_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(output_storage)), output.tensor_spec(), tensor_topology);
-        auto intermediates_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(intermediates_storage)), intermediates.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
+        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
+        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
+        auto output_tensor = ttnn::Tensor(std::move(output_storage), output.tensor_spec(), tensor_topology);
+        auto intermediates_tensor =
+            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
 
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
@@ -229,16 +225,12 @@ void RingSDPAProgramFactory::override_runtime_arguments(
         tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
 
         // Create single-device tensors
-        auto query_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(query_storage)), query.tensor_spec(), tensor_topology);
-        auto key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(key_storage)), key.tensor_spec(), tensor_topology);
-        auto value_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(value_storage)), value.tensor_spec(), tensor_topology);
-        auto output_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(output_storage)), output.tensor_spec(), tensor_topology);
-        auto intermediates_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(intermediates_storage)), intermediates.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
+        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
+        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
+        auto output_tensor = ttnn::Tensor(std::move(output_storage), output.tensor_spec(), tensor_topology);
+        auto intermediates_tensor =
+            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
 
         // Create SDPA attributes and tensor args
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;

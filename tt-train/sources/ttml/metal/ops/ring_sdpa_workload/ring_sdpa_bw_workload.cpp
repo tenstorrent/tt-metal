@@ -126,20 +126,16 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
         tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
 
         // Create single-device tensors
-        auto grad_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_output_storage)), grad_output.tensor_spec(), tensor_topology);
-        auto attn_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(attn_output_storage)), attn_output.tensor_spec(), tensor_topology);
-        auto query_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(query_storage)), query.tensor_spec(), tensor_topology);
-        auto key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(key_storage)), key.tensor_spec(), tensor_topology);
-        auto value_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(value_storage)), value.tensor_spec(), tensor_topology);
-        auto intermediates_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(intermediates_storage)), intermediates.tensor_spec(), tensor_topology);
-        auto grad_query_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_query_storage)), grad_query.tensor_spec(), tensor_topology);
+        auto grad_output_tensor =
+            ttnn::Tensor(std::move(grad_output_storage), grad_output.tensor_spec(), tensor_topology);
+        auto attn_output_tensor =
+            ttnn::Tensor(std::move(attn_output_storage), attn_output.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
+        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
+        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
+        auto intermediates_tensor =
+            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
+        auto grad_query_tensor = ttnn::Tensor(std::move(grad_query_storage), grad_query.tensor_spec(), tensor_topology);
 
         // Create SDPA backward Q with mask_type (no explicit mask tensor needed)
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
@@ -239,20 +235,16 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
         tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
 
         // Create single-device tensors
-        auto grad_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_output_storage)), grad_output.tensor_spec(), tensor_topology);
-        auto attn_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(attn_output_storage)), attn_output.tensor_spec(), tensor_topology);
-        auto query_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(query_storage)), query.tensor_spec(), tensor_topology);
-        auto key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(key_storage)), key.tensor_spec(), tensor_topology);
-        auto value_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(value_storage)), value.tensor_spec(), tensor_topology);
-        auto intermediates_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(intermediates_storage)), intermediates.tensor_spec(), tensor_topology);
-        auto grad_query_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_query_storage)), grad_query.tensor_spec(), tensor_topology);
+        auto grad_output_tensor =
+            ttnn::Tensor(std::move(grad_output_storage), grad_output.tensor_spec(), tensor_topology);
+        auto attn_output_tensor =
+            ttnn::Tensor(std::move(attn_output_storage), attn_output.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
+        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
+        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
+        auto intermediates_tensor =
+            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
+        auto grad_query_tensor = ttnn::Tensor(std::move(grad_query_storage), grad_query.tensor_spec(), tensor_topology);
 
         // Create SDPA attributes and tensor args
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
@@ -392,22 +384,17 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
         tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
 
         // Create single-device tensors
-        auto grad_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_output_storage)), grad_output.tensor_spec(), tensor_topology);
-        auto attn_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(attn_output_storage)), attn_output.tensor_spec(), tensor_topology);
-        auto query_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(query_storage)), query.tensor_spec(), tensor_topology);
-        auto key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(key_storage)), key.tensor_spec(), tensor_topology);
-        auto value_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(value_storage)), value.tensor_spec(), tensor_topology);
-        auto intermediates_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(intermediates_storage)), intermediates.tensor_spec(), tensor_topology);
-        auto grad_key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(grad_key_storage)), grad_key.tensor_spec(), tensor_topology);
-        auto grad_value_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_value_storage)), grad_value.tensor_spec(), tensor_topology);
+        auto grad_output_tensor =
+            ttnn::Tensor(std::move(grad_output_storage), grad_output.tensor_spec(), tensor_topology);
+        auto attn_output_tensor =
+            ttnn::Tensor(std::move(attn_output_storage), attn_output.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
+        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
+        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
+        auto intermediates_tensor =
+            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
+        auto grad_key_tensor = ttnn::Tensor(std::move(grad_key_storage), grad_key.tensor_spec(), tensor_topology);
+        auto grad_value_tensor = ttnn::Tensor(std::move(grad_value_storage), grad_value.tensor_spec(), tensor_topology);
 
         // Create SDPA backward KV with mask_type (no explicit mask tensor needed)
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
@@ -510,22 +497,17 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
         tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
 
         // Create single-device tensors
-        auto grad_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_output_storage)), grad_output.tensor_spec(), tensor_topology);
-        auto attn_output_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(attn_output_storage)), attn_output.tensor_spec(), tensor_topology);
-        auto query_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(query_storage)), query.tensor_spec(), tensor_topology);
-        auto key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(key_storage)), key.tensor_spec(), tensor_topology);
-        auto value_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(value_storage)), value.tensor_spec(), tensor_topology);
-        auto intermediates_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(intermediates_storage)), intermediates.tensor_spec(), tensor_topology);
-        auto grad_key_tensor =
-            ttnn::Tensor(tt::tt_metal::Storage(std::move(grad_key_storage)), grad_key.tensor_spec(), tensor_topology);
-        auto grad_value_tensor = ttnn::Tensor(
-            tt::tt_metal::Storage(std::move(grad_value_storage)), grad_value.tensor_spec(), tensor_topology);
+        auto grad_output_tensor =
+            ttnn::Tensor(std::move(grad_output_storage), grad_output.tensor_spec(), tensor_topology);
+        auto attn_output_tensor =
+            ttnn::Tensor(std::move(attn_output_storage), attn_output.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
+        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
+        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
+        auto intermediates_tensor =
+            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
+        auto grad_key_tensor = ttnn::Tensor(std::move(grad_key_storage), grad_key.tensor_spec(), tensor_topology);
+        auto grad_value_tensor = ttnn::Tensor(std::move(grad_value_storage), grad_value.tensor_spec(), tensor_topology);
 
         // Create SDPA attributes and tensor args
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};

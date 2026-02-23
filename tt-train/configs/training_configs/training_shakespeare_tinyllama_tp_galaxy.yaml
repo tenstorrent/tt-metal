@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_nano_gpt"
   seed: 5489
   model_save_interval: 500
-  batch_size: 32
+  batch_size: 1
   gradient_accumulation_steps: 1
   num_epochs: 1
   max_steps: 5000
@@ -16,9 +16,7 @@ training_config:
 
 device_config:
   enable_tp: true
-  enable_cp: false
-  enable_ddp: true
-  mesh_shape: [8, 4]
+  mesh_shape: [1, 32]
 
 eval_config:
   repetition_penalty: 1.0
