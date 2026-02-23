@@ -70,7 +70,6 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
 
     from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
 
-
     compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
 
     gate_ov, up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(
