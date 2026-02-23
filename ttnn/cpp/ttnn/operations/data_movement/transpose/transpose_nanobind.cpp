@@ -37,7 +37,6 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    // Bind the free functions directly
     ttnn::bind_function<"transpose">(
         mod,
         doc,

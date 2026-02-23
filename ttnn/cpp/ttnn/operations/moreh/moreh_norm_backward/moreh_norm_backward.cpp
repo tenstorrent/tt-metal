@@ -6,8 +6,6 @@
 
 #include "device/moreh_norm_backward_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_norm_backward {}  // namespace ttnn::operations::moreh::moreh_norm_backward
-
 namespace ttnn {
 
 Tensor moreh_norm_backward(

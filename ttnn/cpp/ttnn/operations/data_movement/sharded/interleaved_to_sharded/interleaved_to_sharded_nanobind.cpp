@@ -56,7 +56,6 @@ void bind_interleaved_to_sharded(nb::module_& mod) {
 
         )doc";
 
-    // Bind the free function directly - no struct!
     ttnn::bind_function<"interleaved_to_sharded">(
         mod,
         doc,

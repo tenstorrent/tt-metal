@@ -7,8 +7,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::moreh::moreh_clip_grad_norm {}  // namespace ttnn::operations::moreh::moreh_clip_grad_norm
-
 namespace ttnn {
 
 /**

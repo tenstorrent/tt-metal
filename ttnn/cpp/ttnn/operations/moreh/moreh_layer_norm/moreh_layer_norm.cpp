@@ -8,8 +8,6 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_layer_norm {}  // namespace ttnn::operations::moreh::moreh_layer_norm
-
 namespace ttnn {
 
 std::vector<std::optional<Tensor>> moreh_layer_norm(

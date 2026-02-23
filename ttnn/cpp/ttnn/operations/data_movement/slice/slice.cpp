@@ -10,8 +10,6 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::data_movement {}  // namespace ttnn::operations::data_movement
-
 namespace ttnn {
 
 template <typename T>

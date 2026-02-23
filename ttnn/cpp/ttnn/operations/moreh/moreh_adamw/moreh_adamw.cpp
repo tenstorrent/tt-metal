@@ -8,8 +8,6 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_adamw {}  // namespace ttnn::operations::moreh::moreh_adamw
-
 namespace ttnn {
 
 std::vector<std::optional<Tensor>> moreh_adamw(

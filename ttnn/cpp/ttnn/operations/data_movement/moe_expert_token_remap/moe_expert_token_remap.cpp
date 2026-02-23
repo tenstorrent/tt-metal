@@ -6,8 +6,6 @@
 
 #include "moe_expert_token_remap.hpp"
 
-namespace ttnn::operations::data_movement {}  // namespace ttnn::operations::data_movement
-
 namespace ttnn {
 
 std::vector<ttnn::Tensor> moe_expert_token_remap(

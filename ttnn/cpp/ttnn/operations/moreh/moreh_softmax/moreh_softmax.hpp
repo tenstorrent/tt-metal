@@ -7,8 +7,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::moreh::moreh_softmax {}  // namespace ttnn::operations::moreh::moreh_softmax
-
 namespace ttnn {
 
 using operations::moreh::moreh_softmax::MorehSoftmaxOp;
