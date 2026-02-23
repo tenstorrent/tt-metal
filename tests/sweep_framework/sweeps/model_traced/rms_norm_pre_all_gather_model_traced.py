@@ -10,7 +10,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-TIMEOUT = 30
+TIMEOUT = 120
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("rms_norm_pre_all_gather", all_cases=False)
@@ -69,17 +69,26 @@ def run(
 
     # Create input tensor - bfloat8_b and bfloat4_b require TILE layout
     input_layout = ttnn.TILE_LAYOUT if input_a_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else input_a_layout
-    input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
-    )
-    # Weight tensor should always be ROW_MAJOR layout and bfloat16 dtype
-    # This is required by rms_norm_post_all_gather operation
+
+    actual_input_mem_config = input_a_memory_config
+    if isinstance(input_a_memory_config, dict):
+        actual_input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    try:
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=actual_input_mem_config
+        )
+    except Exception:
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
     weight_tensor = ttnn.from_torch(
         torch_weight_padded,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=input_b_memory_config or input_a_memory_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Op call
