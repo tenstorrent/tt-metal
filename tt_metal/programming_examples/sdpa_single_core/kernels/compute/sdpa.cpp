@@ -275,10 +275,6 @@ void exp_tile_first_column(uint32_t idst) {
 
 #endif
 
-// Toggle: interleave drain sub_exp with split matmul for first QKT@V row.
-// Requires sbh=1, kt_num_subblocks=2. Overlaps EXP (SFPU) with matmul (FPU).
-#define OVERLAP_DRAIN_WITH_MATMUL
-
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -902,111 +898,65 @@ void sdpa_inner_loop_step(
             MATH(DPRINT << "QKT@V: Processing Q_subblock 0 (drain)" << ENDL());
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
 
-#ifdef OVERLAP_DRAIN_WITH_MATMUL
+            // Overlap drain: sub_exp (SFPU) overlapped with matmul (FPU).
+            // Loops kt_num_subblocks times: each iteration drains one sub_exp block,
+            // then runs a matmul over qktv_in0_block_w/kt_num_subblocks inner tiles.
+            // EXP on SFPU overlaps with FPU matmul each iteration.
             {
-                constexpr uint32_t half_inner = qktv_in0_block_w / 2;
-                static_assert(kt_num_subblocks == 2, "Overlap drain requires kt_num_subblocks==2");
+                static_assert(kt_num_subblocks == 1 || kt_num_subblocks == 2, "Only kt_num_subblocks 1 or 2 supported");
+                constexpr uint32_t matmul_inner = qktv_in0_block_w / kt_num_subblocks;
 
-                // 1. sub_exp drain kt=0: reads alias_prev_qkt_row → writes cb_qkt_im (sequential)
-                MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=0" << ENDL());
-                sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                    alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
-
-                // 2. matmul first half — FPU overlaps with EXP(kt=0) on SFPU
-                // Wait for softmax'd tiles in cb_qkt_im (first row at position 0)
-                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                {
-                    uint32_t v_index_offset = 0;
-                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack H1");
-                        blocked_matmul_and_pack<
-                            false,
-                            qktv_subblock_w,
-                            qktv_subblock_h,
-                            half_inner,
-                            head_dim_t,
-                            head_dim_t>(
-                            cb_qkt_im,
-                            cb_v_in,
-                            cur_out,
-                            qktv_in0_index_offset,
-                            v_index_offset,
-                            0,
-                            v_subblock * qktv_subblock_w);
-                        v_index_offset += qktv_subblock_w;
-                    }
-                }
-
-                // 3. sub_exp drain kt=1
-                MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=1" << ENDL());
-                sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                    alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
-
-                // Push last softmax'd row, free prev row buffer
-                cb_push_back(cb_qkt_im, row_tiles);
-                cb_pop_front(alias_prev_qkt_row, row_tiles);
-                // NOTE: cur_sum stays in RESERVED state (not pushed).
-                // SALAD will L1-accumulate corrected prev_sum onto it, then push at end.
-
-                // 4. matmul second half with L1 accumulate
-                PACK((llk_pack_reconfig_l1_acc(1)));
-                {
-                    uint32_t v_index_offset = 0;
-                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack H2");
-                        blocked_matmul_and_pack<
-                            false,
-                            qktv_subblock_w,
-                            qktv_subblock_h,
-                            half_inner,
-                            head_dim_t,
-                            head_dim_t>(
-                            cb_qkt_im,
-                            cb_v_in,
-                            cur_out,
-                            qktv_in0_index_offset + half_inner,
-                            half_inner * head_dim_t + v_index_offset,
-                            0,
-                            v_subblock * qktv_subblock_w);
-                        v_index_offset += qktv_subblock_w;
-                    }
-                }
-                PACK((llk_pack_reconfig_l1_acc(0)));
-            }
-#else
-            {
-                // Non-overlap path: drain all sub_exp, then full matmul
-                MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "]" << ENDL());
-                for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                for (uint32_t kt_sub = 0; kt_sub < kt_num_subblocks; ++kt_sub) {
+                    // sub_exp drain — EXP runs on SFPU, freeing FPU for matmul overlap
+                    MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=" << kt_sub << ENDL());
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                        alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
-                }
-                cb_push_back(cb_qkt_im, row_tiles);
-                cb_pop_front(alias_prev_qkt_row, row_tiles);
-                // cur_sum stays RESERVED — pushed after SALAD corrections
+                        alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
 
-                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                uint32_t v_index_offset = 0;
-                for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
-                    blocked_matmul_and_pack<
-                        false,
-                        qktv_subblock_w,
-                        qktv_subblock_h,
-                        qktv_in0_block_w,
-                        head_dim_t,
-                        head_dim_t>(
-                        cb_qkt_im,
-                        cb_v_in,
-                        cur_out,
-                        qktv_in0_index_offset,
-                        v_index_offset,
-                        0,
-                        v_subblock * qktv_subblock_w);
-                    v_index_offset += qktv_subblock_w;
+                    // After last sub_exp: push softmax'd row, free raw row buffer.
+                    // cur_sum stays RESERVED — SALAD will L1-accumulate onto it later.
+                    if (kt_sub == kt_num_subblocks - 1) {
+                        cb_push_back(cb_qkt_im, row_tiles);
+                        cb_pop_front(alias_prev_qkt_row, row_tiles);
+                    }
+
+                    // Before first matmul: wait for softmax'd tiles from Phase 1
+                    if (kt_sub == 0) {
+                        cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+                    }
+
+                    // L1 accumulate for subsequent matmul iterations
+                    if (kt_sub > 0) {
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
+
+                    // Matmul — FPU overlaps with SFPU EXP
+                    {
+                        uint32_t v_index_offset = 0;
+                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
+                            blocked_matmul_and_pack<
+                                false,
+                                qktv_subblock_w,
+                                qktv_subblock_h,
+                                matmul_inner,
+                                head_dim_t,
+                                head_dim_t>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                cur_out,
+                                qktv_in0_index_offset + kt_sub * matmul_inner,
+                                kt_sub * matmul_inner * head_dim_t + v_index_offset,
+                                0,
+                                v_subblock * qktv_subblock_w);
+                            v_index_offset += qktv_subblock_w;
+                        }
+                    }
+
+                    if (kt_sub > 0) {
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                    }
                 }
             }
-#endif
             qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
             qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
         }
