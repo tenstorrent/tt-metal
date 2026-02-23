@@ -111,30 +111,28 @@ void kernel_main() {
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
     uint32_t output_tile_id_start = 0;
-    {
-        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-            while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+        while (tiles_read < tiles_to_read) {
+            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+            uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-                size_t l1_write_addr = get_write_ptr(cb_output_id);
-                for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
-                    uint32_t tile_id = output_tile_id_start + tiles_read;
-                    uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
-                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
+            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
+            size_t l1_write_addr = get_write_ptr(cb_output_id);
+            for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
+                uint32_t tile_id = output_tile_id_start + tiles_read;
+                uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
-                    l1_write_addr += page_size;
-                    tiles_read++;
-                }
-
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
+                l1_write_addr += page_size;
+                tiles_read++;
             }
-            tiles_read = input_tile_id_start;
-            tiles_to_read = input_tile_id_end;
-            output_tile_id_start += input_tensor_Wt * input_tensor_Ht;
+
+            noc_async_read_barrier();
+            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
         }
+        tiles_read = input_tile_id_start;
+        tiles_to_read = input_tile_id_end;
+        output_tile_id_start += input_tensor_Wt * input_tensor_Ht;
     }
 
     uint32_t slices_received = 0;
