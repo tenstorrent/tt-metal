@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Mapping, Optional, Sequence, Union
+from typing import List, Mapping, Union
 
 import torch
 from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
-from transformers import BatchFeature
 from vllm.model_executor.models.gemma3_mm import (
     Gemma3DummyInputsBuilder,
     Gemma3MultiModalProcessor,
@@ -16,9 +15,7 @@ from vllm.model_executor.models.gemma3_mm import (
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import MultiModalDataDict, MultiModalFieldConfig, MultiModalInputs, MultiModalKwargs
-from vllm.multimodal.parse import MultiModalDataItems
-from vllm.multimodal.processing import BaseMultiModalProcessor, PromptUpdate
+from vllm.multimodal.inputs import MultiModalDataDict
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 
 import ttnn
@@ -390,70 +387,6 @@ class MistralForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-
-class MultiModalProcessor(BaseMultiModalProcessor):
-    """Multi-modal processor for Gemma3 / Qwen-VL."""
-
-    def _get_mm_fields_config(
-        self,
-        hf_inputs: "BatchFeature",
-        hf_processor_mm_kwargs: Mapping[str, object],
-    ) -> Mapping[str, MultiModalFieldConfig]:
-        """Unused, defined to satisfy abstract method requirement."""
-        raise NotImplementedError
-
-    def _get_prompt_updates(
-        self,
-        mm_items: MultiModalDataItems,
-        hf_processor_mm_kwargs: Mapping[str, object],
-        out_mm_kwargs: MultiModalKwargs,
-    ) -> Sequence[PromptUpdate]:
-        """Unused, defined to satisfy abstract method requirement."""
-        raise NotImplementedError
-
-    def apply(
-        self,
-        prompt: Union[str, list[int]],
-        mm_data: MultiModalDataDict,
-        hf_processor_mm_kwargs: Mapping[str, object],
-        tokenization_kwargs: Optional[Mapping[str, object]] = None,
-        return_mm_hashes: bool = False,
-    ) -> MultiModalInputs:
-        input_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
-
-        # WORKAROUND
-        # When using /v1/chat/completions endpoint prompt is already tokenized
-        # Processor requires text, so we decode tokens back to text
-        if isinstance(prompt, list) and prompt and isinstance(prompt[0], int):
-            # Use the processor's tokenizer to decode tokens back to text
-            tokenizer = (
-                getattr(input_processor, "tokenizer") if hasattr(input_processor, "tokenizer") else input_processor
-            )
-            text_prompt = tokenizer.decode(prompt, skip_special_tokens=False)
-            logger.warning(f"Applied workaround: decoded {len(prompt)} tokens back to text for processor compatibility")
-        else:
-            text_prompt = prompt
-
-        processed_inputs = input_processor(
-            text=text_prompt,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
-            images=mm_data["image"] if mm_data else None,
-            videos=None,  # [INFO] videos are not supported yet
-            return_tensors="pt",
-        )
-
-        assert processed_inputs.input_ids.shape[0] == 1, "Expected to process one input prompt at a time in processor"
-        prompt_token_ids = processed_inputs.input_ids[0].tolist()
-
-        mm_inputs = MultiModalInputs(
-            type="multimodal",
-            prompt=prompt,
-            prompt_token_ids=prompt_token_ids,
-            mm_kwargs={"image": processed_inputs},  # [INFO] add processed_inputs,
-            mm_hashes={},
-            mm_placeholders={},
-        )
-        return mm_inputs
 
 
 @MULTIMODAL_REGISTRY.register_processor(

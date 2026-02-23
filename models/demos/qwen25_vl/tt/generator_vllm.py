@@ -102,7 +102,6 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
-# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(
     Qwen2_5_VLMultiModalProcessor,
     info=TT_Qwen2_5_VLProcessingInfo,
