@@ -836,7 +836,6 @@ def test_lm_head_sampling_fused_argmax_single_device_d2h(
         skip_ccl=True,
         socket_output=d2h_socket,
     )
-    ttnn.synchronize_device(submesh)
 
     output_index_torch = ttnn.to_torch(ttnn_output_index).to(torch.uint32).reshape(1, 1)
     assert torch.equal(
@@ -851,6 +850,8 @@ def test_lm_head_sampling_fused_argmax_single_device_d2h(
     )
     d2h_socket.read_tensor(d2h_read_tensor)
     d2h_token = ttnn.to_torch(d2h_read_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+    d2h_socket.barrier()
+    ttnn.synchronize_device(submesh)
     logger.info(f"D2H token: {d2h_token}")
     logger.info(f"Expected index: {torch_expected_idx}")
     assert torch.equal(
