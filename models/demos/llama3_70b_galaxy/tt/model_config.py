@@ -768,6 +768,8 @@ class TtModelArgs:
                 and self.num_devices > 1
             )
 
+            self.model_config["USE_FUSED_AG_MATMUL_PREFILL"] = os.environ.get("USE_FUSED_AG_MATMUL_PREFILL", "0") == "1"
+
             if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
                 do_core_grid_size = (8, 1)
                 do_per_core_N = (

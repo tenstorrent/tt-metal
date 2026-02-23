@@ -286,29 +286,87 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
-        w2_in_gathered = self.tt_ccl.line_all_gather(
-            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
-        )
-        ttnn.deallocate(w2_in)
+        use_fused_ag_matmul = self.model_config.get("USE_FUSED_AG_MATMUL_PREFILL", False)
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
-            w2_out = ttnn.linear(
-                w2_in_gathered,
+        if use_fused_ag_matmul and batch_size == 1:
+            cluster_axis = 1
+
+            if self.tt_ccl.use_ring_ag_prefill:
+                ccl_semaphore_handles = self.tt_ccl.gather_semaphore_handles[cluster_axis][
+                    self.tt_ccl.gather_idx[cluster_axis]
+                ]
+                topology = ttnn.Topology.Ring
+            else:
+                ccl_semaphore_handles = [
+                    self.tt_ccl.gather_semaphore_handles[cluster_axis][self.tt_ccl.gather_idx[cluster_axis]],
+                    self.tt_ccl.gather_semaphore_handles[cluster_axis][
+                        (self.tt_ccl.gather_idx[cluster_axis] + 1) % self.tt_ccl.num_cbs
+                    ],
+                ]
+                topology = ttnn.Topology.Linear
+
+            B = w2_in.shape[1]
+            w2_in_flat = ttnn.reshape(w2_in, (1, 1, B * w2_in.shape[-2], w2_in.shape[-1]))
+            seqlen_for_buffer = w2_in_flat.shape[-2]
+
+            persistent_output_buffer = (
+                self.tt_ccl.all_gather_buffers[seqlen_for_buffer].get("FF3", None)
+                if seqlen_for_buffer in self.tt_ccl.all_gather_buffers
+                else None
+            )
+
+            fused_matmul_config = ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=4,
+                N_block_size=8,
+                subblock_h=2,
+                subblock_w=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(4, 8),
+            )
+
+            barrier_sem_handle = self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+            barrier_sem = None if persistent_output_buffer is not None else barrier_sem_handle
+
+            w2_out = ttnn.experimental.all_gather_minimal_matmul_async(
+                w2_in_flat,
                 self.w2_interleaved,
+                config=fused_matmul_config,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
-                program_config=short_lens_pc_2,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                persistent_output_buffer=persistent_output_buffer,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                num_links=1,
+                topology=topology,
+                cluster_axis=cluster_axis,
+                barrier_semaphore=barrier_sem,
+                num_workers_per_link=4,
+                num_buffers_per_channel=48,
+                force_transpose=True,
             )
+            ttnn.deallocate(w2_in_flat)
+            self.tt_ccl.gather_idx[cluster_axis] = (self.tt_ccl.gather_idx[cluster_axis] + 1) % self.tt_ccl.num_cbs
         else:
-            w2_out = ttnn.experimental.minimal_matmul(
-                input_tensor=w2_in_gathered,
-                weight_tensor=self.w2_interleaved,
-                config=minimal_pc_2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            w2_in_gathered = self.tt_ccl.line_all_gather(
+                w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
             )
+            ttnn.deallocate(w2_in)
+
+            if seq_len < 4096 or batch_size > 1:
+                w2_out = ttnn.linear(
+                    w2_in_gathered,
+                    self.w2_interleaved,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=short_lens_pc_2,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                w2_out = ttnn.experimental.minimal_matmul(
+                    input_tensor=w2_in_gathered,
+                    weight_tensor=self.w2_interleaved,
+                    config=minimal_pc_2,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
