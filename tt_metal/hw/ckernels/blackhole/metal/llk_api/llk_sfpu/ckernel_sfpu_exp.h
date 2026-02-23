@@ -315,16 +315,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
 
 template <
     ckernel::ApproximationMode APPROX_MODE,
-    bool FAST_APPROX,
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false,
-    bool CLAMP_NEGATIVE = true>
+    bool SKIP_POSITIVE_CHECK = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (APPROX_MODE != ckernel::ApproximationMode::Precise) {
-        _calculate_exponential_<APPROX_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK, CLAMP_NEGATIVE>(
-            exp_base_scale_factor);
+        _calculate_exponential_<APPROX_MODE, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>(exp_base_scale_factor);
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];

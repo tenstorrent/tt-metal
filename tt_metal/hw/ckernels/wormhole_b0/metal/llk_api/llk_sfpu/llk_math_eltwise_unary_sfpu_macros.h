@@ -104,29 +104,12 @@
         ckernel::sfpu::FN<APPROX_MODE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1);
 
 // For ops with multiple template parameters and one runtime parameter (e.g., scale)
-#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                \
-    FN,                                                \
-    APPROX_MODE,                                       \
-    FAST_APPROX,                                       \
-    IS_FP32_DEST_ACC_EN,                               \
-    SCALE_EN,                                          \
-    SKIP_POSITIVE_CHECK,                               \
-    CLAMP_NEGATIVE,                                    \
-    ITERATIONS,                                        \
-    DST_IDX,                                           \
-    VECTOR_MODE,                                       \
-    SCALE)                                             \
-    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>( \
-        ckernel::sfpu::FN<                             \
-            APPROX_MODE,                               \
-            FAST_APPROX,                               \
-            IS_FP32_DEST_ACC_EN,                       \
-            SCALE_EN,                                  \
-            ITERATIONS,                                \
-            SKIP_POSITIVE_CHECK,                       \
-            CLAMP_NEGATIVE>,                           \
-        DST_IDX,                                       \
-        VECTOR_MODE,                                   \
+#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                                                                           \
+    FN, APPROX_MODE, IS_FP32_DEST_ACC_EN, SCALE_EN, SKIP_POSITIVE_CHECK, ITERATIONS, DST_IDX, VECTOR_MODE, SCALE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(                                                            \
+        ckernel::sfpu::FN<APPROX_MODE, IS_FP32_DEST_ACC_EN, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>,           \
+        DST_IDX,                                                                                                  \
+        VECTOR_MODE,                                                                                              \
         SCALE)
 
 // For kernels with one template parameter and one extra runtime argument.
@@ -172,10 +155,10 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(                                                  \
         ckernel::sfpu::FN<APPROX_MODE, FP32, ITER, LEGACY_COMPAT>, DST_IDX, MODE)
 
-// For unary ops with five template parameters (APPROX_MODE, ITER, fp32_dest_acc_en, FAST_APPROX, legacy_compat)
-#define SFPU_FIVE_PARAM_KERNEL_ITER_FIRST_FN(FN, APPROX_MODE, ITER, FP32, FAST_APPROX, LEGACY_COMPAT, DST_IDX, MODE) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(                                                               \
-        ckernel::sfpu::FN<APPROX_MODE, ITER, FP32, FAST_APPROX, LEGACY_COMPAT>, DST_IDX, (int)VectorMode::MODE)
+// For unary ops with four template parameters (APPROX_MODE, ITER, fp32_dest_acc_en, legacy_compat)
+#define SFPU_FIVE_PARAM_KERNEL_ITER_FIRST_FN(FN, APPROX_MODE, ITER, FP32, LEGACY_COMPAT, DST_IDX, MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(                                                  \
+        ckernel::sfpu::FN<APPROX_MODE, ITER, FP32, LEGACY_COMPAT>, DST_IDX, (int)VectorMode::MODE)
 
 // For kernels whose functor takes three template parameters (e.g., <APPROX_MODE, DATA_FORMAT, ITERATIONS>).
 #define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(FN, APPROX_MODE, DATA_FORMAT, ITERATIONS, DST_IDX, MODE)           \
@@ -204,7 +187,7 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(              \
         ckernel::sfpu::TYPE<APPROX_MODE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE);
 
-// For log1p op that needs three template parameters
-#define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P_FN(FN, MODE, APPROX_MODE, FAST_APPROX, FP32, DST_IDX) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(                                         \
-        ckernel::sfpu::FN<APPROX_MODE, FAST_APPROX, FP32>, DST_IDX, (int)VectorMode::MODE)
+// For log1p op that needs two template parameters
+#define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P_FN(FN, MODE, APPROX_MODE, FP32, DST_IDX) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(                            \
+        ckernel::sfpu::FN<APPROX_MODE, FP32>, DST_IDX, (int)VectorMode::MODE)

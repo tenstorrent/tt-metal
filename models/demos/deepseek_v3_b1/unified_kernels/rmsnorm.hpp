@@ -126,7 +126,7 @@ struct RMSNorm {
             }
             {
                 add_rsqrt_tile<
-                    ckernel::use_approximate_mode<APPROX, CTArgs::rsqrt_fast_approx>(),
+                    ckernel::use_approximate_enum<APPROX, CTArgs::rsqrt_fast_approx>(),
                     VectorMode::RC_custom,
                     1>(0, args.epsilon);
             }

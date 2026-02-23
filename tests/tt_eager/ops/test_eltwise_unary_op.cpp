@@ -166,8 +166,7 @@ namespace tt::tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
     static Tensor fn(const tt::tt_metal::Tensor& t) {
-        return ttnn::exp(
-            t, ckernel::use_approximate_enum<approx_value>(), tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+        return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };
 }  // namespace tt::tt_metal

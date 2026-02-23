@@ -187,7 +187,7 @@ void kernel_main() {
 
     /* Simplified tree reduction: just add outputs from other cores */
     if (do_reduce) {
-        exp_tile_init<exp_approx_mode, false, scale_fp32>();
+        exp_tile_init<exp_approx_mode, scale_fp32>();
         if (num_cores_to_wait > 0) {
             reconfig_data_format_srca<false, true>(cb_ms_in);
             for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {

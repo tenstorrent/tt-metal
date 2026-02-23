@@ -165,7 +165,8 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
+    ckernel::sfpu::
+        calculate_exponential<ckernel::ApproximationMode::FastApproximateClamped, DST_ACCUM_MODE, true, 4, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
