@@ -175,6 +175,10 @@ class ModelArgs:
             "gpt-oss-120b": {
                 "T3K": [128],
                 "TG": [128],
+            },
+            "gpt-oss-20b": {
+                "T3K": [128],
+                "TG": [128],
             }
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
