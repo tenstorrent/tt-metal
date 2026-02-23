@@ -70,7 +70,8 @@ void AddDeviceOperation::validate_on_program_cache_miss(
 }
 
 void AddDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& args) {
+    const operation_attributes_t& attributes, const tensor_args_t& args) {
+    TT_FATAL(attributes.sub_core_grids.has_value(), "sub_core_grids must be provided for dram optimized add!");
     fail_on_shape_mismatch(args.a_tensor, args.b_tensor);
 }
 
@@ -112,7 +113,7 @@ tt::stl::hash::hash_t AddDeviceOperation::compute_program_hash(
         args.a_tensor.memory_config(),
         args.a_tensor.dtype(),
         args.b_tensor.memory_config(),
-        attributes.worker_grid,
+        attributes.sub_core_grids,
         args.b_tensor.dtype());
 }
 
@@ -130,26 +131,12 @@ std::tuple<AddDeviceOperation::operation_attributes_t, AddDeviceOperation::tenso
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    CoreRangeSet worker_grid;
-    auto* device = a_tensor.device();
-    if (sub_core_grids.has_value()) {
-        worker_grid = sub_core_grids.value();
-    } else {
-        for (const auto& sub_device_id : device->get_sub_device_ids()) {
-            const auto& sub_device_workers =
-                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
-            worker_grid = worker_grid.merge(sub_device_workers);
-        }
-    }
-
-    // std::cout << "worker_grid: " << worker_grid.str() << std::endl;
-
     return {
         operation_attributes_t{
             .memory_config = memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : a_tensor.memory_config()),
             .dtype = dtype.value_or(a_tensor.dtype()),
-            .worker_grid = std::move(worker_grid),
+            .sub_core_grids = sub_core_grids,
             .compute_kernel_config = std::nullopt},
         tensor_args_t{.a_tensor = a_tensor, .b_tensor = b_tensor, .output_tensor = output_tensor}};
 }

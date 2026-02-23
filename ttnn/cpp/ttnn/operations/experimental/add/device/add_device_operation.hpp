@@ -5,8 +5,8 @@
 #pragma once
 
 #include "ttnn/operations/experimental/add/device/add_device_operation_types.hpp"
-#include "ttnn/operations/experimental/add/device/program_factory/element_wise_multi_core_add_program.hpp"
-#include "ttnn/operations/experimental/add/device/program_factory/elt_nd_sharded_add_program.hpp"
+#include "ttnn/operations/experimental/add/device/dram_optimized/dram_optimized_program.hpp"
+#include "ttnn/operations/experimental/add/device/ndsharded/elt_nd_sharded_add_program.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <optional>
