@@ -4,7 +4,6 @@
 
 #include "topology.hpp"
 
-#include "context/metal_context.hpp"
 #include "device/device_manager.hpp"
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
@@ -392,8 +391,21 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
 };
 // clang-format on
 
-DispatchTopology::DispatchTopology(const ContextDescriptor& descriptor, dispatch_core_manager& dispatch_core_manager) :
-    descriptor_(descriptor), dispatch_core_manager_(dispatch_core_manager) {
+DispatchTopology::DispatchTopology(
+    const ContextDescriptor& descriptor,
+    dispatch_core_manager& dispatch_core_manager,
+    DeviceManager* device_manager,
+    const GetControlPlaneFn& get_control_plane,
+    const GetDispatchQueryManagerFn& get_dispatch_query_manager,
+    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
+    const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
+    descriptor_(descriptor),
+    dispatch_core_manager_(dispatch_core_manager),
+    device_manager_(device_manager),
+    get_control_plane_(get_control_plane),
+    get_dispatch_query_manager_(get_dispatch_query_manager),
+    get_max_num_eth_cores_(get_max_num_eth_cores),
+    get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
         std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs());
@@ -432,9 +444,8 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     auto populate_single_device = [&]() {
         if (num_hw_cqs == 1) {
             return single_chip_arch_1cq;
-        }  // TODO: determine whether dispatch_s is inserted at this level, instead of inside
-           // Device::dispatch_s_enabled().
-        if (this->dispatch_core_manager_.get_dispatch_core_type() == CoreType::WORKER) {
+        }
+        if (this->get_dispatch_query_manager_().dispatch_s_enabled()) {
             return single_chip_arch_2cq_dispatch_s;
         }
         return single_chip_arch_2cq;
@@ -583,7 +594,13 @@ void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>
             node.cq_id,
             node.noc_selection,
             node.kernel_type,
-            node.tunnel_index));
+            descriptor_,
+            dispatch_core_manager_,
+            node.tunnel_index,
+            get_control_plane_,
+            get_dispatch_query_manager_,
+            get_max_num_eth_cores_,
+            get_reads_dispatch_cores_));
         if (descriptor_.cluster().get_associated_mmio_device(node.device_id) == node.device_id) {
             mmio_device_ids.insert(node.device_id);
         }
@@ -738,14 +755,14 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
     std::vector<uint32_t> zero = {0x0};
 
     // Need to set up for all devices serviced by an mmio chip
+    TT_ASSERT(device_manager_ != nullptr, "DeviceManager required for configure_dispatch_cores");
     if (device->is_mmio_capable()) {
         for (ChipId serviced_device_id : descriptor_.cluster().get_devices_controlled_by_mmio_device(device->id())) {
             uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(serviced_device_id);
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
                 tt_cxy_pair completion_q_writer_location =
                     this->dispatch_core_manager_.completion_queue_writer_core(serviced_device_id, channel, cq_id);
-                IDevice* mmio_device =
-                    MetalContext::instance().device_manager()->get_active_device(completion_q_writer_location.chip);
+                IDevice* mmio_device = device_manager_->get_active_device(completion_q_writer_location.chip);
                 uint32_t completion_q_wr_ptr =
                     my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                 uint32_t completion_q_rd_ptr =

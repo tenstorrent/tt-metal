@@ -103,19 +103,20 @@
   save-perf-data: true
   model-type: deepseek_v3
 
-- name: Galaxy Sentence Bert tests
-  cmd: |
-    pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py
-    python3 models/perf/merge_perf_results.py
-  model: sentence_bert
-  skus:
-    wh_galaxy:
-      timeout: 30
-  owner_id: U088413NP0Q # Ashai Reddy
-  team: models
-  arch: wormhole_b0
-  save-perf-data: false
-  model-type: sentence_bert
+# Note: Sentence Bert tests are currently disabled due to #38178 and will be re-enabled once the issues are resolved.
+# - name: Galaxy Sentence Bert tests
+#   cmd: |
+#     pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py
+#     python3 models/perf/merge_perf_results.py
+#   model: sentence_bert
+#   skus:
+#     wh_galaxy:
+#       timeout: 30
+#   owner_id: U088413NP0Q # Ashai Reddy
+#   team: models
+#   arch: wormhole_b0
+#   save-perf-data: false
+#   model-type: sentence_bert
 
 - name: Galaxy GPT-OSS model perf tests
   cmd: uv pip install -r models/demos/gpt_oss/requirements.txt && export HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ && pytest --timeout 600 models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_all_fused_ops_device_perf.py::test_all_fused_ops_device_perf -k "decode and 1"
