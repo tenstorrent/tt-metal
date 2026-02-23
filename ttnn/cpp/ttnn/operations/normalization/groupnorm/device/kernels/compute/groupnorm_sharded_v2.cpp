@@ -233,13 +233,13 @@ void kernel_main() {
             cb_push_back(cb_ex2pe, 1);
 
             // reduce only one final tile
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
+            compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_SCALAR>(
                 cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
 
             // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -331,13 +331,13 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
 
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
+            compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_SCALAR>(
                 cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
 
             cb_wait_front(cb_ex_partial, 1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(

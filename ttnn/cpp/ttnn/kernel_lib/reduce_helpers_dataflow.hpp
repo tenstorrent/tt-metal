@@ -5,36 +5,57 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 namespace dataflow_kernel_lib {
 
-// Row size in uint32 (8 u32 = 16 bf16)
-constexpr uint32_t ROW_SIZE_U32 = 8;
+using ckernel::PoolType;
+using ckernel::ReduceDim;
+
+// =============================================================================
+// Reduce scaler helpers API
+//
+// calculate_and_prepare_reduce_scaler: Automatically computes the correct scaler based on
+//   pool type, reduce dimension, and reduce factor (e.g. 1/N for AVG, 1.0 for
+//   SUM/MAX). Use this when performing standard reduce operations.
+//
+// prepare_reduce_scaler: Prepares a CB tile for reduce using a caller-provided
+//   float scaler. Use this when you need a custom scaler value that doesn't
+//   follow the standard reduce conventions. Accepts a runtime float value.
+// =============================================================================
 
 /**
- * @brief Fill row 0 of each face with a scaler value
+ * @brief Prepares a CB tile for reduce using a caller-provided float scaler
  *
- * @tparam half_tile If true, fill faces 0-1 only. If false, fill all 4 faces.
- * @param ptr Pointer to the start of the tile in L1 memory
- * @param scaler Packed bf16 value to write (bf16 << 16 | bf16)
+ * Converts the float scaler to the appropriate bit representation based on
+ * the circular buffer's data format, then fills row 0 of each face.
+ * Data format and tile shape (half/full) are deduced from the circular buffer.
+ *
+ * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
+ * @param scaler_f Float scaler value to fill the tile with
  */
-template <bool half_tile>
-FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler);
+template <uint32_t cb_id>
+FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
 
 /**
- * @brief Generate a reduce scaler tile
+ * @brief Generate a reduce scaler tile with format and tile shape deduced from cb_id
  *
- * Creates a tile in the specified circular buffer with the scaler value
- * placed in row 0 of each face. The scaler is typically 1.0 for SUM/MAX
- * reductions, and 1/N for AVG reductions.
+ * Computes the appropriate scaler value based on pool type, reduce dimension,
+ * and reduce factor. Supports both bfloat16 and float32 formats.
+ * Data format and tile shape (half/full) are deduced from the circular buffer.
  *
- * @tparam half_tile If true, only fill faces 0-1 (half tile mode)
- * @param cb_id Circular buffer ID to write the tile to
- * @param scaler Packed bf16 value (bf16 << 16 | bf16)
+ * For AVG pooling with REDUCE_SCALAR, uses 1/sqrt(N) since the LLK applies the
+ * scaler twice (row then col). For AVG with REDUCE_ROW/REDUCE_COL, uses 1/N.
+ * For SUM/MAX, the reduce_volume is ignored and the scaler is 1.0.
+ *
+ * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
+ * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ * @tparam reduce_volume Number of elements being reduced (N). Must be non-zero for AVG.
  */
-template <bool half_tile = false>
-FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler);
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_volume = 1>
+FORCE_INLINE void calculate_and_prepare_reduce_scaler();
 
 }  // namespace dataflow_kernel_lib
 

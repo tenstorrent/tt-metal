@@ -82,7 +82,7 @@ void kernel_main() {
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
 
-    constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
+    constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
@@ -92,9 +92,9 @@ void kernel_main() {
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
 
-    static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
+    static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::AVG, "Only supports REDUCE_OP = MAX or AVG");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
-    constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
+    constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::AVG) ? true : false;
 
     // tilize reconfiguration can be beneficial when we have a wide tensor with a non MAX_TILES_PER_REDUCTION number of
     // C tiles, but we only use it when the window size fits within a face such that the tilize can be done only on the

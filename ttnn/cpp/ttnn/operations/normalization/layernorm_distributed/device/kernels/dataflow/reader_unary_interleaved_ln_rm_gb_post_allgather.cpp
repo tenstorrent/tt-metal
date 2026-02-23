@@ -22,10 +22,10 @@ void kernel_main() {
         get_arg_val<uint32_t>(4);  // Tile offset for stats input; status input is two tiles wide and contains E(x) and
                                    // E(x^2) in the left most columns per tile.
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(7);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(8);
-    const uint32_t stats_addr = get_arg_val<uint32_t>(9);
-    const uint32_t y_offset = get_arg_val<uint32_t>(10);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(7);
+    const uint32_t stats_addr = get_arg_val<uint32_t>(8);
+    const uint32_t y_offset = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_stats = tt::CBIndex::c_1;
@@ -50,6 +50,7 @@ void kernel_main() {
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr uint32_t W_times_num_devices = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
     const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
@@ -64,9 +65,12 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    uint32_t scaler = get_arg_val<uint32_t>(5);
-    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce, scaler);
-    const uint32_t eps = get_arg_val<uint32_t>(6);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_reduce,
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_ROW,
+        W_times_num_devices>();
+    const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(cb_eps, eps);
 
     uint32_t inp_tile_idx = tile_offset;
