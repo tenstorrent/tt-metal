@@ -80,18 +80,6 @@ skus:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
 
-  wh_n150:
-    runs_on:
-      - N150
-      - in-service
-      - cloud-virtual-machine
-
-  wh_n300:
-    runs_on:
-      - N300
-      - in-service
-      - cloud-virtual-machine
-
   wh_n300_perf:
     runs_on:
       - N300
