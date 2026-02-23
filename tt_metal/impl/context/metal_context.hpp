@@ -81,8 +81,6 @@ public:
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
-    std::shared_ptr<ContextDescriptor> get_context_descriptor();
-
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
     void initialize_device_manager(
