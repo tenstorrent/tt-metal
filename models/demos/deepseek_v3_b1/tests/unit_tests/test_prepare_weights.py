@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     SharedExpertWeights,
     deallocate_weights,
     load_layer,
+    load_moe_routed_experts_from_cache,
     prepare_attention_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
@@ -797,6 +798,70 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
         assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
 
     assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+    _assert_layer_on_device_with_topology(layer)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_load_layer_with_preloaded_routed_experts_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare+save an MoE layer, load routed experts via load_moe_routed_experts_from_cache, then load_layer(..., preloaded_routed_experts=...) and verify the assembled layer matches."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    if not is_slow_dispatch():
+        pytest.skip("load_layer requires slow dispatch")
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    state = _layer_state_dict(0, is_moe=True, seed=43)
+    weights = prepare_weights(
+        state,
+        submesh,
+        num_layers=1,
+        first_k_dense_replace=0,
+        num_routed_experts=NUM_ROUTED_EXPERTS,
+    )
+    orig = weights.layers[0]
+    assert isinstance(orig, DeepSeekV3MoELayerWeights)
+    save_layer(
+        orig,
+        tmp_path,
+        0,
+        hf_model_name="test-moe-model-4x2",
+        hf_state_dict_name="test-moe-state-dict.safetensors",
+        device_mesh_shape=(4, 2),
+    )
+    deallocate_weights(weights)
+
+    preloaded = load_moe_routed_experts_from_cache(tmp_path, submesh, 0)
+    assert len(preloaded.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(preloaded.routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(preloaded.routed_down_proj) == NUM_ROUTED_EXPERTS
+
+    layer = load_layer(
+        tmp_path, submesh, 0, preloaded_routed_experts=preloaded
+    )  # This requires slow dispatch, so test must run in this mode
+    assert isinstance(layer, DeepSeekV3MoELayerWeights)
+    # Expected shapes (same as test_prepare_moe_layer_single_layer_4x2)
+    assert layer.q_a_proj.tensor_shape == (3584, 3072)
+    assert layer.q_b_proj.tensor_shape == (1536, 12288)
+    assert layer.kv_a_proj.tensor_shape == (7168, 576)
+    assert layer.o_proj.tensor_shape == (8192, 7168)
+    assert layer.gate_mm.tensor_shape == (7168, 256)
+    assert layer.attn_norm.tensor_shape == (1, 7168)
+    assert layer.shared_gate_proj.tensor_shape == (7168, 256)
+    assert layer.shared_up_proj.tensor_shape == (7168, 256)
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
+    # Routed experts came from preloaded (same count and on device)
+    for e in range(NUM_ROUTED_EXPERTS):
+        assert layer.routed_gate_proj[e].shape == preloaded.routed_gate_proj[e].shape
+        assert layer.routed_up_proj[e].shape == preloaded.routed_up_proj[e].shape
+        assert layer.routed_down_proj[e].shape == preloaded.routed_down_proj[e].shape
+        _assert_on_device(layer.routed_gate_proj[e])
+        _assert_on_device(layer.routed_up_proj[e])
+        _assert_on_device(layer.routed_down_proj[e])
     _assert_layer_on_device_with_topology(layer)
 
 

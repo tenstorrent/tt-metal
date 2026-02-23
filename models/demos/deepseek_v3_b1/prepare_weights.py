@@ -907,12 +907,73 @@ def save_layer(
     logger.info(f"  save_layer total: {time.perf_counter() - save_layer_t0:.3f}s")
 
 
+def load_moe_routed_experts_from_cache(
+    path: str | Path,
+    device,
+    layer_idx: int,
+    *,
+    num_experts: int = NUM_ROUTED_EXPERTS,
+) -> MoERoutedExpertWeights:
+    """Load only the routed expert weights for an MoE layer from cache (fast-dispatch-safe).
+
+    Reads experts/e_NNN/{gate,up,down}_proj.tensorbin. Use this in fast dispatch mode
+    before loading the rest of the layer in slow dispatch via load_layer(..., preloaded_routed_experts=...).
+    """
+    path = Path(path)
+    layer_dir = path / f"layer_{layer_idx:03d}"
+    manifest_path = layer_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Missing manifest: {manifest_path}")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    if manifest.get("layer_type") != "moe":
+        raise ValueError(f"Layer {layer_idx} is not MoE (layer_type={manifest.get('layer_type')})")
+    num_experts = manifest.get("routed_experts", {}).get("num_experts", num_experts)
+    experts_dir = layer_dir / "experts"
+    logger.info("Loading {} routed experts for layer {} from cache...", num_experts, layer_idx)
+    t0 = time.perf_counter()
+    routed_gate_proj = []
+    routed_up_proj = []
+    routed_down_proj = []
+    for e in range(num_experts):
+        if e > 0 and e % 64 == 0:
+            logger.debug("  loaded experts 0..{}", e - 1)
+        expert_dir = experts_dir / f"e_{e:03d}"
+        t_load_gate_t0 = time.perf_counter()
+        routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
+        t_load_gate = time.perf_counter() - t_load_gate_t0
+
+        t_load_up_t0 = time.perf_counter()
+        routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
+        t_load_up = time.perf_counter() - t_load_up_t0
+
+        t_load_down_t0 = time.perf_counter()
+        routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
+        t_load_down = time.perf_counter() - t_load_down_t0
+
+        logger.debug(
+            f"    Loaded expert {e}: gate_proj.tensorbin in {t_load_gate:.3f}s, up_proj.tensorbin in {t_load_up:.3f}s, down_proj.tensorbin in {t_load_down:.3f}s"
+        )
+    logger.info("  routed experts for layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - t0)
+    return MoERoutedExpertWeights(
+        routed_gate_proj=routed_gate_proj,
+        routed_up_proj=routed_up_proj,
+        routed_down_proj=routed_down_proj,
+    )
+
+
 def load_layer(
     path: str | Path,
     device,
     layer_idx: int,
+    *,
+    preloaded_routed_experts: MoERoutedExpertWeights | None = None,
 ) -> DeepSeekV3LayerWeights:
-    """Deserialize a single layer from <path>/layer_{layer_idx:03d}/."""
+    """Deserialize a single layer from <path>/layer_{layer_idx:03d}/.
+
+    For MoE layers, if preloaded_routed_experts is provided, expert tensors are not
+    loaded from disk (use after load_moe_routed_experts_from_cache in fast dispatch).
+    """
     path = Path(path)
     layer_dir = path / f"layer_{layer_idx:03d}"
     manifest_path = layer_dir / "manifest.json"
@@ -1008,26 +1069,32 @@ def load_layer(
 
         standalone = manifest.get("standalone_tensors", {})
         shared_down_proj = ttnn.load_tensor(layer_dir / standalone["shared_down_proj"], device=device)
-        num_experts = manifest.get("routed_experts", {}).get("num_experts", NUM_ROUTED_EXPERTS)
-        logger.info("  loading {} routed experts from disk (this may be slow)...", num_experts)
-        experts_t0 = time.perf_counter()
-        experts_dir = layer_dir / "experts"
-        routed_gate_proj = []
-        routed_up_proj = []
-        routed_down_proj = []
-        for e in range(num_experts):
-            if e > 0 and e % 64 == 0:
-                logger.debug("  loaded experts 0..{}", e - 1)
-            expert_dir = experts_dir / f"e_{e:03d}"
-            routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
-            routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
-            routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
-        logger.info(
-            "  layer {} loaded in {:.3f}s (routed experts: {:.3f}s)",
-            layer_idx,
-            time.perf_counter() - load_t0,
-            time.perf_counter() - experts_t0,
-        )
+        if preloaded_routed_experts is not None:
+            routed_gate_proj = preloaded_routed_experts.routed_gate_proj
+            routed_up_proj = preloaded_routed_experts.routed_up_proj
+            routed_down_proj = preloaded_routed_experts.routed_down_proj
+            logger.info("  layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - load_t0)
+        else:
+            num_experts = manifest.get("routed_experts", {}).get("num_experts", NUM_ROUTED_EXPERTS)
+            logger.info("  loading {} routed experts from disk (this may be slow)...", num_experts)
+            experts_t0 = time.perf_counter()
+            experts_dir = layer_dir / "experts"
+            routed_gate_proj = []
+            routed_up_proj = []
+            routed_down_proj = []
+            for e in range(num_experts):
+                if e > 0 and e % 64 == 0:
+                    logger.debug("  loaded experts 0..{}", e - 1)
+                expert_dir = experts_dir / f"e_{e:03d}"
+                routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
+                routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
+                routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
+            logger.info(
+                "  layer {} loaded in {:.3f}s (routed experts: {:.3f}s)",
+                layer_idx,
+                time.perf_counter() - load_t0,
+                time.perf_counter() - experts_t0,
+            )
 
         return DeepSeekV3MoELayerWeights(
             q_a_proj=q_a_proj,
