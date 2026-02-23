@@ -118,9 +118,6 @@
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
   model: qwen2.5-7b
   skus:
-    wh_n150:
-      timeout: 5
-      tier: 3
     wh_n300:
       timeout: 5
       tier: 3
