@@ -96,20 +96,19 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::transformer::scaled_dot_product_attention,
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::kw_only(),
-            nb::arg("attn_mask") = nb::none(),
-            nb::arg("is_causal").noconvert() = true,
-            nb::arg("scale") = nb::none(),
-            nb::arg("sliding_window_size") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("attention_sink") = nb::none()));
+        &ttnn::transformer::scaled_dot_product_attention,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("is_causal").noconvert() = true,
+        nb::arg("scale") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("attention_sink") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(
@@ -161,19 +160,18 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"chunked_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         chunked_doc,
-        ttnn::overload_t(
-            &chunked_scaled_dot_product_attention_wrapper,
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::arg("page_table_tensor").noconvert(),
-            nb::arg("chunk_start_idx") = nb::none(),
-            nb::kw_only(),
-            nb::arg("chunk_start_idx_tensor") = nb::none(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()));
+        &chunked_scaled_dot_product_attention_wrapper,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("page_table_tensor").noconvert(),
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::kw_only(),
+        nb::arg("chunk_start_idx_tensor") = nb::none(),
+        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("memory_config").noconvert() = nb::none(),
+        nb::arg("program_config").noconvert() = nb::none(),
+        nb::arg("compute_kernel_config").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
