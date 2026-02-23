@@ -19,8 +19,11 @@ void kernel_main() {
 
     constexpr uint32_t stick_size =
         get_compile_time_arg_val(0);  // For ND sharded tensors, stick size can be < row size
-    constexpr uint32_t num_sticks_in_row = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size_of_last_stick_in_row = get_compile_time_arg_val(2);
+    constexpr uint32_t num_sticks_in_row =
+        get_compile_time_arg_val(1);  // For ND-sharded tensors, each row can have multiple sticks (pages).
+    constexpr uint32_t stick_size_of_last_stick_in_row =
+        get_compile_time_arg_val(2);  // For uneven sharding along the width, the last stick could contain padding data,
+                                      // so we need to specify the size of valid data we want to read in.
 
     constexpr auto src_tensor_args = TensorAccessorArgs<3>();
 
@@ -31,9 +34,9 @@ void kernel_main() {
     auto read_tiles = [&](const uint32_t& num_tiles) {
         cb_reserve_back(cb_id_in0, num_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        for (uint32_t k = 0; k < tile_height;
-             k++) {  // need an inner loop for sticks within row. Only relevant for nd sharded case on multicore
-                     // (otherwise this loop only has 1 iteration).
+        for (uint32_t k = 0; k < tile_height; k++) {
+            // Need an inner loop for sticks within row. Only relevant for ND-sharded case on multicore
+            // (otherwise this loop only has 1 iteration).
             for (uint32_t l = 0; l < num_sticks_in_row; l++) {
                 uint64_t src_noc_addr = base_src_noc_addr[k * num_sticks_in_row + l];
                 uint32_t width_size = (l == num_sticks_in_row - 1) ? stick_size_of_last_stick_in_row : block_width_size;
@@ -51,6 +54,7 @@ void kernel_main() {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
             for (uint32_t k = 0; k < num_sticks_in_row; k++) {
+                // For ND-sharded case, we need to read in all pages (sticks) within the row.
                 base_src_noc_addr[j * num_sticks_in_row + k] = s.get_noc_addr(stick_id);
                 stick_id++;
             }
