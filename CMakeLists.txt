@@ -5,6 +5,16 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.t
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
 
+# Sync submodule URLs to use the fork of tt-llk which uses branch `polymage/main`.
+execute_process(
+    COMMAND git submodule sync --recursive
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+execute_process(
+    COMMAND git submodule update --init --recursive
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # Clear any compile options that may have been set by consuming projects that have leaked into us.
 set_directory_properties(
     PROPERTIES
