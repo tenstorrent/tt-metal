@@ -18,11 +18,8 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
-template <bool diagonal = false>
 inline void _llk_pack_untilize_configure_addrmod_()
 {
-    static_assert(!diagonal, "Diagonal not supported");
-
     addr_mod_pack_t {
         .y_src = {.incr = 0, .clr = 0},
     }
@@ -31,26 +28,29 @@ inline void _llk_pack_untilize_configure_addrmod_()
 
 /*
 block_ct_dim represents the number of input tiles in a block.
-full_ct_dim represents the total number of input tiles.
+dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or smaller) tiles are packed in a single 32x32 tile region in dest.
 */
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false>
 inline void _llk_pack_untilize_mop_config_(
-    const std::uint32_t face_r_dim                = FACE_R_DIM,
-    const std::uint32_t num_faces                 = 4,
-    bool narrow_row                               = false,
-    [[maybe_unused]] std::uint32_t row_num_datums = TILE_C_DIM,
-    const std::uint32_t tile_dst_offset           = 0)
+    const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_offset = 0)
 {
+    static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
+    static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
     /*
     Outer loop iterates over the rows in the block, while the inner loop iterates
     over each tile in the block.
+    When dense, we use all 4 interfaces to pack out a row each from 4 faces (2 tiles) that end up contiguous in L1
+    because offsets align well and it improves perf, thus we halve the number of mop inner loops.
     */
-    constexpr std::uint32_t MOP_INNER_LOOP = block_ct_dim;
+    constexpr std::uint32_t MOP_INNER_LOOP = dense ? block_ct_dim / 2 : block_ct_dim;
     const std::uint32_t MOP_OUTER_LOOP     = face_r_dim;
 
     // For narrow row, the faces are stored in the first column of the tile, therefore requiring only one packer interface.
-    const std::uint32_t PACK_INTF_SEL = (narrow_row) ? p_pacr::SINGLE_INTF_ACTIVE : ((num_faces > 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::SINGLE_INTF_ACTIVE);
+    const std::uint32_t PACK_INTF_SEL = (dense)                          ? p_pacr::ALL_INTF_ACTIVE
+                                        : (narrow_row || num_faces == 1) ? p_pacr::SINGLE_INTF_ACTIVE
+                                                                         : p_pacr::TWO_INTFS_ACTIVE;
     /*
     When using DST_STRIDED_MODE, each packer interface has a stride of 16*block_size,
     where block_size is set to be the size of a row within face.
@@ -137,26 +137,28 @@ static std::uint32_t tile_dst_offset_state = 0;
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim    = block_ct_dim,
-    bool diagonal                = false,
     bool narrow_row              = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense                   = false>
 inline void _llk_pack_untilize_init_(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
-    static_assert(!diagonal, "Diagonal not supported");
-    static_assert(block_ct_dim <= 8, "block_ct_dim must be less than or equal to 8");
+    static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
+    static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
+    static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
 
     if constexpr (narrow_row)
     {
         // Changed to check against TILE_C_DIM instead of FACE_C_DIM until tt-metal#24095 is investigated.
         static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
     }
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    _llk_pack_untilize_configure_addrmod_<diagonal>();
+    _llk_pack_untilize_configure_addrmod_();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal>(face_r_dim, num_faces, narrow_row, row_num_datums, 0);
+    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, 0);
     tile_dst_offset_state = 0;
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
@@ -174,7 +176,7 @@ inline void _llk_pack_untilize_init_(
     }
     else
     {
-        output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces > 1) ? (num_faces >> 1) : 1) * FACE_C_DIM);
+        output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
     }
 
     // Store 16B aligned row offset address
@@ -195,19 +197,21 @@ inline void _llk_pack_untilize_init_(
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim        = block_ct_dim,
-    bool diagonal                    = false,
     bool narrow_row                  = false,
-    std::uint32_t row_num_datums     = TILE_C_DIM,
-    std::uint32_t tile_dst_ct_offset = 0>
+    std::uint32_t tile_dst_ct_offset = 0,
+    bool dense                       = false>
 inline void _llk_pack_untilize_(
     const std::uint32_t address,
     [[maybe_unused]] const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim                          = FACE_R_DIM,
-    const std::uint32_t num_faces                           = 4,
-    [[maybe_unused]] const std::uint32_t tile_dst_rt_offset = 0)
+    const std::uint32_t face_r_dim         = FACE_R_DIM,
+    const std::uint32_t num_faces          = 4,
+    const std::uint32_t tile_dst_rt_offset = 0)
 {
-    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
+    static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
+    static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
 
     /*
     full_ct_dim represents the number of input tiles.
@@ -226,7 +230,7 @@ inline void _llk_pack_untilize_(
     // If starting_tile_dst_offset is non-zero, reconfigure the template with the correct offset
     if (tile_dst_offset != tile_dst_offset_state)
     {
-        _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal>(face_r_dim, num_faces, narrow_row, row_num_datums, tile_dst_offset);
+        _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, tile_dst_offset);
         tile_dst_offset_state = tile_dst_offset;
     }
 
