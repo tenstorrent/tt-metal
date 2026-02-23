@@ -269,9 +269,9 @@ ALWI void sdpa_tail_streaming(
         }
     }
 
-    // Finalize the worker/neighbor MS without popping the previous-round MS.
+    // Postamble only — caller handles MS pops based on round context
+    // (R1 inputs are TRISC-owned, R2 prev MS is BRISC-owned)
     ckernel::sdpa_bcast_col_reuse_postamble();
-    cb_pop_front(cb_prev_max_sum, 1);
 }
 
 ALWI void sdpa_forward_data(
@@ -802,6 +802,14 @@ struct SdpaReduceWorker {
                 r1_neighbor_valid,
                 local_valid);
 
+            // Pop R1 input MS CBs — TRISC-owned, no BRISC race.
+            // cb_r1_neighbor_ms: incoming from neighbor, consumed only by TRISC
+            // cb_local_ms: BRISC reads via send_all() (L1 address, no cb_wait/pop)
+            // No cb_wait_front needed: NCRISC always pushes all MS CBs unconditionally
+            // (even for invalid neighbors with dummy data), so tiles are guaranteed present.
+            cb_pop_front(ComputeCT::cb_r1_neighbor_ms, 1);
+            cb_pop_front(ComputeCT::cb_local_ms, 1);
+
             // ROUND 2: reduce(r1_result, r2_neighbor) -> final output (normalized L)
             bool local_r1_valid = local_valid || r1_neighbor_valid;
             bool r2_neighbor_r1_valid = r2_neighbor_valid;
@@ -824,6 +832,11 @@ struct SdpaReduceWorker {
                 ComputeCT::cb_l_out,
                 r2_neighbor_r1_valid,
                 local_r1_valid);
+
+            // Pop R2 worker MS CB — incoming from neighbor, consumed only by TRISC.
+            // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)
+            // after send_streaming() reads it for R2 forwarding.
+            cb_pop_front(ComputeCT::cb_r2_neighbor_ms, 1);
         }
 #endif  // COMPILE_FOR_TRISC
     };
