@@ -68,10 +68,12 @@ def reduce_experts(expert_output):
 
 def apply_expert_parallel_allreduce(tensor, mesh_config, ccl_manager):
     """Apply expert parallel allreduce communication."""
-    return mesh_config.allreduce(tensor, ccl_manager, axis=mesh_config.ep_axis)
+    return ttnn.all_reduce(
+        tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.ep_axis
+    )
 
 
-def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manager, activation_dtype, seq_len, tp):
+def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, seq_len, ccl_manager):
     """
     Apply tensor parallel allreduce communication.
 
@@ -93,11 +95,8 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manage
     if seq_len > 1:
         ttnn.synchronize_device(mesh_device)  # ✅ Use explicit mesh_device
 
-    tensor_allreduced = mesh_config.allreduce(
-        tensor,
-        ccl_manager,
-        pad_size=0,  # Optimal padding for TP=8
-        axis=mesh_config.tp_axis,
+    tensor_allreduced = ttnn.all_reduce(
+        tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.tp_axis
     )
     tensor.deallocate(True)
 
@@ -106,4 +105,6 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manage
 
 def apply_sequence_parallel_allgather(tensor, mesh_config, ccl_manager):
     """Apply sequence parallel allgather communication."""
-    return mesh_config.allgather(tensor, ccl_manager, axis=mesh_config.sp_axis, dim=-2)
+    return ttnn.all_gather(
+        tensor, dim=-2, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.sp_axis
+    )
