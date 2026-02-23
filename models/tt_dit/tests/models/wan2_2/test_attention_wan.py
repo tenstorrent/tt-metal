@@ -116,6 +116,7 @@ def test_wan_attention(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        is_self=attn_type == "self",
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
