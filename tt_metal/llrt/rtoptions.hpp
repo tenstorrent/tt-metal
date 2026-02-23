@@ -269,6 +269,12 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    // Enable channel trimming resource usage capture
+    bool enable_channel_trimming_capture = false;
+
+    // Path to channel trimming profile YAML for import-driven router construction
+    std::string fabric_trimming_profile_path;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -645,6 +651,14 @@ public:
     void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
         fabric_profiling_settings.enable_rx_ch_fwd = enable;
     }
+
+    // If true, enables channel trimming resource usage capture on fabric routers
+    bool get_enable_channel_trimming_capture() const { return enable_channel_trimming_capture; }
+    void set_enable_channel_trimming_capture(bool enable) { enable_channel_trimming_capture = enable; }
+
+    // Channel trimming profile import path
+    bool has_fabric_trimming_profile() const { return !fabric_trimming_profile_path.empty(); }
+    const std::string& get_fabric_trimming_profile_path() const { return fabric_trimming_profile_path; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }

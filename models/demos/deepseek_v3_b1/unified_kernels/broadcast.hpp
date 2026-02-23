@@ -30,6 +30,11 @@ using namespace tt::tt_fabric::linear::experimental;
 #include <utility>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#if defined(ENABLE_SOCKET_READER)
+#include "api/socket_api.h"
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+using tt::data_movement::common::tt_memmove;
+#endif
 
 using address_t = uint32_t;
 #endif
@@ -41,14 +46,19 @@ struct Broadcast {
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
-    template <uint32_t cb0Id, uint32_t NumPagesToRead, uint32_t isSender>
+    template <uint32_t cb0Id, uint32_t NumPagesToRead, uint32_t isSender, uint32_t useSocket = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t num_pages_to_read = NumPagesToRead;
         static constexpr uint32_t is_sender = isSender;
+        static constexpr bool use_socket = useSocket != 0;
     };
 
-    struct ReaderArgs {};
+    struct ReaderArgs {
+        uint32_t socket_config_addr = 0;
+        uint32_t socket_page_size = 0;
+        uint32_t socket_num_pages = 0;
+    };
 
     template <
         uint32_t cb0Id,
@@ -120,8 +130,25 @@ struct Broadcast {
             // ================================================================
             if constexpr (IsWorkerCore) {
                 if (CTArgs::is_sender) {
-                    cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                    cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+#if defined(ENABLE_SOCKET_READER)
+                    if constexpr (CTArgs::use_socket) {
+                        SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
+                        set_receiver_socket_page_size(recv, args.socket_page_size);
+                        socket_wait_for_pages(recv, args.socket_num_pages);
+                        cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                        tt_memmove<true, false, false, 0>(
+                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size);
+                        cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                        socket_pop_pages(recv, args.socket_num_pages);
+                        socket_notify_sender(recv);
+                        update_socket_config(recv);
+                    } else {
+#endif
+                        cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                        cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+#if defined(ENABLE_SOCKET_READER)
+                    }
+#endif
                 }
             }
 
