@@ -1029,6 +1029,9 @@ class MoeRoutedExpertOp:
         # ==================================================================
         down_proj_width_per_core = down_proj_params["per_core_n"] * 32
         down_proj_total_width = down_proj_width_per_core * num_gate_proj_cores
+        # When reduce is enabled, CB 24 is a working buffer (backed by SDPA overlap).
+        # When reduce is disabled, CB 24 is the final output (backed by final_output_tensor).
+        add_out_tensor = final_output_tensor if reduce_intermediate_tensors is None else None
         add_params = MoeRoutedExpertOp.setup_eltwise_add(
             cb_in0_index=add_cb_in0,
             cb_in1_index=add_cb_in1,
@@ -1036,7 +1039,7 @@ class MoeRoutedExpertOp:
             width_per_core=down_proj_width_per_core,
             total_width=down_proj_total_width,
             core_ranges=gate_proj_core_ranges,
-            out_tensor=final_output_tensor,
+            out_tensor=add_out_tensor,
         )
 
         # ==================================================================
@@ -1085,8 +1088,8 @@ class MoeRoutedExpertOp:
             reduce_packet_header_size = 96
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
-            # Worker cores from final_output_tensor shard grid (same as gate_proj cores)
-            reduce_worker_grid = final_output_tensor.memory_config().shard_spec.grid
+            # Worker cores = gate_proj cores (DRAM bank cores)
+            reduce_worker_grid = gate_proj_core_ranges
             reduce_worker_cores_list = ttnn.corerange_to_cores(reduce_worker_grid, row_wise=True)
             reduce_num_workers = len(reduce_worker_cores_list)
 
@@ -1130,9 +1133,6 @@ class MoeRoutedExpertOp:
             reduce_output_shard_spec = reduce_output_sample.memory_config().shard_spec
             reduce_output_core = reduce_output_shard_spec.grid.ranges()[0].start
 
-            # Get per-device final_output_tensor for reduce_local_cb
-            final_output_per_device = ttnn.get_device_tensors(final_output_tensor)
-
             reduce_params = {
                 "sem_round1_addr": reduce_sem_round1_addr,
                 "sem_round2_addr": reduce_sem_round2_addr,
@@ -1142,7 +1142,6 @@ class MoeRoutedExpertOp:
                 "intermediate_r2_per_device": reduce_intermediate_r2_per_device,
                 "intermediate_r3_per_device": reduce_intermediate_r3_per_device,
                 "output_per_device": reduce_output_per_device,
-                "final_output_per_device": final_output_per_device,
                 "num_tiles": reduce_num_tiles,
                 "payload_size_bytes": reduce_payload_size_bytes,
                 "slot_size_bytes": reduce_slot_size_bytes,
@@ -3500,6 +3499,28 @@ class MoeOp:
         shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
         out_offset += cb38_total_size
 
+        # ── Reduce: CB 24 (add_cb_out / reduce_local_cb) → sdpa_out_interm_buffer ──
+        # When reduce is enabled, CB 24 is a working buffer (not final output).
+        # Placed after CB 38 on DRAM bank cores; CB 30/31/38 are on sender core (disjoint).
+        if reduce_all_cores_set is not None:
+            cb24_cb_id = routed_ctx.add_cb_out
+            cb24_total_size = 2048  # 1 tile of 32x32 bfloat16
+            cb24_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb24_cb_id,
+                out_buf,
+                address_offset=out_offset,
+                total_size=cb24_total_size,
+            )
+            cb24_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb24_cb_id,
+                data_format=ttnn.bfloat16,
+                page_size=2048,
+                tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
+            )
+            cb24_desc.format_descriptors = [cb24_fmt]
+            routed_ctx.add_params["cb_out_descriptor"] = cb24_desc
+            out_offset += cb24_total_size
+
         # ── Reduce scratch CBs (43-45) → reuse sender-core-only offsets ──
         # These CBs live on DRAM worker + fabric cores, which are disjoint from the
         # sender core where CB 30/31/38 live. Safe to share the same buffer offsets.
@@ -3802,7 +3823,12 @@ class MoeOp:
             gate_proj_weights_tensor,
             up_proj_weights_tensor,
             down_proj_weights_tensor,
-            final_output_tensor,
+        ]
+        # final_output_tensor is only needed when reduce is disabled (it's the actual output).
+        # When reduce is enabled, CB 24 is backed by SDPA buffer instead.
+        if final_output_tensor is not None:
+            io_tensors.append(final_output_tensor)
+        io_tensors += [
             rmsnorm_gamma_tensor,
             shared_residual_mcast_src_tensor,
             shared_gate_weights_overlapped.fused_tensor,

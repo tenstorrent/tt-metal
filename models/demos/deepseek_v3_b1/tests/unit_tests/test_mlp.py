@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe import (
 # ============================================================================
 # Helper: create all MLP dense expert tensors (no routing)
 # ============================================================================
-def create_mlp_tensors(device, mesh_mapper=None):
+def create_mlp_tensors(device, mesh_mapper=None, create_final_output=True):
     """
     Create all tensors needed for MLP dense expert test.
     Same as create_routed_expert_tensors but without routing-specific tensors
@@ -148,15 +148,17 @@ def create_mlp_tensors(device, mesh_mapper=None):
     final_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
     )
-    final_output_tensor = ttnn.from_torch(
-        torch.zeros([1, 1, 1, final_output_total_width]).bfloat16().float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=final_output_mem_config,
-        tile=tile_1x32,
-        **from_torch_kwargs,
-    )
+    final_output_tensor = None
+    if create_final_output:
+        final_output_tensor = ttnn.from_torch(
+            torch.zeros([1, 1, 1, final_output_total_width]).bfloat16().float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=final_output_mem_config,
+            tile=tile_1x32,
+            **from_torch_kwargs,
+        )
 
     return {
         # TTNN tensors for op()

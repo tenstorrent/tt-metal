@@ -100,7 +100,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
 # ============================================================================
 # Helper: create all routed-expert tensors
 # ============================================================================
-def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper=None):
+def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper=None, create_final_output=True):
     """
     Create all tensors needed for MoE routed expert test.
     Directly extracted from the working inline test setup.
@@ -323,15 +323,17 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
     final_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
     )
-    final_output_tensor = ttnn.from_torch(
-        torch.zeros([1, 1, 1, final_output_total_width]).bfloat16().float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=final_output_mem_config,
-        tile=tile_1x32,
-        **from_torch_kwargs,
-    )
+    final_output_tensor = None
+    if create_final_output:
+        final_output_tensor = ttnn.from_torch(
+            torch.zeros([1, 1, 1, final_output_total_width]).bfloat16().float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=final_output_mem_config,
+            tile=tile_1x32,
+            **from_torch_kwargs,
+        )
 
     return {
         # TTNN tensors for op()
@@ -569,7 +571,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 
     # ── Create MoE tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
-    r = create_routed_expert_tensors(submesh, use_hardcoded_expert_index, mesh_mapper=mesh_mapper)
+    r = create_routed_expert_tensors(
+        submesh, use_hardcoded_expert_index, mesh_mapper=mesh_mapper, create_final_output=False
+    )
     sender_core = r["ttnn_residual_mcast_src"].memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
@@ -940,7 +944,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
 
     # ── Create MLP tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
-    r = create_mlp_tensors(submesh, mesh_mapper=mesh_mapper)
+    r = create_mlp_tensors(submesh, mesh_mapper=mesh_mapper, create_final_output=False)
     sender_core = r["ttnn_residual_mcast_src"].memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
