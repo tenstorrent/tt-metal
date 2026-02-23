@@ -10,7 +10,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-TIMEOUT = 120
+TIMEOUT = 30
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("rms_norm_post_all_gather", all_cases=False)
@@ -70,20 +70,9 @@ def run(
 
     # Create input tensor - bfloat8_b and bfloat4_b require TILE layout
     input_layout = ttnn.TILE_LAYOUT if input_a_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else input_a_layout
-
-    actual_input_mem_config = input_a_memory_config
-    if isinstance(input_a_memory_config, dict):
-        actual_input_mem_config = ttnn.DRAM_MEMORY_CONFIG
-
-    try:
-        input_tensor = ttnn.from_torch(
-            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=actual_input_mem_config
-        )
-    except Exception:
-        input_tensor = ttnn.from_torch(
-            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
+    )
     # Determine weight layout based on dtype - bfloat8_b and bfloat4_b require TILE layout
     weight_layout = ttnn.TILE_LAYOUT if input_b_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     weight_tensor = ttnn.from_torch(
@@ -91,7 +80,7 @@ def run(
         dtype=input_b_dtype or input_a_dtype,
         layout=weight_layout,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_b_memory_config or input_a_memory_config,
     )
 
     # Op call
