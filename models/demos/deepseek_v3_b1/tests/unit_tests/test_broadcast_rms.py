@@ -75,6 +75,12 @@ def test_broadcast_rms_fused(
     # Create submesh used by the test
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
+    if use_socket:
+        if not is_slow_dispatch():
+            pytest.skip("Skipping test in fast dispatch mode")
+
+        ttnn.enable_asynchronous_slow_dispatch(submesh)
+
     # Configure a single worker sub-device covering the full compute grid
     compute_grid_size = submesh.compute_with_storage_grid_size()
 

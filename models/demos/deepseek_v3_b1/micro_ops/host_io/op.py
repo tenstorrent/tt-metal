@@ -149,10 +149,6 @@ class HostInterface:
         self.num_fwd_links = 2
         self.num_bwd_links = 1
 
-        self.fabric_packet_header_cb_index = 1
-        self.num_fwd_links = 2
-        self.num_bwd_links = 1
-
     def _create_h2d_kernel(self):
         use_fabric = (not self.loopback_mode) and (
             self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
