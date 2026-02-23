@@ -58,7 +58,7 @@ def compute_forwarder_scratch_size(
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])

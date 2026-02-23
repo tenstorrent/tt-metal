@@ -82,6 +82,17 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
     MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
 }
 
+/**
+ * Lightweight reinit path used when reduce follows custom SDPA sub path.
+ * Reprograms reduce MOP and restores only the reduce addrmods.
+ */
+template <uint32_t block_ct_dim>
+ALWI void reduce_block_max_row_reinit_short() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
+    MATH((llk_math_reduce_block_max_row_mop_config<block_ct_dim, DST_ACCUM_MODE>()));
+    MATH((llk_math_reduce_block_max_row_reinit()));
+}
+
 // clang-format off
 /**
  * Uninitializes the block-based reduce_max_row operation. Needs to be called after the last call to `reduce_block_max_row` before initializing another operation.
