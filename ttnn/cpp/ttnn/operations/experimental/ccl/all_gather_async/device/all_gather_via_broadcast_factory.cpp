@@ -17,8 +17,6 @@ AllGatherViaBroadcastFactory::cached_mesh_workload_t AllGatherViaBroadcastFactor
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const AllGatherAsyncInputs& tensor_args,
     Tensor& output_tensor) {
-    printf("hello here-> all_gather_via_broadcast\n");
-
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -94,7 +92,12 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     const uint32_t MAX_PACKET_SIZE_BYTES = std::bit_floor(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes());
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
-    const uint32_t cb_page_size = std::lcm(std::lcm(input_page_size, output_page_size), MAX_PACKET_SIZE_BYTES);
+    uint32_t cb_page_size = std::lcm(std::lcm(input_page_size, output_page_size), MAX_PACKET_SIZE_BYTES);
+
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        // 32^2 elements == 1/2 or 1 packet, a couple more packets per cb_page for less sync
+        cb_page_size *= 4;
+    }
 
     // per device input and output page numbers
     uint32_t num_input_pages = input_tensor.buffer()->num_pages();
@@ -104,9 +107,6 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     uint32_t num_output_pages = (num_input_pages * input_page_size) / output_page_size;
     // offset into the gathered tensor
     uint32_t write_page_offset = num_output_pages * ring_index;
-
-    // uint32_t packet_size =
-    //     std::min(output_tensor.buffer()->aligned_page_size(), static_cast<unsigned long>(MAX_PACKET_SIZE_BYTES));
 
     // L1 Scratch CB Creation
     uint32_t src0_cb_index = tt::CB::c_in0;
@@ -130,11 +130,9 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         src0_cb_index,  // cb0_id
         cb_page_size,
         output_page_size,
-        // packet_size,
-        MAX_PACKET_SIZE_BYTES,
-        num_targets_forward,   // num_targets_forward_direction
-        num_targets_backward,  // num_targets_backward_direction
-        true,                  // is_sender
+        MAX_PACKET_SIZE_BYTES,  // packet_size,
+        num_targets_forward,    // num_targets_forward_direction
+        num_targets_backward,   // num_targets_backward_direction
     };
 
     std::vector<uint32_t> mcast_forward_args(2, 0);
@@ -182,9 +180,6 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         uint32_t remainder = num_input_pages % operation_attributes.num_links;
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
-        // std::cout << "output_tile_id_start " << output_tile_id_start << '\n';
-        // std::cout << "output_tile_id_end " << output_tile_id_end << '\n';
-        // std::cout << "num_output_pages " << num_output_pages << '\n';
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // tensor_address0
             input_tile_id_start,               // tile_id_start
@@ -200,7 +195,7 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
 
         uint32_t output_tile_id_start = (input_tile_id_start * num_output_pages) / num_input_pages;
         uint32_t output_tile_id_end = (input_tile_id_end * num_output_pages) / num_input_pages;
-        // page id in gathered tensor
+        // page id in gathered tensor with the write page offset
         output_tile_id_start += write_page_offset;
         output_tile_id_end += write_page_offset;
         std::vector<uint32_t> writer_rt_args = {
