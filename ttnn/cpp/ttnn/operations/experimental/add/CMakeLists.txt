@@ -26,8 +26,8 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/add_device_operation.cpp
-        device/program_factory/element_wise_multi_core_add_program.cpp
-        device/program_factory/elt_nd_sharded_add_program.cpp
+        device/dram_optimized/dram_optimized_program.cpp
+        device/ndsharded/elt_nd_sharded_add_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_add PRIVATE ${FixmeOpIncDirs})

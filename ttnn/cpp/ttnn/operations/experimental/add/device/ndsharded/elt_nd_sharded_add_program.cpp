@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/add/device/program_factory/elt_nd_sharded_add_program.hpp"
-#include "ttnn/operations/experimental/add/device/program_factory/elemwise_factory_common.hpp"
-
-#include "ttnn/operations/experimental/add/device/kernels/dataflow/elt_nd_sharded_add_reader_args.hpp"
-#include "ttnn/operations/experimental/add/device/kernels/dataflow/elemwise_writer_kernel_args.hpp"
+#include "ttnn/operations/experimental/add/device/ndsharded/elt_nd_sharded_add_program.hpp"
+#include "ttnn/operations/experimental/add/device/ndsharded/elemwise_nd_factory_common.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -22,8 +19,7 @@ namespace ttnn::experimental::prim {
 
 EltNDShardedAddProgram::cached_program_t EltNDShardedAddProgram::create(
     const AddParams& operation_attributes, const AddInputs& args, Tensor& output) {
-    using namespace ttnn::kernel::eltwise;
-    // using namespace ttnn::kernel::eltwise::add_args;
+    using namespace eltwise_nd_dram_optimized;
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -84,7 +80,7 @@ EltNDShardedAddProgram::cached_program_t EltNDShardedAddProgram::create(
 
     CBHandle cb_output = createCircularBuffer(output_cb_index, page_size, num_tiles_per_shard_width);
 
-    add_nd_sharded_args::CompileTimeReaderKernelArgs reader_compile_time_args = {
+    EltwiseReaderCTArgs reader_compile_time_args = {
         .a_tensor_cb = a_tensor_cb, .b_tensor_cb = b_tensor_cb, .num_tiles_per_cycle = num_tiles_per_cycle};
 
     /***************   READER KERNEL ***************/
@@ -102,7 +98,7 @@ EltNDShardedAddProgram::cached_program_t EltNDShardedAddProgram::create(
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    add_args::CompileTimeWriterKernelArgs writer_compile_time_args = {
+    EltwiseWriterCTArgs writer_compile_time_args = {
         .cb_dst = output_cb_index, .num_tiles_per_cycle = num_tiles_per_cycle};
 
     /***************   WRITER KERNEL ***************/
@@ -117,7 +113,7 @@ EltNDShardedAddProgram::cached_program_t EltNDShardedAddProgram::create(
 
     /***************   COMPUTE KERNEL ***************/
     /* Use the add_tiles operation in the compute kernel */
-    add_args::CompileTimeComputeKernelArgs compute_compile_time_args = {
+    EltwiseComputeCTArgs compute_compile_time_args = {
         .a_tensor_cb = a_tensor_cb,
         .b_tensor_cb = b_tensor_cb,
         .output_cb = output_cb_index,

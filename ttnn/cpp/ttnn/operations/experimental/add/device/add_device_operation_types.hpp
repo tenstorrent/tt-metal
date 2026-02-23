@@ -10,9 +10,9 @@
 namespace ttnn::experimental::prim {
 
 struct AddParams {
-    const tt::tt_metal::MemoryConfig memory_config;
-    const tt::tt_metal::DataType dtype;
-    const CoreRangeSet worker_grid;
+    tt::tt_metal::MemoryConfig memory_config;
+    tt::tt_metal::DataType dtype;
+    std::optional<CoreRangeSet> sub_core_grids;
 
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
