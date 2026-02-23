@@ -548,9 +548,11 @@ namespace {
 ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
     const ::tt::tt_fabric::AdjacencyGraph<MeshId>& mesh_physical_graph, const TopologyMappingConfig& config) {
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
-    // TODO: Remove this once rank bindings file is removed from multi-host systems
-    // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
+
+    // Only add required constraints when rank bindings are enabled
     if (!config.disable_rank_bindings) {
+        // TODO: Remove this once rank bindings file is removed from multi-host systems
+        // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
         for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
             if (!inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id)) {
                 TT_THROW("Failed to add required constraint for mesh {}", mesh_id.get());
@@ -934,18 +936,6 @@ TopologyMappingResult map_multi_mesh_to_physical(
         "Starting multi-mesh mapping: {} logical mesh(es) to {} physical mesh(es)",
         logical_meshes.size(),
         physical_meshes.size());
-
-    // If rank bindings are disabled, initialize valid mappings for all logical meshes
-    // to all physical meshes so that forbidden constraints can be applied
-    if (config.disable_rank_bindings) {
-        std::set<MeshId> physical_mesh_set(physical_meshes.begin(), physical_meshes.end());
-        for (const auto& logical_mesh_id : logical_meshes) {
-            if (!inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_mesh_set)) {
-                TT_THROW("Failed to add required constraint for logical mesh {}", logical_mesh_id.get());
-            }
-        }
-        log_debug(tt::LogFabric, "Rank bindings disabled - all logical meshes can map to any physical mesh");
-    }
 
     bool success = false;
 

@@ -307,10 +307,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 }
 
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
-    // When unset, assume host rank 0.
+    // When unset, use UNSET sentinel value.
     const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
     const MeshHostRankId host_rank = (host_rank_str == nullptr)
-                                         ? MeshHostRankId{0}
+                                         ? MESH_HOST_RANK_UNSET
                                          : MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
 
     // If TT_MESH_ID is unset, assume this host is the only host in the system and owns all Meshes in
@@ -356,7 +356,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // Validate host rank (only if mesh_id is valid)
     const auto& host_ranks = this->mesh_graph_->get_host_ranks(local_mesh_binding.mesh_ids[0]).values();
     if (host_rank_str == nullptr) {
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        local_mesh_binding.host_rank = MESH_HOST_RANK_UNSET;
         TT_FATAL(
             host_ranks.size() == 1 && *host_ranks.front() == 0,
             "TT_MESH_HOST_RANK must be set when multiple host ranks are present in the mesh graph descriptor for mesh "
