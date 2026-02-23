@@ -219,15 +219,10 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
     std::cout << "compute_output_specs: shape_out=" << shape_out << "\n";
 
     // When ref input has ND sharding, build output TensorSpec with derived NdShardSpec:
-    // same grid/orientation/strategy, shard_shape with concat dim = sum of input shard shapes along that dim.
+    // same grid/orientation/strategy. Use first input's shard_shape for the output.
     if (const auto& ref_nd_spec = ref_in_tensor.nd_shard_spec(); ref_nd_spec.has_value()) {
         const auto& first_spec = ref_nd_spec.value();
         ttnn::Shape output_shard_shape = first_spec.shard_shape;
-        output_shard_shape[args.dim] = 0;
-        for (const Tensor& in_ref : tensor_args.input_tensors) {
-            const auto& in_nd = in_ref.nd_shard_spec().value();
-            output_shard_shape[args.dim] += in_nd.shard_shape[args.dim];
-        }
         std::cout << "compute_output_specs: output_shard_shape=" << output_shard_shape << "\n";
         NdShardSpec output_nd_spec(
             std::move(output_shard_shape),
