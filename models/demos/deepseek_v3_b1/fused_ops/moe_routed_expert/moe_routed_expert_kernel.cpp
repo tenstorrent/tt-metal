@@ -693,12 +693,13 @@ void kernel_main() {
 
     // ========================================================================
     // 7. up_proj Matmul: Expert computation on DRAM matmul cores (no SiLU)
-    //    PopIn0=true to release input after use
+    //    PopIn0=true to release input after use, WaitForOutput=true
     //    Writes to intermediate CB (up_proj_cb_mm_out)
     // ========================================================================
     {
         DeviceZoneScopedN("UP_PROJ");
-        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true> up_proj;
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true, false, 0, false, true>
+            up_proj;
         up_proj();
     }
 
