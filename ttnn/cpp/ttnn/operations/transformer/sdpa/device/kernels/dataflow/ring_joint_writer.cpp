@@ -73,28 +73,29 @@ void write_output_and_lse(
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
-    constexpr uint32_t DHt = get_compile_time_arg_val(2);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(3);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(9);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(10);
-    constexpr uint32_t Lt = get_compile_time_arg_val(11);
-    constexpr uint32_t L = get_compile_time_arg_val(12);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(17);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(18);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(19);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(20);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t NHK = get_compile_time_arg_val(2);
+    constexpr uint32_t DHt = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
+    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    constexpr uint32_t Lt = get_compile_time_arg_val(12);
+    constexpr uint32_t L = get_compile_time_arg_val(13);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(16);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(17);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(18);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(19);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(20);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(21);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -139,7 +140,7 @@ void kernel_main() {
 
     uint32_t rind_index = fused_op_receiver.ring_index;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        DPRINT << "Ring iter WR: " << ring_iter << ENDL();
+        // DPRINT << "Ring iter WR: " << ring_iter << ENDL();
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -199,7 +200,7 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
             bool causality = (ring_iter == 0 ? is_causal : false);
-            DPRINT << "Global q_chunk: " << global_q_chunk << ENDL();
+            // DPRINT << "Global q_chunk: " << global_q_chunk << ENDL();
 
             generate_mask<false, 0, true, cb_mask_in>(  // ADD CAUSAL TRUE
                 Sq_chunk_t,
@@ -211,7 +212,7 @@ void kernel_main() {
                 ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
                 L,
                 causality);
-            DPRINT << "Generated mask" << ENDL();
+            // DPRINT << "Generated mask" << ENDL();
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;

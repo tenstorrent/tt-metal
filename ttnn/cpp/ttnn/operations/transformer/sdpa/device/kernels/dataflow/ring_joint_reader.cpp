@@ -11,26 +11,27 @@
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
-    constexpr uint32_t DHt = get_compile_time_arg_val(2);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(3);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(9);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(10);
-    constexpr uint32_t Lt = get_compile_time_arg_val(11);
-    constexpr uint32_t L = get_compile_time_arg_val(12);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(17);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(18);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(19);
+    constexpr uint32_t NHK = get_compile_time_arg_val(2);
+    constexpr uint32_t DHt = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
+    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    constexpr uint32_t Lt = get_compile_time_arg_val(12);
+    constexpr uint32_t L = get_compile_time_arg_val(13);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(16);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(17);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(18);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(19);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(20);
 
-    constexpr auto q_args = TensorAccessorArgs<20>();
+    constexpr auto q_args = TensorAccessorArgs<21>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -141,7 +142,7 @@ void kernel_main() {
     // DPRINT << "NUM LOCAL Q CHUNKS " << num_local_q_chunks << " K CHUNKS " << num_local_k_chunks << ENDL();
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
-        DPRINT << "Ring iter RD: " << ring_iter << ENDL();
+        // DPRINT << "Ring iter RD: " << ring_iter << ENDL();
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.

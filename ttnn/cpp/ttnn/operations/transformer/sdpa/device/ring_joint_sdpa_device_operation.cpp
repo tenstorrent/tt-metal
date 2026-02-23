@@ -91,6 +91,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    const auto NVH = v_shape[1];
     const auto N_local = q_shape[2];
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
@@ -121,8 +122,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     //     joint_v_shape[3]);
 
     TT_FATAL(
-        v_shape[1] == NKH && joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
-        "Num heads must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NVH,
+        "Num heads mismatch. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
         NQH,
         NKH,
         v_shape[1],
@@ -179,7 +180,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
-    TT_FATAL(NQH == NKH, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", NQH, NKH);
+    TT_FATAL(NQH == NVH, "Q num_heads must be equal to V num_heads. Got Q: {}, V: {}", NQH, NVH);
+    TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
 
     // Validate chunk sizes if program config is provided
     auto q_chunk_size = args.get_q_chunk_size();

@@ -29,7 +29,9 @@ def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_
 def run_ring_joint_sdpa(
     submesh,
     b,
-    nh,
+    nhq,
+    nhk,
+    nhv,
     base_seq_len,
     padded_seq_len,
     joint_seq_len,
@@ -78,8 +80,11 @@ def run_ring_joint_sdpa(
     kv_shard_dims[up_axis] = 1  # UP shards on heads dim1
 
     # Create persistent output buffers
-    ag_output_shape_k = (b, nh, padded_seq_len, head_dim_k)
-    ag_output_shape_v = (b, nh, padded_seq_len, head_dim_v)
+    # Check sharding on these
+    ag_output_shape_k = (b, nhk, padded_seq_len, head_dim_k)
+    ag_output_shape_v = (b, nhv, padded_seq_len, head_dim_v)
+    print("ag_output_shape_k = ", ag_output_shape_k)
+    print("ag_output_shape_v = ", ag_output_shape_v)
 
     persistent_output_buffers = [
         [
@@ -103,6 +108,9 @@ def run_ring_joint_sdpa(
         for _ in range(n_iters)
     ]
 
+    print("Persistent output buffer[0] shape = ", persistent_output_buffers[0][0].shape)
+    print("Persistent output buffer[1] shape = ", persistent_output_buffers[0][1].shape)
+
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
         q_chunk_size=q_chunk_size,
@@ -117,17 +125,17 @@ def run_ring_joint_sdpa(
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, base_seq_len, head_dim_q)
-    K = fa_rand(b, nh, base_seq_len, head_dim_k)
-    V = fa_rand(b, nh, base_seq_len, head_dim_v)
+    Q = fa_rand(b, nhq, base_seq_len, head_dim_q)
+    K = fa_rand(b, nhk, base_seq_len, head_dim_k)
+    V = fa_rand(b, nhv, base_seq_len, head_dim_v)
 
-    padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
-    padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
-    padded_V = torch.cat([V, torch.zeros(b, nh, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
+    padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
+    padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
+    padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
 
-    joint_Q = fa_rand(b, nh, joint_seq_len, head_dim_q)
-    joint_K = fa_rand(b, nh, joint_seq_len, head_dim_k)
-    joint_V = fa_rand(b, nh, joint_seq_len, head_dim_v)
+    joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
+    joint_K = fa_rand(b, nhk, joint_seq_len, head_dim_k)
+    joint_V = fa_rand(b, nhv, joint_seq_len, head_dim_v)
 
     # Print shapes of all inputs along with input names
     logger.debug(f"Q: {Q.shape}")
@@ -307,10 +315,12 @@ def run_ring_joint_sdpa(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "b, nh, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
-    # [(1, 32, 4 * 4 * 1024, 576, 576, 128)],
-    [(1, 1, 4 * 32, 64, 64, 32)],
-    ids=["deepseek_v3_prefill"],
+    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
+    [
+        # (1, 32, 32, 32, 4 * 4 * 1024, 576, 576, 128),
+        (1, 2, 1, 2, 4 * 32, 64, 64, 32),
+    ],
+    # ids=["deepseek_v3_prefill", "small_test"],
 )
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
 @pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
@@ -353,7 +363,9 @@ def run_ring_joint_sdpa(
 def test_mla_sdpa(
     mesh_device,
     b,
-    nh,
+    nhq,
+    nhk,
+    nhv,
     base_seq_len,
     head_dim_q,
     head_dim_k,
@@ -387,7 +399,9 @@ def test_mla_sdpa(
     run_ring_joint_sdpa(
         submesh,
         b,
-        nh,
+        nhq,
+        nhk,
+        nhv,
         base_seq_len,
         padded_seq_len,
         joint_seq_len,

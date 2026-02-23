@@ -9,6 +9,7 @@
 #include <cmath>
 #include <string>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -165,7 +166,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_info(tt::LogOp, "k_shape (gathered): {}", k_shape);
     log_info(tt::LogOp, "v_shape (gathered): {}", v_shape);
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const uint32_t B = q_shape[0], NH = q_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
     const uint32_t padded_N = k_shape[2];
     const uint32_t vDH = v_shape[3];
     const uint32_t L = joint_q_shape[2];
@@ -196,7 +197,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
 
     log_debug(tt::LogOp, "B: {}", B);
-    log_debug(tt::LogOp, "NH: {}", NH);
+    log_info(tt::LogOp, "NH: {}", NH);
+    log_info(tt::LogOp, "NHK: {}", NHK);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
     log_debug(tt::LogOp, "vDH: {}", vDH);
@@ -356,6 +358,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
         vDHt,
         Sq_chunk_t,
@@ -399,6 +402,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
         vDHt,
         Sq_chunk_t,
@@ -427,6 +431,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> compute_compile_time_args = {
         B,
         NH,
+        NHK,
         DHt,
         vDHt,
         Sq_chunk_t,
