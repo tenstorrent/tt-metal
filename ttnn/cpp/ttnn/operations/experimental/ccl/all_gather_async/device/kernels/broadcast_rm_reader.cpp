@@ -18,6 +18,8 @@ void kernel_main() {
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
 
+    static_assert(cb_page_size % input_page_size == 0);
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -31,13 +33,17 @@ void kernel_main() {
     for (uint32_t page_id = input_page_id_start; page_id < input_page_id_end;) {
         cb_reserve_back(cb0_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb0_id);
+
         // fill CB page
-        uint32_t input = 0;
-        for (; input < inputs_per_cb_page && page_id + input < input_page_id_end; input++) {
-            auto noc_src_addr = tensor0_addrgen.get_noc_addr(page_id + input, 0);
-            noc_async_read(noc_src_addr, l1_write_addr + input * input_page_size, input_page_size);
+        for (uint32_t input = 0; input < inputs_per_cb_page; input++) {
+            if (page_id + input >= input_page_id_end) [[unlikely]] {
+                break;
+            }
+            auto tensor_src_addr = tensor0_addrgen.get_noc_addr(page_id + input, 0);
+            auto cb_input_page = l1_write_addr + input * input_page_size;
+            noc_async_read(tensor_src_addr, cb_input_page, input_page_size);
         }
-        page_id += input;
+        page_id += inputs_per_cb_page;
         noc_async_read_barrier();
         cb_push_back(cb0_id, 1);
     }

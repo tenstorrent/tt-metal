@@ -26,6 +26,9 @@ AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attri
             "all_gather_async_reversed.");
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
     }
+    if (operation_attributes.use_all_gather_async_via_broadcast) {
+        return AllGatherAsyncVersion::VIA_BROADCAST;
+    }
     TT_FATAL(operation_attributes.semaphore.size() == 2, "Default implementation requires 2 semaphores");
     return AllGatherAsyncVersion::MINIMAL_DEFAULT;
 }
@@ -38,11 +41,12 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED: {
             return LlamaShardedMeshWorkloadFactory{};
         }
+        case AllGatherAsyncVersion::VIA_BROADCAST: {
+            return AllGatherViaBroadcastFactory{};
+        }
         case AllGatherAsyncVersion::MINIMAL_DEFAULT:
         default: {
-            printf("via broadcast factory\n");
-            return AllGatherViaBroadcastFactory{};
-            // return DefaultMeshWorkloadFactory{};
+            return DefaultMeshWorkloadFactory{};
         }
     }
 }
@@ -231,6 +235,7 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOpera
     const std::optional<uint32_t>& cluster_axis,
     bool use_optimal_ccl_for_llama,
     bool use_all_gather_async_llama_sharded,
+    bool use_all_gather_async_via_broadcast,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
@@ -287,6 +292,7 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOpera
             cluster_axis,
             use_all_gather_async_llama_sharded,
             use_optimal_ccl_for_llama,
+            use_all_gather_async_via_broadcast,
             barrier_semaphore,
             using_persistent_buffers,
             chunks_per_sync,
