@@ -13,34 +13,32 @@ This module provides the TTNN implementation of all model components:
 - Full Attention DenseUNet model
 """
 
-import torch
 import ttnn
 from models.demos.attention_denseunet.tt.config import (
-    TtAttentionDenseUNetConfigs,
-    DenseLayerConfiguration,
     AttentionGateConfiguration,
+    DenseLayerConfiguration,
+    TtAttentionDenseUNetConfigs,
     UpconvConfiguration,
 )
 from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 
 
-def concatenate_features(
-    x1: ttnn.Tensor, x2: ttnn.Tensor, use_row_major_layout=True
-) -> ttnn.Tensor:
+def concatenate_features(x1: ttnn.Tensor, x2: ttnn.Tensor, use_row_major_layout=True) -> ttnn.Tensor:
     """
     Concatenate two tensors along the channel dimension.
-    
+
     Args:
         x1: First tensor
         x2: Second tensor
         use_row_major_layout: Whether to use row major layout for concatenation
-        
+
     Returns:
         Concatenated tensor
     """
-    assert x1.shape[:-1] == x2.shape[:-1], \
-        f"Spatial dimensions must match for concatenation (got {x1.shape} and {x2.shape})"
-    
+    assert (
+        x1.shape[:-1] == x2.shape[:-1]
+    ), f"Spatial dimensions must match for concatenation (got {x1.shape} and {x2.shape})"
+
     if not x2.is_sharded() and x1.is_sharded():
         input_core_grid = x1.memory_config().shard_spec.grid
         input_shard_shape = x1.memory_config().shard_spec.shape
@@ -49,7 +47,7 @@ def concatenate_features(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
         )
         x2 = ttnn.to_memory_config(x2, input_memory_config)
-    
+
     if x1.is_sharded():
         output_core_grid = x1.memory_config().shard_spec.grid
         output_shard_shape = (
@@ -62,17 +60,17 @@ def concatenate_features(
         )
     else:
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    
+
     if use_row_major_layout:
         x1_rm = ttnn.to_layout(x1, ttnn.ROW_MAJOR_LAYOUT)
         x2_rm = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        
+
         concatenated = ttnn.concat([x1_rm, x2_rm], dim=3, memory_config=output_memory_config)
         ttnn.deallocate(x1_rm)
         ttnn.deallocate(x2_rm)
-        
+
         concat_tiled = ttnn.to_layout(concatenated, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(concatenated)
         return concat_tiled
@@ -92,14 +90,14 @@ def transpose_conv2d(
 ) -> ttnn.Tensor:
     """
     Transposed convolution for upsampling.
-    
+
     Args:
         input_tensor: Input tensor
         upconv_config: Upconv configuration
         act_block_h_override: Activation block height override
         fp32_dest_acc_en: Enable FP32 destination accumulation
         packer_l1_acc: Enable packer L1 accumulation
-        
+
     Returns:
         Upsampled tensor
     """
@@ -117,7 +115,7 @@ def transpose_conv2d(
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=packer_l1_acc,
     )
-    
+
     output, [upconv_config.weight, upconv_config.bias] = ttnn.conv_transpose2d(
         input_tensor=input_tensor,
         weight_tensor=upconv_config.weight,
@@ -136,30 +134,30 @@ def transpose_conv2d(
         return_output_dim=False,
         return_weights_and_bias=True,
     )
-    
+
     return output
 
 
 class TtDenseLayer:
     """
     TTNN implementation of a DenseLayer.
-    
+
     Follows pattern: BN-ReLU-Conv1x1-BN-ReLU-Conv3x3-Concat
     (BatchNorm is folded into Conv during preprocessing)
     """
-    
+
     def __init__(self, config: DenseLayerConfiguration, device: ttnn.Device):
         self.device = device
         self.bottleneck = TtConv2d(config.bottleneck_conv, device)
         self.expansion = TtConv2d(config.expansion_conv, device)
-    
+
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass: bottleneck conv -> expansion conv -> concatenate with input.
-        
+
         Args:
             x: Input tensor with shape [B, H, W, C_in]
-            
+
         Returns:
             Concatenated tensor with shape [B, H, W, C_in + growth_rate]
         """
@@ -173,22 +171,22 @@ class TtDenseLayer:
 class TtDenseBlock:
     """
     TTNN implementation of a DenseBlock.
-    
+
     Contains multiple DenseLayers where each layer concatenates its output
     to the input, creating dense connections.
     """
-    
+
     def __init__(self, layers: list, device: ttnn.Device):
         self.device = device
         self.layers = [TtDenseLayer(layer_config, device) for layer_config in layers]
-    
+
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass through all dense layers.
-        
+
         Args:
             x: Input tensor
-            
+
         Returns:
             Output with concatenated features from all layers
         """
@@ -200,22 +198,22 @@ class TtDenseBlock:
 class TtTransitionDown:
     """
     TTNN implementation of TransitionDown layer.
-    
+
     Compresses channels and reduces spatial dimensions via pooling.
     """
-    
+
     def __init__(self, conv_config, pool_config, device: ttnn.Device):
         self.device = device
         self.conv = TtConv2d(conv_config, device)
         self.pool = TtMaxPool2d(pool_config, device)
-    
+
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass: conv (BN+ReLU fused) -> max pool.
-        
+
         Args:
             x: Input tensor
-            
+
         Returns:
             Downsampled tensor with compressed channels
         """
@@ -227,20 +225,20 @@ class TtTransitionDown:
 class TtTransitionUp:
     """
     TTNN implementation of TransitionUp layer.
-    
+
     Upsamples spatial dimensions via transposed convolution.
     """
-    
+
     def __init__(self, upconv_config: UpconvConfiguration):
         self.upconv_config = upconv_config
-    
+
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass: transposed convolution for upsampling.
-        
+
         Args:
             x: Input tensor
-            
+
         Returns:
             Upsampled tensor
         """
@@ -250,48 +248,48 @@ class TtTransitionUp:
 class TtAttentionGate:
     """
     TTNN implementation of AttentionGate.
-    
+
     Computes spatial attention to emphasize relevant features from
     skip connections based on the gating signal from the decoder.
     """
-    
+
     def __init__(self, config: AttentionGateConfiguration, device: ttnn.Device):
         self.device = device
         self.config = config
-        
+
         # Initialize convolution layers
         self.theta = TtConv2d(config.theta_conv, device)
         self.phi = TtConv2d(config.phi_conv, device)
         self.psi = TtConv2d(config.psi_conv, device)
         self.W = TtConv2d(config.W_conv, device)
-    
+
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass for attention gate.
-        
+
         Args:
             x: Skip connection features (higher resolution)
             g: Gating signal from decoder (may be lower resolution)
-            
+
         Returns:
             Attention-weighted skip connection features
         """
         theta_x = self.theta(x)
         phi_g = self.phi(g)
         if phi_g.shape[1] != theta_x.shape[1] or phi_g.shape[2] != theta_x.shape[2]:
-            phi_g_torch = ttnn.to_torch(phi_g)
-            phi_g_torch = torch.nn.functional.interpolate(
-                phi_g_torch.permute(0, 3, 1, 2),  # NHWC -> NCHW
-                size=(theta_x.shape[1], theta_x.shape[2]),
-                mode='bilinear',
-                align_corners=False
-            ).permute(0, 2, 3, 1)  # NCHW -> NHWC
-            phi_g = ttnn.from_torch(
-                phi_g_torch,
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG
+            scale_h = theta_x.shape[1] // phi_g.shape[1]
+            scale_w = theta_x.shape[2] // phi_g.shape[2]
+
+            phi_g_rm = ttnn.to_layout(phi_g, ttnn.ROW_MAJOR_LAYOUT)
+            phi_g_rm = ttnn.to_memory_config(phi_g_rm, ttnn.DRAM_MEMORY_CONFIG)
+            phi_g_rm = ttnn.upsample(
+                input_tensor=phi_g_rm,
+                scale_factor=[int(scale_h), int(scale_w)],
+                mode="bilinear",
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            phi_g = ttnn.to_layout(phi_g_rm, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            ttnn.deallocate(phi_g_rm)
         f = ttnn.add(theta_x, phi_g)
         f = ttnn.relu(f)
         attention = self.psi(f)
@@ -304,22 +302,22 @@ class TtAttentionGate:
 class TtDecoderBlock:
     """
     TTNN implementation of DecoderBlock.
-    
+
     Two sequential convolution blocks.
     """
-    
+
     def __init__(self, conv1_config, conv2_config, device: ttnn.Device):
         self.device = device
         self.conv1 = TtConv2d(conv1_config, device)
         self.conv2 = TtConv2d(conv2_config, device)
-    
+
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass: conv1 (BN+ReLU) -> conv2 (BN+ReLU).
-        
+
         Args:
             x: Input tensor (concatenated upsampled + attended skip)
-            
+
         Returns:
             Processed tensor
         """
@@ -331,11 +329,11 @@ class TtDecoderBlock:
 class TtAttentionDenseUNet:
     """
     TTNN implementation of complete Attention DenseUNet model.
-    
+
     Combines DenseNet encoder with attention-gated skip connections
     in a U-Net style architecture.
     """
-    
+
     def __init__(self, configs: TtAttentionDenseUNetConfigs, device: ttnn.Device):
         self.device = device
         self.configs = configs
@@ -343,7 +341,7 @@ class TtAttentionDenseUNet:
         self.encoder_blocks = []
         for block_configs in configs.encoder_blocks:
             self.encoder_blocks.append(TtDenseBlock(block_configs, device))
-        
+
         self.transitions_down = []
         for i, (trans_conv, pool_config) in enumerate(zip(configs.transitions_down, configs.pools)):
             self.transitions_down.append(TtTransitionDown(trans_conv, pool_config, device))
@@ -352,26 +350,24 @@ class TtAttentionDenseUNet:
         self.transitions_up = []
         for upconv_config in configs.upconvs:
             self.transitions_up.append(TtTransitionUp(upconv_config))
-        
+
         self.attention_gates = []
         for att_config in configs.attention_gates:
             self.attention_gates.append(TtAttentionGate(att_config, device))
-        
+
         self.decoder_blocks = []
         for dec_config in configs.decoder_blocks:
-            self.decoder_blocks.append(
-                TtDecoderBlock(dec_config.conv1, dec_config.conv2, device)
-            )
+            self.decoder_blocks.append(TtDecoderBlock(dec_config.conv1, dec_config.conv2, device))
         self.conv_out = TtConv2d(configs.conv_out, device)
-    
+
     def preprocess_input_tensor(self, x: ttnn.Tensor, deallocate_input_activation: bool = True):
         """
         Preprocess input tensor to HWC layout.
-        
+
         Args:
             x: Input tensor
             deallocate_input_activation: Whether to deallocate input
-            
+
         Returns:
             Preprocessed tensor in HWC format
         """
@@ -379,15 +375,15 @@ class TtAttentionDenseUNet:
         if deallocate_input_activation:
             ttnn.deallocate(x)
         return output
-    
+
     def __call__(self, input_tensor: ttnn.Tensor, deallocate_input_activation: bool = True) -> ttnn.Tensor:
         """
         Forward pass through the complete Attention DenseUNet model.
-        
+
         Args:
             input_tensor: Input image tensor
             deallocate_input_activation: Whether to deallocate intermediate activations
-            
+
         Returns:
             Segmentation output tensor
         """
@@ -411,20 +407,18 @@ class TtAttentionDenseUNet:
             x = decoder(x)
         output = self.conv_out(x)
         output = ttnn.experimental.convert_to_chw(output, dtype=ttnn.bfloat16)
-        
+
         return output
 
 
-def create_model_from_configs(
-    configs: TtAttentionDenseUNetConfigs, device: ttnn.Device
-) -> TtAttentionDenseUNet:
+def create_model_from_configs(configs: TtAttentionDenseUNetConfigs, device: ttnn.Device) -> TtAttentionDenseUNet:
     """
     Construct Attention DenseUNet instance from configuration.
-    
+
     Args:
         configs: Model configuration object
         device: TTNN device
-        
+
     Returns:
         TtAttentionDenseUNet instance
     """
