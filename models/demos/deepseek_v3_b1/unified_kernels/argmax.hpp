@@ -323,7 +323,6 @@ struct Sampling {
 #endif
 
         void impl(const RTArgs& args) {
-            DPRINT << "Argmax kernel started" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
             const uint32_t gather_addr = args.gather_addr;
@@ -427,14 +426,10 @@ struct Sampling {
             }
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
-            DPRINT << "IsFinalCore: " << (uint32_t)IsFinalCore << " CTArgs::socket_mode: " << CTArgs::socket_mode
-                   << ENDL();
             if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
                 send_d2h_token_from_cb_brisc(args.socket_config_addr);
             } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
-                DPRINT << "Sending D2D token from CB" << ENDL();
                 send_d2d_token_from_cb_brisc(args.socket_config_addr);
-                DPRINT << "D2D token sent from final core" << ENDL();
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
                 auto local_ready_sem_ptr =
@@ -448,7 +443,6 @@ struct Sampling {
                 send_mesh_winner_via_fabric_brisc(
                     args.final_noc_x, args.final_noc_y, local_slot_addr, metadata, arg_idx);
             }
-            DPRINT << "Final core completed" << ENDL();
 #elif defined(COMPILE_FOR_TRISC)
             // No-op for k=1 argmax fast path.
             (void)args;

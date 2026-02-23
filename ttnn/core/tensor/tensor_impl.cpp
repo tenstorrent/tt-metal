@@ -426,27 +426,27 @@ template <typename T>
 Tensor to_layout_impl(const Tensor& tensor, Layout target_layout);
 
 template <typename T>
-std::string to_string_impl([[maybe_unused]] const Tensor& tensor) {
-    // const auto& shape = tensor.logical_shape();
+std::string to_string_impl(const Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
 
-    // if (!tensor.is_allocated()) {
-    //     return fmt::format(
-    //         "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
-    //         detail::TENSOR_TYPE_STRING,
-    //         shape,
-    //         tensor.dtype(),
-    //         tensor.layout());
-    // }
+    if (!tensor.is_allocated()) {
+        return fmt::format(
+            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+            detail::TENSOR_TYPE_STRING,
+            shape,
+            tensor.dtype(),
+            tensor.layout());
+    }
 
-    // auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
-    //     if (tensor.layout() == Layout::ROW_MAJOR) {
-    //         return tensor;
-    //     }
-    //     if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-    //         return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
-    //     }
-    //     return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
-    // };
+    auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
+        if (tensor.layout() == Layout::ROW_MAJOR) {
+            return tensor;
+        }
+        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
+            return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+        }
+        return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
+    };
 
     auto get_host_buffers = [&](const HostStorage& storage) {
         std::vector<HostBuffer> buffers;
@@ -510,7 +510,9 @@ std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
-std::string to_string([[maybe_unused]] const Tensor& tensor) { return "hello sirjeet"; }
+std::string to_string(const Tensor& tensor) {
+    return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
+}
 
 // ======================================================================================
 //                                      .to_host()
