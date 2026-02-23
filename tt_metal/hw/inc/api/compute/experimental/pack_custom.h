@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/compute/common_globals.h"
+#include "common_globals.h"
 
 namespace ckernel {
 
