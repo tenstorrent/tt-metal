@@ -46,6 +46,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
     if (input_tensor_a.memory_config().is_sharded()) {
+        TT_FATAL(operation_attributes.use_multicore == true, "Multicore must be enabled for sharded input");
         if (input_is_nd_sharded) {
             uint32_t element_size_in_bytes = input_tensor_a.element_size();
             const uint32_t page_size_bytes =
@@ -82,22 +83,12 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
                 "Output memory config layout ({}) must match input tensor memory layout ({})",
                 operation_attributes.output_mem_config.memory_layout(),
                 input_tensor_a.memory_config().memory_layout());
-            TT_FATAL(operation_attributes.use_multicore == true, "Multicore must be enabled for sharded input");
             TT_FATAL(
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                 "Input tensor shard orientation must be ROW_MAJOR but got {}",
                 input_tensor_a.shard_spec().value().orientation);
         }
-    }  // else {
-    //     TT_FATAL(
-    //         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-    //         "Input tensor memory layout must be INTERLEAVED but got {}",
-    //         input_tensor_a.memory_config().memory_layout());
-    //     TT_FATAL(
-    //         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-    //         "Output memory config layout must be INTERLEAVED but got {}",
-    //         operation_attributes.output_mem_config.memory_layout());
-    // }
+    }
 }
 
 TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
@@ -145,11 +136,6 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_is_nd_sharded) {
-            if (use_single_core) {
-                log_warning(
-                    tt::LogOp,
-                    "Tilize: use_multicore=false is ignored for ND sharded inputs; multi-core path will be used");
-            }
             return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
         }
         TT_FATAL(
