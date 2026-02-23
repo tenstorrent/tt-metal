@@ -151,12 +151,6 @@ void sdpa_single_core(
             .set_page_size(qkt_row_B_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_qkt_row_B_config);
 
-    // cb_neginf — helper tile filled with -inf by writer, consumed by compute for prev_max init
-    const uint32_t neginf_cb_index = CBIndex::c_7;
-    auto cb_neginf_config = CircularBufferConfig(single_tile_size, {{neginf_cb_index, cb_data_format}})
-                                .set_page_size(neginf_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb_neginf_config);
-
     const uint32_t identity_scalar_cb_index = CBIndex::c_5;
     auto c_identity_scalar_config = CircularBufferConfig(single_tile_size, {{identity_scalar_cb_index, cb_data_format}})
                                         .set_page_size(tt::CBIndex::c_5, single_tile_size);
@@ -431,11 +425,6 @@ void sdpa_single_core_test(
         CircularBufferConfig(subblock_h * Sk_chunk_t * single_tile_size, {{qkt_row_B_cb_index, cb_data_format}})
             .set_page_size(qkt_row_B_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_qkt_row_B_config);
-
-    const uint32_t neginf_cb_index = CBIndex::c_7;
-    auto cb_neginf_config = CircularBufferConfig(single_tile_size, {{neginf_cb_index, cb_data_format}})
-                                .set_page_size(neginf_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb_neginf_config);
 
     const uint32_t identity_scalar_cb_index = CBIndex::c_5;
     auto c_identity_scalar_config = CircularBufferConfig(single_tile_size, {{identity_scalar_cb_index, cb_data_format}})
