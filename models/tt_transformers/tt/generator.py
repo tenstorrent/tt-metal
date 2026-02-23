@@ -356,6 +356,15 @@ class Generator(WarmupForwardMixin):
                 if page_table is not None
                 else None
             )
+            if page_table_user is not None:
+                logger.info(
+                    "KVDBG tt-metal prefill user global=%s local=%s seq_len=%s cached=%s page_table=%s",
+                    user_id,
+                    group_user_id,
+                    seq_len,
+                    num_cached_tokens,
+                    page_table_user.tolist(),
+                )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
