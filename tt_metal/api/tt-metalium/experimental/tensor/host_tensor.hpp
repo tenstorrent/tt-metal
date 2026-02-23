@@ -158,13 +158,8 @@ public:
     template <typename T>
     std::vector<T> to_vector() const;
 
-    HostBuffer get_host_buffer() const {
-        // TODO: figure out if we're doing DistributedHostBuffer, hardcoding (0,0) is horrifying.
-        // Get shard at (0,0) for single-device tensor - always exists for HostTensor
-        auto buffer = get_distributed_host_buffer().get_shard(distributed::MeshCoordinate(0, 0));
-        TT_ASSERT(buffer.has_value(), "HostTensor must have a buffer at coordinate (0, 0)");
-        return *buffer;
-    }
+    // Use host_buffer::get_host_buffer instead.
+    // HostBuffer get_host_buffer() const;
 
     const DistributedHostBuffer& get_distributed_host_buffer() const { return get_storage().buffer(); }
 

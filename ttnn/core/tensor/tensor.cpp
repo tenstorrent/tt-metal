@@ -188,55 +188,17 @@ Tensor Tensor::from_vector(
     return res;
 }
 
-template <>
-std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    switch (cpu_tensor.dtype()) {
-        case DataType::BFLOAT16: {
-            auto buffer = host_buffer::get_as<bfloat16>(cpu_tensor);
-            std::vector<float> physical_data;
-            physical_data.reserve(buffer.size());
-            std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
-                return static_cast<float>(val);
-            });
-            if (logical_matches_physical(cpu_tensor.tensor_spec())) {
-                return physical_data;
-            }
-            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(physical_data), cpu_tensor.tensor_spec());
-        }
-        case DataType::FLOAT32: {
-            auto buffer = host_buffer::get_as<const float>(cpu_tensor);
-            return tensor_impl::decode_tensor_data(buffer, cpu_tensor.tensor_spec());
-        }
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
-            const auto& tile = cpu_tensor.tensor_spec().tile();
-            auto buffer = host_buffer::get_as<const uint32_t>(cpu_tensor);
-            std::vector<float> unpacked_data =
-                cpu_tensor.tensor_spec().data_type() == DataType::BFLOAT8_B
-                    ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                    : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(unpacked_data), cpu_tensor.tensor_spec());
-        }
-        default: {
-            TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.dtype());
-        }
-    }
-}
-
 template <typename T>
 std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) const {
+    auto incoming_dtype = convert_to_data_type<T>();
     TT_FATAL(
-        this->dtype() == convert_to_data_type<T>(),
+        (is_floating_point(dtype()) && is_floating_point(incoming_dtype)) || (dtype() == incoming_dtype),
         "Unsupported data type for to_vector: got {}, expected: {}",
-        this->dtype(),
-        convert_to_data_type<T>());
+        dtype(),
+        incoming_dtype);
+
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    auto data = host_buffer::get_as<const T>(cpu_tensor);
-    if (logical_matches_physical(cpu_tensor.tensor_spec())) {
-        return std::vector<T>(data.begin(), data.end());
-    }
-    return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
+    return tensor_impl::host_tensor::to_vector<T>(cpu_tensor.host_tensor());
 }
 
 // Instantiate explicitly for the supported types.
@@ -343,6 +305,7 @@ template Tensor Tensor::from_vector<uint32_t>(
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
 
+template std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
