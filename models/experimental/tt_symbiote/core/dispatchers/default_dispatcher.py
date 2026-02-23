@@ -422,7 +422,6 @@ def handle_neg(func, args, kwargs):
 
 
 def handle_cat(func, args, kwargs):
-    """Handle concatenation operation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     tensors = args[0]
@@ -450,7 +449,24 @@ def handle_cat(func, args, kwargs):
                 f"Warning: TTNN concat requires all tensors to have the same dtype, but got {tensor.to_ttnn.dtype} and {dtype}. Casting to {dtype}."
             )
             tensor.ttnn_tensor = ttnn.typecast(tensor.to_ttnn, dtype)
-    res = TorchTTNNTensor(ttnn.concat([tensor.to_ttnn for tensor in tensors if tensor.numel() > 0], dim))
+    tt_list = [tensor.to_ttnn for tensor in tensors if tensor.numel() > 0]
+    if not tt_list:
+        raise ValueError("concat got empty tensor list after filtering numel() > 0")
+    rank = len(tt_list[0].shape)
+    dim = dim + rank if dim < 0 else dim
+    max_shape = [max(t.shape[i] for t in tt_list) for i in range(rank)]
+    padded = []
+    padded_owned = []
+    for t in tt_list:
+        need_pad = any(t.shape[i] != max_shape[i] for i in range(rank) if i != dim)
+        if need_pad:
+            padding_config = [[0, max_shape[i] - t.shape[i]] for i in range(rank)]
+            t = ttnn.pad(t, padding_config, value=0.0)
+            padded_owned.append(t)
+        padded.append(t)
+    res = TorchTTNNTensor(ttnn.concat(padded, dim))
+    for t in padded_owned:
+        ttnn.deallocate(t)
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
             ttnn.deallocate(tensor.ttnn_tensor)

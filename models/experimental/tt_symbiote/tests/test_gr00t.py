@@ -116,14 +116,6 @@ def _sync(device):
         ttnn.synchronize(device)
 
 
-def _apply_speed_optimizations():
-    os.environ.setdefault("TT_SYMBIOTE_MAX_LENGTH", "72")
-    os.environ.setdefault("TT_SYMBIOTE_ACTION_HORIZON", "1")
-    os.environ.setdefault("TT_SYMBIOTE_UNBIND_FALLBACK_THRESHOLD", "1")
-    os.environ.setdefault("TT_SYMBIOTE_SPLIT_FALLBACK_THRESHOLD", "1")
-    os.environ.setdefault("TT_SYMBIOTE_NUM_INFERENCE_TIMESTEPS", "1")
-
-
 def test_view_padded_tensor_via_dispatch():
     """Dispatch view on padded tensor (e.g. post im2col)."""
     padded = torch.randn(2965872, dtype=torch.bfloat16)
@@ -146,7 +138,6 @@ def test_view_padded_tensor_via_dispatch():
 def test_gr00t_inference_validation(device):
     """Full GR00T inference with TTNN module replacement."""
     torch.manual_seed(42)
-    _apply_speed_optimizations()
 
     model_id = "nvidia/GR00T-N1.6-3B"
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B", trust_remote_code=True)
@@ -166,14 +157,6 @@ def test_gr00t_inference_validation(device):
                 ]
             )
             break
-
-    try:
-        env_steps = os.environ.get("TT_SYMBIOTE_NUM_INFERENCE_TIMESTEPS")
-        if env_steps is not None:
-            n = int(env_steps)
-            model.action_head.num_inference_timesteps = max(1, n)
-    except (TypeError, ValueError):
-        pass
 
     lang_layer = model.backbone.model.language_model.model.layers[0]
     vision_layer = model.backbone.model.vision_model.vision_model.encoder.layers[0]

@@ -215,6 +215,9 @@ class TTNNSigLIPPositionEmbedding(TTNNModule):
 
     def forward_with_patch_embeds(self, patch_embeds, spatial_shapes):
         device = self.device
+        if hasattr(patch_embeds, "to_ttnn") and getattr(patch_embeds, "ttnn_tensor", None) is None:
+            if getattr(patch_embeds, "elem", None) is not None or isinstance(patch_embeds, torch.Tensor):
+                patch_embeds = patch_embeds.to_ttnn(device=device)
         batch_size = spatial_shapes.shape[0]
         embed_dim = self.embed_dim
         H0 = W0 = self.position_embedding_size
@@ -308,49 +311,24 @@ def ttnn_split_patch_embeddings_to_windows_with_meta(patch_embeds, batch_hw, win
 
     import torch.nn.functional as F
 
-    batch_hw = batch_hw.tolist()
+    batch_hw = batch_hw.tolist() if hasattr(batch_hw, "tolist") else list(batch_hw)
     counts = [H * W for (H, W) in batch_hw]
     starts = [0] + list(accumulate(counts))[:-1]
-
     size2info = defaultdict(list)
     for img_idx, ((H, W), start) in enumerate(zip(batch_hw, starts)):
         size2info[(H, W)].append((img_idx, start))
 
-    all_windows = []
     all_meta = []
     for (H, W), info in size2info.items():
         H, W = int(H), int(W)
         B = len(info)
-        C = patch_embeds.shape[-1]
         img_idxs, img_starts = zip(*info)
-
-        imgs = []
-        for st in img_starts:
-            flat = patch_embeds[0, st : st + H * W]
-            imgs.append(flat.transpose(0, 1).reshape(C, H, W))
-        batch_tensor = torch.stack(imgs, dim=0)
-
         pad_h = (window_size - H % window_size) % window_size
         pad_w = (window_size - W % window_size) % window_size
-        batch_padded = F.pad(batch_tensor, (0, pad_w, 0, pad_h))
-
         H_pad, W_pad = H + pad_h, W + pad_w
         n_h = H_pad // window_size
         n_w = W_pad // window_size
         n_windows = n_h * n_w
-
-        patches_unf = F.unfold(
-            batch_padded,
-            kernel_size=(window_size, window_size),
-            stride=(window_size, window_size),
-        )
-        patches = (
-            patches_unf.view(B, C, window_size * window_size, n_windows)
-            .permute(0, 3, 2, 1)
-            .reshape(-1, window_size * window_size, C)
-        )
-        all_windows.append(patches)
-
         for b, img_idx in enumerate(img_idxs):
             for win_id in range(n_windows):
                 i, j = divmod(win_id, n_w)
@@ -374,43 +352,155 @@ def ttnn_split_patch_embeddings_to_windows_with_meta(patch_embeds, batch_hw, win
             all_meta[k]["win_xy"][1],
         ),
     )
-    all_windows = torch.cat(all_windows, dim=0)
-    all_windows = all_windows[sorted_idx]
     win_meta_list = [all_meta[i] for i in sorted_idx]
 
+    def _reverse_mapping():
+        counts_c = [H * W for H, W in batch_hw]
+        starts_c = [0] + list(accumulate(counts_c))[:-1]
+        total_patches = sum(counts_c)
+        mapping = [None] * total_patches
+        offset = 0
+        for meta in win_meta_list:
+            img_idx = meta["img_idx"]
+            pH, pW = meta["patch_hw"]
+            h0, w0 = meta["win_xy"]
+            h_eff, w_eff = meta["win_hw"]
+            base = starts_c[img_idx]
+            for u in range(h_eff):
+                for v in range(w_eff):
+                    orig_idx = base + (h0 + u) * pW + (w0) + v
+                    p = u * w_eff + v
+                    mapping[orig_idx] = offset + p
+            offset += h_eff * w_eff
+        return torch.tensor(mapping, dtype=torch.long)
+
+    ws = window_size
+    mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    tt = None
+    device = None
+    if getattr(patch_embeds, "ttnn_tensor", None) is not None:
+        tt = patch_embeds.ttnn_tensor
+        device = tt.device() if callable(tt.device) else tt.device
+    elif hasattr(patch_embeds, "to_ttnn") and hasattr(patch_embeds, "elem") and patch_embeds.elem is None:
+        tt = getattr(patch_embeds, "ttnn_tensor", None)
+        if tt is not None:
+            device = tt.device() if callable(tt.device) else tt.device
+    elif hasattr(patch_embeds, "to_ttnn") and getattr(_self, "device", None) is not None:
+        device = _self.device
+        converted = patch_embeds.to_ttnn(device=device)
+        if hasattr(converted, "ttnn_tensor") and converted.ttnn_tensor is not None:
+            tt = converted.ttnn_tensor
+        elif isinstance(converted, ttnn.Tensor):
+            tt = converted
+    if tt is not None and device is not None:
+        tt = ttnn.to_device(tt, device, memory_config=mem_cfg)
+        if tt.layout != ttnn.TILE_LAYOUT:
+            tt = ttnn.to_layout(tt, ttnn.TILE_LAYOUT, memory_config=mem_cfg)
+        C = int(tt.shape[-1])
+        group_tensors = []
+        for (H, W), info in size2info.items():
+            H, W = int(H), int(W)
+            B = len(info)
+            img_starts = [x[1] for x in info]
+            pad_h = (window_size - H % window_size) % window_size
+            pad_w = (window_size - W % window_size) % window_size
+            H_pad, W_pad = H + pad_h, W + pad_w
+            n_h, n_w = H_pad // ws, W_pad // ws
+            n_windows = n_h * n_w
+            slices = [ttnn.slice(tt, [0, st, 0], [1, st + H * W, C]) for st in img_starts]
+            if len(slices) == 1:
+                group = slices[0]
+            else:
+                group = ttnn.concat(slices, dim=0, memory_config=mem_cfg)
+            for s in slices:
+                if s is not group and hasattr(ttnn, "deallocate"):
+                    ttnn.deallocate(s)
+            group = ttnn.reshape(group, (B, H, W, C))
+            group = ttnn.permute(group, (0, 3, 1, 2))
+            if pad_h > 0 or pad_w > 0:
+                group = ttnn.pad(group, [[0, 0], [0, 0], [0, pad_h], [0, pad_w]], value=0.0)
+            group = ttnn.reshape(group, (B, C, n_h, ws, n_w, ws))
+            group = ttnn.permute(group, (0, 2, 4, 3, 5, 1))
+            group = ttnn.reshape(group, (B * n_windows, ws * ws, C))
+            group_tensors.append(group)
+
+        full_windows = ttnn.concat(group_tensors, dim=0, memory_config=mem_cfg)
+        for g in group_tensors:
+            if hasattr(ttnn, "deallocate"):
+                ttnn.deallocate(g)
+        reordered = []
+        for i in sorted_idx:
+            row = ttnn.slice(full_windows, [i, 0, 0], [i + 1, ws * ws, C])
+            reordered.append(row)
+        if hasattr(ttnn, "deallocate"):
+            ttnn.deallocate(full_windows)
+        final_parts = []
+        for idx, meta in enumerate(win_meta_list):
+            h_eff, w_eff = meta["win_hw"]
+            win = reordered[idx]
+            if h_eff * w_eff == ws * ws:
+                final_parts.append(win)
+            else:
+                win = ttnn.reshape(win, (1, ws, ws, C))
+                win = ttnn.slice(win, [0, 0, 0, 0], [1, h_eff, w_eff, C])
+                win = ttnn.reshape(win, (1, h_eff * w_eff, C))
+                final_parts.append(win)
+        all_tokens_tt = ttnn.concat(final_parts, dim=1, memory_config=mem_cfg)
+        for t in reordered:
+            if hasattr(ttnn, "deallocate"):
+                ttnn.deallocate(t)
+        out = wrap_to_torch_ttnn_tensor(all_tokens_tt)
+        if os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL":
+            out = _populate_elem_on_ttnn_result(out)
+        return out, win_meta_list, _reverse_mapping()
+
+    C = patch_embeds.shape[-1]
+    if hasattr(patch_embeds, "to_torch"):
+        patch_embeds = patch_embeds.to_torch()
+    elif getattr(patch_embeds, "elem", None) is not None:
+        patch_embeds = patch_embeds.elem
+    if not isinstance(patch_embeds, torch.Tensor):
+        patch_embeds = ttnn.to_torch(patch_embeds)
+    all_windows = []
+    for (H, W), info in size2info.items():
+        H, W = int(H), int(W)
+        B = len(info)
+        img_idxs, img_starts = zip(*info)
+        imgs = []
+        for st in img_starts:
+            flat = patch_embeds[0, st : st + H * W]
+            imgs.append(flat.transpose(0, 1).reshape(C, H, W))
+        batch_tensor = torch.stack(imgs, dim=0)
+        pad_h = (window_size - H % window_size) % window_size
+        pad_w = (window_size - W % window_size) % window_size
+        batch_padded = F.pad(batch_tensor, (0, pad_w, 0, pad_h))
+        H_pad, W_pad = H + pad_h, W + pad_w
+        n_h = H_pad // window_size
+        n_w = W_pad // window_size
+        n_windows = n_h * n_w
+        patches_unf = F.unfold(
+            batch_padded,
+            kernel_size=(window_size, window_size),
+            stride=(window_size, window_size),
+        )
+        patches = (
+            patches_unf.view(B, C, window_size * window_size, n_windows)
+            .permute(0, 3, 2, 1)
+            .reshape(-1, window_size * window_size, C)
+        )
+        all_windows.append(patches)
+    all_windows = torch.cat(all_windows, dim=0)
+    all_windows = all_windows[sorted_idx]
     windows_list = []
     for meta, win in zip(win_meta_list, all_windows):
         h_eff, w_eff = meta["win_hw"]
-        valid_num = h_eff * w_eff
-        if valid_num == window_size * window_size:
+        if h_eff * w_eff == window_size * window_size:
             windows_list.append(win)
         else:
             win = win.view(window_size, window_size, -1)[:h_eff, :w_eff, :].reshape(h_eff * w_eff, -1)
             windows_list.append(win)
-
     all_tokens = torch.cat(windows_list, dim=0).unsqueeze(0)
-
-    counts = [H * W for H, W in batch_hw]
-    starts = [0] + list(accumulate(counts))[:-1]
-    total_patches = sum(counts)
-    mapping = [None] * total_patches
-    offset = 0
-
-    for meta in win_meta_list:
-        img_idx = meta["img_idx"]
-        pH, pW = meta["patch_hw"]
-        h0, w0 = meta["win_xy"]
-        h_eff, w_eff = meta["win_hw"]
-        base = starts[img_idx]
-        for u in range(h_eff):
-            for v in range(w_eff):
-                orig_idx = base + (h0 + u) * pW + (w0) + v
-                p = u * w_eff + v
-                mapping[orig_idx] = offset + p
-        offset += h_eff * w_eff
-    reverse_mapping = torch.tensor(mapping, dtype=torch.long)
-
-    return all_tokens, win_meta_list, reverse_mapping
+    return all_tokens, win_meta_list, _reverse_mapping()
 
 
 _DIAG_LM_LAYER0_CAPTURE: Dict[str, Any] = {}
