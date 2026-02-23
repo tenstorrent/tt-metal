@@ -45,7 +45,7 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
         asic_id_to_mesh_coord_map.emplace(asic_id, coord);
     }
 
-    auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     for (auto rank = 0; rank < *(distributed_context->size()); rank++) {
         if (rank == *(distributed_context->rank())) {
             std::size_t num_entries = asic_id_to_mesh_coord_map.size();

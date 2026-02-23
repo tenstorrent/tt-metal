@@ -92,12 +92,12 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::distributed::SocketConfig* config,
-               std::vector<tt::tt_metal::distributed::SocketConnection> connections,
-               tt::tt_metal::distributed::SocketMemoryConfig memory_config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
                std::optional<int> sender_rank,
                std::optional<int> receiver_rank) {
                 new (config) tt::tt_metal::distributed::SocketConfig();
-                config->socket_connection_config = std::move(connections);
+                config->socket_connection_config = connections;
                 config->socket_mem_config = memory_config;
                 if (sender_rank.has_value()) {
                     config->sender_rank = tt::tt_metal::distributed::multihost::Rank(sender_rank.value());
@@ -122,8 +122,8 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::distributed::SocketConfig* config,
-               std::vector<tt::tt_metal::distributed::SocketConnection> connections,
-               tt::tt_metal::distributed::SocketMemoryConfig memory_config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
                uint32_t sender_mesh_id,
                uint32_t receiver_mesh_id) {
                 new (config) tt::tt_metal::distributed::SocketConfig(
