@@ -149,22 +149,19 @@ class DeepseekMinimalBroadcast:
                 range_hops_forward = num_targets_forward
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
+                num_pages_to_read = input_num_pages
 
                 # Reader named compile-time args
                 reader_named_compile_time_args = [
                     ("cb0_id", src0_cb_index),
-                    ("packet_size_in_pages", num_pages_per_packet),
-                    ("tensor0_page_size", page_size_bytes),
+                    ("num_pages_to_read", num_pages_to_read),
                     ("is_sender", 1 if is_sender else 0),
-                    ("core_noc_x", core_noc_x),
-                    ("core_noc_y", core_noc_y),
-                    ("is_secondary_sender", 1 if is_secondary_sender else 0),
                 ]
 
                 # Writer named compile-time args
                 writer_named_compile_time_args = [
                     ("cb0_id", src0_cb_index),
-                    ("packet_size_in_pages", num_pages_per_packet),
+                    ("num_pages_to_read", num_pages_to_read),
                     ("tensor0_page_size", page_size_bytes),
                     ("num_targets_forward_direction", num_targets_forward),
                     ("num_targets_backward_direction", num_targets_backward),
@@ -206,13 +203,6 @@ class DeepseekMinimalBroadcast:
 
                 num_connections = len(dst_nodes)
 
-                # Common runtime args for reader
-                reader_common_rt_args = [
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
-                    0,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                ]
-
                 # Writer runtime args - moved to common args since CCL only uses one core
                 wait_output_semaphore = is_secondary_sender or is_receiver
                 reset_global_semaphore = is_secondary_sender or is_receiver
@@ -221,8 +211,6 @@ class DeepseekMinimalBroadcast:
                 writer_common_rt_args = [
                     int(output_tensor_device.buffer_address()),  # tensor_address0
                     int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                    0,  # tile_id_start
-                    input_num_pages,  # tile_id_end
                     int(wait_output_semaphore),  # wait_output_semaphore
                     int(reset_global_semaphore),  # reset_global_semaphore
                     core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
@@ -237,28 +225,17 @@ class DeepseekMinimalBroadcast:
                 ]
 
                 # Create CB config
-                cb_config = ttnn.CBFormatDescriptor(
-                    buffer_index=src0_cb_index,
-                    data_format=dtype,
-                    page_size=page_size_bytes,
-                )
-                cb_desc = ttnn.CBDescriptor(
-                    total_size=num_pages_per_packet * page_size_bytes,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[cb_config],
-                )
-
+                cb_desc = ttnn.cb_descriptor_from_sharded_tensor(src0_cb_index, input_tensor_device)
                 # Create unified kernel descriptor for CCL broadcast
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=ccl_kernel_path,
                     core_ranges=worker_core_set,
                     ncrisc_named_compile_time_args=union_named_compile_time_args,
                     brisc_named_compile_time_args=union_named_compile_time_args,
-                    ncrisc_common_runtime_args=reader_common_rt_args,
-                    brisc_common_runtime_args=writer_common_rt_args,
-                    # Per-core runtime args: empty for BRISC (fabric args appended later)
+                    ncrisc_common_runtime_args=writer_common_rt_args,
+                    # Per-core runtime args: empty for NCRISC (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
                 )
 
@@ -269,16 +246,16 @@ class DeepseekMinimalBroadcast:
                     cbs=[cb_desc],
                 )
 
-                # Append fabric connection args to BRISC kernel if needed
+                # Append fabric connection args to NCRISC kernel if needed
                 # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if num_connections > 0:
-                    writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
+                    writer_rt_args_ref = program.kernels[0].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
                         fabric_node_id,
                         dst_nodes,
                         [0],
                         program,
-                        1,  # kernel_idx (writer kernel)
+                        0,  # kernel_idx (writer kernel)
                         worker_core,
                     )
                     writer_rt_args_ref.extend(fabric_args)
