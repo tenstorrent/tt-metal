@@ -6,7 +6,6 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
 class TtAttention(LightweightModule):
@@ -21,6 +20,7 @@ class TtAttention(LightweightModule):
         out_dim: int = None,
         kv_heads=None,
         dim_head: int = 64,
+        lora_weights_manager=None,
     ):
         super().__init__()
         self.device = device
@@ -64,13 +64,25 @@ class TtAttention(LightweightModule):
                 ],
                 dim=-1,
             )
-            self.tt_qkv_weights = ttnn.from_torch(
-                fused_qkv_weights, attention_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
+            # self.tt_qkv_weights = ttnn.from_torch(
+            #     fused_qkv_weights, attention_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
+            # )
+            self.tt_qkv_weights, _ = lora_weights_manager.prepare_lora_linear_params(
+                device, fused_qkv_weights, None, attention_weights_dtype, f"{module_path}.to_qkv", permute_weights=False
             )
         else:
-            self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, attention_weights_dtype)
-            self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, attention_weights_dtype)
-            self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, attention_weights_dtype)
+            # self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, attention_weights_dtype)
+            self.tt_q_weights, _ = lora_weights_manager.prepare_lora_linear_params(
+                device, q_weights, None, attention_weights_dtype, f"{module_path}.to_q"
+            )
+            # self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, attention_weights_dtype)
+            self.tt_k_weights, _ = lora_weights_manager.prepare_lora_linear_params(
+                device, k_weights, None, attention_weights_dtype, f"{module_path}.to_k"
+            )
+            # self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, attention_weights_dtype)
+            self.tt_v_weights, _ = lora_weights_manager.prepare_lora_linear_params(
+                device, v_weights, None, attention_weights_dtype, f"{module_path}.to_v"
+            )
 
             self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
             self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
@@ -78,8 +90,11 @@ class TtAttention(LightweightModule):
             self.k_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_k")
             self.v_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_v")
 
-        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
-            device, out_weights, out_bias, attention_weights_dtype
+        # self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
+        #     device, out_weights, out_bias, attention_weights_dtype
+        # )
+        self.tt_out_weights, self.tt_out_bias = lora_weights_manager.prepare_lora_linear_params(
+            device, out_weights, out_bias, attention_weights_dtype, f"{module_path}.to_out.0"
         )
 
         self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")

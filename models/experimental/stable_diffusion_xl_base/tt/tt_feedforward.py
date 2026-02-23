@@ -6,7 +6,6 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
 class TtFeedForward(LightweightModule):
@@ -16,17 +15,23 @@ class TtFeedForward(LightweightModule):
         state_dict,
         module_path,
         model_config,
+        lora_weights_manager=None,
     ):
         super().__init__()
 
         self.device = device
-        self.tt_geglu = TtGEGLU(device, state_dict, f"{module_path}.net.0", model_config)
+        self.tt_geglu = TtGEGLU(
+            device, state_dict, f"{module_path}.net.0", model_config, lora_weights_manager=lora_weights_manager
+        )
 
         weights = state_dict[f"{module_path}.net.2.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.net.2.bias"]
 
         ff_weights_dtype = model_config.ff_weights_dtype
-        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ff_weights_dtype)
+        # self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ff_weights_dtype)
+        self.tt_weights, self.tt_bias = lora_weights_manager.prepare_lora_linear_params(
+            device, weights, bias, ff_weights_dtype, f"{module_path}.net.2"
+        )
 
         self.ff2_model_config = model_config.get_matmul_config(f"{module_path}.net.2")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
