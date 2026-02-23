@@ -176,6 +176,10 @@ class _MoeRoutedExpertContext:
     reduce_packet_cb: int = 0
     reduce_packet_header_cb: int = 0
     reduce_params: dict = None
+    # Pre-built CB descriptors for reduce scratch/packet/header (set by _overlap_cbs_with_sdpa_buffer)
+    reduce_scratch_cb_descriptor: Any = None
+    reduce_packet_cb_descriptor: Any = None
+    reduce_packet_header_cb_descriptor: Any = None
 
 
 @dataclass
@@ -2886,7 +2890,9 @@ class MoeOp:
 
     # Starting address offset within sdpa_kv_cache_buffer for MOE CBs.
     @staticmethod
-    def _overlap_cbs_with_sdpa_buffer(routed_ctx, shared_ctx, sdpa_kv_cache_buffer, sdpa_out_interm_buffer):
+    def _overlap_cbs_with_sdpa_buffer(
+        routed_ctx, shared_ctx, sdpa_kv_cache_buffer, sdpa_out_interm_buffer, reduce_all_cores_set=None
+    ):
         """
         Override working-buffer CB descriptors to overlap with SDPA buffers.
 
@@ -3428,6 +3434,11 @@ class MoeOp:
         routed_ctx.residual_mcast_params["dst_cb_descriptor"] = cb26_desc
         out_offset += cb26_total_size
 
+        # Sender-core-only region starts here (CB 30, 31, 38 are only on sender core).
+        # Reduce scratch CBs (43-45) can reuse these offsets since they live on
+        # disjoint cores (DRAM worker + fabric cores).
+        sender_only_offset = out_offset
+
         # CB 30: shared_group1 (ag gather dst) (total_size=4096, page_size=512, face tile 16x16, bfloat16)
         cb30_cb_id = shared_ctx.group1_cb
         cb30_total_size = 4096
@@ -3488,6 +3499,72 @@ class MoeOp:
         shared_ctx.output_gather_params["dst_cb_descriptor"] = cb38_desc
         shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
         out_offset += cb38_total_size
+
+        # ── Reduce scratch CBs (43-45) → reuse sender-core-only offsets ──
+        # These CBs live on DRAM worker + fabric cores, which are disjoint from the
+        # sender core where CB 30/31/38 live. Safe to share the same buffer offsets.
+        if reduce_all_cores_set is not None:
+            reduce_offset = sender_only_offset
+            reduce_tile_desc = ttnn.TileDescriptor(32, 32)
+
+            # CB 43: reduce_scratch_cb (compute_tile_size * num_tiles)
+            reduce_scratch_size = routed_ctx.reduce_params["compute_tile_size"] * routed_ctx.reduce_params["num_tiles"]
+            reduce_cb_scratch_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.reduce_scratch_cb,
+                out_buf,
+                address_offset=reduce_offset,
+                total_size=reduce_scratch_size,
+            )
+            reduce_cb_scratch_desc.core_ranges = reduce_all_cores_set
+            reduce_cb_scratch_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=routed_ctx.reduce_scratch_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=routed_ctx.reduce_params["compute_tile_size"],
+                    tile=reduce_tile_desc,
+                )
+            ]
+            routed_ctx.reduce_scratch_cb_descriptor = reduce_cb_scratch_desc
+            reduce_offset += reduce_scratch_size
+
+            # CB 44: reduce_packet_cb (slot_size_bytes * num_workers_per_column)
+            reduce_packet_size = (
+                routed_ctx.reduce_params["slot_size_bytes"] * routed_ctx.reduce_params["num_workers_per_column"]
+            )
+            reduce_cb_packet_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.reduce_packet_cb,
+                out_buf,
+                address_offset=reduce_offset,
+                total_size=reduce_packet_size,
+            )
+            reduce_cb_packet_desc.core_ranges = reduce_all_cores_set
+            reduce_cb_packet_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=routed_ctx.reduce_packet_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=routed_ctx.reduce_params["slot_size_bytes"],
+                )
+            ]
+            routed_ctx.reduce_packet_cb_descriptor = reduce_cb_packet_desc
+            reduce_offset += reduce_packet_size
+
+            # CB 45: reduce_packet_header_cb (96 bytes)
+            reduce_packet_header_size = 96
+            reduce_cb_header_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.reduce_packet_header_cb,
+                out_buf,
+                address_offset=reduce_offset,
+                total_size=reduce_packet_header_size,
+            )
+            reduce_cb_header_desc.core_ranges = reduce_all_cores_set
+            reduce_cb_header_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=routed_ctx.reduce_packet_header_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=reduce_packet_header_size,
+                )
+            ]
+            routed_ctx.reduce_packet_header_cb_descriptor = reduce_cb_header_desc
 
     @staticmethod
     def op(
@@ -3623,8 +3700,21 @@ class MoeOp:
         if sdpa_kv_cache_buffer is not None and sdpa_out_interm_buffer is not None:
             sdpa_kv_cache_buffer_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)[0]
             sdpa_out_interm_buffer_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)[0]
+
+            # Build reduce_all_cores_set for SDPA overlap of reduce scratch CBs (43-45)
+            reduce_all_cores_set = None
+            if routed_ctx.enable_reduce_to_one and routed_ctx.reduce_params:
+                reduce_all_cores_set = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(c, c) for c in routed_ctx.reduce_params["worker_cores_list"]]
+                    + [ttnn.CoreRange(c, c) for c in routed_ctx.reduce_params["fabric_cores"]]
+                )
+
             MoeOp._overlap_cbs_with_sdpa_buffer(
-                routed_ctx, shared_ctx, sdpa_kv_cache_buffer_device, sdpa_out_interm_buffer_device
+                routed_ctx,
+                shared_ctx,
+                sdpa_kv_cache_buffer_device,
+                sdpa_out_interm_buffer_device,
+                reduce_all_cores_set=reduce_all_cores_set,
             )
 
         # ==================================================================
@@ -3854,51 +3944,10 @@ class MoeOp:
                     ]
                     device_cb_descriptors.append(reduce_cb_out_desc)
 
-                    # reduce_scratch_cb: scratch buffer for compute (non-tensor-backed)
-                    reduce_scratch_size = reduce_params["compute_tile_size"] * reduce_params["num_tiles"]
-                    reduce_cb_scratch_desc = ttnn.CBDescriptor(
-                        total_size=reduce_scratch_size,
-                        core_ranges=reduce_all_cores_set,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=routed_ctx.reduce_scratch_cb,
-                                data_format=ttnn.bfloat16,
-                                page_size=reduce_params["compute_tile_size"],
-                                tile=reduce_tile_desc,
-                            )
-                        ],
-                    )
-                    device_cb_descriptors.append(reduce_cb_scratch_desc)
-
-                    # reduce_packet_cb
-                    reduce_packet_size = reduce_params["slot_size_bytes"] * reduce_params["num_workers_per_column"]
-                    reduce_cb_packet_desc = ttnn.CBDescriptor(
-                        total_size=reduce_packet_size,
-                        core_ranges=reduce_all_cores_set,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=routed_ctx.reduce_packet_cb,
-                                data_format=ttnn.bfloat16,
-                                page_size=reduce_params["slot_size_bytes"],
-                            )
-                        ],
-                    )
-                    device_cb_descriptors.append(reduce_cb_packet_desc)
-
-                    # reduce_packet_header_cb: persistent packet header storage
-                    reduce_packet_header_size = 96  # Standard packet header size
-                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
-                        total_size=reduce_packet_header_size,
-                        core_ranges=reduce_all_cores_set,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=routed_ctx.reduce_packet_header_cb,
-                                data_format=ttnn.bfloat16,
-                                page_size=reduce_packet_header_size,
-                            )
-                        ],
-                    )
-                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
+                    # reduce scratch/packet/header CBs (43-45): pre-built by _overlap_cbs_with_sdpa_buffer
+                    device_cb_descriptors.append(routed_ctx.reduce_scratch_cb_descriptor)
+                    device_cb_descriptors.append(routed_ctx.reduce_packet_cb_descriptor)
+                    device_cb_descriptors.append(routed_ctx.reduce_packet_header_cb_descriptor)
 
                     # Destination L1 address depends on role
                     if device_role == MESH_LEAF:
