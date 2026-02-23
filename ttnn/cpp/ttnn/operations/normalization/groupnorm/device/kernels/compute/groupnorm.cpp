@@ -213,14 +213,20 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
-    compute_kernel_lib::tilize<cb_in_rm, cb_in>(per_core_N, per_core_M);
+    compute_kernel_lib::tilize<
+        cb_in_rm,
+        cb_in,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_N, per_core_M);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
     compute_kernel_lib::tilize<
         cb_in_rm,
         cb_in,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,  // should have unninit also
-        compute_kernel_lib::tilize_config::WaitMode::NoWait>(per_core_N, per_core_M);
+        compute_kernel_lib::tilize_config::WaitMode::NoWait,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_N, per_core_M);
 #endif
     cb_wait_front(cb_in, per_core_MN);
 #else
@@ -313,7 +319,7 @@ void kernel_main() {
                 // Partial/E[x]
                 cb_wait_front(cb_x, out_block_hw_normal);
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -329,7 +335,7 @@ void kernel_main() {
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -445,7 +451,7 @@ void kernel_main() {
                 // Partial-Var(x)
                 cb_wait_front(cb_xmm, out_block_hw_normal);
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -459,7 +465,7 @@ void kernel_main() {
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -735,7 +741,8 @@ void kernel_main() {
                     cb_untilize_in,
                     cb_untilize_out,
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront>(per_core_M);
+                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
             }
             // End Final Val Calc

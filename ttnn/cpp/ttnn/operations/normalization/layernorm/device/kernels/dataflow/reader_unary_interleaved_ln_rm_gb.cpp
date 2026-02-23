@@ -20,9 +20,9 @@ void kernel_main() {
     uint32_t Wt = get_arg_val<uint32_t>(2);
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
 
-    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    uint32_t b_addr = get_arg_val<uint32_t>(8);
+    uint32_t gamma_addr = get_arg_val<uint32_t>(5);
+    uint32_t beta_addr = get_arg_val<uint32_t>(6);
+    uint32_t b_addr = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in"),
                        cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
@@ -71,11 +71,11 @@ void kernel_main() {
     // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
-        uint32_t scaler = get_arg_val<uint32_t>(4);
-        dataflow_kernel_lib::generate_reduce_scaler(cb_in_2, scaler);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
-    const uint32_t eps = get_arg_val<uint32_t>(5);
+    const uint32_t eps = get_arg_val<uint32_t>(4);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

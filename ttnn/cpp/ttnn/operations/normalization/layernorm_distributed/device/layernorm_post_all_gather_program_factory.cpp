@@ -10,7 +10,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include <bit>
 #include <optional>
 #include <string>
 #include <variant>
@@ -20,31 +19,7 @@ using uint32_t = std::uint32_t;
 namespace ttnn::prim {
 
 namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
+namespace CMAKE_UNIQUE_NAMESPACE {}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 // =============================================================================
@@ -275,6 +250,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         .append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(W * num_devices);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
@@ -433,10 +409,11 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     }
 
     uint32_t curr_row = 0;
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
+    union {
+        float f;
+        uint32_t u;
+    } e{};
+    e.f = operation_attributes.eps;  // epsilon
 
     // Set runtime arguments based on kernel layout type
     if (use_2d_kernel) {
@@ -462,8 +439,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                      tiles_per_core_y,
                      tile_offset,
                      stats_offset,
-                     packed_winv_value,
-                     eps,
+                     e.u,
                      gamma_dram_addr,
                      beta_dram_addr,
                      stats_addr,
@@ -499,8 +475,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                  Wt,
                  tile_offset,
                  stats_offset,
-                 packed_winv_value,
-                 eps,
+                 e.u,
                  gamma_dram_addr,
                  beta_dram_addr,
                  stats_addr,
@@ -541,12 +516,12 @@ void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
             auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
 
             reader_args[0] = input_addr;
-            reader_args[9] = stats_addr;
+            reader_args[8] = stats_addr;
             if (has_gamma) {
-                reader_args[7] = gamma_addr;
+                reader_args[6] = gamma_addr;
             }
             if (has_beta) {
-                reader_args[8] = beta_addr;
+                reader_args[7] = beta_addr;
             }
         }
 

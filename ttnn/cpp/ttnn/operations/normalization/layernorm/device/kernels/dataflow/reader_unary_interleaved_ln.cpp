@@ -49,18 +49,18 @@ namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t NCHt = get_arg_val<uint32_t>(1);
-    const uint32_t Wt = get_arg_val<uint32_t>(2);
-    const uint32_t start_tile_row = get_arg_val<uint32_t>(3);
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    const uint32_t b_addr = get_arg_val<uint32_t>(8);
-    const uint32_t W = get_arg_val<uint32_t>(9);
-    const uint32_t tile_width = get_arg_val<uint32_t>(10);
-    const uint32_t tile_height = get_arg_val<uint32_t>(11);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);     // factory [0]
+    const uint32_t NCHt = get_arg_val<uint32_t>(1);        // factory [1]
+    const uint32_t Wt = get_arg_val<uint32_t>(2);          // factory [2]
+    const uint32_t start_tile_row = get_arg_val<uint32_t>(3); // factory [3]
+    // [4] = eps, read below after scaler generation
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(5);  // factory [5]
+    const uint32_t beta_addr = get_arg_val<uint32_t>(6);   // factory [6]
+    const uint32_t b_addr = get_arg_val<uint32_t>(7);      // factory [7]
+    const uint32_t tile_width = get_arg_val<uint32_t>(8);   // factory [8]
+    const uint32_t tile_height = get_arg_val<uint32_t>(9);  // factory [9]
 #ifdef TILIZE_IN
-    const uint32_t H_logical = get_arg_val<uint32_t>(12);
+    const uint32_t H_logical = get_arg_val<uint32_t>(10);  // factory [10]
 #endif
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
@@ -86,6 +86,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr uint32_t W = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
@@ -125,16 +126,16 @@ void kernel_main() {
 
     if constexpr (!use_welford) {
         // Scaler(s) for reduce
-        uint32_t scaler = get_arg_val<uint32_t>(4);
-        dataflow_kernel_lib::generate_reduce_scaler(cb_scaler, scaler);
-        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        if (partial_last_tile_cols > 0 && !use_welford) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
-                cb_scaler, scaler, partial_last_tile_cols, tile_height, tile_width);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        constexpr auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        if constexpr (partial_last_tile_cols > 0) {
+            uint32_t packed_scaler = dataflow_kernel_lib::float_to_scaler_bits<get_dataformat(cb_scaler)>(1.0f);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_scaler, packed_scaler, partial_last_tile_cols);
         }
     }
 
-    const uint32_t eps = get_arg_val<uint32_t>(5);
+    const uint32_t eps = get_arg_val<uint32_t>(4);          // factory [4]
     generate_bcast_col_scalar(cb_eps, eps);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {

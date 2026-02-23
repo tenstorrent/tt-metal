@@ -426,7 +426,6 @@ When a helper exists for a computation phase, it MUST be the recommended approac
 ### Raw Calls When Necessary
 Some operations have no helper coverage:
 - Custom data movement patterns
-- Scaler tile generation
 - Novel computation not in the library
 
 For these, provide clear guidance on the raw implementation pattern.

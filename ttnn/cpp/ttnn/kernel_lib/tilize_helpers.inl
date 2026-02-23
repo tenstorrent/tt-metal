@@ -12,16 +12,14 @@
  */
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
 
-#if __has_include("chlkc_pack_tile_dims.h")
-#include "chlkc_pack_tile_dims.h"
-#define PACK_TILE_DIMS_AVAILABLE
-#endif
-
-#if __has_include("chlkc_unpack_data_format.h")
-#include "chlkc_unpack_data_format.h"
-#define UNPACK_DATA_FORMAT_AVAILABLE
-#endif
-
+// JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
+// The arrays are available in scope but guarded by TRISC type:
+//   - unpack_src_format[] / unpack_dst_format[]   : UNPACK and MATH TRISCs (not PACK)
+//   - unpack_tile_r/c_dim[]                       : UNPACK and MATH TRISCs (not PACK)
+//   - pack_src_format[] / pack_dst_format[]       : PACK TRISC only
+//   - pack_tile_r/c_dim[]                         : PACK TRISC only
+// Note: unpack_src_format[cb] == pack_dst_format[cb] (both are L1 format, equalized by JIT).
+// Note: unpack_tile_r/c_dim[cb] == pack_tile_r/c_dim[cb] (both from desc.buf_tile_r/c_dim_arr).
 namespace compute_kernel_lib {
 
 // =============================================================================
@@ -30,32 +28,31 @@ namespace compute_kernel_lib {
 
 template <uint32_t cb_id>
 constexpr bool has_32x32_tiles() {
-#ifdef PACK_TILE_DIMS_AVAILABLE
-    // Access pack tile dimensions at compile time
+    // pack_tile_r/c_dim[] available on PACK; unpack_tile_r/c_dim[] on UNPACK/MATH.
+    // Both originate from the same desc.buf_tile_r/c_dim_arr, so values are identical.
+#if defined(UCK_CHLKC_PACK)
     constexpr uint32_t tile_r_dim = pack_tile_r_dim[cb_id];
     constexpr uint32_t tile_c_dim = pack_tile_c_dim[cb_id];
-
+#else
+    constexpr uint32_t tile_r_dim = unpack_tile_r_dim[cb_id];
+    constexpr uint32_t tile_c_dim = unpack_tile_c_dim[cb_id];
+#endif
     // Fast tilize requires 32x32 tiles
     return tile_r_dim == 32 && tile_c_dim == 32;
-#else
-    // If header not available, assume 32x32 tiles (conservative)
-    // fast_tilize already falls back to standard tilize on Blackhole
-    return true;
-#endif
 }
 
 template <uint32_t input_cb>
 constexpr bool has_supported_fast_tilize_format() {
-#ifdef UNPACK_DATA_FORMAT_AVAILABLE
     // Fast tilize only supports Float32 (0) and Float16_b/bfp16 (5)
     // DataFormat enum values: Float32 = 0, Float16_b = 5, Int32 = 8, etc.
-    constexpr std::int32_t format = unpack_src_format[input_cb];
-    return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
+    // unpack_src_format (UNPACK/MATH) and pack_dst_format (PACK) are both the L1 format
+    // for the CB, equalized by JIT (genfiles.cpp:equalize_data_format_vectors).
+#if defined(UCK_CHLKC_PACK)
+    constexpr auto format = pack_dst_format[input_cb];
 #else
-    // If header not available, conservatively disallow fast_tilize
-    // Only enable fast_tilize when we can confirm the format is supported
-    return false;
+    constexpr auto format = unpack_src_format[input_cb];
 #endif
+    return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
 }
 
 template <uint32_t input_cb, uint32_t output_cb>

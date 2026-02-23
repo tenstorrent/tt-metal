@@ -15,8 +15,8 @@ void kernel_main() {
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
     constexpr auto mask_args = TensorAccessorArgs<1>();
     constexpr uint32_t size = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
-    const uint32_t mask_addr = get_arg_val<uint32_t>(2);
-    const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(3);
+    const uint32_t mask_addr = get_arg_val<uint32_t>(1);
+    const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_attn = tt::CBIndex::c_3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
@@ -27,7 +27,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_attn_obj(cb_attn);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
-    const uint32_t pre_scale = get_arg_val<uint32_t>(1);
+    const uint32_t pre_scale = get_arg_val<uint32_t>(0);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
     constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 1);
@@ -61,7 +61,9 @@ void kernel_main() {
 
     {
         constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_1;
-        const uint32_t reduce_scaler = get_arg_val<uint32_t>(0);
-        dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_reduce_scaler,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW>();
     }
 }

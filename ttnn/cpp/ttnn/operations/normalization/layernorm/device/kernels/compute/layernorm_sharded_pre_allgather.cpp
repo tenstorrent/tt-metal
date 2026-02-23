@@ -126,7 +126,7 @@ void kernel_main() {
 #endif
     // E[x],
     compute_kernel_lib::reduce<
-        PoolType::SUM,
+        PoolType::AVG,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -174,7 +174,7 @@ void kernel_main() {
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
     compute_kernel_lib::
-        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+        reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
             cb_x2,
             cb_scaler,
             cb_ex_partial2,
@@ -197,7 +197,7 @@ void kernel_main() {
             for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 cb_ex_external2_obj.wait_front(1);
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                     cb_ex_external2,
                     cb_scaler_global,
                     0,
