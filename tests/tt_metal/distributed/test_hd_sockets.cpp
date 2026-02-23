@@ -9,6 +9,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <random>
 #include "gmock/gmock.h"
@@ -80,6 +81,8 @@ const std::vector<std::size_t> kD2HLatencyFifoSizes = {1024, 4096, 16384, 65536,
 const std::vector<std::size_t> kH2DThroughputFifoSizes = {
     1024, 2048, 4096, 8192, 16384, 32768, 65536, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024};
 const std::vector<std::size_t> kH2DLatencyFifoSizes = {1024, 4096, 16384, 65536, 262144, 524288};
+const std::vector<std::size_t> kH2DDevicePullMTStudyPageSizes = {4096, 16384, 65536, 131072, 262144, 524288};
+const std::vector<std::size_t> kH2DDevicePullMTStudyFifoSizes = {262144, 524288, 1024 * 1024};
 
 std::size_t compute_iteration_data_size_bytes(std::size_t page_size) {
     std::size_t pages = std::min<std::size_t>(kPagesPerIteration, kL1DataBudgetBytes / page_size);
@@ -886,6 +889,64 @@ TEST_F(HDSocketFixture, H2DSocketThroughputBenchmark) {
                     std::cout.flush();
                 }
             }
+        }
+    }
+}
+
+TEST_F(HDSocketFixture, H2DSocketThroughputBenchmarkDevicePullCopyMTStudy) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    constexpr std::size_t kStudyTotalData = 1024UL * 1024 * 1024;  // 1GB
+
+    MeshCoreCoord recv_core = get_target_benchmark_worker_core(mesh_device_);
+    const auto& recv_coord = recv_core.device_coord;
+
+    const char* mt_copy_env = std::getenv("TT_H2D_DEVICE_PULL_MT_COPY");
+    const char* mt_copy_threshold_env = std::getenv("TT_H2D_DEVICE_PULL_MT_COPY_THRESHOLD");
+    std::cout << "# H2DSocketThroughputBenchmarkDevicePullCopyMTStudy" << std::endl;
+    std::cout << "# h2d_mode=DEVICE_PULL total_data=1GB TT_H2D_DEVICE_PULL_MT_COPY="
+              << (mt_copy_env != nullptr ? mt_copy_env : "unset") << " TT_H2D_DEVICE_PULL_MT_COPY_THRESHOLD="
+              << (mt_copy_threshold_env != nullptr ? mt_copy_threshold_env : "unset") << std::endl;
+
+    std::cout << "page_size,socket_fifo_size,h2d_mode,total_data,data_size,pages_per_iter,"
+              << "num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
+              << "throughput_gbps,device_coord" << std::endl;
+
+    for (auto fifo_size : kH2DDevicePullMTStudyFifoSizes) {
+        for (auto page_size : kH2DDevicePullMTStudyPageSizes) {
+            if (page_size > fifo_size) {
+                continue;
+            }
+            // L1 has 1.5MB
+            if (fifo_size + page_size >= 1024 * 1024 + 512 * 1024) {
+                continue;
+            }
+            std::size_t data_size = compute_iteration_data_size_bytes(page_size);
+            std::size_t pages_per_iter = data_size / page_size;
+            uint32_t num_iterations = kStudyTotalData / data_size;
+            if (num_iterations == 0) {
+                continue;
+            }
+            uint64_t total_pages = static_cast<uint64_t>(pages_per_iter) * num_iterations;
+
+            auto [us, cycles] = benchmark_h2d_socket(
+                mesh_device_, fifo_size, page_size, data_size, num_iterations, H2DMode::DEVICE_PULL, recv_core);
+
+            emit_h2d_throughput_csv_row(
+                page_size,
+                fifo_size,
+                H2DMode::DEVICE_PULL,
+                kStudyTotalData,
+                data_size,
+                pages_per_iter,
+                num_iterations,
+                total_pages,
+                us,
+                cycles,
+                recv_coord);
+            std::cout.flush();
         }
     }
 }

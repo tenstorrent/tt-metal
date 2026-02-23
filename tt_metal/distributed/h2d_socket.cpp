@@ -11,6 +11,7 @@
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <sys/mman.h>
 
 namespace tt::tt_metal::distributed {
@@ -227,6 +228,29 @@ H2DSocket::H2DSocket(
     init_data_buffer(mesh_device, pcie_alignment);
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
+
+    if (h2d_mode_ == H2DMode::DEVICE_PULL) {
+        const char* env = std::getenv("TT_H2D_DEVICE_PULL_MT_COPY");
+        use_multithreaded_copy_ = (env != nullptr && env[0] == '1' && env[1] == '\0');
+        if (use_multithreaded_copy_) {
+            for (int i = 0; i < kNumCopyWorkers; ++i) {
+                copy_work_done_[i].store(true, std::memory_order_relaxed);
+                copy_work_available_[i].store(false, std::memory_order_relaxed);
+                copy_workers_[i] = std::thread([this, i] {
+                    while (true) {
+                        while (!copy_work_available_[i].load(std::memory_order_acquire)) {
+                            if (copy_worker_shutdown_.load(std::memory_order_relaxed)) {
+                                return;
+                            }
+                        }
+                        std::memcpy(copy_work_[i].dst, copy_work_[i].src, copy_work_[i].bytes);
+                        copy_work_available_[i].store(false, std::memory_order_relaxed);
+                        copy_work_done_[i].store(true, std::memory_order_release);
+                    }
+                });
+            }
+        }
+    }
 }
 
 H2DSocket::~H2DSocket() noexcept {
@@ -236,6 +260,14 @@ H2DSocket::~H2DSocket() noexcept {
     // Realistically a hang should not be seen here since most user workloads
     // synchronize with the device before the application exits and destructors are called.
     barrier(1000);
+    if (use_multithreaded_copy_) {
+        copy_worker_shutdown_.store(true, std::memory_order_relaxed);
+        for (auto& w : copy_workers_) {
+            if (w.joinable()) {
+                w.join();
+            }
+        }
+    }
     pinned_memory_.reset();
 }
 
@@ -314,8 +346,25 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
-        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
-        std::memcpy(data_ptr, data, num_bytes);
+        auto* dst_ptr = reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_;
+        auto* src_ptr = reinterpret_cast<uint8_t*>(data);
+        if (use_multithreaded_copy_) {
+            const int total_threads = kNumCopyWorkers + 1;
+            const uint32_t chunk = num_bytes / total_threads;
+            for (int i = 0; i < kNumCopyWorkers; ++i) {
+                const uint32_t offset = chunk * (i + 1);
+                const uint32_t size = (i == kNumCopyWorkers - 1) ? (num_bytes - offset) : chunk;
+                copy_work_[i] = {dst_ptr + offset, src_ptr + offset, size};
+                copy_work_done_[i].store(false, std::memory_order_relaxed);
+                copy_work_available_[i].store(true, std::memory_order_release);
+            }
+            std::memcpy(dst_ptr, src_ptr, chunk);
+            for (int i = 0; i < kNumCopyWorkers; ++i) {
+                while (!copy_work_done_[i].load(std::memory_order_acquire));
+            }
+        } else {
+            std::memcpy(dst_ptr, src_ptr, num_bytes);
+        }
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();

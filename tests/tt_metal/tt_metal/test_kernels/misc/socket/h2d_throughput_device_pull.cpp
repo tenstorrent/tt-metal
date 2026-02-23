@@ -26,30 +26,26 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
 
     for (uint32_t i = 0; i < num_iterations; i++) {
-        uint32_t outstanding_data_size = data_size;
         uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
-        while (outstanding_data_size) {
-            socket_wait_for_pages(receiver_socket, 1);
-            uint64_t page_src_addr = pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr;
-            uint32_t page_dst_addr = receiver_socket.read_ptr;
-            uint32_t page_bytes_remaining = page_size;
-            while (page_bytes_remaining) {
-                uint32_t chunk_bytes =
-                    (page_bytes_remaining > max_noc_burst_bytes) ? max_noc_burst_bytes : page_bytes_remaining;
-                noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                    NOC_INDEX, pcie_xy_enc, page_src_addr, page_dst_addr, chunk_bytes);
-                page_src_addr += chunk_bytes;
-                page_dst_addr += chunk_bytes;
-                page_bytes_remaining -= chunk_bytes;
-            }
-            noc_async_read_barrier();
-            noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
-            dst_noc_addr += page_size;
-            outstanding_data_size -= page_size;
-            noc_async_write_barrier();
-            socket_pop_pages(receiver_socket, 1);
-            socket_notify_sender(receiver_socket);
+        socket_wait_for_pages(receiver_socket, 1);
+        uint64_t page_src_addr = pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr;
+        uint32_t page_dst_addr = receiver_socket.read_ptr;
+        uint32_t page_bytes_remaining = page_size;
+        while (page_bytes_remaining) {
+            uint32_t chunk_bytes =
+                (page_bytes_remaining > max_noc_burst_bytes) ? max_noc_burst_bytes : page_bytes_remaining;
+            noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                NOC_INDEX, pcie_xy_enc, page_src_addr, page_dst_addr, chunk_bytes);
+            page_src_addr += chunk_bytes;
+            page_dst_addr += chunk_bytes;
+            page_bytes_remaining -= chunk_bytes;
         }
+        noc_async_read_barrier();
+        noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
+        dst_noc_addr += page_size;
+        noc_async_write_barrier();
+        socket_pop_pages(receiver_socket, 1);
+        socket_notify_sender(receiver_socket);
     }
 
     uint64_t end_timestamp = get_timestamp();

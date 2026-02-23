@@ -6,6 +6,9 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <atomic>
+#include <cstdint>
+#include <thread>
 #include <utility>
 
 namespace tt::umd {
@@ -167,6 +170,19 @@ private:
     uint32_t* bytes_acked_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
+
+    static constexpr int kNumCopyWorkers = 3;
+    struct CopyWork {
+        uint8_t* dst = nullptr;
+        uint8_t* src = nullptr;
+        uint32_t bytes = 0;
+    };
+    bool use_multithreaded_copy_ = false;
+    std::atomic<bool> copy_worker_shutdown_{false};
+    CopyWork copy_work_[kNumCopyWorkers] = {};
+    std::atomic<bool> copy_work_available_[kNumCopyWorkers]{};
+    std::atomic<bool> copy_work_done_[kNumCopyWorkers]{};
+    std::thread copy_workers_[kNumCopyWorkers];
 };
 
 }  // namespace tt::tt_metal::distributed
