@@ -12,22 +12,11 @@ import torch
 import ttnn
 from models.experimental.tt_symbiote.core.utils import TORCH_TO_TTNN, ensure_tile_layout, torch_dtype_to_ttnn_dtype
 
-# ========== Helper Functions ==========
-
 
 def _prepare_tensor_input(
     tensor: Any, device: Optional[Any] = None, ref_dtype: Optional[torch.dtype] = None
 ) -> Tuple[Any, bool, Optional[Any]]:
-    """Prepare a single tensor input for TTNN operation.
-
-    Args:
-        tensor: Input tensor (may be TorchTTNNTensor, torch.Tensor, or scalar)
-        device: Target device (optional)
-        ref_dtype: Reference dtype for scalar conversion
-
-    Returns:
-        Tuple of (prepared_tensor, should_deallocate, device)
-    """
+    """Prepare a single tensor for TTNN; returns (tensor, should_deallocate, device)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     should_deallocate = False
@@ -49,16 +38,7 @@ def _prepare_tensor_input(
 def _prepare_binary_inputs(
     tensor1: Any, tensor2: Any, device: Optional[Any] = None
 ) -> Tuple[Any, Any, bool, bool, Any]:
-    """Prepare two tensor inputs for TTNN binary operation.
-
-    Args:
-        tensor1: First input tensor
-        tensor2: Second input tensor
-        device: Target device (optional)
-
-    Returns:
-        Tuple of (tensor1, tensor2, deallocate1, deallocate2, device)
-    """
+    """Prepare two tensors for a TTNN binary op; returns (t1, t2, dealloc1, dealloc2, device)."""
     tensor1, deallocate1, device = _prepare_tensor_input(tensor1, device, getattr(tensor2, "dtype", None))
     tensor2, deallocate2, device = _prepare_tensor_input(tensor2, device, tensor1.dtype)
 
@@ -73,21 +53,14 @@ def _prepare_binary_inputs(
 
 
 def _cleanup_tensors(*tensor_deallocate_pairs):
-    """Deallocate temporary tensors.
-
-    Args:
-        tensor_deallocate_pairs: Pairs of (tensor, should_deallocate)
-    """
+    """Deallocate temporaries; each pair is (tensor, should_deallocate)."""
     for tensor, should_deallocate in tensor_deallocate_pairs:
         if should_deallocate and tensor.ttnn_tensor is not None:
             ttnn.deallocate(tensor.ttnn_tensor)
 
 
-# ========== Operation Handlers ==========
-
-
 def handle_view(func, args, kwargs):
-    """Handle view operation. When physical volume != new_shape volume (padded buffer), flatten, slice to logical size, then reshape."""
+    """View with padded buffer: flatten, slice to logical size, reshape."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     import math
@@ -109,7 +82,7 @@ def handle_view(func, args, kwargs):
 
 
 def handle_unsafe_view(func, args, kwargs):
-    """Handle view operation."""
+    """View (reshape) when volumes match."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -122,7 +95,7 @@ def handle_unsafe_view(func, args, kwargs):
 
 
 def handle_reshape(func, args, kwargs):
-    """Handle aten::reshape on TTNN. When physical volume != new_shape volume (padded buffer), flatten to (1, old_vol), slice to (1, new_vol), then reshape."""
+    """Reshape; for padded buffer, flatten then slice to logical size then reshape."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     import math
@@ -145,7 +118,7 @@ def handle_reshape(func, args, kwargs):
 
 
 def handle_to_dtype(func, args, kwargs):
-    """Handle aten::to.dtype — typecast on TTNN (Tensix) instead of CPU fallback."""
+    """Typecast to target dtype on device."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -158,7 +131,7 @@ def handle_to_dtype(func, args, kwargs):
 
 
 def handle_dropout(func, args, kwargs):
-    """Handle aten::dropout — no-op on device when eval (train=False); keeps tensor on Tensix."""
+    """Dropout; no-op when not training."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -168,7 +141,7 @@ def handle_dropout(func, args, kwargs):
 
 
 def handle_broadcast_tensors(func, args, kwargs):
-    """Handle aten::broadcast_tensors — expand on TTNN (Tensix), return plain tensors so callers (e.g. mse_loss C++) accept the result."""
+    """Broadcast tensors to a common shape on device."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     tensors = args[0] if args else ()
@@ -199,7 +172,7 @@ def handle_broadcast_tensors(func, args, kwargs):
 
 
 def handle_transpose(func, args, kwargs):
-    """Handle transpose operation."""
+    """Transpose two dimensions."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -211,7 +184,7 @@ def handle_transpose(func, args, kwargs):
 
 
 def handle_mul(func, args, kwargs):
-    """Handle multiplication operation."""
+    """Element-wise multiply."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -225,7 +198,7 @@ def handle_mul(func, args, kwargs):
 
 
 def handle_sub(func, args, kwargs):
-    """Handle subtraction operation."""
+    """Element-wise subtract."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -239,7 +212,7 @@ def handle_sub(func, args, kwargs):
 
 
 def handle_div(func, args, kwargs):
-    """Handle division operation."""
+    """Element-wise divide."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -250,7 +223,7 @@ def handle_div(func, args, kwargs):
 
 
 def _ttnn_from_torchttnn_safe(t, device):
-    """Get valid ttnn tensor from TorchTTNNTensor; use elem when ttnn buffer deallocated (DPL)."""
+    """Return TTNN tensor from wrapper; use elem when device buffer is deallocated."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     if not isinstance(t, TorchTTNNTensor):
@@ -270,8 +243,7 @@ def _ttnn_from_torchttnn_safe(t, device):
 
 
 def handle_add(func, args, kwargs):
-    """Handle addition operation. Uses CPU fallback when one operand is plain torch
-    (e.g. vision tower output) to avoid SIGFPE from device add/layout on awkward shapes."""
+    """Add; CPU fallback when one operand is plain torch to avoid device layout issues."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     a, b = args[0], args[1]
@@ -317,7 +289,7 @@ def handle_add(func, args, kwargs):
 
 
 def handle_add_inplace(func, args, kwargs):
-    """Handle addition operation."""
+    """In-place add."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1 = args[0]
@@ -359,7 +331,7 @@ def handle_add_inplace(func, args, kwargs):
 
 
 def handle_slice(func, args, kwargs):
-    """Handle slice operation."""
+    """Slice tensor along one dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -391,7 +363,7 @@ def handle_slice(func, args, kwargs):
 
 
 def handle_narrow(func, args, kwargs):
-    """Handle aten::narrow — slice along one dimension. narrow(input, dim, start, length)."""
+    """Narrow: slice along one dimension (input, dim, start, length)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -412,7 +384,7 @@ def handle_narrow(func, args, kwargs):
 
 
 def handle_neg(func, args, kwargs):
-    """Handle negation operation."""
+    """Element-wise negate."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -474,7 +446,7 @@ def handle_cat(func, args, kwargs):
 
 
 def handle_unsqueeze(func, args, kwargs):
-    """Handle unsqueeze operation."""
+    """Unsqueeze (add dimension)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -491,7 +463,7 @@ def handle_unsqueeze(func, args, kwargs):
 
 
 def handle_expand(func, args, kwargs):
-    """Handle expand operation."""
+    """Expand to target shape."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -502,7 +474,7 @@ def handle_expand(func, args, kwargs):
 
 
 def handle_bmm(func, args, kwargs):
-    """Handle batch matrix multiplication."""
+    """Batch matrix multiply."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -524,7 +496,7 @@ def handle_bmm(func, args, kwargs):
 
 
 def handle_sdpa(func, args, kwargs):
-    """Handle scaled dot product attention."""
+    """Scaled dot-product attention."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     query = args[0]
@@ -629,7 +601,7 @@ def handle_sdpa(func, args, kwargs):
 
 
 def handle_softmax(func, args, kwargs):
-    """Handle softmax operation."""
+    """Softmax over dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -640,7 +612,7 @@ def handle_softmax(func, args, kwargs):
 
 
 def handle_log_softmax(func, args, kwargs):
-    """Handle log_softmax: log(softmax(x, dim))."""
+    """Log-softmax over dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -654,7 +626,7 @@ def handle_log_softmax(func, args, kwargs):
 
 
 def handle_log(func, args, kwargs):
-    """Handle aten::log — natural log on device."""
+    """Natural log."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -664,7 +636,7 @@ def handle_log(func, args, kwargs):
 
 
 def handle_silu(func, args, kwargs):
-    """Handle SiLU activation."""
+    """SiLU activation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -674,7 +646,7 @@ def handle_silu(func, args, kwargs):
 
 
 def handle_power(func, args, kwargs):
-    """Handle power operation."""
+    """Power (tensor ** exponent)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -685,7 +657,7 @@ def handle_power(func, args, kwargs):
 
 
 def handle_mean(func, args, kwargs):
-    """Handle mean operation."""
+    """Mean over dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -697,7 +669,7 @@ def handle_mean(func, args, kwargs):
 
 
 def handle_rsqrt(func, args, kwargs):
-    """Handle reciprocal square root operation."""
+    """Reciprocal square root."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -707,9 +679,7 @@ def handle_rsqrt(func, args, kwargs):
 
 
 def handle_native_layer_norm(func, args, kwargs):
-    """Handle aten::native_layer_norm in the attention path (input, normalized_shape, weight, bias, eps).
-    Used when layer_norm runs on TTNN tensors from attention; other LayerNorms should use direct
-    module mapping (nn.LayerNorm -> TTNNLayerNorm)."""
+    """Layer norm over normalized_shape (input, normalized_shape, weight, bias, eps)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     if len(args) < 5:
@@ -743,7 +713,7 @@ def handle_native_layer_norm(func, args, kwargs):
 
 
 def handle_mse_loss(func, args, kwargs):
-    """Handle aten::mse_loss(input, target, reduction). Maps to ttnn.mse_loss(ref=target, pred=input)."""
+    """MSE loss; ttnn.mse_loss(ref=target, pred=input)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     if len(args) < 2:
@@ -767,7 +737,7 @@ def handle_mse_loss(func, args, kwargs):
 
 
 def handle_gelu(func, args, kwargs):
-    """Handle GELU activation."""
+    """GELU activation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -777,7 +747,7 @@ def handle_gelu(func, args, kwargs):
 
 
 def handle_relu(func, args, kwargs):
-    """Handle ReLU activation."""
+    """ReLU activation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -787,7 +757,7 @@ def handle_relu(func, args, kwargs):
 
 
 def handle_new_zeros(func, args, kwargs):
-    """Handle new_zeros operation."""
+    """New tensor of zeros with given shape, same dtype/device as input."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -804,7 +774,7 @@ def handle_new_zeros(func, args, kwargs):
 
 
 def handle_sigmoid(func, args, kwargs):
-    """Handle Sigmoid activation."""
+    """Sigmoid activation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -814,7 +784,7 @@ def handle_sigmoid(func, args, kwargs):
 
 
 def handle_tanh(func, args, kwargs):
-    """Handle tanh — run on Tensix."""
+    """Tanh activation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -824,7 +794,7 @@ def handle_tanh(func, args, kwargs):
 
 
 def handle_exp(func, args, kwargs):
-    """Handle exp — run on Tensix."""
+    """Exponential."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -834,7 +804,7 @@ def handle_exp(func, args, kwargs):
 
 
 def handle_sqrt(func, args, kwargs):
-    """Handle sqrt — run on Tensix."""
+    """Square root."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -844,7 +814,7 @@ def handle_sqrt(func, args, kwargs):
 
 
 def handle_squeeze(func, args, kwargs):
-    """Handle squeeze operation."""
+    """Squeeze dimension(s)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -855,7 +825,7 @@ def handle_squeeze(func, args, kwargs):
 
 
 def handle_stack(func, args, kwargs):
-    """Handle stack operation."""
+    """Stack tensors along new dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     tensors = args[0]
@@ -884,7 +854,7 @@ def handle_stack(func, args, kwargs):
 
 
 def handle_sum(func, args, kwargs):
-    """Handle sum operation (aten::sum.dim_IntList or aten::sum full-reduce)."""
+    """Sum over dimension(s) or full reduce."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -901,7 +871,7 @@ def handle_sum(func, args, kwargs):
 
 
 def handle_ge(func, args, kwargs):
-    """Handle greater equal operation."""
+    """Greater or equal (tensor >= scalar)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -912,7 +882,7 @@ def handle_ge(func, args, kwargs):
 
 
 def handle_gt(func, args, kwargs):
-    """Handle greater than operation."""
+    """Greater than (tensor > scalar)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -923,7 +893,7 @@ def handle_gt(func, args, kwargs):
 
 
 def handle_eq(func, args, kwargs):
-    """Handle equal operation."""
+    """Equal (tensor == scalar or tensor)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -934,7 +904,7 @@ def handle_eq(func, args, kwargs):
 
 
 def handle_lt(func, args, kwargs):
-    """Handle less than operation."""
+    """Less than."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
@@ -945,7 +915,7 @@ def handle_lt(func, args, kwargs):
 
 
 def handle_select(func, args, kwargs):
-    """Handle select operation."""
+    """Select index along dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -969,7 +939,7 @@ def handle_select(func, args, kwargs):
 
 
 def handle_bernoulli_p(func, args, kwargs):
-    """Handle bernoulli.p operation."""
+    """Bernoulli sample."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -985,7 +955,7 @@ def handle_bernoulli_p(func, args, kwargs):
 
 
 def handle_repeat(func, args, kwargs):
-    """Handle repeat operation."""
+    """Repeat tensor to target shape."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -997,7 +967,7 @@ def handle_repeat(func, args, kwargs):
 
 
 def handle_masked_fill_Scalar(func, args, kwargs):
-    """Handle aten::masked_fill.Scalar — where mask is True, fill with value. output = where(mask, value, input)."""
+    """Where mask is True, fill with scalar value."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1019,7 +989,7 @@ def handle_masked_fill_Scalar(func, args, kwargs):
 
 
 def handle_masked_fill_Tensor(func, args, kwargs):
-    """Handle aten::masked_fill.Tensor — where mask is True, fill with value tensor. output = where(mask, value, input)."""
+    """Where mask is True, fill with value tensor."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1048,7 +1018,7 @@ def handle_masked_fill_Tensor(func, args, kwargs):
 
 
 def handle_copy_(func, args, kwargs):
-    """Handle aten::copy_ (in-place copy): copy src into self on device. Returns self."""
+    """In-place copy of src into self on device."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     self_tensor = args[0]
@@ -1082,7 +1052,7 @@ def handle_copy_(func, args, kwargs):
 
 
 def handle_where(func, args, kwargs):
-    """Handle where operation."""
+    """Where(condition, x, y)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     condition = args[0]
@@ -1142,7 +1112,7 @@ def handle_where(func, args, kwargs):
 
 
 def handle_split(func, args, kwargs):
-    """Handle split operation."""
+    """Split into sections along dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1182,7 +1152,7 @@ def handle_split(func, args, kwargs):
 
 
 def handle_unbind(func, args, kwargs):
-    """Handle unbind: split tensor along dim into a tuple of views (one per index along dim)."""
+    """Unbind: tuple of views along dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1206,8 +1176,7 @@ def handle_unbind(func, args, kwargs):
 
 
 def handle_pixel_unshuffle(func, args, kwargs):
-    """Handle pixel_unshuffle: [N, C, H, W] with downscale_factor r -> [N, C*r*r, H//r, W//r].
-    Implemented as reshape -> permute -> reshape (no dedicated ttnn op)."""
+    """Pixel unshuffle: [N,C,H,W] -> [N, C*r*r, H//r, W//r] via reshape/permute."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1231,7 +1200,7 @@ def handle_pixel_unshuffle(func, args, kwargs):
 
 
 def handle_chunk(func, args, kwargs):
-    """Handle chunk operation: split tensor into n chunks along dim (like split with equal-sized parts)."""
+    """Chunk into n equal parts along dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1267,7 +1236,7 @@ def handle_chunk(func, args, kwargs):
 
 
 def handle_contiguous(func, args, kwargs):
-    """Handle contiguous: return a contiguous copy on device (clone)."""
+    """Contiguous copy (clone) on device."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1281,11 +1250,7 @@ def _to_copy(
     x,
     dtype=None,
 ):
-    """
-    TTNN equivalent of aten::_to_copy operation.
-
-    Creates a new tensor with potentially different properties while copying data.
-    """
+    """Copy tensor, optionally to a new dtype."""
     assert isinstance(x, (ttnn.Tensor, int, float, bool, complex))
 
     if dtype is None:
@@ -1306,7 +1271,7 @@ def _to_copy(
 
 
 def handle_to_copy(func, args, kwargs):
-    """Handle _to_copy operation."""
+    """Copy/clone with optional dtype."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1316,7 +1281,7 @@ def handle_to_copy(func, args, kwargs):
 
 
 def handle_max(func, args, kwargs):
-    """Handle max operation."""
+    """Max along dimension."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1331,7 +1296,7 @@ def handle_max(func, args, kwargs):
 
 
 def handle_addmm(func, args, kwargs):
-    """Handle addmm operation."""
+    """addmm: output = beta*input + alpha*(mat1 @ mat2)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor1 = args[0]
@@ -1400,7 +1365,7 @@ def handle_addmm(func, args, kwargs):
 
 
 def handle_zeros_like(func, args, kwargs):
-    """Handle zeros_like operation."""
+    """Zeros with same shape/dtype/device as input."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1417,9 +1382,63 @@ def handle_zeros_like(func, args, kwargs):
     return result
 
 
+def handle_ones_like(func, args, kwargs):
+    """Ones with same shape/dtype/device as input."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(
+        ttnn.ones_like(
+            input_tensor.to_ttnn,
+            memory_config=input_tensor.to_ttnn.memory_config(),
+            device=input_tensor.to_ttnn.device(),
+        ),
+        dtype=input_tensor.dtype,
+    )
+
+
+def handle_full_like(func, args, kwargs):
+    """Full with fill_value, same shape/dtype/device as input."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    fill_value = args[1] if len(args) > 1 else kwargs.get("fill_value")
+    if hasattr(fill_value, "item"):
+        fill_value = fill_value.item()
+    return TorchTTNNTensor(
+        ttnn.full_like(
+            input_tensor.to_ttnn,
+            fill_value=fill_value,
+            memory_config=input_tensor.to_ttnn.memory_config(),
+            device=input_tensor.to_ttnn.device(),
+        ),
+        dtype=input_tensor.dtype,
+    )
+
+
+def handle_empty_like(func, args, kwargs):
+    """Empty tensor with same shape/dtype/device as input."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(
+        ttnn.empty_like(
+            input_tensor.to_ttnn,
+            memory_config=input_tensor.to_ttnn.memory_config(),
+            device=input_tensor.to_ttnn.device(),
+        ),
+        dtype=input_tensor.dtype,
+    )
+
+
 def handle_index(func, args, kwargs):
-    """Handle index operation. Supports single 1D int/bool index on any dimension (e.g. x[:, idx, :]).
-    Uses ttnn.gather when index_dim >= 1 for better performance; slice+stack for dim 0 or fallback."""
+    """Index with single 1D index; uses gather when index_dim >= 1."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1524,7 +1543,7 @@ def handle_topk_5args(func, args, kwargs):
 
 
 def handle_topk(func, args, kwargs):
-    """Handle topk operation."""
+    """Top-k values and indices."""
     if len(args) == 2:
         return handle_topk_2args(func, args, kwargs)
     elif len(args) == 5:
@@ -1533,7 +1552,7 @@ def handle_topk(func, args, kwargs):
 
 
 def handle_permute(func, args, kwargs):
-    """Handle permute operation."""
+    """Permute dimensions."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1545,7 +1564,7 @@ def handle_permute(func, args, kwargs):
 
 
 def handle_clamp(func, args, kwargs):
-    """Handle clamp operation."""
+    """Clamp to [min, max]."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1558,9 +1577,7 @@ def handle_clamp(func, args, kwargs):
 
 
 def handle_embedding(func, args, kwargs):
-    """Handle aten::embedding — embedding lookup on device via ttnn.embedding.
-    args: (input/indices, weight, padding_idx=-1, scale_grad_by_freq=False, sparse=False)
-    """
+    """Embedding lookup on device (ttnn.embedding)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     indices = args[0]
@@ -1607,9 +1624,7 @@ def handle_embedding(func, args, kwargs):
 
 
 def handle_constant_pad_nd(func, args, kwargs):
-    """Handle constant_pad_nd (F.pad mode='constant') for patch_embedding and similar.
-    Converts PyTorch pad list (last dim first, left/right per dim) to ttnn.pad format.
-    Supports both left and right padding on device via concat when left padding is needed."""
+    """Constant pad (F.pad); left padding via concat, right-only via ttnn.pad."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1657,8 +1672,7 @@ def handle_constant_pad_nd(func, args, kwargs):
         out = ttnn.pad(t, padding=padding_config, value=value)
         return TorchTTNNTensor(out)
 
-    # Left padding: build result via concat(left_fill, t, right_fill) per dimension
-    # Pad from last dim first (dim 3, 2, 1, 0)
+    # Left padding: concat(left_fill, t, right_fill) per dim, last dim first
     shape = [int(s) for s in t.shape]
     out = t
     for dim in range(rank - 1, -1, -1):
@@ -1695,7 +1709,7 @@ def handle_constant_pad_nd(func, args, kwargs):
 
 
 def handle_flatten_using_ints(func, args, kwargs):
-    """Handle aten::flatten.using_ints — flatten dims [start_dim, end_dim] on TTNN via reshape."""
+    """Flatten [start_dim, end_dim] via reshape."""
     import math
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
@@ -1718,9 +1732,7 @@ def handle_flatten_using_ints(func, args, kwargs):
 
 
 def handle_im2col(func, args, kwargs):
-    """Handle aten::im2col (F.unfold) on Tensix. Supports dilation=(1,1), padding=(0,0), stride==kernel_size.
-    Uses slice+reshape+cat per window to avoid a single large 6D permute (which can OOM on device).
-    """
+    """im2col (F.unfold); dilation=(1,1), padding=(0,0), stride==kernel_size."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1772,7 +1784,7 @@ def handle_im2col(func, args, kwargs):
 
 
 def handle_linear(func, args, kwargs):
-    """Handle aten::linear: output = input @ weight.T + bias (or no bias). Maps to addmm on TTNN."""
+    """Linear: input @ weight.T + bias; implemented via addmm."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1804,7 +1816,7 @@ def handle_linear(func, args, kwargs):
 
 
 def handle_pad(func, args, kwargs):
-    """Handle aten::pad when mode is constant — delegate to constant_pad_nd logic."""
+    """Pad (constant mode); delegates to constant_pad_nd."""
     mode = kwargs.get("mode", "constant")
     value = float(kwargs.get("value", 0))
     if len(args) > 2:
@@ -1820,7 +1832,7 @@ def handle_pad(func, args, kwargs):
 
 
 def handle_scatter_value_inplace(func, args, kwargs):
-    """Handle scatter_ value operation."""
+    """Scatter: write src into self at index along dim."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1892,7 +1904,7 @@ def handle_scatter_value_inplace(func, args, kwargs):
 
 
 def handle_bitwise_not(func, args, kwargs):
-    """Handle bitwise_not operation."""
+    """Bitwise not (bool tensor)."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1903,7 +1915,7 @@ def handle_bitwise_not(func, args, kwargs):
 
 
 def handle_gather(func, args, kwargs):
-    """Handle gather operation."""
+    """Gather along dimension by index."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     input_tensor = args[0]
@@ -1955,10 +1967,9 @@ def handle_gather(func, args, kwargs):
     return res
 
 
-# Full op mapping for default dispatcher (alnah005 tensor_operations minimal set + leftover from tensor_operations)
 def _get_func_to_ttnn_compatible():
+    """aten op name -> TTNN handler."""
     return {
-        # alnah005 tensor_operations minimal set
         "aten::view": handle_view,
         "aten::transpose.int": handle_transpose,
         "aten::mul.Tensor": handle_mul,
@@ -1980,7 +1991,6 @@ def _get_func_to_ttnn_compatible():
         "aten::addmm": handle_addmm,
         "aten::permute": handle_permute,
         "aten::mm": handle_bmm,
-        # leftover from tensor_operations
         "aten::_unsafe_view": handle_view,
         "aten::_softmax": handle_softmax,
         "aten::mean.dim": handle_mean,
@@ -2015,6 +2025,9 @@ def _get_func_to_ttnn_compatible():
         "aten::_to_copy": handle_to_copy,
         "aten::max.dim": handle_max,
         "aten::zeros_like": handle_zeros_like,
+        "aten::ones_like": handle_ones_like,
+        "aten::full_like": handle_full_like,
+        "aten::empty_like": handle_empty_like,
         "aten::index.Tensor": handle_index,
         "aten::topk": handle_topk,
         "aten::clamp": handle_clamp,
@@ -2056,7 +2069,7 @@ def _get_func_to_ttnn_compatible():
 
 
 def _log_fallback_op(func_name: str) -> None:
-    """Log once per op the same message used when an op runs on PyTorch instead of TTNN."""
+    """Log once when an op falls back to PyTorch (no TTNN handler or dispatch failed)."""
     if not hasattr(can_dispatch_to_ttnn, "_reported_fallback_ops"):
         can_dispatch_to_ttnn._reported_fallback_ops = set()
     if func_name not in can_dispatch_to_ttnn._reported_fallback_ops:
@@ -2068,7 +2081,7 @@ def _log_fallback_op(func_name: str) -> None:
 
 
 def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
-    """Check if operation can be dispatched to TTNN."""
+    """Return True if this op can run on TTNN with the given args/kwargs."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     any_ttnn_tensor = False
@@ -2145,7 +2158,7 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
     if "aten::unbind.int" == func_name and passed and any_ttnn_tensor:
         try:
             thresh = int(os.environ.get("TT_SYMBIOTE_UNBIND_FALLBACK_THRESHOLD", "0"))
-        except ValueError:
+        except (ValueError, TypeError):
             thresh = 0
         if thresh > 0 and len(args) >= 1:
             shp = getattr(args[0], "shape", None)
@@ -2159,7 +2172,7 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
     if func_name in ("aten::split.Tensor", "aten::split_with_sizes") and passed and any_ttnn_tensor:
         try:
             thresh = int(os.environ.get("TT_SYMBIOTE_SPLIT_FALLBACK_THRESHOLD", "0"))
-        except ValueError:
+        except (ValueError, TypeError):
             thresh = 0
         if thresh > 0 and len(args) >= 2:
             sections = args[1]
@@ -2261,8 +2274,7 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
         if not any_ttnn_tensor or len(args) < 2:
             passed = False
     if func_name.startswith("aten::im2col") and len(args) >= 5:
-        # im2col runs on device (DRAM/Tensix) with no default limit. Set TT_SYMBIOTE_IM2COL_MAX_DEVICE_NUMEL
-        # to a positive value (e.g. 500000) to cap and force CPU fallback for very large outputs.
+        # TT_SYMBIOTE_IM2COL_MAX_DEVICE_NUMEL: if set, cap output numel and fallback to CPU when exceeded
         _max_numel = int(os.environ.get("TT_SYMBIOTE_IM2COL_MAX_DEVICE_NUMEL", "0"))
         if _max_numel > 0:
             _shp = getattr(args[0], "shape", None) if args else None
@@ -2298,7 +2310,7 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
 
 
 def dispatch_to_ttnn(func_name, args, kwargs):
-    """Dispatch operation to TTNN handler."""
+    """Call the TTNN handler for this op or raise KeyError."""
     func_to_ttnn_compatible = _get_func_to_ttnn_compatible()
     if func_name in func_to_ttnn_compatible:
         return func_to_ttnn_compatible[func_name](func_name, args, kwargs)

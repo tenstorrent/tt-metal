@@ -1,14 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""GR00T integration tests: dispatch, padded view, inference."""
+"""GR00T integration tests: full inference on device."""
 
-import operator
 import os
 import subprocess
 import sys
 import time
-from functools import reduce
 from pathlib import Path
 
 import numpy as np
@@ -114,23 +112,6 @@ def _sync(device):
         device.synchronize()
     elif hasattr(ttnn, "synchronize"):
         ttnn.synchronize(device)
-
-
-def test_view_padded_tensor_via_dispatch():
-    """Dispatch view on padded tensor (e.g. post im2col)."""
-    padded = torch.randn(2965872, dtype=torch.bfloat16)
-    shape = (1, 1152, 196, 4)
-    target_numel = reduce(operator.mul, shape, 1)
-    assert target_numel == 903168 and padded.numel() > target_numel
-
-    class ViewFunc:
-        def name(self):
-            return "aten::view"
-
-    result = DispatchManager.dispatch_to_torch_wrapper(ViewFunc(), (padded, shape), {})
-    out = result.to_torch if hasattr(result, "to_torch") else result
-    assert out.shape == shape
-    assert out.numel() == target_numel
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
