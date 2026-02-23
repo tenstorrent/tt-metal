@@ -4,6 +4,10 @@
 
 #pragma once
 
+// TRISC is a compute processor, not a data movement processor.
+// The NOC non-blocking API is not available for TRISC.
+#if !defined(COMPILE_FOR_TRISC)
+
 // NOC Non-blocking API version selector
 // Define NOC_API_V2 to use the V2 implementation, otherwise V1 is used by default
 
@@ -13,3 +17,5 @@
 #else
 #include "noc_nonblocking_api_v1.h"
 #endif
+
+#endif  // !defined(COMPILE_FOR_TRISC)
