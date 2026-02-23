@@ -290,18 +290,7 @@ class MoEGate(AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Validate input memory config if enforcement is enabled
-        if cfg.get("enforce_memory_config", True):
-            expected_memory_config = cfg["input_memory_config"]
-            actual_memory_config = x.memory_config()
-            if actual_memory_config != expected_memory_config:
-                # Try to convert to expected memory config
-                x = ttnn.to_memory_config(x, expected_memory_config)
-                # Log warning about the conversion
-                logger.warning(
-                    f"MoEGate: Input tensor memory config ({actual_memory_config}) did not match "
-                    f"expected config ({expected_memory_config}). Tensor has been converted."
-                )
+        assert x.memory_config() == cfg["input_memory_config"]
 
         # Gate projections
         if cfg["linear_fallback"]:
