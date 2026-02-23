@@ -5,10 +5,10 @@ training_config:
   batch_size: 2
   num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
   tokenizer_type: bpe
   model_config: "configs/model_configs/nanogpt.yaml"
+
+optimizer_config: "configs/optimizer_configs/adamw.yaml"
 
 device_config:
   enable_ddp: false

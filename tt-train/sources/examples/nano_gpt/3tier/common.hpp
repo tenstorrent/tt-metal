@@ -4,6 +4,7 @@
 
 #include <ttnn/distributed/create_socket.hpp>
 
+#include "../utils.hpp"
 #include "core/distributed/distributed.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
@@ -23,11 +24,7 @@ struct TrainingConfig {
     uint32_t batch_size = 64;
     uint32_t num_epochs = 1;
     uint32_t max_steps = 5000;
-    float learning_rate = 3e-4F;
-    float weight_decay = 1e-2F;
-    bool use_moreh_adamw = false;
-    // works only for AdamW
-    bool use_kahan_summation = false;
+    OptimizerConfig optimizer;
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;

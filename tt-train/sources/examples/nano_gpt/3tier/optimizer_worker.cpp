@@ -13,7 +13,6 @@
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
-#include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -129,21 +128,7 @@ int main(int argc, char **argv) {
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
-    auto adamw_params = ttml::optimizers::AdamWConfig();
-    adamw_params.lr = config.learning_rate;
-    adamw_params.weight_decay = config.weight_decay;
-    adamw_params.use_kahan_summation = config.use_kahan_summation;
-
-    auto select_optimizer = [&model_parameters,
-                             &adamw_params](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
-        if (use_moreh_adamw) {
-            return std::make_unique<ttml::optimizers::MorehAdamW>(model_parameters, adamw_params);
-        } else {
-            return std::make_unique<ttml::optimizers::AdamW>(model_parameters, adamw_params);
-        }
-    };
-
-    auto optimizer = select_optimizer(config.use_moreh_adamw);
+    auto optimizer = create_optimizer(config.optimizer, model_parameters);
 
     auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
     send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);

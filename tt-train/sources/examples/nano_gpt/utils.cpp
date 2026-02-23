@@ -4,9 +4,107 @@
 
 #include "utils.hpp"
 
+#include <filesystem>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "ops/binary_ops.hpp"
+
+OptimizerConfig parse_optimizer_config(const YAML::Node &yaml_config) {
+    OptimizerConfig config;
+    auto optimizer_config_rel = yaml_config["optimizer_config"].as<std::string>();
+    auto base_path = std::filesystem::path(std::string(CONFIGS_FOLDER)).parent_path();
+    auto full_path = (base_path / optimizer_config_rel).string();
+    auto optimizer_node = YAML::LoadFile(full_path);
+    config.type = optimizer_node["type"].as<std::string>(config.type);
+    config.lr = optimizer_node["lr"].as<float>(config.lr);
+    config.beta1 = optimizer_node["beta1"].as<float>(config.beta1);
+    config.beta2 = optimizer_node["beta2"].as<float>(config.beta2);
+    config.epsilon = optimizer_node["epsilon"].as<float>(config.epsilon);
+    config.weight_decay = optimizer_node["weight_decay"].as<float>(config.weight_decay);
+    config.amsgrad = optimizer_node["amsgrad"].as<bool>(config.amsgrad);
+    config.use_kahan_summation = optimizer_node["use_kahan_summation"].as<bool>(config.use_kahan_summation);
+    config.stochastic_rounding = optimizer_node["stochastic_rounding"].as<bool>(config.stochastic_rounding);
+    config.momentum = optimizer_node["momentum"].as<float>(config.momentum);
+    config.dampening = optimizer_node["dampening"].as<float>(config.dampening);
+    config.nesterov = optimizer_node["nesterov"].as<bool>(config.nesterov);
+    return config;
+}
+
+std::unique_ptr<ttml::optimizers::OptimizerBase> create_optimizer(
+    const OptimizerConfig &cfg, ttml::serialization::NamedParameters params) {
+    if (cfg.type == "NoOp") {
+        return std::make_unique<ttml::optimizers::NoOp>(std::move(params));
+    }
+    if (cfg.type == "AdamW") {
+        return std::make_unique<ttml::optimizers::AdamW>(
+            std::move(params),
+            ttml::optimizers::AdamWConfig{
+                .lr = cfg.lr,
+                .beta1 = cfg.beta1,
+                .beta2 = cfg.beta2,
+                .epsilon = cfg.epsilon,
+                .weight_decay = cfg.weight_decay,
+                .amsgrad = cfg.amsgrad,
+                .use_kahan_summation = cfg.use_kahan_summation});
+    }
+    if (cfg.type == "MorehAdamW") {
+        return std::make_unique<ttml::optimizers::MorehAdamW>(
+            std::move(params),
+            ttml::optimizers::AdamWConfig{
+                .lr = cfg.lr,
+                .beta1 = cfg.beta1,
+                .beta2 = cfg.beta2,
+                .epsilon = cfg.epsilon,
+                .weight_decay = cfg.weight_decay,
+                .amsgrad = cfg.amsgrad,
+                .use_kahan_summation = cfg.use_kahan_summation});
+    }
+    if (cfg.type == "AdamWFused") {
+        return std::make_unique<ttml::optimizers::AdamWFused>(
+            std::move(params),
+            ttml::optimizers::AdamWFusedConfig{
+                .lr = cfg.lr,
+                .beta1 = cfg.beta1,
+                .beta2 = cfg.beta2,
+                .epsilon = cfg.epsilon,
+                .weight_decay = cfg.weight_decay,
+                .amsgrad = cfg.amsgrad,
+                .stochastic_rounding = cfg.stochastic_rounding});
+    }
+    if (cfg.type == "AdamWFullPrecision") {
+        return std::make_unique<ttml::optimizers::AdamWFullPrecision>(
+            std::move(params),
+            ttml::optimizers::AdamWFullPrecisionConfig{
+                .lr = cfg.lr,
+                .beta1 = cfg.beta1,
+                .beta2 = cfg.beta2,
+                .epsilon = cfg.epsilon,
+                .weight_decay = cfg.weight_decay,
+                .amsgrad = cfg.amsgrad});
+    }
+    if (cfg.type == "SGD") {
+        return std::make_unique<ttml::optimizers::SGD>(
+            std::move(params),
+            ttml::optimizers::SGDConfig{
+                .lr = cfg.lr,
+                .momentum = cfg.momentum,
+                .dampening = cfg.dampening,
+                .weight_decay = cfg.weight_decay,
+                .nesterov = cfg.nesterov});
+    }
+    if (cfg.type == "SGDFused") {
+        return std::make_unique<ttml::optimizers::SGDFused>(
+            std::move(params),
+            ttml::optimizers::SGDFusedConfig{
+                .lr = cfg.lr,
+                .momentum = cfg.momentum,
+                .dampening = cfg.dampening,
+                .weight_decay = cfg.weight_decay,
+                .nesterov = cfg.nesterov});
+    }
+    throw std::runtime_error("Unknown optimizer type: " + cfg.type);
+}
 
 void LossAverageMeter::update(float loss, size_t count) {
     m_sum += loss * static_cast<float>(count);

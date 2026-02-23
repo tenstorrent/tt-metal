@@ -12,12 +12,38 @@
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
+#include "optimizers/adamw.hpp"
+#include "optimizers/adamw_full_precision.hpp"
+#include "optimizers/adamw_fused.hpp"
+#include "optimizers/no_op.hpp"
+#include "optimizers/sgd.hpp"
+#include "optimizers/sgd_fused.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"
 #include "schedulers/sequential_scheduler.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+
+struct OptimizerConfig {
+    std::string type = "AdamWFused";
+    float lr = 3e-4F;
+    float beta1 = 0.9F;
+    float beta2 = 0.999F;
+    float epsilon = 1e-8F;
+    float weight_decay = 1e-2F;
+    bool amsgrad = false;
+    bool use_kahan_summation = false;
+    bool stochastic_rounding = false;
+    float momentum = 0.0F;
+    float dampening = 0.0F;
+    bool nesterov = false;
+};
+
+OptimizerConfig parse_optimizer_config(const YAML::Node &yaml_config);
+
+std::unique_ptr<ttml::optimizers::OptimizerBase> create_optimizer(
+    const OptimizerConfig &cfg, ttml::serialization::NamedParameters params);
 
 class LossAverageMeter {
     float m_sum = 0.0F;
@@ -148,9 +174,9 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
             ss << "transformer";
         }
         ss << "_bs_" << batch_size;
-        ss << "_lr_" << config.learning_rate;
-        ss << "_wd_" << config.weight_decay;
-        if (config.use_kahan_summation) {
+        ss << "_lr_" << config.optimizer.lr;
+        ss << "_wd_" << config.optimizer.weight_decay;
+        if (config.optimizer.use_kahan_summation) {
             ss << "_kahan";
         }
 
