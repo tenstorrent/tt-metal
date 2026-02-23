@@ -843,21 +843,23 @@ def test_demo_text(
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     # Warmup prefill and decode
+    # Note: Gemma3 on-device sampling disabled because vocab_size/num_devices > 64k
+    # https://github.com/tenstorrent/tt-metal/issues/32249
     logger.info("Warming up model...")
     num_blocks = page_params["page_max_num_blocks_per_dp"] // (global_batch_size // data_parallel) if page_params else 0
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
-        can_sample_on_device=True,
-        non_greedy_decoding_on_device=True,
+        can_sample_on_device=False,
+        non_greedy_decoding_on_device=False,
     )
     generator.warmup_model_decode(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         max_batch_size=global_batch_size,
         num_blocks=num_blocks,
-        can_sample_on_device=True,
-        non_greedy_decoding_on_device=True,
+        can_sample_on_device=False,
+        non_greedy_decoding_on_device=False,
     )
     logger.info("Warmup complete")
 
