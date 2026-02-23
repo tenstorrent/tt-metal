@@ -762,9 +762,21 @@ class TTNNGR00TSelfAttention(TTNNModule):
 
         if attention_mask is not None:
             raw = getattr(attention_mask, "elem", attention_mask)
+            raw_tt = None
+            mask_kv_len = None
             if isinstance(raw, ttnn.Tensor):
-                raw = ttnn.to_torch(raw)
-            if isinstance(raw, torch.Tensor) and raw.dim() >= 2:
+                raw_tt = raw
+                raw_tt = ttnn.to_device(raw_tt, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if raw_tt.layout != ttnn.TILE_LAYOUT:
+                    raw_tt = ttnn.to_layout(raw_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if raw_tt.dtype != ttnn.bfloat16:
+                    raw_tt = ttnn.typecast(raw_tt, ttnn.bfloat16)
+                ndim = len(raw_tt.shape)
+                if ndim == 3:
+                    raw_tt = ttnn.squeeze(raw_tt, 1)
+                if len(raw_tt.shape) == 2:
+                    mask_kv_len = raw_tt.shape[1]
+            elif isinstance(raw, torch.Tensor) and raw.dim() >= 2:
                 if raw.dim() == 3:
                     raw = raw.squeeze(1)
                 if raw.dim() == 2:
@@ -776,33 +788,34 @@ class TTNNGR00TSelfAttention(TTNNModule):
                         device=device,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
-                    raw_tt = ttnn.unsqueeze(raw_tt, 1)
-                    raw_tt = ttnn.unsqueeze(raw_tt, 2)
-                    if mask_kv_len < kv_len:
-                        raw_tt = ttnn.pad(raw_tt, [[0, 0], [0, 0], [0, 0], [0, kv_len - mask_kv_len]], value=0.0)
-                    elif mask_kv_len > kv_len:
-                        raw_tt = ttnn.slice(raw_tt, [0, 0, 0, 0], [batch_size, 1, 1, kv_len])
-                    ones_tt = ttnn.ones(
-                        (batch_size, 1, 1, kv_len),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            if raw_tt is not None and mask_kv_len is not None:
+                raw_tt = ttnn.unsqueeze(raw_tt, 1)
+                raw_tt = ttnn.unsqueeze(raw_tt, 2)
+                if mask_kv_len < kv_len:
+                    raw_tt = ttnn.pad(raw_tt, [[0, 0], [0, 0], [0, 0], [0, kv_len - mask_kv_len]], value=0.0)
+                elif mask_kv_len > kv_len:
+                    raw_tt = ttnn.slice(raw_tt, [0, 0, 0, 0], [batch_size, 1, 1, kv_len])
+                ones_tt = ttnn.ones(
+                    (batch_size, 1, 1, kv_len),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                sub_tt = ttnn.subtract(ones_tt, raw_tt)
+                ttnn.deallocate(ones_tt)
+                ttnn.deallocate(raw_tt)
+                clamped = ttnn.clamp(sub_tt, 0.0, 1.0)
+                ttnn.deallocate(sub_tt)
+                scaled = ttnn.multiply(clamped, PAD_MASK_VALUE)
+                ttnn.deallocate(clamped)
+                tt_additive = ttnn.repeat(scaled, ttnn.Shape((batch_size, 1, q_len, kv_len)))
+                ttnn.deallocate(scaled)
+                if os.environ.get("TT_SYMBIOTE_DEBUG_ATTN_MASK"):
+                    print(
+                        f"[TTNNGR00TSelfAttention mask] encoder mask shape=({batch_size}, 1, {q_len}, {kv_len})",
+                        flush=True,
                     )
-                    sub_tt = ttnn.subtract(ones_tt, raw_tt)
-                    ttnn.deallocate(ones_tt)
-                    ttnn.deallocate(raw_tt)
-                    clamped = ttnn.clamp(sub_tt, 0.0, 1.0)
-                    ttnn.deallocate(sub_tt)
-                    scaled = ttnn.multiply(clamped, PAD_MASK_VALUE)
-                    ttnn.deallocate(clamped)
-                    tt_additive = ttnn.repeat(scaled, ttnn.Shape((batch_size, 1, q_len, kv_len)))
-                    ttnn.deallocate(scaled)
-                    if os.environ.get("TT_SYMBIOTE_DEBUG_ATTN_MASK"):
-                        print(
-                            f"[TTNNGR00TSelfAttention mask] encoder mask shape=({batch_size}, 1, {q_len}, {kv_len})",
-                            flush=True,
-                        )
 
         if is_causal:
             ones_qk = ttnn.ones(
@@ -998,10 +1011,58 @@ class TTNNGR00TSelfAttention(TTNNModule):
                 )
                 if ct is not None and st is not None:
                     sq = q_4d.shape[2]
-                    if ct.shape[1] < sq:
-                        ct = torch.nn.functional.pad(ct, (0, 0, 0, sq - ct.shape[1]), value=1.0)
-                        st = torch.nn.functional.pad(st, (0, 0, 0, sq - st.shape[1]), value=0.0)
-                    q_4d, k_4d = self._rope_torch_fallback(q_4d, k_4d, ct, st, hw_dev)
+                    if isinstance(ct, ttnn.Tensor):
+                        ct_t = ct
+                    elif hasattr(ct, "to_ttnn"):
+                        ct_t = ct.to_ttnn
+                    else:
+                        ct_t = ttnn.from_torch(
+                            ct.to(torch.bfloat16).contiguous(),
+                            device=hw_dev,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    if isinstance(st, ttnn.Tensor):
+                        st_t = st
+                    elif hasattr(st, "to_ttnn"):
+                        st_t = st.to_ttnn
+                    else:
+                        st_t = ttnn.from_torch(
+                            st.to(torch.bfloat16).contiguous(),
+                            device=hw_dev,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    ct_t = ttnn.to_device(ct_t, hw_dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    st_t = ttnn.to_device(st_t, hw_dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    need_len = sq
+                    ndim = len(ct_t.shape)
+                    if ndim == 3:
+                        ct_t = ttnn.unsqueeze(ct_t, 1)
+                        st_t = ttnn.unsqueeze(st_t, 1)
+                    ct_len = ct_t.shape[2]
+                    if ct_len < need_len:
+                        pad_len = need_len - ct_len
+                        ct_t = ttnn.pad(
+                            ct_t,
+                            [[0, 0], [0, 0], [0, pad_len], [0, 0]],
+                            value=1.0,
+                        )
+                        st_t = ttnn.pad(
+                            st_t,
+                            [[0, 0], [0, 0], [0, pad_len], [0, 0]],
+                            value=0.0,
+                        )
+                    q_rot, k_rot = self.rope(
+                        q_4d.to_ttnn if hasattr(q_4d, "to_ttnn") else q_4d,
+                        k_4d.to_ttnn if hasattr(k_4d, "to_ttnn") else k_4d,
+                        ct_t,
+                        st_t,
+                    )
+                    q_4d = q_rot if isinstance(q_rot, TorchTTNNTensor) else TorchTTNNTensor(q_rot)
+                    k_4d = k_rot if isinstance(k_rot, TorchTTNNTensor) else TorchTTNNTensor(k_rot)
 
             def _to_ttnn(t):
                 return t.to_ttnn if hasattr(t, "to_ttnn") else t
