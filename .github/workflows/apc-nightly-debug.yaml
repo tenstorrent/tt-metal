@@ -22,7 +22,7 @@ on:
       run-wormhole-tests:
         default: true
         type: boolean
-        description: "Run Wormhole (APC) tests"
+        description: "Run Wormhole tests"
       run-blackhole-tests:
         default: true
         type: boolean
