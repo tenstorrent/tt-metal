@@ -32,6 +32,7 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
     _get_core_coords_from_ranges,
     _compute_and_concatenate_runtime_args,
     _append_barrier_runtime_args,
+    _append_rebind_runtime_args,
     _concatenate_common_runtime_args,
     _merge_named_compile_time_args,
     _merge_compile_time_args,
@@ -304,12 +305,10 @@ def _build_fused_descriptor(
                 named_ct_args.append((f"{s}_mcast_end_x", seg.config.mcast_end_x))
                 named_ct_args.append((f"{s}_mcast_end_y", seg.config.mcast_end_y))
 
-        # Add rebind named compile-time args (addr + size for each CB that changes)
-        for phase_idx, rebinds in rebind_info.items():
-            for slot_idx, addr, size in rebinds:
-                prefix = f"phase_{phase_idx}_cb{slot_idx}"
-                named_ct_args.append((f"{prefix}_rebind_addr", addr))
-                named_ct_args.append((f"{prefix}_rebind_size", size))
+        # Append rebind addresses as runtime args (not CT to avoid JIT cache busting)
+        rt_args, rebind_offset = _append_rebind_runtime_args(rt_args, rebind_info)
+        if rebind_offset is not None:
+            named_ct_args.append(("rebind_rt_offset", rebind_offset))
 
         # Get config from first available kernel for this role
         role_config = None
