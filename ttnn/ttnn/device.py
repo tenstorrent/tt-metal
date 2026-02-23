@@ -236,6 +236,37 @@ def manage_device(device_id: int) -> "ttnn.device.Device":
         close_device(device)
 
 
+initialize_fast_dispatch = ttnn._ttnn.device.initialize_fast_dispatch
+terminate_fast_dispatch = ttnn._ttnn.device.terminate_fast_dispatch
+
+
+@contextlib.contextmanager
+def setup_fast_dispatch(device):
+    """
+    Context manager that enables Fast Dispatch for the duration of the block.
+    The device must have been opened in Slow Dispatch mode (e.g. TT_METAL_SLOW_DISPATCH_MODE=1).
+    On exit, Fast Dispatch is terminated and the device returns to Slow Dispatch.
+
+    Args:
+        device: The device to enable Fast Dispatch on.
+
+    Yields:
+        None: Use the device inside the block; it is in Fast Dispatch mode.
+
+    Example:
+        >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+        >>> with ttnn.device.setup_fast_dispatch(mesh_device):
+        ...     # issue writes or other FD operations
+        ...     pass
+        >>> # FD terminated; device is back in Slow Dispatch
+    """
+    initialize_fast_dispatch(device)
+    try:
+        yield
+    finally:
+        terminate_fast_dispatch(device)
+
+
 def dump_device_memory_state(device, prefix=""):
     ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
 

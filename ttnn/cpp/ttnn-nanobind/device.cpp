@@ -367,6 +367,26 @@ void device_module(nb::module_& m_device) {
             >>> import ttnn
             >>> ttnn.device.ClearKernelCache()
     )doc");
+    m_device.def(
+        "initialize_fast_dispatch",
+        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device); },
+        nb::arg("device").noconvert(),
+        R"doc(
+        Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
+
+        Args:
+            device (ttnn.Device): The mesh device to enable Fast Dispatch on.
+    )doc");
+    m_device.def(
+        "terminate_fast_dispatch",
+        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().terminate_fast_dispatch(device); },
+        nb::arg("device").noconvert(),
+        R"doc(
+        Disable Fast Dispatch on a MeshDevice, returning it to Slow Dispatch mode.
+
+        Args:
+            device (ttnn.Device): The mesh device to disable Fast Dispatch on.
+    )doc");
     m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
     )doc");
