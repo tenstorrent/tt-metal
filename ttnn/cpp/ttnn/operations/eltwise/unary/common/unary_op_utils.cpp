@@ -181,30 +181,38 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {"elu_tile_init();", fmt::format("elu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::GELU:
             return {
-                fmt::format("gelu_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("gelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("gelu_tile_init<ckernel::use_approximate_enum<{}>()>();", (uint32_t)param0),
+                fmt::format("gelu_tile<ckernel::use_approximate_enum<{1}>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::LOG:
             return {
-                fmt::format("log_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("log_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("log_tile_init<ckernel::use_approximate_enum<APPROX, {}>()>();", (uint32_t)param0),
+                fmt::format("log_tile<ckernel::use_approximate_enum<APPROX, {1}>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             return {
-                fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("log_with_base_tile<{1}u>({0}, 0x3ede5bd9u);", idst, (uint32_t)param0)};
+                fmt::format(
+                    "log_with_base_tile_init<ckernel::use_approximate_enum<APPROX, {}>()>();", (uint32_t)param0),
+                fmt::format(
+                    "log_with_base_tile<ckernel::use_approximate_enum<APPROX, {1}>()>({0}, 0x3ede5bd9u);",
+                    idst,
+                    (uint32_t)param0)};
 
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
             return {
-                fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("log_with_base_tile<{1}u>({0}, 0x3fb8aa3bu);", idst, (uint32_t)param0)};
+                fmt::format(
+                    "log_with_base_tile_init<ckernel::use_approximate_enum<APPROX, {}>()>();", (uint32_t)param0),
+                fmt::format(
+                    "log_with_base_tile<ckernel::use_approximate_enum<APPROX, {1}>()>({0}, 0x3fb8aa3bu);",
+                    idst,
+                    (uint32_t)param0)};
         case UnaryOpType::LOG1P:
             return {
-                fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("log1p_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("log1p_tile_init<ckernel::use_approximate_enum<APPROX, {}>()>();", (uint32_t)param0),
+                fmt::format("log1p_tile<ckernel::use_approximate_enum<APPROX, {1}>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::TANH:
             return {
-                fmt::format("tanh_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("tanh_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("tanh_tile_init<ckernel::use_approximate_enum<{}>()>();", (uint32_t)param0),
+                fmt::format("tanh_tile<ckernel::use_approximate_enum<{1}>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::HEAVISIDE:
             return {
                 "heaviside_tile_init();",
@@ -243,25 +251,26 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0))};
         case UnaryOpType::EXP:
             return {
-                fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("exp_tile_init<ckernel::use_approximate_enum<{}>()>();", (uint32_t)param0),
+                fmt::format("exp_tile<ckernel::use_approximate_enum<{1}>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::SIGMOID: {
             uint32_t param1 = (uint32_t)params[1];
             TT_FATAL(
                 (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
                 "Invalid Vector mode value. Expected vector mode C (2) or RC (4) for sigmoid");
             return {
-                fmt::format("sigmoid_tile_init<{}u>();", param1),
-                fmt::format("sigmoid_tile<{1}, {2}u>({0});", idst, (int32_t)param0, param1)};
+                fmt::format("sigmoid_tile_init<ckernel::use_approximate_enum<{}>()>();", param1),
+                fmt::format(
+                    "sigmoid_tile<{1}, ckernel::use_approximate_enum<{2}>()>({0});", idst, (int32_t)param0, param1)};
         }
         case UnaryOpType::ERF:
             return {
-                fmt::format("erf_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("erf_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("erf_tile_init<ckernel::use_approximate_enum<{}>()>();", (uint32_t)param0),
+                fmt::format("erf_tile<ckernel::use_approximate_enum<{1}>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::ERFC:
             return {
-                fmt::format("erfc_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("erfc_tile_init<ckernel::use_approximate_enum<{}>()>();", (uint32_t)param0),
+                fmt::format("erfc_tile<ckernel::use_approximate_enum<{1}>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::RDIV: {
             uint32_t rounding_mode_value = params[1];
             static constexpr const char* rounding_mode_strs[] = {
@@ -550,8 +559,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         }
         case UnaryOpType::HARDMISH: {
             return {
-                fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("hardmish_tile_init<ckernel::use_approximate_enum<APPROX, {}>()>();", (uint32_t)param0),
+                fmt::format(
+                    "hardmish_tile<ckernel::use_approximate_enum<APPROX, {1}>()>({0});", idst, (uint32_t)param0)};
         }
         case UnaryOpType::RSQRT: {
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
