@@ -40,7 +40,7 @@ jobs:
 
   install-and-run-falcon7b:
     name: TT-Installer and run Falcon7b Demo
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
     timeout-minutes: 90
     steps:
       - name: Prepare system
@@ -94,7 +94,7 @@ jobs:
 
   install-and-run-llama70b-t3k:
     name: TT-Installer and run T3K Llama 70B Demo
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-llmbox-viommu-stable', 'n300') }}
+    runs-on: tt-ubuntu-2204-n300-llmbox-viommu-stable
     timeout-minutes: 180
     steps:
       - name: Prepare system
