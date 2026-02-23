@@ -133,11 +133,15 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     # Union semaphore refs
     all_semaphores = tuple(ref for r in results for ref in r.semaphores)
 
+    # Concatenate kernel labels
+    all_labels = tuple(label for r in results for label in r.kernel_labels)
+
     return _BuildResult(
         descriptor=merged_desc,
         input_tensors=all_inputs,
         output_tensors=all_outputs,
         semaphores=all_semaphores,
+        kernel_labels=all_labels,
     )
 
 

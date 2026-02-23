@@ -220,6 +220,7 @@ def _build_fused_descriptor(
     op_semaphore_info.sort(key=lambda x: x[0])
 
     fused_kernels = []
+    kernel_labels = []
 
     for role_key in role_keys:
         risc_type, core_key = role_key
@@ -340,6 +341,18 @@ def _build_fused_descriptor(
         desc.config = role_config
         fused_kernels.append(desc)
 
+        # Compute kernel label from op names (all-or-nothing: only if ALL phases are named)
+        role_phase_names = []
+        all_named = True
+        for phase_idx, pk in enumerate(phase_kernels):
+            if pk.get(role_key) is not None:
+                name = phases[phase_idx].op_descriptor.name
+                if name:
+                    role_phase_names.append(name)
+                else:
+                    all_named = False
+        kernel_labels.append("_".join(role_phase_names) if all_named and role_phase_names else "")
+
     # Merge semaphores (dedup by ID)
     all_semaphores = []
     seen_sem_ids: Set[int] = set()
@@ -378,6 +391,7 @@ def _build_fused_descriptor(
         input_tensors=all_input_tensors,
         output_tensors=[output_tensor] if output_tensor else [],
         semaphores=sem_refs,
+        kernel_labels=tuple(kernel_labels),
     )
 
 

@@ -85,13 +85,14 @@ class _BuildResult:
     outermost ``build()`` call.
     """
 
-    __slots__ = ("descriptor", "input_tensors", "output_tensors", "semaphores")
+    __slots__ = ("descriptor", "input_tensors", "output_tensors", "semaphores", "kernel_labels")
 
-    def __init__(self, descriptor, input_tensors, output_tensors, semaphores=()):
+    def __init__(self, descriptor, input_tensors, output_tensors, semaphores=(), kernel_labels=()):
         self.descriptor = descriptor
         self.input_tensors = input_tensors
         self.output_tensors = output_tensors
         self.semaphores = semaphores
+        self.kernel_labels = kernel_labels
 
 
 # =============================================================================
