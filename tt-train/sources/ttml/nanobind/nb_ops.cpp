@@ -124,12 +124,16 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
+        nb::enum_<ttml::ops::distributed::GRAD_OUTPUT_TYPE>(py_distributed, "GRAD_OUTPUT_TYPE")
+            .value("REPLICATED", ttml::ops::distributed::GRAD_OUTPUT_TYPE::REPLICATED)
+            .value("SHARDED", ttml::ops::distributed::GRAD_OUTPUT_TYPE::SHARDED);
         py_distributed.def(
             "all_gather",
             &ttml::ops::distributed::all_gather,
             nb::arg("tensor"),
             nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none());
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("grad_output_type") = ttml::ops::distributed::GRAD_OUTPUT_TYPE::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
     }

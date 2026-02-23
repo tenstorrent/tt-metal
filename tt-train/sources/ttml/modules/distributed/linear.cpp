@@ -114,7 +114,8 @@ autograd::TensorPtr ColumnParallelLinear::operator()(const autograd::TensorPtr& 
     if (m_gather_output) {
         // All-gather output along TP dimension to gather sharded outputs within each DP group
         // m_gather_output is true only at classification head for which output gradient is replicated across TP devices
-        x = ops::distributed::all_gather_grad_replicated(x, tensor->get_rank() - 1U, m_shard_dim);
+        x = ops::distributed::all_gather(
+            x, tensor->get_rank() - 1U, m_shard_dim, ops::distributed::GRAD_OUTPUT_TYPE::REPLICATED);
     }
     return x;
 }
