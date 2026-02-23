@@ -4,6 +4,9 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const { DEFAULT_LOOKBACK_DAYS, EMPTY_VALUE, SUCCESS_EMOJI, FAILURE_EMOJI, SHA_SHORT_LENGTH, DEFAULT_INFRA_OWNER, getTimeSinceLastSuccess } = require('./data-loading');
+
+/** Maximum number of error snippets to include in the step summary per workflow (avoids GitHub's 1024k limit for $GITHUB_STEP_SUMMARY) */
+const MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY = 5;
 const { getWorkflowStats, fetchPRInfo, findFirstFailInWindow, fetchCommitAuthor, renderCommitsTable } = require('./analysis');
 const { fetchErrorSnippetsForRun, inferJobAndTestFromSnippet, resolveOwnersForSnippet, findOwnerForLabel, renderErrorsTable } = require('./error-processing');
 const { getAnnotationsDirForRunId, listCommitsBetweenOffline } = require('./data-loading');
@@ -946,8 +949,13 @@ function buildRegressionsSection(regressedDetails, context) {
         : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
 
       let errorsList = '';
-      const errorsHtml = renderErrorsTable(it.error_snippets || []);
-      errorsList = [errorsHtml, ''].join('\n');
+      const allErrors = it.error_snippets || [];
+      const errorsToShow = allErrors.slice(0, MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY);
+      const errorsHtml = renderErrorsTable(errorsToShow);
+      const overflowNote = allErrors.length > MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY
+        ? `<p><em>Showing first ${MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY} of ${allErrors.length} errors; full list in artifacts.</em></p>\n`
+        : '';
+      errorsList = [overflowNote, errorsHtml, ''].join('\n');
 
       if (it.no_success_in_window) {
         const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
@@ -1005,8 +1013,13 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
       const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
 
       let errorsList = '';
-      const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-      errorsList = [errorsHtml2, ''].join('\n');
+      const allErrors2 = it.error_snippets || [];
+      const errorsToShow2 = allErrors2.slice(0, MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY);
+      const errorsHtml2 = renderErrorsTable(errorsToShow2);
+      const overflowNote2 = allErrors2.length > MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY
+        ? `<p><em>Showing first ${MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY} of ${allErrors2.length} errors; full list in artifacts.</em></p>\n`
+        : '';
+      errorsList = [overflowNote2, errorsHtml2, ''].join('\n');
 
       if (it.no_success_in_window) {
         const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
