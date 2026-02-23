@@ -1,6 +1,6 @@
-name: "apc nightly debug run"
+name: "Debug nightly run"
 
-run-name: "apc nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
+run-name: "Debug nightly run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
 
 on:
   schedule:
@@ -43,8 +43,8 @@ jobs:
             echo "enable-watcher=false" >> "$GITHUB_OUTPUT"
           fi
 
-  nightly-debug:
-    name: apc nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+  apc-nightly-debug:
+    name: APC debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: determine-watcher
     strategy:
       matrix:
@@ -59,3 +59,17 @@ jobs:
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-t3000-apc-fast-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
+
+  blackhole-nightly-debug:
+    name: Blackhole debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    needs: determine-watcher
+    strategy:
+      matrix:
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
+    uses: ./.github/workflows/blackhole-post-commit.yaml
+    secrets: inherit
+    with:
+      build-type: RelWithDebInfo
+      platform: ${{ matrix.platform }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
