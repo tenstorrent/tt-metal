@@ -21,7 +21,7 @@ _start:
 	addi	tp,tp,%lo(__local_base)
 	lui	sp,%hi(__local_stride)
 	addi	sp,sp,%lo(__local_stride)
-// for TRISCs __local_base and __local_stride already have the correct value in internal memory
+// for TRISCs __local_base and __local_stride are already set by the linker to the correct internal memory addresses
 #ifndef COMPILE_FOR_TRISC
 	csrr	s2,mhartid
 	mul	s2,sp,s2
