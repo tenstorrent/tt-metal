@@ -76,6 +76,14 @@ jobs:
           fetch-depth: ${{ (startsWith(inputs.ref || github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
 
+      - name: 📦 Restore CPM source cache
+        uses: actions/cache@v4
+        with:
+          path: .cpmcache
+          key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: |
+            cpm-
+
       # Python for driving the build; not the version the wheel targets
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
