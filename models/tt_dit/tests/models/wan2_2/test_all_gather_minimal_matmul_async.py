@@ -57,6 +57,7 @@ def run_test_linear_impl(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     num_iters=1,
+    enable_trace=False,
     use_persistent_buffers=True,
     use_non_fused=False,
     force_transpose=True,
@@ -127,84 +128,125 @@ def run_test_linear_impl(
         compute_with_storage_grid_size=core_grid,
     )
 
-    if use_non_fused:
-        tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
-            tt_input,
-            persistent_output_buffer=persistent_output_buffers[0],
-            dim=3,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
-            num_links=num_links,
-            topology=topology,
-            cluster_axis=cluster_axis,
-            chunks_per_sync=16,
-            num_workers_per_link=3,
-            num_buffers_per_channel=2,
-        )
+    tt_output_tensor_list = []
 
-        tt_output = ttnn.experimental.minimal_matmul(
-            tt_all_gather_out_tensor,
-            tt_weight,
-            bias_tensor=tt_bias,
-            fused_activation=activation_fn,
-            compute_kernel_config=compute_config,
-            config=matmul_config,
-        )
-    else:
-        tt_output = ttnn.experimental.all_gather_minimal_matmul_async(
-            tt_input,
-            tt_weight,
-            bias_tensor=tt_bias,
-            fused_activation=activation_fn,
-            compute_kernel_config=compute_config,
-            config=matmul_config,
-            persistent_output_buffer=persistent_output_buffers[0],
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
-            num_links=num_links,
-            topology=topology,
-            cluster_axis=cluster_axis,
-            barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
-            force_transpose=force_transpose,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=48,
-        )
-
-    ttnn.synchronize_device(device)
-
-    tt_output = ttnn.from_device(tt_output)
-    tt_output = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            device,
-            mesh_shape=tuple(device.shape),
-            dims=[sp_axis + 2, tp_axis + 2] if use_non_fused else [sp_axis, tp_axis],
-        ),
-    )
-    check_result = []
-
-    for i in range(device.shape[0]):
-        for j in range(device.shape[1]):
-            if use_non_fused:
-                tt_device_output = tt_output[
-                    :,
-                    :,
-                    i * per_device_M : (i + 1) * per_device_M,
-                    j * N : (j + 1) * N,
-                ]
-            else:
-                tt_device_output = tt_output[
-                    i * per_device_M : (i + 1) * per_device_M,
-                    j * N : (j + 1) * N,
-                ]
-            check_result.append(
-                assert_quality(
-                    torch_output[:, :, i * per_device_M : (i + 1) * per_device_M, :]
-                    if use_non_fused
-                    else torch_output[i * per_device_M : (i + 1) * per_device_M, :],
-                    tt_device_output,
-                )
+    def run_op(i):
+        if use_non_fused:
+            tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
+                tt_input,
+                persistent_output_buffer=persistent_output_buffers[i],
+                dim=3,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                num_links=num_links,
+                topology=topology,
+                cluster_axis=cluster_axis,
+                chunks_per_sync=16,
+                num_workers_per_link=3,
+                num_buffers_per_channel=2,
             )
 
-    return check_result
+            tt_output = ttnn.experimental.minimal_matmul(
+                tt_all_gather_out_tensor,
+                tt_weight,
+                bias_tensor=tt_bias,
+                fused_activation=activation_fn,
+                compute_kernel_config=compute_config,
+                config=matmul_config,
+            )
+        else:
+            tt_output = ttnn.experimental.all_gather_minimal_matmul_async(
+                tt_input,
+                tt_weight,
+                bias_tensor=tt_bias,
+                fused_activation=activation_fn,
+                compute_kernel_config=compute_config,
+                config=matmul_config,
+                persistent_output_buffer=persistent_output_buffers[i],
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                num_links=num_links,
+                topology=topology,
+                cluster_axis=cluster_axis,
+                barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
+                force_transpose=force_transpose,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=48,
+            )
+
+        return tt_output
+
+    if enable_trace:
+        # Compile the op
+        run_op(0)
+        ttnn.synchronize_device(device)
+        logger.info(f"Done compiling Op")
+
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        tt_out_tensor = run_op(0)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+        logger.info(f"Done capturing trace")
+
+        # Execute trace
+        for i in range(num_iters):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            tt_output_tensor_list.append(tt_out_tensor)
+        logger.info(f"Done executing trace")
+    else:
+        for i in range(num_iters):
+            ttnn.synchronize_device(device)
+            tt_out_tensor = run_op(i)
+            tt_output_tensor_list.append(tt_out_tensor)
+
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(device)
+            logger.info(f"Done op")
+
+            logger.info(f"Done iteration {i}")
+
+    # Check results
+    check_result_list = []
+    for n in range(num_iters):
+        print(f"iteration {n}:")
+        tt_output = tt_output_tensor_list[n]
+
+        tt_output = ttnn.from_device(tt_output)
+        tt_output = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                device,
+                mesh_shape=tuple(device.shape),
+                dims=[sp_axis + 2, tp_axis + 2] if use_non_fused else [sp_axis, tp_axis],
+            ),
+        )
+        check_result = []
+
+        for i in range(device.shape[0]):
+            for j in range(device.shape[1]):
+                if use_non_fused:
+                    tt_device_output = tt_output[
+                        :,
+                        :,
+                        i * per_device_M : (i + 1) * per_device_M,
+                        j * N : (j + 1) * N,
+                    ]
+                else:
+                    tt_device_output = tt_output[
+                        i * per_device_M : (i + 1) * per_device_M,
+                        j * N : (j + 1) * N,
+                    ]
+                check_result.append(
+                    assert_quality(
+                        torch_output[:, :, i * per_device_M : (i + 1) * per_device_M, :]
+                        if use_non_fused
+                        else torch_output[i * per_device_M : (i + 1) * per_device_M, :],
+                        tt_device_output,
+                    )
+                )
+        check_result_list.append(check_result)
+
+    return check_result_list
 
 
 def run_test_linear(
@@ -222,7 +264,7 @@ def run_test_linear(
     num_workers_per_link,
     num_links,
     use_bias=True,
-    activation="gelu",
+    activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     dtype=ttnn.bfloat16,
@@ -232,6 +274,8 @@ def run_test_linear(
     force_transpose=True,
     sp_axis=0,
     tp_axis=1,
+    num_iters=1,
+    enable_trace=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -295,11 +339,13 @@ def run_test_linear(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         torch_dtype=torch_dtype,
+        num_iters=num_iters,
+        enable_trace=enable_trace,
     )
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y",
     [
         [
             (2, 4),
@@ -311,11 +357,6 @@ def run_test_linear(
             1,
             4,
             4,
-            8,
-            8,
-            8,
-            2,
-            2,
         ],
         [
             (8, 4),
@@ -331,11 +372,6 @@ def run_test_linear(
             1,
             8,
             8,
-            8,
-            8,
-            8,
-            2,
-            2,
         ],
         [
             (8, 4),
@@ -351,11 +387,6 @@ def run_test_linear(
             1,
             8,
             8,
-            8,
-            8,
-            8,
-            2,
-            2,
         ],
         [
             (8, 4),
@@ -371,11 +402,6 @@ def run_test_linear(
             1,
             8,
             8,
-            8,
-            8,
-            8,
-            2,
-            2,
         ],
         [
             (8, 4),
@@ -391,11 +417,6 @@ def run_test_linear(
             1,
             12,
             9,
-            16,
-            8,
-            4,
-            1,
-            2,
         ],
     ],
     ids=[
@@ -408,18 +429,20 @@ def run_test_linear(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "M, K, N, force_transpose",
+    "M, K, N, force_transpose, use_bias, activation",
     [
-        (32768, 4096, 4096, True),
-        (75776, 5120, 3840, True),
-        (75776, 5120, 1280, True),
-        (75776, 5120, 3456, True),
+        (32768, 4096, 4096, True, False, None),
+        (75776, 5120, 3840, True, True, None),
+        (75776, 5120, 1280, True, True, None),
+        (75776, 5120, 3456, True, True, "gelu"),
+        (3072, 5120, 3456, True, True, "gelu"),
     ],
     ids=[
         "4k4k4k",
         "qkv",
         "denseout",
         "ff1",
+        "unit",
     ],
 )
 @pytest.mark.parametrize(
@@ -429,6 +452,14 @@ def run_test_linear(
         False,
     ],
     ids=["separate", "fused"],
+)
+@pytest.mark.parametrize(
+    "enable_trace,num_iters",
+    [
+        (False, 1),
+        (True, 2),
+    ],
+    ids=["check", "perf"],
 )
 def test_linear(
     mesh_device,
@@ -449,7 +480,13 @@ def test_linear(
     force_transpose,
     sp_axis,
     tp_axis,
+    use_bias,
+    activation,
+    enable_trace,
+    num_iters,
 ):
+    print(f"M,K,N,h,w: {M_block_size}, {K_block_size}, {N_block_size}, {subblock_h},  {subblock_w}\n")
+
     check_result = run_test_linear(
         mesh_device,
         M,
@@ -468,7 +505,13 @@ def test_linear(
         force_transpose=force_transpose,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        use_bias=use_bias,
+        activation=activation,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
     )
-    for i in range(mesh_device.get_num_devices()):
-        assert check_result[i]["pcc"] > 0.999_500
-        assert check_result[i]["relative_rmse"] < 0.02
+
+    for n in range(num_iters):
+        for i in range(mesh_device.get_num_devices()):
+            assert check_result[n][i]["pcc"] > 0.999_500
+            assert check_result[n][i]["relative_rmse"] < 0.02
