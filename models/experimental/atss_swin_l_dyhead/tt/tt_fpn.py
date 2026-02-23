@@ -104,7 +104,7 @@ class TtFPN:
             return_weights_and_bias=True,
             dtype=ttnn.bfloat16,
         )
-        output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.sharded_to_interleaved(output, ttnn.L1_MEMORY_CONFIG)
         output = ttnn.reshape(output, (batch, out_h, out_w, out_ch))
         return output, out_h, out_w, weight, bias
 
@@ -144,7 +144,7 @@ class TtFPN:
         # Top-down pathway: upsample higher-level and add to lower-level
         for i in range(self.num_ins - 1, 0, -1):
             lat_higher = laterals[i]
-            lat_higher_rm = ttnn.to_layout(lat_higher, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            lat_higher_rm = ttnn.to_layout(lat_higher, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
             upsampled = ttnn.upsample(lat_higher_rm, scale_factor=2, mode="nearest")
 
             target_h = laterals[i - 1].shape[1]
@@ -154,8 +154,8 @@ class TtFPN:
             if up_h != target_h or up_w != target_w:
                 upsampled = upsampled[:, :target_h, :target_w, :]
 
-            upsampled = ttnn.to_layout(upsampled, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            laterals[i - 1] = ttnn.to_layout(laterals[i - 1], ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # upsampled = ttnn.to_layout(upsampled, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # laterals[i - 1] = ttnn.to_layout(laterals[i - 1], ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             laterals[i - 1] = ttnn.add(laterals[i - 1], upsampled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(upsampled)
 
@@ -163,7 +163,7 @@ class TtFPN:
         outs = []
         for i in range(self.num_ins):
             lat = laterals[i]
-            lat = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # lat = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             N = lat.shape[0]
             H = lat.shape[1]
             W = lat.shape[2]
@@ -186,7 +186,7 @@ class TtFPN:
         # Extra levels: stride-2 convs on output (add_extra_convs='on_output')
         extra_src = outs[-1]
         for i in range(len(self.extra_weights)):
-            extra_src = ttnn.to_layout(extra_src, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            extra_src = ttnn.to_layout(extra_src, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
             N = extra_src.shape[0]
             H = extra_src.shape[1]
             W = extra_src.shape[2]
