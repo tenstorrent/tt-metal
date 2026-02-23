@@ -204,18 +204,6 @@ private:
     // Mutex to protect reinitialization operations (switching between mock and real hardware)
     std::mutex reinitialization_mutex_;
 
-    // Mutex to protect bank-to-NOC table generation (called concurrently during device initialization)
-    mutable std::mutex bank_to_noc_tables_mutex_;
-
-    // Written to device as part of FW init, device-specific
-    std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
-    std::unordered_map<ChipId, std::vector<int32_t>> l1_bank_offset_map_;
-    std::unordered_map<ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;
-    std::unordered_map<ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
-
-    std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_col_to_virtual_col_;
-    std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_row_to_virtual_row_;
-
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;
     std::unique_ptr<Hal> hal_;

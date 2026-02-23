@@ -64,13 +64,8 @@ RiscFirmwareInitializer::~RiscFirmwareInitializer() = default;
 
 void RiscFirmwareInitializer::init(
     const std::vector<Device*>& /*devices*/, const std::unordered_set<InitializerKey>& /*init_done*/) {
-    TT_THROW("RiscFirmwareInitializer::init is not implemented. Use init_by_device_ids instead.");
-}
-
-void RiscFirmwareInitializer::init_by_device_ids(const std::set<tt::ChipId>& device_ids) {
-    run_async_build_phase(device_ids);
-    run_launch_phase(device_ids);
-    initialized_ = true;
+    TT_THROW(
+        "RiscFirmwareInitializer::init is not implemented. Use run_async_build_phase and run_launch_phase instead.");
 }
 
 void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& device_ids) {
@@ -78,6 +73,22 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
     std::vector<std::shared_future<void>> futures;
     futures.reserve(device_ids.size());
+
+    // Reserve tables per device ID for multi threaded access below
+    dram_bank_offset_map_.reserve(device_ids.size());
+    l1_bank_offset_map_.reserve(device_ids.size());
+    dram_bank_to_noc_xy_.reserve(device_ids.size());
+    l1_bank_to_noc_xy_.reserve(device_ids.size());
+    worker_logical_col_to_virtual_col_.reserve(device_ids.size());
+    worker_logical_row_to_virtual_row_.reserve(device_ids.size());
+    for (tt::ChipId device_id : device_ids) {
+        dram_bank_offset_map_[device_id].reserve(num_hw_cqs_);
+        l1_bank_offset_map_[device_id].reserve(num_hw_cqs_);
+        dram_bank_to_noc_xy_[device_id].reserve(num_hw_cqs_);
+        l1_bank_to_noc_xy_[device_id].reserve(num_hw_cqs_);
+        worker_logical_col_to_virtual_col_[device_id].reserve(num_hw_cqs_);
+        worker_logical_row_to_virtual_row_[device_id].reserve(num_hw_cqs_);
+    }
 
     for (tt::ChipId device_id : device_ids) {
         futures.emplace_back(detail::async([this, device_id]() {
@@ -128,21 +139,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             initialize_and_launch_firmware(device_id);
         }
     }
-}
-
-void RiscFirmwareInitializer::copy_maps_to(
-    std::unordered_map<tt::ChipId, std::vector<int32_t>>& out_dram_bank_offset_map,
-    std::unordered_map<tt::ChipId, std::vector<int32_t>>& out_l1_bank_offset_map,
-    std::unordered_map<tt::ChipId, std::vector<uint16_t>>& out_dram_bank_to_noc_xy,
-    std::unordered_map<tt::ChipId, std::vector<uint16_t>>& out_l1_bank_to_noc_xy,
-    std::unordered_map<tt::ChipId, std::vector<uint8_t>>& out_worker_logical_col_to_virtual_col,
-    std::unordered_map<tt::ChipId, std::vector<uint8_t>>& out_worker_logical_row_to_virtual_row) const {
-    out_dram_bank_offset_map = dram_bank_offset_map_;
-    out_l1_bank_offset_map = l1_bank_offset_map_;
-    out_dram_bank_to_noc_xy = dram_bank_to_noc_xy_;
-    out_l1_bank_to_noc_xy = l1_bank_to_noc_xy_;
-    out_worker_logical_col_to_virtual_col = worker_logical_col_to_virtual_col_;
-    out_worker_logical_row_to_virtual_row = worker_logical_row_to_virtual_row_;
+    initialized_ = true;
 }
 
 void RiscFirmwareInitializer::configure() {}
