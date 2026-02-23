@@ -315,9 +315,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     env_(env),
     is_fw_(build_config.is_fw),
     process_defines_at_compile_(true),
-    core_type_(build_config.core_type),
-    processor_class_(build_config.processor_class),
-    processor_id_(build_config.processor_id),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
     cflags_(env.cflags_),
     defines_(env.defines_),
@@ -326,13 +323,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     default_compile_opt_level_("Os"),
     default_linker_opt_level_("Os") {
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
-    if (this->core_type_ == HalProgrammableCoreType::TENSIX &&
-        this->processor_class_ == HalProcessorClassType::COMPUTE) {
+    if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
+        build_config.processor_class == HalProcessorClassType::COMPUTE) {
         this->default_compile_opt_level_ = "O3";
         this->default_linker_opt_level_ = "O3";
         this->includes_ += "-I" + env_.gpp_include_dir_ + " ";
         this->process_defines_at_compile_ = false;
-    } else if (this->core_type_ == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
+    } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
         // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",
         // because its linker script depends on some files in that directory.
         // Maybe we should move the dependencies to runtime/hw/toolchain/<arch>/?
@@ -340,7 +337,10 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_};
+        build_config.is_fw,
+        build_config.core_type,
+        build_config.processor_class,
+        static_cast<uint32_t>(build_config.processor_id)};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -398,6 +398,21 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         for (const auto& obj : jit_build_query.link_objs(params)) {
             fmt::format_to(it, "{}{} ", env_.root_, obj);
         }
+    }
+
+    // Linker flags
+    this->lflags_ += jit_build_query.linker_flags(params);
+    this->lflags_ += fmt::format("-T{} ", this->linker_script_);
+    if (!this->is_fw_) {
+        this->lflags_ += "-Wl,--emit-relocs ";
+    }
+
+    // Precompute the weakened firmware path
+    {
+        auto target_name = jit_build_query.weakened_firmware_target_name(params);
+        std::string_view suffix = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
+        this->weakened_firmware_name_ =
+            fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, target_name, target_name, suffix);
     }
 
     // Note the preceding slash which defies convention as this gets appended to
@@ -527,16 +542,6 @@ bool JitBuildState::need_link(const string& out_dir) const {
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
-    lflags += tt_metal::MetalContext::instance().hal().get_jit_build_query().linker_flags(
-        {.is_fw = this->is_fw_,
-         .core_type = this->core_type_,
-         .processor_class = this->processor_class_,
-         .processor_id = static_cast<uint32_t>(this->processor_id_)});
-    lflags += fmt::format("-T{} ", this->linker_script_);
-    if (!this->is_fw_) {
-        // Emit relocations, so we can relocate the resulting binary
-        lflags += "-Wl,--emit-relocs ";
-    }
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
         lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
@@ -550,12 +555,11 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     // 2. Weakened firmware elf (for kernels)
     std::vector<std::string> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
-        std::string weakened = weakened_firmware_name();
-        link_deps.push_back(weakened);
+        link_deps.push_back(this->weakened_firmware_name_);
         if (!this->firmware_is_kernel_object_) {
             cmd += "-Wl,--just-symbols=";
         }
-        cmd += weakened + " ";
+        cmd += this->weakened_firmware_name_ + " ";
     }
 
     // Append common args provided by the build state
@@ -591,7 +595,7 @@ void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    jit_build::utils::FileRenamer out_file(weakened_firmware_name());
+    jit_build::utils::FileRenamer out_file(this->weakened_firmware_name_);
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
@@ -601,19 +605,6 @@ void JitBuildState::weaken(const string& out_dir) const {
         elf.ObjectifyExecutable();
     }
     elf.WriteImage(out_file.path());
-}
-
-std::string JitBuildState::weakened_firmware_name() const {
-    const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
-    const std::string weakened_firmware_target_name = jit_build_query.weakened_firmware_target_name(
-        {this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_});
-    std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
-    return fmt::format(
-        "{}{}/{}_{}",
-        this->env_.out_firmware_root_,
-        weakened_firmware_target_name,
-        weakened_firmware_target_name,
-        name);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
