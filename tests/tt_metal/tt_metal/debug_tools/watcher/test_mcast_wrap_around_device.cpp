@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ namespace {
 // Helper to run a wrap-around multicast test on device
 bool RunDeviceMcastWrapAroundTest(
     IDevice* device,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     NOC noc_id,
     CoreCoord sender_logical,
     CoreCoord mcast_start_logical,
