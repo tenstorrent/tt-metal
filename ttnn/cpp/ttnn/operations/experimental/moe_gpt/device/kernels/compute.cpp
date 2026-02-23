@@ -26,6 +26,9 @@ void kernel_main() {
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w2_addr = get_arg_val<uint32_t>(argidx++);
+    const auto bias0_addr = get_arg_val<uint32_t>(argidx++);
+    const auto bias1_addr = get_arg_val<uint32_t>(argidx++);
+    const auto bias2_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);

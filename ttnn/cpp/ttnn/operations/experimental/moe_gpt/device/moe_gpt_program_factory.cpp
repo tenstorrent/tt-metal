@@ -87,7 +87,13 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
 
     // Create compile args for the program
     const auto tensors = std::vector<const Tensor*>{
-        &tensor_args.input_tensor, &tensor_args.w0_w1_tensor, &tensor_args.w2_tensor, &tensor_args.output_tensor};
+        &tensor_args.input_tensor,
+        &tensor_args.w0_w1_tensor,
+        &tensor_args.w2_tensor,
+        &tensor_args.bias0_tensor,
+        &tensor_args.bias1_tensor,
+        &tensor_args.bias2_tensor,
+        &tensor_args.output_tensor};
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
@@ -166,6 +172,9 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
     }
 
     // Set the runtime arguments for the kernels
+    // Layout: [0]=bank_id, [1]=vchan, [2]=input, [3]=w0_w1, [4]=w2,
+    //         [5]=bias0, [6]=bias1, [7]=bias2, [8]=output,
+    //         [9]=semaphore, [10]=ring_pos, [11]=neighbor_x, [12]=neighbor_y
     std::vector<uint32_t> runtime_args;
     runtime_args.push_back(0);  // DRAM Bank ID placeholder
     runtime_args.push_back(0);  // VChannel placeholder
@@ -173,10 +182,10 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
         runtime_args.push_back(tensor->buffer()->address());
     }
     // Add placeholders for neighbor physical coords and semaphore
-    runtime_args.push_back(ring_semaphore_id);  // Semaphore ID
-    runtime_args.push_back(0);                  // Ring core ID placeholder
-    runtime_args.push_back(0);                  // Neighbor physical x
-    runtime_args.push_back(0);                  // Neighbor physical y
+    runtime_args.push_back(ring_semaphore_id);  // Semaphore ID       [9]
+    runtime_args.push_back(0);                  // Ring core ID        [10]
+    runtime_args.push_back(0);                  // Neighbor physical x [11]
+    runtime_args.push_back(0);                  // Neighbor physical y [12]
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -204,11 +213,11 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
 
         runtime_args[0] = dram_bank++;
         runtime_args[1] = vchannel;
-        // runtime_args[2-5] are already set to tensor addresses
-        // runtime_args[6] is already set to ring_semaphore_id
-        runtime_args[7] = ring_pos;
-        runtime_args[8] = static_cast<uint32_t>(next_physical.x);
-        runtime_args[9] = static_cast<uint32_t>(next_physical.y);
+        // runtime_args[2-8] are already set to tensor addresses
+        // runtime_args[9] is already set to ring_semaphore_id
+        runtime_args[10] = ring_pos;
+        runtime_args[11] = static_cast<uint32_t>(next_physical.x);
+        runtime_args[12] = static_cast<uint32_t>(next_physical.y);
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
@@ -238,12 +247,17 @@ void MoEGPTProgramFactory::override_runtime_arguments(
         program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
 
     // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [3] = w0_w1_tensor address, [5] = w2_tensor address
+    // Runtime args layout: [2]=input, [3]=w0_w1, [4]=w2, [5]=bias0, [6]=bias1, [7]=bias2, [8]=output
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
+            runtime_args[2] = tensor_args.input_tensor.buffer()->address();
             runtime_args[3] = tensor_args.w0_w1_tensor.buffer()->address();
             runtime_args[4] = tensor_args.w2_tensor.buffer()->address();
+            runtime_args[5] = tensor_args.bias0_tensor.buffer()->address();
+            runtime_args[6] = tensor_args.bias1_tensor.buffer()->address();
+            runtime_args[7] = tensor_args.bias2_tensor.buffer()->address();
+            runtime_args[8] = tensor_args.output_tensor.buffer()->address();
         }
     }
 }
