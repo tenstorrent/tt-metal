@@ -247,7 +247,8 @@ ALWI void sdpa_tail_streaming(
         cb_push_back(cb_l_out, block_size);
     }
 
-    ckernel::sdpa_tail_finalize(cb_worker_max_sum, cb_prev_max_sum);
+    // Finalize the worker/neighbor MS without popping the previous-round MS.
+    ckernel::sdpa_bcast_col_reuse_postamble(cb_worker_max_sum);
 }
 
 ALWI void sdpa_forward_data(
