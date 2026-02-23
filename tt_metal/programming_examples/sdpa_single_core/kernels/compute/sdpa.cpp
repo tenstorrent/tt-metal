@@ -760,7 +760,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
  * Consumes (pops) sum and output tiles from cur_sum_cb / cur_out_cb.
  * scratch_cb must be a 1-tile CB.
  */
-template <uint32_t SBH, uint32_t head_dim_t_>
+template <bool PROFILING_ENABLED, uint32_t SBH, uint32_t head_dim_t_>
 void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
@@ -772,6 +772,7 @@ void normalize_row_streaming(
         // Keeps the matmul result in DST[0] and applies recip directly, avoiding a
         // pack→scratch→copy-back-to-DST round-trip.
         {
+            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
             mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             reconfig_data_format(col_identity_cb, cur_sum_cb);
@@ -798,6 +799,7 @@ void normalize_row_streaming(
         // 3. normalize: multiply all head_dim_t_ output tiles by bcast_cols(1/sum) in one DST batch
         static_assert(head_dim_t_ <= 8, "head_dim_t must fit in DST (max 8 tiles with fp16b double-buffer)");
         {
+            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "NORM_MUL_BCAST");
             mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
             cb_wait_front(cur_out_cb, head_dim_t_);
             cb_wait_front(scratch_cb, 1);
@@ -1088,7 +1090,7 @@ void sdpa_inner_loop_step(
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
                 cb_push_back(cur_sum, sbh);
                 cb_push_back(cur_out, sbh * head_dim_t);
-                normalize_row_streaming<sbh, head_dim_t>(
+                normalize_row_streaming<PROFILING_ENABLED, sbh, head_dim_t>(
                     cur_sum, cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
                 pushed++;
             }
