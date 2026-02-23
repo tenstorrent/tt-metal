@@ -597,6 +597,13 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
 
     WAYPOINT("NASW");
     ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
+#if defined(WATCHER_ENABLED)
+    // Memory fence to ensure NOC command buffer register writes are visible
+    // before subsequent sanitize reads in noc_async_read_one_packet_with_state.
+    // Without this fence, the sanitize can observe stale register values under
+    // certain timing conditions, causing spurious invalid coordinate errors.
+    asm volatile("fence" : : : "memory");
+#endif
     WAYPOINT("NASD");
 }
 
@@ -674,6 +681,13 @@ void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
 
     WAYPOINT("NAUW");
     ncrisc_noc_read_set_state<noc_mode>(noc, read_cmd_buf, src_noc_addr);
+#if defined(WATCHER_ENABLED)
+    // Memory fence to ensure NOC command buffer register writes are visible
+    // before subsequent sanitize reads in noc_async_read_with_state.
+    // Without this fence, the sanitize can observe stale register values under
+    // certain timing conditions, causing spurious invalid coordinate errors.
+    asm volatile("fence" : : : "memory");
+#endif
     WAYPOINT("NAUD");
 }
 
@@ -991,6 +1005,13 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 
     WAYPOINT("NWPW");
     ncrisc_noc_write_set_state<posted, true /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, size, vc);
+#if defined(WATCHER_ENABLED)
+    // Memory fence to ensure NOC command buffer register writes are visible
+    // before subsequent sanitize reads in noc_async_write_one_packet_with_state.
+    // Without this fence, the sanitize can observe stale register values under
+    // certain timing conditions, causing spurious invalid coordinate errors.
+    asm volatile("fence" : : : "memory");
+#endif
     WAYPOINT("NWPD");
 }
 
@@ -2429,6 +2450,13 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, 0, dst_noc_addr, 0, vc, posted, noc);
 
     ncrisc_noc_write_set_state<posted, false /* one_packet */>(noc, cmd_buf, dst_noc_addr, 0 /* len_bytes */, vc);
+#if defined(WATCHER_ENABLED)
+    // Memory fence to ensure NOC command buffer register writes are visible
+    // before subsequent sanitize reads in noc_async_write_one_packet_with_trid_with_state.
+    // Without this fence, the sanitize can observe stale register values under
+    // certain timing conditions, causing spurious invalid coordinate errors.
+    asm volatile("fence" : : : "memory");
+#endif
     WAYPOINT("NAWD");
 }
 
