@@ -65,14 +65,16 @@ void bind_add(nb::module_& mod) {
                const Tensor& b,
                const std::optional<const DataType>& output_dtype,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(a, b, output_dtype, memory_config, std::move(output_tensor));
+               std::optional<Tensor> output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(a, b, output_dtype, memory_config, std::move(output_tensor), sub_core_grids);
             },
             nb::arg("a"),
             nb::arg("b"),
             nb::kw_only(),
             nb::arg("dtype").noconvert() = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 }
 }  // namespace ttnn::operations::experimental::binary::detail

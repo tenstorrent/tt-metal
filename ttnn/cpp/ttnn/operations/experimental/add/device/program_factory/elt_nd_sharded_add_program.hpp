@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <vector>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/add/device/add_device_operation_types.hpp"
+#include "tt-metalium/core_coord.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -17,6 +20,7 @@ struct EltNDShardedAddProgram {
         tt::tt_metal::CBHandle b_tensor_cb{};
         tt::tt_metal::CBHandle output_cb{};
         CoreRangeSet all_device_cores;
+        std::vector<CoreCoord> ordered_cores;  // worker order = shard index order
         uint32_t a_tensor_tile_size{};
         uint32_t b_tensor_tile_size{};
         uint32_t dst_tile_size{};

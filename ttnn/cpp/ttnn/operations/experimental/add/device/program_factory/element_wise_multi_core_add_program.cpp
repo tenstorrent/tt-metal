@@ -26,7 +26,7 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     auto dtype = tt_metal::datatype_to_dataformat_converter(args.a_tensor.dtype());
 
     /***************   CIRCULAR BUFFERS ***************/
-    constexpr uint32_t num_tiles_per_cycle = 1;
+    constexpr uint32_t num_tiles_per_cycle = 4;  //
     // constexpr uint32_t num_output_tiles = 2;
 
     auto createCircularBuffer = [&program, &all_device_cores, dtype = dtype](

@@ -44,7 +44,8 @@ struct AddDeviceOperation {
         const Tensor& b_tensor,
         const std::optional<const DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> output_tensor);
+        std::optional<Tensor> output_tensor,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::experimental::prim

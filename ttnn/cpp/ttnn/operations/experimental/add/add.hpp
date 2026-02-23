@@ -18,7 +18,8 @@ struct AddOperation {
         const Tensor& b,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> output_tensor = std::nullopt) {
+        std::optional<Tensor> output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         if (output_dtype.has_value() && output_tensor.has_value()) {
             TT_FATAL(
                 output_dtype.value() == output_tensor.value().dtype(),
@@ -26,7 +27,7 @@ struct AddOperation {
         }
 
         auto [operation_attributes, tensor_args] = ttnn::experimental::prim::AddDeviceOperation::invoke(
-            a, b, output_dtype, memory_config, std::move(output_tensor));
+            a, b, output_dtype, memory_config, std::move(output_tensor), sub_core_grids);
         return ttnn::device_operation::launch<ttnn::experimental::prim::AddDeviceOperation>(
             operation_attributes, tensor_args);
     }
