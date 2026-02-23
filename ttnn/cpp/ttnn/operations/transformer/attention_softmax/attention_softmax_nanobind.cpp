@@ -37,7 +37,7 @@ void bind_attention_softmax(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"attention_softmax">(
+    ttnn::bind_function<"attention_softmax", "ttnn.transformer.">(
         mod,
         doc,
         &ttnn::transformer::attention_softmax,
@@ -71,7 +71,7 @@ void bind_attention_softmax(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"attention_softmax_">(
+    ttnn::bind_function<"attention_softmax_", "ttnn.transformer.">(
         mod,
         doc_inplace,
         &ttnn::transformer::attention_softmax_,

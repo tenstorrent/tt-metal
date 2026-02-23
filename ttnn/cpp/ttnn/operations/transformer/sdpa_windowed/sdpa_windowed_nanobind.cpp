@@ -48,7 +48,7 @@ void bind_sdpa_windowed(nb::module_& mod) {
                 )
         )doc";
 
-    ttnn::bind_function<"windowed_scaled_dot_product_attention">(
+    ttnn::bind_function<"windowed_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         doc,
         &ttnn::transformer::windowed_scaled_dot_product_attention,

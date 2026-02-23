@@ -181,7 +181,7 @@ void bind_sdpa_decode(nb::module_& mod) {
         "If a position is given as (-1), compute for the corresponding index in the batch is skipped."
         )doc";
 
-    ttnn::bind_function<"scaled_dot_product_attention_decode">(
+    ttnn::bind_function<"scaled_dot_product_attention_decode", "ttnn.transformer.">(
         mod,
         doc,
         ttnn::overload_t(
@@ -201,7 +201,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none()));
 
-    ttnn::bind_function<"paged_scaled_dot_product_attention_decode">(
+    ttnn::bind_function<"paged_scaled_dot_product_attention_decode", "ttnn.transformer.">(
         mod,
         doc,
         ttnn::overload_t(
@@ -221,7 +221,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none()));
 
-    ttnn::bind_function<"flash_multi_latent_attention_decode">(
+    ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,
         doc,
         ttnn::overload_t(
@@ -242,7 +242,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none()));
 
-    ttnn::bind_function<"paged_flash_multi_latent_attention_decode">(
+    ttnn::bind_function<"paged_flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,
         doc,
         ttnn::overload_t(

@@ -93,7 +93,7 @@ void bind_sdpa(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"scaled_dot_product_attention">(
+    ttnn::bind_function<"scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         doc,
         ttnn::overload_t(
@@ -158,7 +158,7 @@ void bind_sdpa(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"chunked_scaled_dot_product_attention">(
+    ttnn::bind_function<"chunked_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         chunked_doc,
         ttnn::overload_t(
@@ -206,7 +206,7 @@ void bind_sdpa(nb::module_& mod) {
               - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
         )doc";
 
-    ttnn::bind_function<"joint_scaled_dot_product_attention">(
+    ttnn::bind_function<"joint_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         joint_doc,
         &ttnn::transformer::joint_scaled_dot_product_attention,
@@ -267,7 +267,7 @@ void bind_sdpa(nb::module_& mod) {
               - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
         )doc";
 
-    ttnn::bind_function<"ring_joint_scaled_dot_product_attention">(
+    ttnn::bind_function<"ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         ring_joint_doc,
         &ttnn::transformer::ring_joint_scaled_dot_product_attention,
@@ -319,7 +319,7 @@ void bind_sdpa(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"flash_mla_prefill">(
+    ttnn::bind_function<"flash_mla_prefill", "ttnn.transformer.">(
         mod,
         mla_doc,
         &ttnn::transformer::flash_mla_prefill,
@@ -361,7 +361,7 @@ void bind_sdpa(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"chunked_flash_mla_prefill">(
+    ttnn::bind_function<"chunked_flash_mla_prefill", "ttnn.transformer.">(
         mod,
         chunked_mla_doc,
         &ttnn::transformer::chunked_flash_mla_prefill,
@@ -419,7 +419,7 @@ void bind_sdpa(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"ring_distributed_scaled_dot_product_attention">(
+    ttnn::bind_function<"ring_distributed_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         ring_distributed_doc,
         &ttnn::transformer::ring_distributed_scaled_dot_product_attention,

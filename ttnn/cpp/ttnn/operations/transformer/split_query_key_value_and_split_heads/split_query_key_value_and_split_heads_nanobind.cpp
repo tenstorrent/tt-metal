@@ -12,6 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
 
+#include "tt_stl/assert.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include "split_query_key_value_and_split_heads.hpp"
@@ -76,7 +77,7 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"split_query_key_value_and_split_heads">(
+    ttnn::bind_function<"split_query_key_value_and_split_heads", "ttnn.transformer.">(
         mod,
         doc,
         &ttnn::transformer::split_query_key_value_and_split_heads,

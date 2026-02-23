@@ -30,7 +30,7 @@ void bind_concatenate_heads(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"concatenate_heads">(
+    ttnn::bind_function<"concatenate_heads", "ttnn.transformer.">(
         mod,
         doc,
         &ttnn::transformer::concatenate_heads,
