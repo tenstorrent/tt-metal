@@ -266,14 +266,6 @@ void MetalContext::initialize(
 
     risc_firmware_initializer_->run_launch_phase(device_ids);
 
-    risc_firmware_initializer_->copy_maps_to(
-        dram_bank_offset_map_,
-        l1_bank_offset_map_,
-        dram_bank_to_noc_xy_,
-        l1_bank_to_noc_xy_,
-        worker_logical_col_to_virtual_col_,
-        worker_logical_row_to_virtual_row_);
-
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
     watcher_server_->attach_devices();
@@ -362,16 +354,6 @@ void MetalContext::teardown() {
 
     noc_debug_state_.reset();
 
-    // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
-    // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
-    // when context is re-initialized).
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
-
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
         experimental::disable_mock_mode();
@@ -458,30 +440,6 @@ void MetalContext::reinitialize_for_real_hardware() {
     teardown_base_objects();
     initialize_base_objects();
 
-    // Clear and reinitialize device-specific maps: they contain data computed from the old cluster_/hal_ objects and
-    // must be cleared after switching to the new cluster configuration.
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
-
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-    for (ChipId device_id : cluster_->all_chip_ids()) {
-        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
-    }
-
     teardown_dispatch_state();
     initialized_ = false;
 
@@ -551,22 +509,6 @@ MetalContext::MetalContext() {
     }
 
     initialize_base_objects();
-
-    // Initialize some container members to allow threadsafe operations on them later
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-    for (ChipId device_id : cluster_->all_chip_ids()) {
-        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
-    }
 
     device_manager_ = std::make_unique<DeviceManager>();
 }
