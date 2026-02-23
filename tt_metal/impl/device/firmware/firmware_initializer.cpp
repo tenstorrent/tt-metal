@@ -16,6 +16,4 @@ FirmwareInitializer::FirmwareInitializer(std::shared_ptr<const ContextDescriptor
 
 void FirmwareInitializer::post_teardown() {}
 
-void FirmwareInitializer::init_by_device_ids(const std::set<tt::ChipId>& /*device_ids*/) {}
-
 }  // namespace tt::tt_metal
