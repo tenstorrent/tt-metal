@@ -3982,6 +3982,25 @@ class MoeOp:
             rmsnorm_scalar_packed=routed_ctx.rmsnorm_scalar_packed,
         )
 
+        # Shared descriptors (populated by _build_descriptors)
+        self.cb_descriptors = []
+        self.unified_core_descs = []
+        self.per_core_descs = []
+        self.semaphore_descriptors = []
+        self.io_tensors = []
+        self.kernel_defines = []
+
+        # Per-device state (populated by _setup_device_args per mesh iteration)
+        self.ncrisc_args = []
+        self.brisc_args = []
+        self.trisc_args = []
+        self.device_cb_descs = []
+        self.device_sem_descs = []
+        self.device_unified_core_descs = []
+        self.device_per_core_descs = []
+        self.device_rt_args_desc = None
+        self.ncrisc_common_rt_args = []
+
     def _build_cb_descriptors(self):
         """Build combined CB descriptors for routed + shared expert."""
         cb_descriptors = []
