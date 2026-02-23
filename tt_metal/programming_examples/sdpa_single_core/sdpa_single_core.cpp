@@ -286,7 +286,10 @@ void sdpa_single_core(
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/compute/sdpa.cpp",
         core,
         tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity, .compile_args = compute_compile_time_args, .defines = defines});
+            .math_fidelity = math_fidelity,
+            //.math_approx_mode = true,  // when APPROX=true: recip uses 2 Newton iters instead of 3
+            .compile_args = compute_compile_time_args,
+            .defines = defines});
 
     // Set kernel arguments
     uint32_t q_addr = q_dram_buffer->address();
@@ -555,7 +558,10 @@ void sdpa_single_core_test(
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/compute/sdpa.cpp",
         core,
         tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity, .compile_args = compute_compile_time_args, .defines = defines});
+            .math_fidelity = math_fidelity,
+            //.math_approx_mode = true,  // when APPROX=true: recip uses 2 Newton iters instead of 3
+            .compile_args = compute_compile_time_args,
+            .defines = defines});
 
     // --- Set kernel runtime args ---
     uint32_t q_addr = q_dram_buffer->address();
