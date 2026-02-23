@@ -4,6 +4,7 @@
 
 #include "ops/rope_op.hpp"
 
+#include <core/ttnn_all_includes.hpp>
 #include <numbers>
 
 #include "autograd/auto_context.hpp"

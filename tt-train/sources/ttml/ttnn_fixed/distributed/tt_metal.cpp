@@ -15,10 +15,10 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
+namespace {
+
 const char* kTTMetalHomeEnvVar = "TT_METAL_HOME";
 const char* kTTMeshGraphDescriptorEnvVar = "TT_MESH_GRAPH_DESC_PATH";
-
-namespace {
 
 // Convert FabricType (inferred from MGD dim_types) to the appropriate 2D FabricConfig
 tt::tt_fabric::FabricConfig get_2d_fabric_config_from_type(tt::tt_fabric::FabricType fabric_type) {
@@ -62,38 +62,49 @@ tt::tt_fabric::FabricConfig infer_fabric_config_from_mgd(const std::string& mgd_
 
 }  // namespace
 
-void enable_fabric(uint32_t num_devices) {
-    std::string mesh_graph_descriptor_path;
-
-    const char* mesh_graph_descriptor_path_env = std::getenv(kTTMeshGraphDescriptorEnvVar);
-    if (mesh_graph_descriptor_path_env) {
-        mesh_graph_descriptor_path = mesh_graph_descriptor_path_env;
-    } else {
-        const char* metal_home = std::getenv(kTTMetalHomeEnvVar);
-        if (!metal_home) {
-            throw std::runtime_error("TT_METAL_HOME is not set");
-        }
-
-        mesh_graph_descriptor_path = std::string(metal_home) + "/tests/tt_metal/tt_fabric/custom_mesh_descriptors/";
-
-        bool set_env_var = (num_devices == 8U || num_devices == 32U);
-        if (num_devices == 8U) {
-            mesh_graph_descriptor_path += "t3k_1x8_mesh_graph_descriptor.textproto";
-        } else if (num_devices == 32U) {
-            mesh_graph_descriptor_path += "galaxy_1x32_mesh_graph_descriptor.textproto";
-        }
-
-        // set environment variable
-        if (set_env_var) {
-            setenv(kTTMeshGraphDescriptorEnvVar, mesh_graph_descriptor_path.c_str(), 1);
-            fmt::println("[tt-train] TT_MESH_GRAPH_DESC_PATH is set to {}", mesh_graph_descriptor_path);
-        }
+std::optional<std::string> get_mgd_path(uint32_t num_devices) {
+    // Check if env var is already set
+    const char* mgd_path_env = std::getenv(kTTMeshGraphDescriptorEnvVar);
+    if (mgd_path_env) {
+        return std::string(mgd_path_env);
     }
 
-    // Infer the fabric config from the MGD's dim_types (LINE vs RING per axis)
-    // This automatically selects FABRIC_2D, FABRIC_2D_TORUS_X, FABRIC_2D_TORUS_Y, or FABRIC_2D_TORUS_XY
-    auto fabric_config = infer_fabric_config_from_mgd(mesh_graph_descriptor_path);
-    tt::tt_fabric::SetFabricConfig(fabric_config);
+    // Build default path based on num_devices
+    const char* metal_home = std::getenv(kTTMetalHomeEnvVar);
+    if (!metal_home) {
+        throw std::runtime_error("TT_METAL_HOME is not set");
+    }
+
+    std::string mgd_path = std::string(metal_home) + "/tests/tt_metal/tt_fabric/custom_mesh_descriptors/";
+
+    if (num_devices == 8U) {
+        mgd_path += "t3k_1x8_mesh_graph_descriptor.textproto";
+    } else if (num_devices == 32U) {
+        mgd_path += "galaxy_1x32_mesh_graph_descriptor.textproto";
+    } else {
+        // No default MGD for this device count
+        return std::nullopt;
+    }
+
+    // Set environment variable for downstream use
+    setenv(kTTMeshGraphDescriptorEnvVar, mgd_path.c_str(), 1);
+    fmt::println("[tt-train] TT_MESH_GRAPH_DESC_PATH is set to {}", mgd_path);
+
+    return mgd_path;
+}
+
+void enable_fabric(uint32_t num_devices) {
+    auto mgd_path = get_mgd_path(num_devices);
+
+    if (mgd_path.has_value()) {
+        // Infer the fabric config from the MGD's dim_types (LINE vs RING per axis)
+        // This automatically selects FABRIC_2D, FABRIC_2D_TORUS_X, FABRIC_2D_TORUS_Y, or FABRIC_2D_TORUS_XY
+        auto fabric_config = infer_fabric_config_from_mgd(mgd_path.value());
+        tt::tt_fabric::SetFabricConfig(fabric_config);
+    } else {
+        // No MGD available, use default FABRIC_2D
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

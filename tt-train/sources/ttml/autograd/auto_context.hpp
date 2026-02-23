@@ -62,7 +62,7 @@ private:
     std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
     std::optional<uint32_t> m_cp_axis = std::nullopt;
-    uint32_t m_cp_size = 1U;
+    uint32_t m_num_cp_devices = 1U;
     uint32_t m_num_ddp_devices = 1U;
     uint32_t m_num_tp_devices = 1U;
 };

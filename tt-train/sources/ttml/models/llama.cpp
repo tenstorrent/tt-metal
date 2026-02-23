@@ -226,7 +226,7 @@ ttml::autograd::TensorPtr Llama::operator()(
 
     if (kv_cache) {
         // Inference mode with KV cache
-        for (uint32_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
+        for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
             auto& block = blocks[block_idx];
             // Cast block to LlamaBlock to access the cache-aware operator
             auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);

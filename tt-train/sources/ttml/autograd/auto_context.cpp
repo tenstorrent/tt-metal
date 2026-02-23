@@ -141,7 +141,7 @@ ParallelismContext::ParallelismContext(
 
     if (is_line_topology) {
         TT_FATAL(
-            num_enabled_parallelisms <= 1,
+            num_enabled_parallelisms == 1,
             "For line mesh topology (shape {}), exactly one parallelism type must be enabled. "
             "Got: ddp={}, tp={}, cp={}",
             mesh_shape,
@@ -164,7 +164,7 @@ ParallelismContext::ParallelismContext(
             m_num_ddp_devices = mesh_shape[active_axis];
         } else if (config.enable_cp) {
             m_cp_axis = active_axis;
-            m_cp_size = mesh_shape[active_axis];
+            m_num_cp_devices = mesh_shape[active_axis];
         } else if (config.enable_tp) {
             m_tp_axis = active_axis;
             m_num_tp_devices = mesh_shape[active_axis];
@@ -186,7 +186,7 @@ ParallelismContext::ParallelismContext(
         }
         if (config.enable_cp) {
             m_cp_axis = axis++;
-            m_cp_size = mesh_shape[m_cp_axis.value()];
+            m_num_cp_devices = mesh_shape[m_cp_axis.value()];
         }
         if (config.enable_tp) {
             m_tp_axis = axis++;
@@ -224,7 +224,7 @@ const uint32_t ParallelismContext::get_cp_size() const {
     if (!m_cp_axis.has_value()) {
         return 1U;
     }
-    return m_cp_size;
+    return m_num_cp_devices;
 }
 
 const uint32_t ParallelismContext::get_tp_size() const {

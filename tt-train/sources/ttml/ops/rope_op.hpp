@@ -4,9 +4,12 @@
 
 #pragma once
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/tensor.hpp"
+
+// Forward declaration to avoid heavy include in files that only need the pointer type
+namespace ttnn::distributed {
+class TensorToMesh;
+}  // namespace ttnn::distributed
 
 namespace ttml::ops {
 
