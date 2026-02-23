@@ -154,6 +154,7 @@ def passed_test(
     L1_to_L1_iterations: int = 1,
     print_erros: bool = True,
     print_pcc: bool = False,
+    tile_dimensions: tuple[int, int] = (32, 32),
 ):
     Tolerance = namedtuple("Tolerance", ["atol", "rtol"])
 
@@ -194,8 +195,8 @@ def passed_test(
         try:
             if not is_within_tolerance:
                 diff_indices = torch.where(~is_valid)[0]
-                num_tiles = (res_tensor.size()[0]) // 1024
-                tile_shape = (32, 32)
+                tile_size = tile_dimensions[0] * tile_dimensions[1]
+                num_tiles = (res_tensor.size()[0]) // tile_size
 
                 def bg(r, g, b):
                     return f"\033[48;2;{r};{g};{b}m"
@@ -215,9 +216,9 @@ def passed_test(
                     label = "Golden tile" if golden else "Result tile"
                     background = PURPLE if golden else BLUE
                     tile_lines = [f"Row\t === {label} {tile_no+1} ==="]
-                    for row in range(32):
+                    for row in range(tile_dimensions[0]):
                         row_values = []
-                        for col in range(32):
+                        for col in range(tile_dimensions[1]):
                             colour = RED if error_tile[row, col] else background
                             row_values.append(
                                 f"{colour}{tile_data[row, col]:7.2f}{RESET}{' ' if col == 15 else '' }"
@@ -233,14 +234,14 @@ def passed_test(
 
                 for tile_no in range(num_tiles):
                     result_tile = res_tensor[
-                        tile_no * 1024 : (tile_no + 1) * 1024
-                    ].view(tile_shape)
+                        tile_no * tile_size : (tile_no + 1) * tile_size
+                    ].view(tile_dimensions)
                     golden_tile = golden_tensor[
-                        tile_no * 1024 : (tile_no + 1) * 1024
-                    ].view(tile_shape)
-                    error_tile = ~is_valid[tile_no * 1024 : (tile_no + 1) * 1024].view(
-                        tile_shape
-                    )
+                        tile_no * tile_size : (tile_no + 1) * tile_size
+                    ].view(tile_dimensions)
+                    error_tile = ~is_valid[
+                        tile_no * tile_size : (tile_no + 1) * tile_size
+                    ].view(tile_dimensions)
 
                     lines = format_tile(result_tile, error_tile, tile_no)
                     if not lines:

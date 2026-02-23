@@ -53,9 +53,6 @@ supported_formats = [
 # Define parameter lists
 broadcast_types = [
     BroadcastType.None_,
-    BroadcastType.Column,
-    BroadcastType.Row,
-    BroadcastType.Scalar,
 ]
 dest_acc = [DestAccumulation.Yes, DestAccumulation.No]
 disable_src_zero_flags = [False, True]
