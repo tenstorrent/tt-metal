@@ -42,15 +42,14 @@ void bind_embedding_backward(nb::module_& mod) {
     ttnn::bind_function<"embedding_bw">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::embedding_bw,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("weight_tensor").noconvert(),
-            nb::arg("output_gradient_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("dtype").noconvert() = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor").noconvert() = nb::none()));
+        &ttnn::embedding_bw,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("weight_tensor").noconvert(),
+        nb::arg("output_gradient_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("dtype").noconvert() = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::embedding_backward
