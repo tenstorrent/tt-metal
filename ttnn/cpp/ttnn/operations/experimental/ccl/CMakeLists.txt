@@ -31,6 +31,8 @@ file(
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
+    deepseek_b1_reduce_to_one/device/kernels/*
+    moe/selective_reduce_combine/device/kernels/*
 )
 
 target_sources(
@@ -124,6 +126,8 @@ target_sources(
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
