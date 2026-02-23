@@ -15,45 +15,35 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cube_root() {
-    sfpi::vFloat third_128 = 0x1.555556p-9f;
-    // Magic constant from paper, with MSB set to 1.
-    sfpi::vInt magic = 0xd48c2b4b;
-    sfpi::vFloat rounding_bias = 8388608.0f;
+    sfpi::vFloat negative_third_256 = -0x1.555556p-10f;
+
+    // Magic constant 0x548c2b4b / 256 + 2^23
+    sfpi::vFloat magic = 1418472267.0f / 256.0f + 8388608.0f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[0];
         sfpi::vFloat x = sfpi::abs(a);
 
-        sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(x);
-
-        // The original paper wants i = 0x54a223b4 - i/3.
-        // Since computing i/3 is expensive, we note the following:
-        // 1. x is positive, hence the MSB of i is always zero and i<2^31.
-        // 2. dividing by 3 loses another bit, so the 2 high bits of i/3 are zero and i/3<2^30.
-        // We would like to end up with a value < 2^23 so that we can use the
-        // rounding bias trick; adding 2^23 in floating point shifts the value
-        // into the mantissa bits.  Since i/3<2^30, we simply need to divide by
-        // 2^7 to obtain a value < 2^23.
+        // Paper wants i = 0x54a223b4 - i/3.
+        // Due to lack of integer division and lack of fp32 to u32 cast, we
+        // compute this using two instructions: SFPMAD and SFPSHFT.
         //
-        // The calculation below does:
-        // 1. f = (float)i; this is inexact for values larger than 2^24.
-        // 2. Use a single SFPMAD to compute (f/3.0)/128.0, which is guaranteed to be smaller than 2^23,
-        //    and add 2^23, shifting result into mantissa bits (rounding to nearest even).
-        // 3. Left-shift by 7 to undo division by 128.0.
-        // This gives us approximately i/3 but with low 7 bits all zero, and high 2 bits 10.
+        // First, we compute (0x54a223b4 - i/3) in fp32, but we also need to
+        // add 2^23 to shift the result into the mantissa bits for extraction
+        // as integer.  This only works if (0x54a223b4 - i/3)*k < 2^23, so we
+        // divide everything by 2^8.
+        //
+        // f = (0x54a223b4 - i * 1.0/3.0) / 256.0 + 2^23
+        //   = (0x54a223b4/256.0 - i * 1.0/3.0/256.0) + 2^23
 
-        sfpi::vFloat f = sfpi::int32_to_float(i, 0);
+        sfpi::vFloat f = sfpi::int32_to_float(sfpi::reinterpret<sfpi::vInt>(x), 0);
 
-        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        f.get() = __builtin_rvtt_sfpmad(f.get(), third_128.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        f = f * negative_third_256 + magic;
 
-        // f has exponent 23; i<<7 will have two high bits 10; use modified
-        // magic constant from paper with MSB=1 to cancel the MSB=1 of i<<7.
-        i = sfpi::reinterpret<sfpi::vInt>(f);
-        i = magic - (i << 7);
+        // Now, left-shift by 8 to restore integer result.
 
-        sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(i);
+        sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(f) << 8);
 
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vFloat c = (x * y) * (y * y);
@@ -61,8 +51,8 @@ inline void calculate_cube_root() {
 
             sfpi::vFloat d = x * (y * y);
             c = d * y + sfpi::vConstNeg1;
-            sfpi::vFloat third = sfpi::addexp(third_128, 7);
-            sfpi::vFloat t = c * third + sfpi::vConstNeg1;
+            sfpi::vFloat negative_third = sfpi::addexp(negative_third_256, 8);
+            sfpi::vFloat t = c * negative_third + sfpi::vConst1;
             d = sfpi::setsgn(d, a);
             y = d * (t * t);
 
