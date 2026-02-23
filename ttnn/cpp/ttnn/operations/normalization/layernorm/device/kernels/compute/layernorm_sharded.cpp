@@ -13,6 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary/gelu.h"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -360,6 +361,12 @@ void kernel_main() {
 
             tile_regs_wait();
             for (uint32_t i = 0; i < subblock_w; i++) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+                if constexpr (!(do_gamma | do_beta)) {
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+#endif
                 pack_tile(i, cb_im);
             }
             tile_regs_release();
@@ -394,6 +401,12 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < subblock_w; i++) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    if constexpr (!do_beta) {
+                        SFPU_OP_INIT_ACTIVATION
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+#endif
                     pack_tile(i, cb_outgamma);
                 }
                 tile_regs_release();
@@ -424,6 +437,10 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < subblock_w; i++) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                     pack_tile(i, cb_out);
                 }
                 tile_regs_release();

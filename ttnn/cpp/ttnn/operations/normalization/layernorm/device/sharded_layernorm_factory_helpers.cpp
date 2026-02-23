@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -470,7 +471,14 @@ KernelPaths KernelPaths::get(
 }
 
 KernelDefines KernelDefines::build(
-    bool has_b, bool has_gamma, bool has_beta, bool rms_norm, bool use_welford, bool skip_write_back) {
+    bool has_b,
+    bool has_gamma,
+    bool has_beta,
+    bool rms_norm,
+    bool use_welford,
+    bool skip_write_back,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    std::optional<tt::tt_metal::DataType> output_dtype) {
     KernelDefines defines;
 
     // Reader defines
@@ -498,6 +506,14 @@ KernelDefines KernelDefines::build(
     }
     if (rms_norm && !use_welford) {
         defines.compute.emplace_back("RMSNORM", "1");
+    }
+    if (fused_activation.has_value()) {
+        const auto& act = fused_activation.value();
+        auto act_defines =
+            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "i", output_dtype);
+        for (auto& [key, val] : act_defines) {
+            defines.compute.emplace_back(key, val);
+        }
     }
 
     return defines;

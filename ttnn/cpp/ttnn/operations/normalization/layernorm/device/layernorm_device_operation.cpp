@@ -428,7 +428,8 @@ Tensor layer_norm(
     LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
-    const std::optional<const Tensor>& recip_tensor) {
+    const std::optional<const Tensor>& recip_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -437,6 +438,7 @@ Tensor layer_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
+        .fused_activation = fused_activation,
     };
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,
