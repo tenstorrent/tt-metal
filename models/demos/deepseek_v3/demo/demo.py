@@ -65,6 +65,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to output JSON file. If --prompts-file is provided and --output-path is not specified, output will be saved to <prompts-file-stem>_output.json in the same directory as the prompts file.",
     )
     p.add_argument(
+        "--checkpoint-jsonl",
+        type=str,
+        help="Optional JSONL path to append partial results as each user hits EOS. Useful for partial eval if a run hangs.",
+    )
+    p.add_argument(
         "--model-path",
         type=str,
         required=True,
@@ -92,6 +97,19 @@ def create_parser() -> argparse.ArgumentParser:
         "--sampling-top-k",
         type=int,
         help="Top-k cutoff. Default when --sampling is enabled: 0 (disabled).",
+    )
+    p.add_argument(
+        "--stop-at-eos",
+        dest="stop_at_eos",
+        action="store_true",
+        default=True,
+        help="Stop recording output tokens for a user once an EOS/stop token is generated.",
+    )
+    p.add_argument(
+        "--no-stop-at-eos",
+        dest="stop_at_eos",
+        action="store_false",
+        help="Disable EOS stopping; always record max-new-tokens.",
     )
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
@@ -280,6 +298,8 @@ def run_demo(
     sampling_temperature: float | None = None,
     sampling_top_p: float | None = None,
     sampling_top_k: int | None = None,
+    stop_at_eos: bool = True,
+    checkpoint_jsonl: str | Path | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -429,6 +449,29 @@ def run_demo(
             logger.info("Sampling disabled; using greedy argmax decode.")
 
         # Multi-prompt generation
+        checkpoint_fh = None
+        checkpoint_written: set[int] = set()
+        checkpoint_path = Path(checkpoint_jsonl) if checkpoint_jsonl else None
+        if checkpoint_path is not None:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_fh = open(checkpoint_path, "w", encoding="utf-8")
+
+            def _checkpoint_user(user_idx: int, token_ids: list[int]) -> None:
+                if user_idx in checkpoint_written:
+                    return
+                text = None
+                if gen.tokenizer is not None:
+                    text = gen.tokenizer.decode(token_ids, skip_special_tokens=True)
+                record = {
+                    "index": user_idx + 1,
+                    "prompt": prompt_list[user_idx] if user_idx < len(prompt_list) else "",
+                    "text": text,
+                }
+                checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                checkpoint_fh.flush()
+                os.fsync(checkpoint_fh.fileno())
+                checkpoint_written.add(user_idx)
+
         generations, statistics = gen.generate(
             prompt_list,
             max_new_tokens=max_new_tokens,
@@ -437,6 +480,8 @@ def run_demo(
             early_print_first_user=early_print_first_user,
             repeat_batches=repeat_batches,
             pre_tokenized=pre_tokenized_prompts,
+            stop_at_eos=stop_at_eos,
+            on_user_finished=_checkpoint_user if checkpoint_fh is not None else None,
         )
 
         # Process all generations
@@ -458,6 +503,21 @@ def run_demo(
                     }
                 )
             results.append(result)
+
+        # If checkpointing is enabled, write any users that never hit EOS.
+        if checkpoint_fh is not None:
+            for i, result in enumerate(results):
+                if i in checkpoint_written:
+                    continue
+                record = {
+                    "index": i + 1,
+                    "prompt": prompt_list[i] if i < len(prompt_list) else "",
+                    "text": result.get("text"),
+                }
+                checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            checkpoint_fh.flush()
+            os.fsync(checkpoint_fh.fileno())
+            checkpoint_fh.close()
 
         return {"generations": results, "statistics": statistics}
     finally:
@@ -513,6 +573,8 @@ def main() -> None:
         sampling_temperature=args.sampling_temperature,
         sampling_top_p=args.sampling_top_p,
         sampling_top_k=args.sampling_top_k,
+        stop_at_eos=bool(args.stop_at_eos),
+        checkpoint_jsonl=args.checkpoint_jsonl,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing

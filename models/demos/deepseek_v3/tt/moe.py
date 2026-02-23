@@ -21,6 +21,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -156,14 +157,20 @@ class MoE(SharedStateAddOn, AbstractModule):
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
 
-            USERS_PER_ROW = 32
             HIDDEN_SIZE = hf_config.hidden_size
             TP_SIZE = mesh_device.shape[1]
 
+            shard_core_grid = ttnn.CoreGrid(y=7, x=4)
+            per_core_width = (HIDDEN_SIZE // TP_SIZE) // shard_core_grid.num_cores
             input_output_memory_config = ttnn.create_sharded_memory_config(
-                shape=(USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE),
-                core_grid=ttnn.CoreGrid(y=7, x=4),
+                shape=(
+                    ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                    ttnn.core.roundup(per_core_width, ttnn.TILE_SIZE),
+                ),
+                core_grid=shard_core_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
             # Construct the config
@@ -469,9 +476,23 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _fwd_reduce_scatter(
         cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
     ) -> ttnn.Tensor:
-        return ttnn.experimental.reduce_scatter_minimal_async(
-            post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
-        )
+        # Use standard reduce_scatter (composite fallback) to avoid shard shape constraints
+        # encountered by the minimal async path in some decode configurations.
+        rs_cfg = cfg["final_output_reduce_scatter"]
+        rs_kwargs = {
+            "dim": rs_cfg["dim"],
+            "cluster_axis": rs_cfg.get("cluster_axis"),
+            "subdevice_id": rs_cfg.get("subdevice_id"),
+            "memory_config": rs_cfg.get("memory_config"),
+            "intermediate_memory_config": rs_cfg.get("intermediate_memory_config"),
+            "num_links": rs_cfg.get("num_links"),
+            "topology": rs_cfg.get("topology"),
+            "chunks_per_sync": rs_cfg.get("chunks_per_sync"),
+            "num_workers_per_link": rs_cfg.get("num_workers_per_link"),
+            "num_buffers_per_channel": rs_cfg.get("num_buffers_per_channel"),
+        }
+        rs_kwargs = {k: v for k, v in rs_kwargs.items() if v is not None}
+        return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
 
     @classmethod
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:

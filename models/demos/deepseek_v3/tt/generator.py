@@ -24,7 +24,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-MAX_SEQ_LEN = 2048
+MAX_SEQ_LEN = 32768
 
 
 @dataclass(frozen=True)
@@ -624,6 +624,8 @@ class DeepseekGenerator:
         early_print_first_user: bool = True,
         repeat_batches: int = 1,
         pre_tokenized: List[List[int]] | None = None,
+        stop_at_eos: bool = True,
+        on_user_finished=None,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -632,6 +634,10 @@ class DeepseekGenerator:
 
         repeat_batches: Number of times to repeat the prefill+decode pass. Only the
                         last pass's tokens are returned; timings aggregate.
+
+        stop_at_eos: If True, stop recording output tokens for a user once an EOS/stop token is generated.
+        on_user_finished: Optional callback invoked once per user when an EOS/stop token is generated.
+                          Signature: (user_index: int, output_tokens: list[int]) -> None
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
@@ -668,6 +674,35 @@ class DeepseekGenerator:
         profiler.end("tokenizing")
 
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
+
+        # Resolve stop token ids (if requested).
+        effective_stop_at_eos = bool(stop_at_eos) and teacher_forcing is None
+        stop_token_ids: set[int] = set()
+        if effective_stop_at_eos and self.tokenizer is not None:
+            eos_id = getattr(self.tokenizer, "eos_token_id", None)
+            if eos_id is None:
+                eos_id = getattr(self.hf_config, "eos_token_id", None)
+            if isinstance(eos_id, (list, tuple, set)):
+                stop_token_ids.update(int(x) for x in eos_id if x is not None)
+            elif eos_id is not None:
+                stop_token_ids.add(int(eos_id))
+            # Some tokenizers expose an explicit stop token list.
+            stop_tokens = getattr(self.tokenizer, "stop_tokens", None)
+            if stop_tokens:
+                for st in stop_tokens:
+                    if isinstance(st, int):
+                        stop_token_ids.add(int(st))
+                    elif isinstance(st, str):
+                        try:
+                            stop_token_ids.add(int(self.tokenizer.convert_tokens_to_ids(st)))
+                        except Exception:
+                            pass
+            # Drop any invalid ids.
+            stop_token_ids = {tid for tid in stop_token_ids if tid is not None and tid >= 0}
+
+        if effective_stop_at_eos and not stop_token_ids:
+            logger.warning("stop_at_eos enabled but no EOS/stop token ids found; generating full length.")
+            effective_stop_at_eos = False
 
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
@@ -713,6 +748,8 @@ class DeepseekGenerator:
             logger.info(f"Finished prefill for all users...")
 
             generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+            finished: list[bool] | None = [False] * num_of_prompts if effective_stop_at_eos else None
+            notified: list[bool] | None = [False] * num_of_prompts if effective_stop_at_eos else None
             if max_new_tokens <= 0:
                 logger.info("max_new_tokens <= 0, skipping decode loop.")
             else:
@@ -734,7 +771,18 @@ class DeepseekGenerator:
 
                 # Record token 0
                 for i in range(num_of_prompts):
+                    if finished is not None and finished[i]:
+                        continue
                     token_value = int(next_tokens[i].item())
+                    if finished is not None and token_value in stop_token_ids:
+                        finished[i] = True
+                        if on_user_finished is not None and notified is not None and not notified[i]:
+                            try:
+                                on_user_finished(i, list(generations[i]))
+                            except Exception as exc:
+                                logger.warning(f"on_user_finished callback failed for user {i}: {exc}")
+                            notified[i] = True
+                        continue
                     generations[i].append(token_value)
                     if early_print_first_user and i == 0:
                         if self.tokenizer is not None:
@@ -769,7 +817,18 @@ class DeepseekGenerator:
                     positions += 1
 
                     for i in range(num_of_prompts):
+                        if finished is not None and finished[i]:
+                            continue
                         token_value = int(next_tokens[i].item())
+                        if finished is not None and token_value in stop_token_ids:
+                            finished[i] = True
+                            if on_user_finished is not None and notified is not None and not notified[i]:
+                                try:
+                                    on_user_finished(i, list(generations[i]))
+                                except Exception as exc:
+                                    logger.warning(f"on_user_finished callback failed for user {i}: {exc}")
+                                notified[i] = True
+                            continue
                         generations[i].append(token_value)
                         if early_print_first_user and i == 0:
                             if self.tokenizer is not None:
