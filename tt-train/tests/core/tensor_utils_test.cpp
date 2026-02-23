@@ -295,6 +295,22 @@ TYPED_TEST(TtmlFromVectorBf16Test, TileLayout) {
     ASSERT_EQ(tensor.layout(), ttnn::TILE_LAYOUT);
 }
 
+/* Test for issue #38364 */
+TYPED_TEST(TtmlFromVectorBf16Test, VeryLargeTileLayout) {
+    using scalar_t = typename TypeParam::scalar_t;
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<scalar_t> test_data;
+    uint32_t vec_size = 1048576;
+    for (size_t i = 0; i < vec_size; i++) {
+        test_data.push_back(0);
+    }
+
+    auto shape = ttnn::Shape({1, 1, 1, vec_size});
+    auto tensor =
+        ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device, ttnn::TILE_LAYOUT);
+    ASSERT_EQ(tensor.layout(), ttnn::TILE_LAYOUT);
+}
+
 class TtmlFromVectorFloat32Test : public TensorUtilsTest {};
 
 /* <float, ttnn::DataType::FLOAT32> */
