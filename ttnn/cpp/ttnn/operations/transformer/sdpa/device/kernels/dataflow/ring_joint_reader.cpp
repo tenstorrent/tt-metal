@@ -135,6 +135,7 @@ void kernel_main() {
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
     uint32_t rind_index = fused_op_receiver.ring_index;
+    // DPRINT << "READER BEGIN FOR " << rind_index << ENDL();
     // uint32_t tmp = global_q_end - global_q_start;
     // DPRINT << "GLOBAL Q RANGE: " << global_q_start << " - " << global_q_end << ENDL();
     // DPRINT << "NUM LOCAL Q CHUNKS " << num_local_q_chunks << " K CHUNKS " << num_local_k_chunks << ENDL();
@@ -318,11 +319,11 @@ void kernel_main() {
         }
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
-            cb_reserve_back(cb_v_in, k_chunk_tiles);
+            cb_reserve_back(cb_v_in, v_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
-            cb_push_back(cb_v_in, k_chunk_tiles);
+            cb_push_back(cb_v_in, v_chunk_tiles);
         }
         // DPRINT << "READER STEP: " << ring_iter << ENDL();
     }
-    DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
+    // DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
 }

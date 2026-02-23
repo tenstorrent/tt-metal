@@ -1438,6 +1438,7 @@ void sdpa_inner_loop(
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t mask_chunk_0,
@@ -1813,9 +1814,9 @@ void sdpa_inner_loop(
     if constexpr (sdpa_type == RING) {
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_wait_front(cb_k_in, k_chunk_tiles);
-            cb_wait_front(cb_v_in, k_chunk_tiles);
+            cb_wait_front(cb_v_in, v_chunk_tiles);
             cb_pop_front(cb_k_in, k_chunk_tiles);
-            cb_pop_front(cb_v_in, k_chunk_tiles);
+            cb_pop_front(cb_v_in, v_chunk_tiles);
         }
     }
 
@@ -2108,6 +2109,7 @@ void sdpa_ring(
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t ring_iter,
@@ -2177,6 +2179,7 @@ void sdpa_ring(
         iter_k_chunk_end,
         q_chunk_tiles,
         k_chunk_tiles,
+        v_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
         0,  // mask_chunk_0 (not used)

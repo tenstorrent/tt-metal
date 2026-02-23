@@ -250,17 +250,21 @@ def run_ring_joint_sdpa(
         pt_Q = torch.cat([Q, joint_Q], dim=2)
         pt_K = torch.cat([K, joint_K], dim=2)
         pt_V = torch.cat([V, joint_V], dim=2)
+        print("Running on host...")
         gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=is_causal)
+        print("Done running on host...")
         gt_out = gt[:, :, :base_seq_len, :]
         gt_joint_out = gt[:, :, base_seq_len:, :]
 
         for i in range(n_iters):
+            print("Getting results from device...")
             tt_out = ttnn.to_torch(
                 tt_out_list[i],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
                 ),
             )
+            print("Done getting results from device...")
             joint_shard_dims = [None, None]
             joint_shard_dims[up_axis] = 1
             joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
@@ -304,7 +308,7 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
     "b, nh, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
-    #    [(1, 1, 4 * 32, 32, 32, 32)],
+    # [(1, 32, 4 * 4 * 1024, 576, 576, 128)],
     [(1, 1, 4 * 32, 64, 64, 32)],
     ids=["deepseek_v3_prefill"],
 )

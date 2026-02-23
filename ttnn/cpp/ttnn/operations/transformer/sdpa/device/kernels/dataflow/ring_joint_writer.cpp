@@ -244,7 +244,6 @@ void kernel_main() {
             }
 
             if (ring_iter > 0) {
-                DPRINT << "Reading prev output and LSE" << ENDL();
                 read_prev_output_and_lse(
                     is_joint_q ? joint_out_generator : out_generator,
                     lse_writer,
@@ -260,10 +259,8 @@ void kernel_main() {
                     cb_lse_in,
                     tile_bytes,
                     lse_tile_bytes);
-                DPRINT << "Read prev output and LSE" << ENDL();
             }
 
-            DPRINT << "Writing output and LSE" << ENDL();
             write_output_and_lse(
                 is_joint_q ? joint_out_generator : out_generator,
                 lse_writer,
@@ -279,10 +276,7 @@ void kernel_main() {
                 cb_lse_out,
                 tile_bytes,
                 lse_tile_bytes);
-            DPRINT << "Written output and LSE" << ENDL();
-            DPRINT << "Global q_chunk end: " << global_q_chunk << ENDL();
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
-    DPRINT << "WRITER EXIT" << ENDL();
 }

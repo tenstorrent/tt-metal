@@ -56,6 +56,7 @@ void kernel_main() {
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
@@ -141,6 +142,7 @@ void kernel_main() {
             num_kv_chunks,
             q_chunk_tiles,
             k_chunk_tiles,
+            v_chunk_tiles,
             qk_chunk_tiles,
             out_chunk_tiles,
             ring_iter,
