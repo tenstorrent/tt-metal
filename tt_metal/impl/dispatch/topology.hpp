@@ -5,7 +5,6 @@
 #pragma once
 
 #include <device.hpp>
-#include <functional>
 #include <memory>
 #include <set>
 #include <unordered_map>
@@ -19,10 +18,6 @@
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 #include "tt_metal/impl/context/context_descriptor.hpp"
-
-namespace tt::tt_fabric {
-class ControlPlane;
-}
 
 namespace tt {
 class Cluster;
@@ -58,14 +53,7 @@ struct DispatchKernelNode {
 
 class DispatchTopology {
 public:
-    explicit DispatchTopology(
-        const ContextDescriptor& descriptor,
-        dispatch_core_manager& dispatch_core_manager,
-        DeviceManager* device_manager,
-        const GetControlPlaneFn& get_control_plane = {},
-        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
-        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
+    explicit DispatchTopology(const ContextDescriptor& descriptor, dispatch_core_manager& dispatch_core_manager);
     ~DispatchTopology();
 
     void populate_fd_kernels(const std::vector<Device*>& devices, uint32_t num_hw_cqs);
@@ -89,11 +77,6 @@ private:
 
     const ContextDescriptor& descriptor_;
     dispatch_core_manager& dispatch_core_manager_;
-    DeviceManager* device_manager_;
-    GetControlPlaneFn get_control_plane_;
-    GetDispatchQueryManagerFn get_dispatch_query_manager_;
-    GetMaxNumEthCoresFn get_max_num_eth_cores_;
-    GetReadsDispatchCoresFn get_reads_dispatch_cores_;
     std::unique_ptr<DispatchMemMap> dispatch_mem_map_[enchantum::to_underlying(CoreType::COUNT)];
     std::vector<FDKernel*> node_id_to_kernel_;
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
