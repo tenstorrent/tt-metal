@@ -11,7 +11,7 @@
 
 constexpr uint32_t sender_socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);
-constexpr uint32_t page_size = get_compile_time_arg_val(2);
+constexpr uint32_t sender_page_size = get_compile_time_arg_val(2);
 constexpr uint32_t upstream_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_whole_fabric_packets_link_0 = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_fabric_packets_link_1 = get_compile_time_arg_val(5);
@@ -125,7 +125,7 @@ void kernel_main() {
     }
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
-    set_sender_socket_page_size(sender_socket, page_size);
+    set_sender_socket_page_size(sender_socket, sender_page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     // Create receiver socket interfaces for all upstream sockets
@@ -169,20 +169,19 @@ void kernel_main() {
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
 
-    uint32_t current_socket_idx = 0;
     uint32_t bytes_accumulated = 0;
-    bool data_pushed = false;
 
     socket_reserve_pages(sender_socket, 1);
 
     // Collect data from all upstream sockets into a single larger page
-    while (true) {
+    // Process num_upstream_sockets pages (one from each worker) for reduce-to-one
+    for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         // Wait for pages in current upstream socket with termination checks
-        if (!socket_wait_for_pages_with_termination(receiver_sockets[current_socket_idx], 1, termination_semaphore)) {
+        if (!socket_wait_for_pages_with_termination(receiver_sockets[i], 1, termination_semaphore)) {
             break;
         }
 
-        auto l1_read_addr = receiver_sockets[current_socket_idx].read_ptr;
+        auto l1_read_addr = receiver_sockets[i].read_ptr;
         // Calculate offset within the downstream buffer for this socket's data
         uint32_t skt_offset = bytes_accumulated;
         uint32_t dst_l1_addr = downstream_fifo_l1_addr + sender_socket.write_ptr + skt_offset;
@@ -199,30 +198,18 @@ void kernel_main() {
             l1_read_addr,
             dst_addr);
 
-        socket_pop_pages(receiver_sockets[current_socket_idx], 1);
+        socket_pop_pages(receiver_sockets[i], 1);
 
-        socket_notify_sender(receiver_sockets[current_socket_idx]);
+        socket_notify_sender(receiver_sockets[i]);
 
         invalidate_l1_cache();
 
         // Update accumulation
         bytes_accumulated += upstream_page_size;
-        current_socket_idx = (current_socket_idx + 1) % num_upstream_sockets;
-
-        // Push when we've accumulated a full downstream page
-        if (bytes_accumulated >= page_size) {
-            socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
-            data_pushed = true;
-            bytes_accumulated = 0;
-
-            // Reserve next page if continuing
-            socket_reserve_pages(sender_socket, 1);
-        }
     }
 
-    // Push any remaining data if we broke out of loop before filling a complete page
-    if (bytes_accumulated > 0 && !data_pushed) {
+    // Push the aggregated page after collecting all worker data
+    if (bytes_accumulated >= sender_page_size) {
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
     }
