@@ -14,6 +14,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
@@ -209,6 +210,42 @@ class WanAttention(Module):
                 bias = _interleave_heads([k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)])
                 state["to_kv.bias"] = bias.squeeze(-1)
 
+    def _to_out_fused_addcmul(
+        self,
+        x: ttnn.Tensor,
+        addcmul_residual: ttnn.Tensor,
+        addcmul_gate: ttnn.Tensor,
+        compute_kernel_config=None,
+    ) -> ttnn.Tensor:
+        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
+        to_out = self.to_out
+
+        # Handle FSDP weight gathering (mirrors ColParallelLinear.forward)
+        if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=2, mesh_axis=to_out.fsdp_mesh_axis
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = to_out.weight.data
+
+        M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        matmul_config = get_matmul_config(M, K, N_out, core_grid)
+
+        output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+            x,
+            weight,
+            1.0,  # scalar
+            addcmul_residual,
+            addcmul_gate,
+            bias_tensor=to_out.bias.data if to_out.bias is not None else None,
+            config=matmul_config,
+            compute_kernel_config=compute_kernel_config or to_out.compute_config,
+        )
+        return output
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -217,6 +254,8 @@ class WanAttention(Module):
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
         trans_mat: ttnn.Tensor | None = None,
+        addcmul_residual: ttnn.Tensor | None = None,
+        addcmul_gate: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
@@ -224,9 +263,15 @@ class WanAttention(Module):
         rope_cos: fractured on SP, TP
         rope_sin: fractured on SP, TP
         trans_mat: replicated
+        addcmul_residual: (optional) residual tensor for fused matmul+addcmul (self-attn only)
+        addcmul_gate: (optional) gate tensor for fused matmul+addcmul (self-attn only)
 
         If prompt_1BLP is not provided, run self-attention.
         Otherwise, run cross-attention on prompt.
+
+        When addcmul_residual and addcmul_gate are both provided (self-attention only),
+        the to_out projection and residual addcmul are fused into a single op:
+            output = addcmul_residual + to_out(attn_output) * addcmul_gate
 
         Outputs:
         spatial_1BND: fractured N on SP, fractured D on TP
@@ -334,6 +379,12 @@ class WanAttention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+        if addcmul_residual is not None and addcmul_gate is not None:
+            # Fused to_out projection + addcmul (self-attention only)
+            spatial_1BND = self._to_out_fused_addcmul(
+                spatial_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=self.mm_compute_kernel_config
+            )
+        else:
+            spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
         return spatial_1BND
