@@ -1439,7 +1439,7 @@ class MLA1D(AbstractModule):
         try:
             if page_table is None:
                 logger.warning(
-                    "KVDBG deepseek prefill: page_table=None global={} local={} row={} col={}",
+                    "KVDBG TT prefill: page_table=None global={} local={} row={} col={}",
                     global_batch_idx,
                     local_batch_idx,
                     row_idx,
@@ -1449,7 +1449,7 @@ class MLA1D(AbstractModule):
             if isinstance(page_table, ttnn.Tensor):
                 if mesh_device is None:
                     logger.warning(
-                        "KVDBG deepseek prefill: mesh_device=None global={} local={} row={} col={} page_table_shape={}",
+                        "KVDBG TT prefill: mesh_device=None global={} local={} row={} col={} page_table_shape={}",
                         global_batch_idx,
                         local_batch_idx,
                         row_idx,
@@ -1478,7 +1478,7 @@ class MLA1D(AbstractModule):
                         idxs = oob_mask.nonzero(as_tuple=False).flatten().tolist()[:16]
                         vals = flat[oob_mask][:16].tolist()
                         logger.error(
-                            "KVDBG deepseek prefill OOB user global={} local={} row={} col={} row_shape={} "
+                            "KVDBG TT prefill OOB user global={} local={} row={} col={} row_shape={} "
                             "block_size={} max_blocks={} min={} max={} oob={} sample_idx_val={}",
                             global_batch_idx,
                             local_batch_idx,
@@ -1494,7 +1494,7 @@ class MLA1D(AbstractModule):
                         )
                 else:
                     logger.warning(
-                        "KVDBG deepseek prefill: row index out of range global={} local={} row={} col={} table_shape={}",
+                        "KVDBG TT prefill: row index out of range global={} local={} row={} col={} table_shape={}",
                         global_batch_idx,
                         local_batch_idx,
                         row_idx,
@@ -1503,7 +1503,7 @@ class MLA1D(AbstractModule):
                     )
             else:
                 logger.warning(
-                    "KVDBG deepseek prefill: unexpected page_table type global={} local={} row={} col={} page_table={}",
+                    "KVDBG TT prefill: unexpected page_table type global={} local={} row={} col={} page_table={}",
                     global_batch_idx,
                     local_batch_idx,
                     row_idx,
@@ -1511,7 +1511,7 @@ class MLA1D(AbstractModule):
                     pt_torch,
                 )
         except Exception as exc:
-            logger.warning("KVDBG deepseek prefill failed: {}", exc)
+            logger.warning("KVDBG TT prefill failed: {}", exc)
 
     @classmethod
     def forward_prefill(
@@ -1628,17 +1628,16 @@ class MLA1D(AbstractModule):
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
-        if _deepseek_kvdbg_enabled():
-            cls._debug_prefill_page_table(
-                page_table=page_table,
-                local_batch_idx=local_batch_idx,
-                global_batch_idx=batch_idx,
-                row_idx=row_idx,
-                col_idx=col_idx,
-                block_size=kvpe_cache.shape[2],
-                max_blocks=kvpe_cache.shape[0],
-                mesh_device=cfg.get("mesh_device", None),
-            )
+        cls._debug_prefill_page_table(
+            page_table=page_table,
+            local_batch_idx=local_batch_idx,
+            global_batch_idx=batch_idx,
+            row_idx=row_idx,
+            col_idx=col_idx,
+            block_size=kvpe_cache.shape[2],
+            max_blocks=kvpe_cache.shape[0],
+            mesh_device=cfg.get("mesh_device", None),
+        )
 
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
