@@ -33,7 +33,7 @@ inline void debug_print_noc_write_status(const char* label, uint32_t noc) {
 
 void kernel_main() {
     // __builtin_riscv_ttrocc_llk_intf_write(0, 0);
-    __builtin_riscv_ttrocc_cmdbuf_reset(0);
+    // __builtin_riscv_ttrocc_cmdbuf_reset(0);  // DO NOT reset here - noc_init() already configured this buf
     // __builtin_riscv_ttrocc_cmdbuf_reset(1);
 
     std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
@@ -124,6 +124,7 @@ void kernel_main() {
         DPRINT << "ISSUE WRITE TO DST DRAM 2" << ENDL();
         debug_print_noc_write_status("AFTER WRITE ISSUE", noc_index);
         DPRINT << "Waiting for write barrier..." << ENDL();
+        DPRINT << "  scmdbuf_tr_ack=" << __builtin_riscv_ttrocc_scmdbuf_tr_ack() << ENDL();
         noc_async_write_barrier();
         debug_print_noc_write_status("AFTER WRITE BARRIER", noc_index);
         DPRINT << "ISSUE WRITE TO DST DRAM 3" << ENDL();
