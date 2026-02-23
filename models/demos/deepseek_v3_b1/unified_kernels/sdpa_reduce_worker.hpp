@@ -661,6 +661,9 @@ struct SdpaReduceWorker {
             sender.send_streaming();
             sender.finish_round();
 
+            // Release the single MS tile from R1 result after R2 streaming send to
+            // preserve BRISC/TRISC synchronization semantics from post_sdpa.
+            cb_pop_front(WriterCT::cb_r1_result_ms, 1);
             noc_async_full_barrier();
 
             // SCATTER PHASE: Distribute output rows to destination cores
