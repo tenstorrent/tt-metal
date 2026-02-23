@@ -12,8 +12,8 @@
 #include "api/compute/eltwise_unary/erf_erfc.h"
 #endif
 
-#if SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE
-#include "api/compute/eltwise_unary/logical_not_noti.h"
+#if SFPU_OP_LOGICAL_NOT_INCLUDE
+#include "api/compute/eltwise_unary/logical_not.h"
 #endif
 
 #if SFPU_OP_EXP_INCLUDE

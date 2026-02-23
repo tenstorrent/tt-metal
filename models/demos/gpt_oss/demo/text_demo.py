@@ -201,7 +201,7 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
             True,  # enable_decode_trace
-            False,  # enable_prefill_trace
+            True,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
             True,  # stop_at_eos
@@ -216,7 +216,7 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
-            False,  # enable_prefill_trace
+            True,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
             True,  # stop_at_eos
@@ -231,7 +231,7 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
-            False,  # enable_prefill_trace
+            True,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
             True,  # stop_at_eos
@@ -954,7 +954,7 @@ def test_gpt_oss_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Decode forward (matching tt_transformers call)
-            logits, _ = generator.decode_forward_text(
+            logits, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_decode_trace,
