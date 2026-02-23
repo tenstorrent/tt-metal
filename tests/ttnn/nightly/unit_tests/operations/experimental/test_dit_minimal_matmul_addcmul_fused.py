@@ -50,11 +50,11 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     torch.manual_seed(0)
 
     # Create torch inputs
-    torch_matmul_input = torch.randn(M, K, dtype=torch.bfloat16)
-    torch_matmul_weight = torch.randn(K, N, dtype=torch.bfloat16)
-    torch_addcmul_a = torch.randn(M, N, dtype=torch.bfloat16)  # base value (full shape)
-    torch_addcmul_b = torch.randn(1, N, dtype=torch_gate_dtype)  # gate (broadcast like bias)
-    torch_bias = torch.randn(1, N, dtype=torch.bfloat16) if use_bias else None
+    torch_matmul_input = torch.randn(M, K, dtype=torch.float32)
+    torch_matmul_weight = torch.randn(K, N, dtype=torch.float32)
+    torch_addcmul_a = torch.randn(M, N, dtype=torch.float32)  # base value (full shape)
+    torch_addcmul_b = torch.randn(1, N, dtype=torch.float32)  # gate (broadcast like bias)
+    torch_bias = torch.randn(1, N, dtype=torch.float32) if use_bias else None
 
     # Compute expected torch output (full fused operation) in float32 for accuracy
     with torch.no_grad():
