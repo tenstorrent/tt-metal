@@ -494,6 +494,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
 
+    // Guard against division by zero
+    TT_FATAL(
+        num_used_riscs_per_tensix_ > 0,
+        "num_used_riscs_per_tensix_ must be greater than 0, but got {}",
+        num_used_riscs_per_tensix_);
+
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =
         fabric_context.get_fabric_packet_header_size_bytes() + tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
