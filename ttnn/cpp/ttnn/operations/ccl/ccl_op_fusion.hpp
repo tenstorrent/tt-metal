@@ -274,4 +274,28 @@ struct MinimalMatmulFusedOpSignaler {
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
 
+// Used to propagate semaphore information from strided reduce scatter to matmul
+// when matmul is the first operation in the fusion pipeline.
+// The strided_reduce_scatter program factory populates this with:
+//   - NOC coordinates of its reader cores
+//   - A semaphore ID that the matmul master will increment
+// The matmul program factory later reads this to configure its OpSignaler
+// so the matmul master knows which cores and semaphore to signal.
+struct StridedReduceScatterFusedOpSignaler {
+    uint32_t num_fused_op_cores_to_signal = 0;
+    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    uint32_t fused_op_receiver_signal_semaphore = 0;
+
+    bool initialized = false;
+
+    StridedReduceScatterFusedOpSignaler() = default;
+
+    void init_strided_reduce_scatter(
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal);
+
+    void push_strided_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) const;
+};
+
 }  // namespace ttnn::experimental::ccl
