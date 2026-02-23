@@ -59,6 +59,17 @@ struct EriscDynamicEntry {
     RiscTimestampV2 rx_heartbeat;
 };
 
+// Per-channel configuration info (layout must match Metalium FabricTelemetryChannelConfig + padding).
+struct ChannelConfig {
+    uint32_t buffer_start_address;
+    uint16_t buffer_size_bytes;
+    uint8_t num_buffer_slots;
+    uint8_t reserved;  // Padding for alignment; not exposed in Metalium API.
+};
+
+static constexpr uint8_t MAX_TELEMETRY_SENDER_CHANNELS = 9;
+static constexpr uint8_t MAX_TELEMETRY_RECEIVER_CHANNELS = 2;
+
 struct DynamicInfo {
     BandwidthTelemetry tx_bandwidth;
     BandwidthTelemetry rx_bandwidth;
@@ -75,6 +86,10 @@ struct StaticInfo {
     uint8_t direction;
     DynamicStatistics supported_stats;
     uint32_t fabric_config;
+    uint8_t num_sender_channels;
+    uint8_t num_receiver_channels;
+    ChannelConfig sender_channels[MAX_TELEMETRY_SENDER_CHANNELS];
+    ChannelConfig receiver_channels[MAX_TELEMETRY_RECEIVER_CHANNELS];
 };
 
 struct FabricTelemetryStaticOnly {

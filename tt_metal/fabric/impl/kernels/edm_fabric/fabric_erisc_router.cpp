@@ -2748,6 +2748,55 @@ void initialize_fabric_telemetry() {
     }
 }
 
+// Helper to get sender channel base address from compile-time pool data (StaticSizedSenderEthChannel
+// does not expose channel_base_address() or get_max_eth_payload_size()).
+template <size_t ChannelIdx>
+struct get_sender_channel_base_address {
+    static constexpr size_t pool_idx = SENDER_TO_POOL_IDX[ChannelIdx];
+    static constexpr auto pool_type =
+        static_cast<FabricChannelPoolType>(channel_pools_args::channel_pool_types[pool_idx]);
+    using PoolType = std::tuple_element_t<pool_idx, typename channel_pools_args::PoolsTuple>;
+    static constexpr size_t value = []() constexpr {
+        if constexpr (pool_type == FabricChannelPoolType::STATIC) {
+            return PoolType::base_address;
+        } else {
+            return PoolType::chunk_base_addresses[0];
+        }
+    }();
+};
+
+template <typename SenderChannels, typename ReceiverChannels>
+void populate_channel_telemetry(
+    volatile tt_l1_ptr FabricTelemetry* fabric_telemetry,
+    SenderChannels& sender_channels,
+    ReceiverChannels& receiver_channels) {
+    (void)sender_channels;  // Sender channels don't expose address/size; we use compile-time pool data
+    fabric_telemetry->static_info.num_sender_channels = NUM_SENDER_CHANNELS;
+    fabric_telemetry->static_info.num_receiver_channels = NUM_RECEIVER_CHANNELS;
+
+    // Populate sender channel configs from compile-time pool data
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        ((fabric_telemetry->static_info.sender_channels[Is].buffer_start_address =
+              static_cast<uint32_t>(get_sender_channel_base_address<Is>::value),
+          fabric_telemetry->static_info.sender_channels[Is].buffer_size_bytes =
+              static_cast<uint16_t>(channel_buffer_size),
+          fabric_telemetry->static_info.sender_channels[Is].num_buffer_slots =
+              static_cast<uint8_t>(SENDER_NUM_BUFFERS_ARRAY[Is])),
+         ...);
+    }(std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+
+    // Populate receiver channel configs (receiver channels expose channel_base_address and get_max_eth_payload_size)
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        ((fabric_telemetry->static_info.receiver_channels[Is].buffer_start_address =
+              reinterpret_cast<uint32_t>(receiver_channels.template get<Is>().channel_base_address()),
+          fabric_telemetry->static_info.receiver_channels[Is].buffer_size_bytes =
+              static_cast<uint16_t>(receiver_channels.template get<Is>().get_max_eth_payload_size()),
+          fabric_telemetry->static_info.receiver_channels[Is].num_buffer_slots =
+              static_cast<uint8_t>(RECEIVER_NUM_BUFFERS_ARRAY[Is])),
+         ...);
+    }(std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+}
+
 void kernel_main() {
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         channel_trimming_usage_recorder.reset();
@@ -3241,6 +3290,13 @@ void kernel_main() {
     local_sender_channels.init<channel_pools_args>(
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE));
+
+    // Populate channel telemetry after channels are initialized (addresses/sizes are now valid)
+    {
+        volatile tt_l1_ptr FabricTelemetry* fabric_telemetry = reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(
+            eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+        populate_channel_telemetry(fabric_telemetry, local_sender_channels, local_receiver_channels);
+    }
 
     // initialize the local sender channel worker interfaces
     // Sender channel 0 is always for local worker in the new design

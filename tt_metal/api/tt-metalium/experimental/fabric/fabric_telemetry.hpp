@@ -62,6 +62,21 @@ struct FabricTelemetryEriscEntry {
 };
 
 /**
+ * @brief Per-channel telemetry configuration (buffer location and slot count).
+ * Layout matches HAL ChannelConfig in fabric_telemetry_msgs.h (without the reserved padding field).
+ */
+struct FabricTelemetryChannelConfig {
+    std::uint32_t buffer_start_address = 0;
+    std::uint16_t buffer_size_bytes = 0;
+    std::uint8_t num_buffer_slots = 0;
+};
+
+/** Maximum number of sender channels in static info (matches HAL MAX_TELEMETRY_SENDER_CHANNELS). */
+inline constexpr size_t MAX_TELEMETRY_SENDER_CHANNELS = 9;
+/** Maximum number of receiver channels in static info (matches HAL MAX_TELEMETRY_RECEIVER_CHANNELS). */
+inline constexpr size_t MAX_TELEMETRY_RECEIVER_CHANNELS = 2;
+
+/**
  * @brief Dynamic telemetry information that can be sampled from hardware.
  */
 struct FabricTelemetryDynamicInfo {
@@ -82,6 +97,10 @@ struct FabricTelemetryStaticInfo {
     std::uint8_t direction = 0;
     FabricTelemetryStatisticMask supported_stats = 0;
     std::uint32_t fabric_config = 0;
+    std::uint8_t num_sender_channels = 0;
+    std::uint8_t num_receiver_channels = 0;
+    std::array<FabricTelemetryChannelConfig, MAX_TELEMETRY_SENDER_CHANNELS> sender_channels;
+    std::array<FabricTelemetryChannelConfig, MAX_TELEMETRY_RECEIVER_CHANNELS> receiver_channels;
 };
 
 /**
