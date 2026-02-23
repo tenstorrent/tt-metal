@@ -20,7 +20,7 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
-USERS_PER_ROW = 32
+USERS_PER_ROW = 8
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 
