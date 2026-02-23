@@ -210,6 +210,9 @@ EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
 
+initialize_fast_dispatch = ttnn._ttnn.device.initialize_fast_dispatch
+terminate_fast_dispatch = ttnn._ttnn.device.terminate_fast_dispatch
+
 
 @contextlib.contextmanager
 def manage_device(device_id: int) -> "ttnn.device.Device":
