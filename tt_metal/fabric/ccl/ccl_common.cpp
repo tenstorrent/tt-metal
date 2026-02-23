@@ -26,15 +26,18 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 
     std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
     // Ethernet Kernels
-    const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
+    auto [eth_sender_ct_args, named_ct_args] = edm_builder.get_compile_time_args((uint32_t)risc_id);
     log_trace(tt::LogFabric, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogFabric, "CT ARGS:");
     for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
         log_trace(tt::LogFabric, "\t{}", s);
     }
 
-    auto kernel_config =
-        tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = risc_id, .compile_args = eth_sender_ct_args};
+    auto kernel_config = tt::tt_metal::EthernetConfig{
+        .noc = noc_id,
+        .processor = risc_id,
+        .compile_args = eth_sender_ct_args,
+        .named_compile_args = named_ct_args};
     if (opt_level.has_value()) {
         kernel_config.opt_level = opt_level.value();
     }

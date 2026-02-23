@@ -100,6 +100,8 @@ struct GatherReduce {
 #if defined(COMPILE_FOR_TRISC)
     // in0_cb += in1_cb over num_tiles tiles, in place
     static inline void add_tiles_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+        reconfig_data_format<false, true>(in0_cb, in1_cb);
+        pack_reconfig_data_format<true>(in0_cb);
         add_tiles_init(in0_cb, in1_cb);
         cb_wait_front(in0_cb, num_tiles);
         cb_wait_front(in1_cb, num_tiles);
@@ -186,20 +188,23 @@ struct GatherReduce {
             // ================================================================
             if constexpr (IsReceiverCore) {
                 uint32_t noc0_receiver_semaphore_addr = get_semaphore(args.noc0_receiver_semaphore_id);
-                uint32_t noc1_receiver_semaphore_addr = get_semaphore(args.noc1_receiver_semaphore_id);
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)noc0_receiver_semaphore_addr;
-                volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
 
                 // Reserve space in destination CBs
                 cb_reserve_back(args.half0_dst_cb, args.dst_num_tiles);
                 cb_reserve_back(args.half1_dst_cb, args.dst_num_tiles);
 
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
-                noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
-                noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
+
+                if (args.noc1_num_senders > 0) {
+                    uint32_t noc1_receiver_semaphore_addr = get_semaphore(args.noc1_receiver_semaphore_id);
+                    volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
+                        (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
+                    noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
+                    noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
+                }
 
                 // Push to destination CBs after data arrived
                 cb_push_back(args.half0_dst_cb, args.dst_num_tiles);

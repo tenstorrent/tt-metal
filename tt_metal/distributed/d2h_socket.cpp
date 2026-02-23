@@ -259,4 +259,8 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     }
 }
 
+std::vector<MeshCoreCoord> D2HSocket::get_active_cores() const { return {sender_core_}; }
+
+MeshDevice* D2HSocket::get_mesh_device() const { return config_buffer_->device(); }
+
 }  // namespace tt::tt_metal::distributed

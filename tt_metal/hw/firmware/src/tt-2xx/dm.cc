@@ -38,6 +38,9 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
+// temporary for things to build
+thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
@@ -90,13 +93,13 @@ void invalidate_trisc_instruction_cache() {
 
 void deassert_trisc() {
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
 // Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
-thread_local ::experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
 
 void device_setup() {
@@ -120,8 +123,11 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    DPRINT << "DM-FW: waiting for TRISC0 to complete " << subordinate_sync->neo0_trisc0 << ENDL();
-    while (subordinate_sync->neo0_trisc0 != RUN_SYNC_MSG_DONE) {
+    DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
+    while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
@@ -130,7 +136,7 @@ inline void run_triscs(uint32_t enables) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc1 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc2 = RUN_SYNC_MSG_GO;
-        subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+        // subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -186,7 +192,7 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
-        // trigger_sync_register_init();
+        trigger_sync_register_init();
 
         DeviceProfilerInit();
         while (1) {
@@ -276,7 +282,8 @@ extern "C" uint32_t _start1() {
                 // prev_noc_mode = noc_mode;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                    (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                          launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -316,7 +323,7 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                // trigger_sync_register_init();
+                trigger_sync_register_init();
 
                 if constexpr (ASSERT_ENABLED) {
                     if (noc_mode == DM_DYNAMIC_NOC) {
@@ -386,8 +393,8 @@ extern "C" uint32_t _start1() {
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);

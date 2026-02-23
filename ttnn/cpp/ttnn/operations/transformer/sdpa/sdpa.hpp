@@ -91,6 +91,7 @@ ttnn::Tensor flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     uint32_t head_dim_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
     const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
     bool is_causal = true,
     std::optional<float> scale = std::nullopt,

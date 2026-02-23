@@ -330,6 +330,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("head_dim_v").noconvert(),
             nb::kw_only(),
+            nb::arg("input_tensor_v") = nb::none(),
             nb::arg("attn_mask") = nb::none(),
             nb::arg("is_causal").noconvert() = true,
             nb::arg("scale") = nb::none(),

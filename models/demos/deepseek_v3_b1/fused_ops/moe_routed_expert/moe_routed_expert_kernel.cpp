@@ -429,6 +429,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_local_cb"),
         get_named_compile_time_arg_val("reduce_scratch_cb"),
         get_named_compile_time_arg_val("reduce_packet_cb"),
+        get_named_compile_time_arg_val("reduce_packet_header_cb"),
         get_named_compile_time_arg_val("reduce_num_hops"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
@@ -539,13 +540,15 @@ void kernel_main() {
     // cb_in0_wait: wait on up_proj_mm_out (1x32 tiles) before reading aliased 16x16 CB
     // ------------------------------------------------------------------------
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
-        get_named_compile_time_arg_val("mul_cb_in0"),          // up_proj output aliased as 16x16
-        get_named_compile_time_arg_val("mul_cb_in1"),          // gate_proj output aliased as 16x16
-        get_named_compile_time_arg_val("mul_cb_out"),          // final output (16x16)
-        get_named_compile_time_arg_val("mul_num_tiles"),       // number of 16x16 tiles
-        get_named_compile_time_arg_val("up_proj_cb_mm_out"),   // wait on this CB before reading mul_cb_in0
-        get_named_compile_time_arg_val("up_proj_per_core_n"),  // number of tiles in mm_out format
-        get_named_compile_time_arg_val("mul_cb_scalar"),       // scalar CB for expert scale
+        get_named_compile_time_arg_val("mul_cb_in0"),            // up_proj output aliased as 16x16
+        get_named_compile_time_arg_val("mul_cb_in1"),            // gate_proj output aliased as 16x16
+        get_named_compile_time_arg_val("mul_cb_out"),            // final output (16x16)
+        get_named_compile_time_arg_val("mul_num_tiles"),         // number of 16x16 tiles
+        get_named_compile_time_arg_val("up_proj_cb_mm_out"),     // cb_in0_wait
+        get_named_compile_time_arg_val("up_proj_per_core_n"),    // cb_in0_wait_tiles
+        get_named_compile_time_arg_val("gate_proj_cb_out"),      // cb_in1_wait
+        get_named_compile_time_arg_val("gate_proj_per_core_n"),  // cb_in1_wait_tiles
+        get_named_compile_time_arg_val("mul_cb_scalar"),         // scalar CB for expert scale
         get_named_compile_time_arg_val("mul_fp32_dest_acc_en")>;
 
     // ------------------------------------------------------------------------
@@ -605,6 +608,8 @@ void kernel_main() {
     // Compute has no runtime args
     deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
 #endif
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ============================================================================
@@ -688,12 +693,13 @@ void kernel_main() {
 
     // ========================================================================
     // 7. up_proj Matmul: Expert computation on DRAM matmul cores (no SiLU)
-    //    PopIn0=true to release input after use
+    //    PopIn0=true to release input after use, WaitForOutput=true
     //    Writes to intermediate CB (up_proj_cb_mm_out)
     // ========================================================================
     {
         DeviceZoneScopedN("UP_PROJ");
-        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true> up_proj;
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true, false, 0, false, true>
+            up_proj;
         up_proj();
     }
 
