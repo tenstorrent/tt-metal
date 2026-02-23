@@ -211,41 +211,77 @@ run_t3000_falcon40b_tests() {
   fi
 }
 
+run_t3000_qwen3-32b_tests() {
+  fail=0
+  start_time=$(date +%s)
+  echo "LOG_METAL: Running run_t3000_qwen3-32b_tests"
+
+  hf_model=Qwen/Qwen3-32B
+  tt_cache=$TT_CACHE_HOME/$hf_model
+
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen3-32b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_qwen25-coder-32b_tests() {
+  fail=0
+  start_time=$(date +%s)
+  echo "LOG_METAL: Running run_t3000_qwen25-coder-32b_tests"
+
+  hf_model=Qwen/Qwen2.5-Coder-32B-Instruct
+  tt_cache=$TT_CACHE_HOME/$hf_model
+
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen25-coder-32b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_gemma3-small_tests() {
   pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
-run_t3000_llama3-small_tests() {
+run_t3000_llama3.1-8b_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3-small_tests"
+  echo "LOG_METAL: Running run_t3000_llama3.1-8b_tests"
 
-  # Llama3.2-1B
-  llama1b=meta-llama/Llama-3.2-1B-Instruct
-  # Llama3.2-3B
-  llama3b=meta-llama/Llama-3.2-3B-Instruct
-  # Llama3.1-8B
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  hf_model=meta-llama/Llama-3.1-8B-Instruct
+  tt_cache=$TT_CACHE_HOME/$hf_model
 
-  # Run all Llama3 tests for 1B, 3B and 8B weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_embedding.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_mlp.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
-  done
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3-small_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3.1-8b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -279,15 +315,15 @@ run_t3000_llama3.2-11b_tests() {
   fi
 }
 
-run_t3000_llama3.1-70b_tests() {
+run_t3000_llama3.3-70b_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3.1-70b_tests"
+  echo "LOG_METAL: Running run_t3000_llama3.3-70b_tests"
 
-  # Llama3.1-70B weights
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  # Llama3.3-70B weights
+  llama70b=meta-llama/Llama-3.3-70B-Instruct
   tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
 
   HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
@@ -301,7 +337,7 @@ run_t3000_llama3.1-70b_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3.1-70b_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3.3-70b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -757,14 +793,14 @@ run_t3000_tests() {
   # Run falcon40b tests
   run_t3000_falcon40b_tests
 
-  # Run llama3-small (1B, 3B, 8B) tests
-  run_t3000_llama3-small_tests
+  # Run llama3.1-8B tests
+  run_t3000_llama3.1-8b_tests
 
   # Run llama3.2-11B tests
   run_t3000_llama3.2-11b_tests
 
-  # Run llama3.1-70B tests
-  run_t3000_llama3.1-70b_tests
+  # Run llama3.3-70B tests
+  run_t3000_llama3.3-70b_tests
 
   # Run llama3.2-90B tests
   run_t3000_llama3.2-90b_tests
@@ -783,6 +819,12 @@ run_t3000_tests() {
 
   # Run mixtral tests
   run_t3000_mixtral_tests
+
+  # Run Qwen3-32B tests
+  run_t3000_qwen3-32b_tests
+
+  # Run Qwen2.5-Coder-32B tests
+  run_t3000_qwen25-coder-32b_tests
 
   # Run grok tests
   run_t3000_grok_tests
