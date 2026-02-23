@@ -77,18 +77,21 @@ pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py 
 
 ### Test cases
 
-| ID | Q chunks | K/V chunks | Data |
-|----|----------|------------|------|
-| `1q_1k-zeros` | 1 | 1 | All zeros |
-| `1q_1k-ones` | 1 | 1 | All ones |
-| `1q_1k-random` | 1 | 1 | `fa_rand` (FlashAttention-style) |
-| `1q_5k-random` | 1 | 5 | `fa_rand` |
-| `3q_5k-random` | 3 | 5 | `fa_rand` |
+| ID | Q chunks | K/V chunks | Sk_chunk_t | Data |
+|----|----------|------------|------------|------|
+| `1q_1k-zeros-sk16` | 1 | 1 | 16 | All zeros |
+| `1q_1k-ones-sk16` | 1 | 1 | 16 | All ones |
+| `1q_1k-random-sk16` | 1 | 1 | 16 | `fa_rand` (FlashAttention-style) |
+| `1q_5k-random-sk16` | 1 | 5 | 16 | `fa_rand` |
+| `3q_5k-random-sk16` | 3 | 5 | 16 | `fa_rand` |
+| `1q_1k-random-sk8` | 1 | 1 | 8 | `fa_rand` |
+| `1q_5k-random-sk8` | 1 | 5 | 8 | `fa_rand` |
+| `3q_5k-random-sk8` | 3 | 5 | 8 | `fa_rand` |
 
 ### Run a single test
 
 ```bash
-pytest generate_and_test_sdpa.py -v -k "1q_1k-random"
+pytest generate_and_test_sdpa.py -v -k "1q_1k-random-sk16"
 ```
 
 ### Generate permanent input folders for IDE debugging

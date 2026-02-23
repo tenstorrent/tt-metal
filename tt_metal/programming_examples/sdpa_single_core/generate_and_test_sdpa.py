@@ -342,30 +342,37 @@ def run_sdpa_single_core_test(
 # ---------------------------------------------------------------------------
 
 TEST_CASES = [
-    # (num_q_chunks, num_k_chunks, data_mode)
-    (1, 1, "zeros"),
-    (1, 1, "ones"),
-    (1, 1, "random"),
-    (1, 5, "random"),
-    (3, 5, "random"),
+    # (num_q_chunks, num_k_chunks, data_mode, sk_chunk_t)
+    (1, 1, "zeros", 16),
+    (1, 1, "ones", 16),
+    (1, 1, "random", 16),
+    (1, 5, "random", 16),
+    (3, 5, "random", 16),
+    # K=8 variants
+    (1, 1, "random", 8),
+    (1, 5, "random", 8),
+    (3, 5, "random", 8),
 ]
 
 TEST_IDS = [
-    "1q_1k-zeros",
-    "1q_1k-ones",
-    "1q_1k-random",
-    "1q_5k-random",
-    "3q_5k-random",
+    "1q_1k-zeros-sk16",
+    "1q_1k-ones-sk16",
+    "1q_1k-random-sk16",
+    "1q_5k-random-sk16",
+    "3q_5k-random-sk16",
+    "1q_1k-random-sk8",
+    "1q_5k-random-sk8",
+    "3q_5k-random-sk8",
 ]
 
 
 @pytest.mark.parametrize(
-    "num_q_chunks, num_k_chunks, data_mode",
+    "num_q_chunks, num_k_chunks, data_mode, sk_chunk_t",
     TEST_CASES,
     ids=TEST_IDS,
 )
-def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode):
-    test_id = request.node.callspec.id  # e.g. "1q_1k-zeros"
+def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode, sk_chunk_t):
+    test_id = request.node.callspec.id  # e.g. "1q_1k-zeros-sk16"
     save_only = request.config.getoption("--save-inputs", default=False)
     run_sdpa_single_core_test(
         test_id,
@@ -373,4 +380,5 @@ def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode):
         num_k_chunks,
         data_mode,
         save_inputs_only=save_only,
+        sk_chunk_t=sk_chunk_t,
     )
