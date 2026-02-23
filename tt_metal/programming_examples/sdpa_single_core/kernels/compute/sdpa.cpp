@@ -351,7 +351,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
  * This replaces the old mul_tiles_bcast_cols_inplace + add_block_inplace pair, which
  * incorrectly used pack_tile<true> to overwrite already-pushed CB data.
  */
-template <uint32_t SBH>
+template <uint32_t SBH, bool SKIP_INIT = false>
 void mul_bcast_cols_l1_acc(
     uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock = 0xFFFFFFFF) {
     if (write_q_subblock == 0xFFFFFFFF) {
@@ -361,7 +361,9 @@ void mul_bcast_cols_l1_acc(
     const uint32_t read_row_base = q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    if constexpr (!SKIP_INIT) {
+        mul_bcast_cols_init_short(in0_cb, in1_cb);
+    }
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
@@ -381,7 +383,7 @@ void mul_bcast_cols_l1_acc(
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
-template <uint32_t SBH, uint32_t SBW>
+template <uint32_t SBH, uint32_t SBW, bool SKIP_INIT = false>
 void mul_block_bcast_cols_acc(
     uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock = 0xFFFFFFFF) {
     if (write_q_subblock == 0xFFFFFFFF) {
@@ -392,7 +394,9 @@ void mul_block_bcast_cols_acc(
     static_assert(tiles_per_row * tiles_per_column <= 8, "SBH * SBW must fit in DST (max 8 tiles)");
     const uint32_t read_row_base = q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    if constexpr (!SKIP_INIT) {
+        mul_bcast_cols_init_short(in0_cb, in1_cb);
+    }
 
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
@@ -612,7 +616,8 @@ template <
     uint32_t INNER_DIM,
     uint32_t IN1_STRIDE,
     uint32_t OUT_NUM_COLS,
-    bool SEQUENTIAL_OUTPUT = false>
+    bool SEQUENTIAL_OUTPUT = false,
+    bool SKIP_INIT = false>
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -621,8 +626,9 @@ void blocked_matmul_and_pack(
     uint32_t in1_index_start,
     uint32_t q_subblock,
     uint32_t out_col_offset) {
-    // --- Init: ensure HW is configured for this matmul ---
-    mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+    if constexpr (!SKIP_INIT) {
+        mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+    }
 
     // --- Matmul phase ---
     tile_regs_acquire();
@@ -814,6 +820,7 @@ void sdpa_inner_loop_step(
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
     // ========== PHASE 1: Q@KT with alternating row buffers ==========
+    mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
@@ -828,10 +835,11 @@ void sdpa_inner_loop_step(
                 MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
                 sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
                     alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
             }
 
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
-            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true>(
+            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true, true>(
                 cb_q_in,
                 cb_kt_in,
                 alias_cur_qkt_row,
@@ -930,6 +938,7 @@ void sdpa_inner_loop_step(
                     }
 
                     // Matmul — FPU overlaps with SFPU EXP
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
                     {
                         uint32_t v_index_offset = 0;
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -940,7 +949,9 @@ void sdpa_inner_loop_step(
                                 qktv_subblock_h,
                                 matmul_inner,
                                 head_dim_t,
-                                head_dim_t>(
+                                head_dim_t,
+                                false,
+                                true>(
                                 cb_qkt_im,
                                 cb_v_in,
                                 cur_out,
@@ -975,15 +986,16 @@ void sdpa_inner_loop_step(
         // SALAD correction for one completed row: sum/out L1-accumulate, then
         // optionally push + normalize on the last K iteration.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
+            mul_bcast_cols_init_short(prev_sum, cb_exp_max_diff);
             {
                 MATH(DPRINT << "SALAD sum correction for Q[" << salad_row << "]" << ENDL());
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
-                mul_bcast_cols_l1_acc<sbh>(prev_sum, cb_exp_max_diff, cur_sum, salad_row, w_salad);
+                mul_bcast_cols_l1_acc<sbh, true>(prev_sum, cb_exp_max_diff, cur_sum, salad_row, w_salad);
             }
             {
                 MATH(DPRINT << "SALAD out correction for Q[" << salad_row << "]" << ENDL());
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
-                mul_block_bcast_cols_acc<sbh, head_dim_t>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
+                mul_block_bcast_cols_acc<sbh, head_dim_t, true>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
             }
             if (last_iter) {
                 normalize_row(w_salad, pushed);
@@ -1014,6 +1026,7 @@ void sdpa_inner_loop_step(
 
             // 2. Full matmul for CURRENT row — FPU overlaps with SFPU EXP above
             // Uses w_q for the output row offset (adjusted for pushed rows)
+            mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
             {
                 uint32_t v_index_offset = 0;
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1024,7 +1037,9 @@ void sdpa_inner_loop_step(
                         qktv_subblock_h,
                         qktv_in0_block_w,
                         head_dim_t,
-                        head_dim_t>(
+                        head_dim_t,
+                        false,
+                        true>(
                         cb_qkt_im,
                         cb_v_in,
                         cur_out,
