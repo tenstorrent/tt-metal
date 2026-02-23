@@ -20,6 +20,7 @@ and forwards it downstream, optionally using fabric connections for cross-device
 
 import ttnn
 
+
 class MeshWrapper:
     def __init__(self, mesh_device=None, mesh_id=None):
         self.mesh_device = mesh_device
@@ -35,6 +36,7 @@ class MeshWrapper:
 
     def get_mesh_id(self):
         return self.mesh_id
+
 
 class SocketInterface:
     def __init__(
@@ -62,18 +64,10 @@ class SocketInterface:
                 sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
             ), "Sender and receiver mesh IDs must be the same when both MeshDevices are provided"
             self.mesh_device = sender_mesh.get_mesh_device()
-            self.my_mesh_id = sender_mesh.get_mesh_id()
-            self.peer_mesh_id = receiver_mesh.get_mesh_id()
             self.local_socket = True
         else:
             self.mesh_device = (
                 sender_mesh.get_mesh_device() if sender_mesh.get_mesh_device() else receiver_mesh.get_mesh_device()
-            )
-            self.my_mesh_id = (
-                sender_mesh.get_mesh_id() if sender_mesh.get_mesh_device() else receiver_mesh.get_mesh_id()
-            )
-            self.peer_mesh_id = (
-                receiver_mesh.get_mesh_id() if sender_mesh.get_mesh_device() else sender_mesh.get_mesh_id()
             )
             self.local_socket = False
 
@@ -304,7 +298,11 @@ class SocketInterface:
             if self.upstream_socket:
                 # Has an upstream socket - is sender
                 program = self._create_program(
-                    self.mesh_device, self.send_core_coord, self.upstream_socket, self.internal_socket, self.sender_packet_header_cb_index
+                    self.mesh_device,
+                    self.send_core_coord,
+                    self.upstream_socket,
+                    self.internal_socket,
+                    self.sender_packet_header_cb_index,
                 )
             else:
                 assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
@@ -318,13 +316,6 @@ class SocketInterface:
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         if self.local_socket:
-            mesh_program_descriptor[
-                ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-            ] = sender_program
-            mesh_program_descriptor[
-                ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
-            ] = receiver_program
-            
             same_device = self.send_core_coord.device_coord == self.recv_core_coord.device_coord
             if same_device:
                 sender_cb_ids = {fd.buffer_index for cb in sender_program.cbs for fd in cb.format_descriptors}
@@ -344,6 +335,13 @@ class SocketInterface:
                 mesh_program_descriptor[
                     ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
                 ] = combined_program
+            else:
+                mesh_program_descriptor[
+                    ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
+                ] = sender_program
+                mesh_program_descriptor[
+                    ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
+                ] = receiver_program
         else:
             device_coord = (
                 self.send_core_coord.device_coord if self.upstream_socket else self.recv_core_coord.device_coord

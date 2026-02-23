@@ -2,6 +2,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Multi-Host Pipeline Block.
+
+Provides a PipelineBlock class that encapsulates a single stage of a multi-host
+pipeline. Each PipelineBlock manages the setup and lifecycle of D2D socket
+interfaces for forwarding data between pipeline stages across hosts.
+
+The first pipeline stage (mesh_id == 0) additionally manages:
+- A HostInterface for H2D/D2H communication with the host
+- An embedding tensor lookup on incoming tokens
+- Loopback connectivity from the last pipeline stage back to the host
+
+Intermediate stages forward data from their entry node to their exit node
+via upstream and downstream D2D socket interfaces.
+
+Pipeline topology is determined by generate_blitz_decode_pipeline(), which
+maps physical ASIC locations to logical mesh coordinates for each stage.
+"""
+
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
@@ -168,3 +187,11 @@ class PipelineBlock:
     def read_output(self, output_tensor):
         assert self.is_first_pipeline_stage(), "Output can only be read from the first pipeline stage"
         self.d2h_socket.read_tensor(output_tensor)
+
+    # Returns sender socket feeding exit node
+    def get_upstream_socket(self):
+        return self.exit_socket_interface.get_upstream_socket()
+
+    # Returns receiver socket draining entry node
+    def get_downstream_socket(self):
+        return self.entry_socket_interface.get_downstream_socket()

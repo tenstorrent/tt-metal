@@ -4,7 +4,7 @@
 
 """
 Multi-Host Pipeline Block Integration Tests.
-Combine H <-> D Interface with Mult-Host sockets under PipelineBlock API.
+Combine H <-> D Interface with Multi-Host sockets under PipelineBlock API.
 
 """
 
