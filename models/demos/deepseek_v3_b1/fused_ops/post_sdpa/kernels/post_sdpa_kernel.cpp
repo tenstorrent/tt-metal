@@ -41,32 +41,10 @@
 #include "../../../unified_kernels/all_reduce_receiver.hpp"
 #endif
 
-// SDPA Reduce-to-All includes (only needed for SDPA cores)
+// SDPA Reduce-to-All unified headers (replaces inlined SDPA code)
 #ifndef SKIP_SDPA
-#if defined(COMPILE_FOR_TRISC)
-// Compute-only includes for SDPA (no fabric headers - they conflict with compute headers)
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/recip.h"
-#include "api/compute/bcast.h"
-#include "api/compute/tile_move_copy.h"
-#include "models/demos/deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
-#endif
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
-// Dataflow-only includes for SDPA (fabric headers for packet sending/forwarding)
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-// tt_memmove for local memory copy (MS data from recv buffer to CB)
-// Include common.hpp when:
-// - CCL is skipped (common.hpp won't be included via all_reduce_sender.hpp), OR
-// - Compiling for NCRISC (all_reduce_sender.hpp only includes common.hpp for BRISC)
-#if defined(SKIP_CCL) || defined(COMPILE_FOR_NCRISC)
-#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#endif
-using tt::data_movement::common::tt_memmove;
-#endif
+#include "../../../unified_kernels/sdpa_reduce_worker.hpp"
+#include "../../../unified_kernels/sdpa_reduce_forwarder.hpp"
 #endif
 
 // Compile-time role flags for dead code elimination via if constexpr
@@ -114,25 +92,6 @@ void kernel_main() {
 // - CCL receiver (12, 9): wait for remote data, push to compute
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-#ifndef SKIP_SDPA
-    // SDPA Reader compile-time args (for SDPA worker cores)
-    constexpr uint32_t sdpa_cb_local_l = get_named_compile_time_arg_val("sdpa_cb_local_l");
-    constexpr uint32_t sdpa_cb_local_ms = get_named_compile_time_arg_val("sdpa_cb_local_ms");
-    constexpr uint32_t sdpa_cb_r1_neighbor_l = get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l");
-    constexpr uint32_t sdpa_cb_r1_neighbor_ms = get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms");
-    constexpr uint32_t sdpa_cb_r2_neighbor_l = get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l");
-    constexpr uint32_t sdpa_cb_r2_neighbor_ms = get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms");
-    constexpr uint32_t sdpa_ms_tile_size_bytes = get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes");
-    constexpr uint32_t sdpa_l_chunk_size_bytes = get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes");
-    constexpr uint32_t sdpa_num_l_chunks = get_named_compile_time_arg_val("sdpa_num_l_chunks");
-    constexpr uint32_t sdpa_tiles_per_l_chunk = get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk");
-    constexpr uint32_t sdpa_out_tiles = sdpa_num_l_chunks * sdpa_tiles_per_l_chunk;
-    constexpr uint32_t sdpa_total_l_bytes = sdpa_num_l_chunks * sdpa_l_chunk_size_bytes;
-    // Semaphore thresholds for SDPA reader
-    constexpr uint32_t SDPA_MS_SEM_THRESHOLD = 1;
-    constexpr uint32_t SDPA_L_SEM_BASE_THRESHOLD = 2;
-#endif
-
     // Matmul1 CTArgs
     using Matmul1CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul1_args{};
@@ -365,488 +324,124 @@ void kernel_main() {
 
 #ifndef SKIP_SDPA
     // ========================================================================
-    // SDPA REDUCE-TO-ALL PHASE
+    // SDPA REDUCE-TO-ALL PHASE (using unified ops from sdpa_reduce_worker.hpp
+    // and sdpa_reduce_forwarder.hpp)
+    //
     // SDPA worker cores (8): reduce L/MS across devices, scatter to matmul1 cores
     // SDPA forwarder cores (2): forward fabric packets for SDPA CCL
+    //
+    // The unified SdpaReduceWorker::Op handles all three RISC processors:
+    //   NCRISC: Reader - pushes local input, prepares neighbor data
+    //   BRISC: Writer - sends packets via forwarders, scatters output
+    //   TRISC: Compute - streaming SDPA tail reduction (R1 + R2)
+    //
+    // The unified SdpaReduceForwarder::Op handles BRISC (FWD) and NCRISC (BWD)
     // ========================================================================
     {
         DeviceZoneScopedN("SDPA_REDUCE_TO_ALL");
 
+        // SDPA Worker cores: use unified SdpaReduceWorker::Op
+        if constexpr (Core::is_sdpa_worker_core) {
+            using Worker = deepseek_b1_ops::SdpaReduceWorker;
+
 #if defined(COMPILE_FOR_NCRISC)
-        // SDPA Reader: push local input, prepare neighbor data for compute
-        if constexpr (Core::is_sdpa_worker_core) {
-            // Runtime args for SDPA reader
-            size_t sdpa_rt_arg_idx = 0;
-            const uint32_t sdpa_r1_neighbor_sem_addr = get_arg_val<uint32_t>(sdpa_rt_arg_idx++);
-            const uint32_t sdpa_r2_neighbor_sem_addr = get_arg_val<uint32_t>(sdpa_rt_arg_idx++);
-            const uint32_t sdpa_r1_recv_buffer_addr = get_arg_val<uint32_t>(sdpa_rt_arg_idx++);
-            const uint32_t sdpa_r2_recv_buffer_addr = get_arg_val<uint32_t>(sdpa_rt_arg_idx++);
+            using ReaderCTArgs = Worker::ReaderCTArgs<
+                get_named_compile_time_arg_val("sdpa_cb_local_l"),
+                get_named_compile_time_arg_val("sdpa_cb_local_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l"),
+                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms"),
+                get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
+                get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
+                get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+                get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
+                0,
+                0>;  // cb_position=0, position_enabled=0 (not used in post_sdpa)
 
-            // Push local input (aliased CBs, no copy needed)
-            cb_reserve_back(sdpa_cb_local_l, sdpa_out_tiles);
-            cb_push_back(sdpa_cb_local_l, sdpa_out_tiles);
-            cb_reserve_back(sdpa_cb_local_ms, 1);
-            cb_push_back(sdpa_cb_local_ms, 1);
+            // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
+            using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+            using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
-            // Helper lambda to prepare neighbor data for compute
-            auto prepare_sdpa_data = [&](uint32_t cb_l, uint32_t cb_ms, uint32_t sem_addr, uint32_t recv_buffer_addr) {
-                volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
+            sdpa_worker();
 
-                DPRINT << "SDPA Reader: sem_addr=" << sem_addr << " recv_buffer=" << recv_buffer_addr << ENDL();
-                DPRINT << "SDPA Reader: waiting for MS, current sem=" << *sem_ptr << ENDL();
+#elif defined(COMPILE_FOR_BRISC)
+            // Dummy ReaderCT - not used by BRISC
+            using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
-                // MS first (sem >= 1)
-                cb_reserve_back(cb_ms, 1);
-                noc_semaphore_wait_min(sem_ptr, SDPA_MS_SEM_THRESHOLD);
-                // MS is at end of buffer (offset = total_l_bytes)
-                // Use tt_memmove for local memory copy (same core L1 to L1)
-                uint32_t ms_src_addr = recv_buffer_addr + sdpa_total_l_bytes;
-                tt_memmove<true, false, false, 0>(get_write_ptr(cb_ms), ms_src_addr, sdpa_ms_tile_size_bytes);
-                cb_push_back(cb_ms, 1);
+            using WriterCTArgs = Worker::WriterCTArgs<
+                get_named_compile_time_arg_val("sdpa_cb_local_l"),
+                get_named_compile_time_arg_val("sdpa_cb_local_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_packet_slot"),
+                get_named_compile_time_arg_val("sdpa_l1_alignment"),
+                get_named_compile_time_arg_val("sdpa_page_size_bytes"),
+                get_named_compile_time_arg_val("sdpa_slot_size"),
+                get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
+                get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
+                get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+                get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
+                get_named_compile_time_arg_val("sdpa_cb_l_out"),
+                get_named_compile_time_arg_val("sdpa_scatter_num_tiles"),
+                get_named_compile_time_arg_val("sdpa_scatter_src_tile_size"),
+                get_named_compile_time_arg_val("sdpa_scatter_dst_tile_size"),
+                get_named_compile_time_arg_val("sdpa_scatter_face_size"),
+                get_named_compile_time_arg_val("sdpa_scatter_row_face_size"),
+                get_named_compile_time_arg_val("sdpa_scatter_num_rows"),
+                1,  // scatter_arrival_enabled=1 (signal matmul1 cores after each scatter row)
+                get_named_compile_time_arg_val("scatter_arrival_semaphore_id")>;
 
-                // L chunks (sem >= 2, 3, 4, ...)
-                for (uint32_t i = 0; i < sdpa_num_l_chunks; i++) {
-                    cb_reserve_back(cb_l, sdpa_tiles_per_l_chunk);
-                    noc_semaphore_wait_min(sem_ptr, SDPA_L_SEM_BASE_THRESHOLD + i);
-                    // L CB is aliased to buffer, just push (zero-copy)
-                    cb_push_back(cb_l, sdpa_tiles_per_l_chunk);
-                }
-                noc_semaphore_set(sem_ptr, 0);
-            };
+            // Dummy ComputeCT - not used by BRISC
+            using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
-            // Prepare R1 neighbor data
-            prepare_sdpa_data(
-                sdpa_cb_r1_neighbor_l, sdpa_cb_r1_neighbor_ms, sdpa_r1_neighbor_sem_addr, sdpa_r1_recv_buffer_addr);
+            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
+            sdpa_worker();
 
-            // Prepare R2 neighbor data
-            prepare_sdpa_data(
-                sdpa_cb_r2_neighbor_l, sdpa_cb_r2_neighbor_ms, sdpa_r2_neighbor_sem_addr, sdpa_r2_recv_buffer_addr);
+#elif defined(COMPILE_FOR_TRISC)
+            // Dummy ReaderCT and WriterCT - not used by TRISC
+            using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+            using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+
+            using ComputeCTArgs = Worker::ComputeCTArgs<
+                get_named_compile_time_arg_val("sdpa_cb_local_l"),
+                get_named_compile_time_arg_val("sdpa_cb_local_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
+                get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l"),
+                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_l_out"),
+                get_named_compile_time_arg_val("sdpa_cb_ms_out"),
+                get_named_compile_time_arg_val("sdpa_scale_fp32"),
+                get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
+                get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+                0,
+                0,   // cb_position=0, position_enabled=0 (not used in post_sdpa)
+                1>;  // final_reduction=1 (always normalize in post_sdpa)
+
+            // Note: compute_kernel_hw_startup already called at top of TRISC block
+            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
+            sdpa_worker();
+#endif
         }
 
-        // SDPA Forwarder NCRISC: forward BWD direction fabric packets
+        // SDPA Forwarder cores: use unified SdpaReduceForwarder::Op
+        // Forwarders are dataflow-only (BRISC/NCRISC), TRISC is no-op
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sdpa_forwarder_core) {
-            DPRINT << "SDPA Forwarder NCRISC: Start" << ENDL();
-            // Forwarder logic handled separately - runs on BRISC for FWD, NCRISC for BWD
-            constexpr uint32_t sdpa_fwd_slots_per_round = get_named_compile_time_arg_val("sdpa_fwd_slots_per_round");
-            constexpr uint32_t sdpa_fwd_slot_size = get_named_compile_time_arg_val("sdpa_fwd_slot_size");
-            constexpr uint32_t sdpa_fwd_r2_buffer_offset = get_named_compile_time_arg_val("sdpa_fwd_r2_buffer_offset");
-            constexpr uint32_t sdpa_fwd_all_sent_mask =
-                (sdpa_fwd_slots_per_round == 32) ? 0xFFFFFFFFu : ((1u << sdpa_fwd_slots_per_round) - 1u);
+            using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
+            using FwdCTArgs = Fwd::CTArgs<
+                get_named_compile_time_arg_val("sdpa_fwd_slots_per_round"),
+                get_named_compile_time_arg_val("sdpa_fwd_slot_size"),
+                get_named_compile_time_arg_val("sdpa_fwd_r2_buffer_offset")>;
 
-            size_t sdpa_fwd_rt_arg_idx = 0;
-            const uint32_t sdpa_fwd_buffer_base = get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++);
-            const uint32_t sdpa_fwd_buffer_offset = get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++);
-            const uint32_t sdpa_fwd_r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++));
-            const uint32_t sdpa_fwd_r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++));
-
-            const uint32_t my_buffer_base = sdpa_fwd_buffer_base + sdpa_fwd_buffer_offset;
-
-            auto sdpa_fabric_connection =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                    sdpa_fwd_rt_arg_idx);
-            sdpa_fabric_connection.open();
-
-            volatile tt_l1_ptr uint32_t* r1_sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sdpa_fwd_r1_sem_addr);
-            volatile tt_l1_ptr uint32_t* r2_sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sdpa_fwd_r2_sem_addr);
-
-            const uint32_t r1_buffer_base = my_buffer_base;
-            const uint32_t r2_buffer_base = my_buffer_base + sdpa_fwd_r2_buffer_offset;
-
-            uint32_t r1_sent_mask = 0;
-            uint32_t r2_sent_mask = 0;
-            // Forward packets as they arrive
-            do {
-                invalidate_l1_cache();
-                // Process R1 slots
-                uint32_t r1_sem_value = *r1_sem_ptr;
-                uint32_t r1_pending = r1_sem_value & ~r1_sent_mask;
-                while (r1_pending != 0) {
-                    uint32_t slot = __builtin_ctz(r1_pending);
-                    uint32_t slot_addr = r1_buffer_base + (slot * sdpa_fwd_slot_size);
-                    auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
-                    uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
-                    sdpa_fabric_connection.wait_for_empty_write_slot();
-                    sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
-                    r1_sent_mask |= (1u << slot);
-                    r1_pending &= ~(1u << slot);
-                }
-
-                // Process R2 slots
-                uint32_t r2_sem_value = *r2_sem_ptr;
-                uint32_t r2_pending = r2_sem_value & ~r2_sent_mask;
-                while (r2_pending != 0) {
-                    uint32_t slot = __builtin_ctz(r2_pending);
-                    uint32_t slot_addr = r2_buffer_base + (slot * sdpa_fwd_slot_size);
-                    auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
-                    uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
-                    sdpa_fabric_connection.wait_for_empty_write_slot();
-                    sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
-                    r2_sent_mask |= (1u << slot);
-                    r2_pending &= ~(1u << slot);
-                }
-            } while (r1_sent_mask != sdpa_fwd_all_sent_mask || r2_sent_mask != sdpa_fwd_all_sent_mask);
-
-            sdpa_fabric_connection.close();
-            noc_async_full_barrier();
-            DPRINT << "SDPA Forwarder NCRISC: End" << ENDL();
+            Fwd::Op<FwdCTArgs> sdpa_forwarder;
+            sdpa_forwarder();
         }
-#endif  // COMPILE_FOR_NCRISC
-
-#if defined(COMPILE_FOR_BRISC)
-        // SDPA Writer: send R1/R2 packets, scatter to matmul1 cores
-        if constexpr (Core::is_sdpa_worker_core) {
-            constexpr uint32_t sdpa_cb_r1_result_l = get_named_compile_time_arg_val("sdpa_cb_r1_result_l");
-            constexpr uint32_t sdpa_cb_r1_result_ms = get_named_compile_time_arg_val("sdpa_cb_r1_result_ms");
-            constexpr uint32_t sdpa_cb_packet_slot = get_named_compile_time_arg_val("sdpa_cb_packet_slot");
-            constexpr uint32_t sdpa_l1_alignment = get_named_compile_time_arg_val("sdpa_l1_alignment");
-            constexpr uint32_t sdpa_page_size_bytes = get_named_compile_time_arg_val("sdpa_page_size_bytes");
-            constexpr uint32_t sdpa_slot_size = get_named_compile_time_arg_val("sdpa_slot_size");
-            constexpr uint32_t sdpa_cb_l_out = get_named_compile_time_arg_val("sdpa_cb_l_out");
-            constexpr uint32_t sdpa_scatter_num_tiles = get_named_compile_time_arg_val("sdpa_scatter_num_tiles");
-            constexpr uint32_t sdpa_scatter_src_tile_size =
-                get_named_compile_time_arg_val("sdpa_scatter_src_tile_size");
-            constexpr uint32_t sdpa_scatter_dst_tile_size =
-                get_named_compile_time_arg_val("sdpa_scatter_dst_tile_size");
-            constexpr uint32_t sdpa_scatter_face_size = get_named_compile_time_arg_val("sdpa_scatter_face_size");
-            constexpr uint32_t sdpa_scatter_row_face_size =
-                get_named_compile_time_arg_val("sdpa_scatter_row_face_size");
-            constexpr uint32_t sdpa_scatter_num_rows = get_named_compile_time_arg_val("sdpa_scatter_num_rows");
-            constexpr uint32_t scatter_arrival_semaphore_id =
-                get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
-            // Additional compile-time args needed for R1/R2 packet sending
-            constexpr uint32_t sdpa_cb_local_l = get_named_compile_time_arg_val("sdpa_cb_local_l");
-            constexpr uint32_t sdpa_cb_local_ms = get_named_compile_time_arg_val("sdpa_cb_local_ms");
-            constexpr uint32_t sdpa_ms_tile_size_bytes = get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes");
-            constexpr uint32_t sdpa_l_chunk_size_bytes = get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes");
-            constexpr uint32_t sdpa_num_l_chunks = get_named_compile_time_arg_val("sdpa_num_l_chunks");
-            constexpr uint32_t sdpa_tiles_per_l_chunk = get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk");
-            constexpr uint32_t sdpa_total_l_bytes = sdpa_num_l_chunks * sdpa_l_chunk_size_bytes;
-
-            static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-
-            // Runtime args
-            size_t sdpa_wr_rt_arg_idx = 0;
-            const uint32_t r1_dst_mesh_id = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r1_dst_chip_id = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r1_neighbor_dst_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-
-            const uint32_t r2_dst_mesh_id = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r2_dst_chip_id = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t current_core_x = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t current_core_y = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t fwd_core_x = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t fwd_core_y = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r1_fwd_slot_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++));
-            const uint32_t r1_base_slot_idx = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r2_fwd_slot_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            const uint32_t r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++));
-            const uint32_t r2_base_slot_idx = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-
-            // Scatter runtime args
-            const uint32_t scatter_dest_l1_addr = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            uint32_t scatter_dest_noc_x[sdpa_scatter_num_rows];
-            uint32_t scatter_dest_noc_y[sdpa_scatter_num_rows];
-            for (uint32_t i = 0; i < sdpa_scatter_num_rows; i++) {
-                scatter_dest_noc_x[i] = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-                scatter_dest_noc_y[i] = get_arg_val<uint32_t>(sdpa_wr_rt_arg_idx++);
-            }
-
-            // Helper: send packet via forwarder
-            auto send_sdpa_packet = [&](uint32_t src_addr,
-                                        uint32_t payload_size,
-                                        uint32_t dst_addr,
-                                        uint32_t sem_addr,
-                                        uint32_t dst_mesh_id,
-                                        uint32_t dst_chip_id,
-                                        uint32_t fwd_slot_addr,
-                                        uint32_t fwd_sem_addr,
-                                        uint32_t slot_idx) {
-                cb_reserve_back(sdpa_cb_packet_slot, 1);
-                uint32_t header_addr = get_write_ptr(sdpa_cb_packet_slot);
-
-                auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
-                (void)fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
-
-                uint64_t dst_noc = get_noc_addr(current_core_x, current_core_y, dst_addr);
-                uint64_t sem_noc = get_noc_addr(current_core_x, current_core_y, sem_addr);
-                header->to_noc_fused_unicast_write_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc, sem_noc, 1, false},
-                    align(payload_size, sdpa_l1_alignment));
-
-                uint64_t fwd_slot_noc = get_noc_addr(fwd_core_x, fwd_core_y, fwd_slot_addr);
-                noc_async_write(header_addr, fwd_slot_noc, packet_header_size_bytes);
-                noc_async_write(src_addr, fwd_slot_noc + packet_header_size_bytes, payload_size);
-                noc_async_writes_flushed();
-
-                uint64_t fwd_sem_noc = get_noc_addr(fwd_core_x, fwd_core_y, fwd_sem_addr);
-                noc_semaphore_inc(fwd_sem_noc, 1u << slot_idx);
-
-                cb_push_back(sdpa_cb_packet_slot, 1);
-                cb_pop_front(sdpa_cb_packet_slot, 1);
-            };
-
-            // Round 1: Send local input to R1 neighbor
-            // MS first (at end of buffer)
-            send_sdpa_packet(
-                get_read_ptr(sdpa_cb_local_ms),
-                sdpa_ms_tile_size_bytes,
-                r1_neighbor_dst_addr + sdpa_total_l_bytes,
-                r1_neighbor_sem_addr,
-                r1_dst_mesh_id,
-                r1_dst_chip_id,
-                r1_fwd_slot_addr,
-                r1_fwd_sem_addr,
-                r1_base_slot_idx);
-            // L chunks
-            for (uint32_t i = 0; i < sdpa_num_l_chunks; i++) {
-                uint32_t src_addr = get_read_ptr(sdpa_cb_local_l) + i * sdpa_l_chunk_size_bytes;
-                uint32_t dst_addr = r1_neighbor_dst_addr + i * sdpa_l_chunk_size_bytes;
-                send_sdpa_packet(
-                    src_addr,
-                    sdpa_l_chunk_size_bytes,
-                    dst_addr,
-                    r1_neighbor_sem_addr,
-                    r1_dst_mesh_id,
-                    r1_dst_chip_id,
-                    r1_fwd_slot_addr + (1 + i) * sdpa_slot_size,
-                    r1_fwd_sem_addr,
-                    r1_base_slot_idx + 1 + i);
-            }
-
-            // Round 2: Send R1 result to R2 neighbor (streaming - wait for compute)
-            // MS first
-            cb_wait_front(sdpa_cb_r1_result_ms, 1);
-            send_sdpa_packet(
-                get_read_ptr(sdpa_cb_r1_result_ms),
-                sdpa_ms_tile_size_bytes,
-                r2_neighbor_dst_addr + sdpa_total_l_bytes,
-                r2_neighbor_sem_addr,
-                r2_dst_mesh_id,
-                r2_dst_chip_id,
-                r2_fwd_slot_addr,
-                r2_fwd_sem_addr,
-                r2_base_slot_idx);
-            // L chunks (streaming)
-            for (uint32_t i = 0; i < sdpa_num_l_chunks; i++) {
-                cb_wait_front(sdpa_cb_r1_result_l, (i + 1) * sdpa_tiles_per_l_chunk);
-                uint32_t src_addr = get_read_ptr(sdpa_cb_r1_result_l) + i * sdpa_l_chunk_size_bytes;
-                uint32_t dst_addr = r2_neighbor_dst_addr + i * sdpa_l_chunk_size_bytes;
-                send_sdpa_packet(
-                    src_addr,
-                    sdpa_l_chunk_size_bytes,
-                    dst_addr,
-                    r2_neighbor_sem_addr,
-                    r2_dst_mesh_id,
-                    r2_dst_chip_id,
-                    r2_fwd_slot_addr + (1 + i) * sdpa_slot_size,
-                    r2_fwd_sem_addr,
-                    r2_base_slot_idx + 1 + i);
-            }
-
-            // Pop R1 result MS now that we've sent it.
-            // TRISC R2 finalize deliberately does NOT pop this CB to avoid a race
-            // where TRISC pops it before BRISC reads it.
-            cb_pop_front(sdpa_cb_r1_result_ms, 1);
-            noc_async_full_barrier();
-
-            // SCATTER PHASE: Distribute output rows to matmul1 cores
-            if constexpr (sdpa_scatter_num_rows > 0) {
-                // Wait for all compute output
-                cb_wait_front(sdpa_cb_l_out, sdpa_scatter_num_tiles);
-                uint32_t src_base = get_read_ptr(sdpa_cb_l_out);
-                uint32_t temp_base = get_read_ptr(sdpa_cb_r1_result_l);  // Reuse as scratch
-
-                constexpr uint32_t row_face_words = sdpa_scatter_row_face_size / sizeof(uint32_t);
-                constexpr uint32_t scatter_payload_bytes = sdpa_scatter_num_tiles * sdpa_scatter_dst_tile_size;
-
-                for (uint32_t row = 0; row < sdpa_scatter_num_rows; row++) {
-                    // Reorder: extract row from each source tile
-                    for (uint32_t t = 0; t < sdpa_scatter_num_tiles; t++) {
-                        uint32_t src_tile = src_base + t * sdpa_scatter_src_tile_size;
-                        uint32_t dst_tile = temp_base + t * sdpa_scatter_dst_tile_size;
-
-                        // Copy Face 0 row
-                        volatile tt_l1_ptr uint32_t* src_f0 =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_tile + row * sdpa_scatter_row_face_size);
-                        volatile tt_l1_ptr uint32_t* dst_f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile);
-                        for (uint32_t w = 0; w < row_face_words; w++) {
-                            dst_f0[w] = src_f0[w];
-                        }
-
-                        // Copy Face 1 row
-                        volatile tt_l1_ptr uint32_t* src_f1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            src_tile + sdpa_scatter_face_size + row * sdpa_scatter_row_face_size);
-                        volatile tt_l1_ptr uint32_t* dst_f1 =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile + sdpa_scatter_row_face_size);
-                        for (uint32_t w = 0; w < row_face_words; w++) {
-                            dst_f1[w] = src_f1[w];
-                        }
-                    }
-
-                    // Write reordered row to matmul1 core
-                    uint64_t dest_noc_addr =
-                        get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], scatter_dest_l1_addr);
-                    noc_async_write(temp_base, dest_noc_addr, scatter_payload_bytes);
-                    noc_async_writes_flushed();
-
-                    // Signal matmul1 core that scatter data arrived
-                    uint64_t matmul1_sem_addr = get_noc_addr(
-                        scatter_dest_noc_x[row], scatter_dest_noc_y[row], get_semaphore(scatter_arrival_semaphore_id));
-                    noc_semaphore_inc(matmul1_sem_addr, 1);
-                }
-
-                noc_async_write_barrier();
-            }
-        }
-
-        // SDPA Forwarder BRISC: forward FWD direction fabric packets
-        if constexpr (Core::is_sdpa_forwarder_core) {
-            DPRINT << "SDPA Forwarder BRISC: Start" << ENDL();
-            constexpr uint32_t sdpa_fwd_slots_per_round = get_named_compile_time_arg_val("sdpa_fwd_slots_per_round");
-            constexpr uint32_t sdpa_fwd_slot_size = get_named_compile_time_arg_val("sdpa_fwd_slot_size");
-            constexpr uint32_t sdpa_fwd_r2_buffer_offset = get_named_compile_time_arg_val("sdpa_fwd_r2_buffer_offset");
-            constexpr uint32_t sdpa_fwd_all_sent_mask =
-                (sdpa_fwd_slots_per_round == 32) ? 0xFFFFFFFFu : ((1u << sdpa_fwd_slots_per_round) - 1u);
-
-            size_t sdpa_fwd_rt_arg_idx = 0;
-            const uint32_t sdpa_fwd_buffer_base = get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++);
-            const uint32_t sdpa_fwd_buffer_offset = get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++);
-            const uint32_t sdpa_fwd_r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++));
-            const uint32_t sdpa_fwd_r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(sdpa_fwd_rt_arg_idx++));
-
-            const uint32_t my_buffer_base = sdpa_fwd_buffer_base + sdpa_fwd_buffer_offset;
-
-            auto sdpa_fabric_connection =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                    sdpa_fwd_rt_arg_idx);
-            sdpa_fabric_connection.open();
-
-            volatile tt_l1_ptr uint32_t* r1_sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sdpa_fwd_r1_sem_addr);
-            volatile tt_l1_ptr uint32_t* r2_sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sdpa_fwd_r2_sem_addr);
-
-            const uint32_t r1_buffer_base = my_buffer_base;
-            const uint32_t r2_buffer_base = my_buffer_base + sdpa_fwd_r2_buffer_offset;
-
-            uint32_t r1_sent_mask = 0;
-            uint32_t r2_sent_mask = 0;
-
-            do {
-                invalidate_l1_cache();
-                // Process R1 slots
-                uint32_t r1_sem_value = *r1_sem_ptr;
-                uint32_t r1_pending = r1_sem_value & ~r1_sent_mask;
-                while (r1_pending != 0) {
-                    uint32_t slot = __builtin_ctz(r1_pending);
-                    uint32_t slot_addr = r1_buffer_base + (slot * sdpa_fwd_slot_size);
-                    auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
-                    uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
-                    sdpa_fabric_connection.wait_for_empty_write_slot();
-                    sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
-                    r1_sent_mask |= (1u << slot);
-                    r1_pending &= ~(1u << slot);
-                }
-
-                // Process R2 slots
-                uint32_t r2_sem_value = *r2_sem_ptr;
-                uint32_t r2_pending = r2_sem_value & ~r2_sent_mask;
-                while (r2_pending != 0) {
-                    uint32_t slot = __builtin_ctz(r2_pending);
-                    uint32_t slot_addr = r2_buffer_base + (slot * sdpa_fwd_slot_size);
-                    auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
-                    uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
-                    sdpa_fabric_connection.wait_for_empty_write_slot();
-                    sdpa_fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
-                    r2_sent_mask |= (1u << slot);
-                    r2_pending &= ~(1u << slot);
-                }
-            } while (r1_sent_mask != sdpa_fwd_all_sent_mask || r2_sent_mask != sdpa_fwd_all_sent_mask);
-
-            sdpa_fabric_connection.close();
-            noc_async_full_barrier();
-            DPRINT << "SDPA Forwarder BRISC: End" << ENDL();
-        }
-#endif  // COMPILE_FOR_BRISC
-
-#if defined(COMPILE_FOR_TRISC)
-        // SDPA Compute: R1 and R2 reductions
-        if constexpr (Core::is_sdpa_worker_core) {
-            DPRINT << "SDPA Compute TRISC: Start" << ENDL();
-            // Compile-time args for SDPA compute
-            constexpr uint32_t sdpa_scale_fp32 = get_named_compile_time_arg_val("sdpa_scale_fp32");
-            constexpr uint32_t sdpa_cb_local_l = get_named_compile_time_arg_val("sdpa_cb_local_l");
-            constexpr uint32_t sdpa_cb_local_ms = get_named_compile_time_arg_val("sdpa_cb_local_ms");
-            constexpr uint32_t sdpa_cb_r1_neighbor_l = get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l");
-            constexpr uint32_t sdpa_cb_r1_neighbor_ms = get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms");
-            constexpr uint32_t sdpa_cb_r1_result_l = get_named_compile_time_arg_val("sdpa_cb_r1_result_l");
-            constexpr uint32_t sdpa_cb_r1_result_ms = get_named_compile_time_arg_val("sdpa_cb_r1_result_ms");
-            constexpr uint32_t sdpa_cb_r2_neighbor_l = get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l");
-            constexpr uint32_t sdpa_cb_r2_neighbor_ms = get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms");
-            constexpr uint32_t sdpa_cb_l_out = get_named_compile_time_arg_val("sdpa_cb_l_out");
-            constexpr uint32_t sdpa_cb_ms_out = get_named_compile_time_arg_val("sdpa_cb_ms_out");
-            constexpr uint32_t sdpa_num_l_chunks = get_named_compile_time_arg_val("sdpa_num_l_chunks");
-            constexpr uint32_t sdpa_tiles_per_l_chunk = get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk");
-
-            constexpr int vector_mode = VectorMode::RC_custom;
-            constexpr bool SDPA_EXP_APPROX_MODE = false;
-
-            binary_op_init_common(sdpa_cb_local_l, sdpa_cb_local_l, sdpa_cb_l_out);
-            exp_tile_init<SDPA_EXP_APPROX_MODE, false>();
-
-            // R1: reduce(local, r1_neighbor) -> r1_result (non-final, outputs L and MS)
-            // MS reduction + L block processing with streaming
-            ckernel::
-                sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, false, sdpa_tiles_per_l_chunk, sdpa_scale_fp32, vector_mode>(
-                    sdpa_cb_r1_neighbor_ms, sdpa_cb_local_ms, sdpa_cb_r1_result_ms, sdpa_cb_r1_neighbor_l);
-
-            for (uint32_t chunk = 0; chunk < sdpa_num_l_chunks; chunk++) {
-                cb_wait_front(sdpa_cb_r1_neighbor_l, (chunk + 1) * sdpa_tiles_per_l_chunk);
-                cb_wait_front(sdpa_cb_local_l, (chunk + 1) * sdpa_tiles_per_l_chunk);
-                cb_reserve_back(sdpa_cb_r1_result_l, sdpa_tiles_per_l_chunk);
-
-                uint32_t tile_index = chunk * sdpa_tiles_per_l_chunk;
-                // R1 is non-normalizing: MS reduce releases regs, so always acquire
-                bool acquire_regs = true;
-                ckernel::sdpa_tail_l_block<sdpa_tiles_per_l_chunk>(
-                    sdpa_cb_r1_neighbor_l, sdpa_cb_local_l, sdpa_cb_r1_result_l, tile_index, acquire_regs);
-
-                cb_push_back(sdpa_cb_r1_result_l, sdpa_tiles_per_l_chunk);
-            }
-            ckernel::sdpa_tail_finalize(sdpa_cb_r1_neighbor_ms, sdpa_cb_local_ms);
-
-            // R2: reduce(r1_result, r2_neighbor) -> final output (normalized L)
-            ckernel::
-                sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, true, sdpa_tiles_per_l_chunk, sdpa_scale_fp32, vector_mode>(
-                    sdpa_cb_r2_neighbor_ms, sdpa_cb_r1_result_ms, sdpa_cb_ms_out, sdpa_cb_r2_neighbor_l);
-
-            for (uint32_t chunk = 0; chunk < sdpa_num_l_chunks; chunk++) {
-                cb_wait_front(sdpa_cb_r2_neighbor_l, (chunk + 1) * sdpa_tiles_per_l_chunk);
-                cb_wait_front(sdpa_cb_r1_result_l, (chunk + 1) * sdpa_tiles_per_l_chunk);
-                cb_reserve_back(sdpa_cb_l_out, sdpa_tiles_per_l_chunk);
-
-                uint32_t tile_index = chunk * sdpa_tiles_per_l_chunk;
-                bool acquire_regs = !(chunk == 0);  // First chunk reuses regs from MS phase when normalize=true
-                ckernel::sdpa_tail_l_block<sdpa_tiles_per_l_chunk>(
-                    sdpa_cb_r2_neighbor_l, sdpa_cb_r1_result_l, sdpa_cb_l_out, tile_index, acquire_regs);
-
-                cb_push_back(sdpa_cb_l_out, sdpa_tiles_per_l_chunk);
-            }
-            // Inline R2 finalize: DON'T pop sdpa_cb_r1_result_ms here!
-            // BRISC needs to read sdpa_cb_r1_result_ms (to send R2 data to neighbor).
-            // If we pop it before BRISC reads it, BRISC hangs on cb_wait_front.
-            // BRISC will pop sdpa_cb_r1_result_ms after sending R2 data.
-            ckernel::sdpa_bcast_col_reuse_postamble();
-            cb_pop_front(sdpa_cb_r2_neighbor_ms, 1);
-            DPRINT << "SDPA Compute TRISC: Done" << ENDL();
-        }
-#endif  // COMPILE_FOR_TRISC
+#endif
     }
 #endif  // SKIP_SDPA
 
