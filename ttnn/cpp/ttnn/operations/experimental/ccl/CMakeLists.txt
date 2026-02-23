@@ -101,6 +101,9 @@ target_sources(
         strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
+        minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.cpp
+        minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.cpp
+        minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_program.cpp
         matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp
