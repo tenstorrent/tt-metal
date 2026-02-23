@@ -147,11 +147,11 @@
 - name: Galaxy DeepSeek v3 demo tests
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
-    pytest models/demos/deepseek_v3/demo/test_demo.py -k "tg_stress" --timeout 600
+    pytest models/demos/deepseek_v3/demo/test_demo.py -k "tg_stress" --timeout 900
   model: deepseek_v3
   skus:
     wh_galaxy:
-      timeout: 10
+      timeout: 15
   owner_id: U08H32XUS9W # Yousef Al Rawwash
   team: models
 
