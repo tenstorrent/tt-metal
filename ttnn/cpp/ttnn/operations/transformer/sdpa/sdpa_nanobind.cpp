@@ -20,50 +20,6 @@
 
 namespace ttnn::operations::transformer {
 
-namespace {
-// Special wrapper only for chunked_scaled_dot_product_attention which needs dispatch logic
-ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& page_table_tensor,
-    const nb::object& chunk_start_idx_arg,
-    std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    if (chunk_start_idx_tensor_opt.has_value()) {
-        return ttnn::transformer::chunked_scaled_dot_product_attention(
-            input_tensor_q,
-            input_tensor_k,
-            input_tensor_v,
-            page_table_tensor,
-            chunk_start_idx_tensor_opt.value(),
-            scale,
-            memory_config,
-            program_config,
-            compute_kernel_config);
-    }
-    if (chunk_start_idx_arg.is_none()) {
-        throw std::runtime_error(
-            "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
-            "chunk_start_idx_tensor=...");
-    }
-    int64_t chunk_start_idx = nb::cast<int64_t>(chunk_start_idx_arg);
-    return ttnn::transformer::chunked_scaled_dot_product_attention(
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        page_table_tensor,
-        chunk_start_idx,
-        scale,
-        memory_config,
-        program_config,
-        compute_kernel_config);
-}
-}  // namespace
-
 void bind_sdpa(nb::module_& mod) {
     const auto* const doc =
         R"doc(
@@ -160,7 +116,46 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"chunked_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         chunked_doc,
-        &chunked_scaled_dot_product_attention_wrapper,
+        // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
+        +[](const ttnn::Tensor& input_tensor_q,
+            const ttnn::Tensor& input_tensor_k,
+            const ttnn::Tensor& input_tensor_v,
+            const ttnn::Tensor& page_table_tensor,
+            const nb::object& chunk_start_idx_arg,
+            std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
+            std::optional<float> scale,
+            const std::optional<MemoryConfig>& memory_config,
+            const std::optional<SDPAProgramConfig>& program_config,
+            std::optional<DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
+            if (chunk_start_idx_tensor_opt.has_value()) {
+                return ttnn::transformer::chunked_scaled_dot_product_attention(
+                    input_tensor_q,
+                    input_tensor_k,
+                    input_tensor_v,
+                    page_table_tensor,
+                    chunk_start_idx_tensor_opt.value(),
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            }
+            if (chunk_start_idx_arg.is_none()) {
+                throw std::runtime_error(
+                    "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
+                    "chunk_start_idx_tensor=...");
+            }
+            int64_t chunk_start_idx = nb::cast<int64_t>(chunk_start_idx_arg);
+            return ttnn::transformer::chunked_scaled_dot_product_attention(
+                input_tensor_q,
+                input_tensor_k,
+                input_tensor_v,
+                page_table_tensor,
+                chunk_start_idx,
+                scale,
+                memory_config,
+                program_config,
+                compute_kernel_config);
+        },
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),
