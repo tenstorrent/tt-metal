@@ -42,22 +42,24 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Param Type | Name         | Description                              | Type      | Valid Range     | Required |
- * |------------|--------------|------------------------------------------|-----------|-----------------|----------|
- * | Template   | block_ct_dim | Width of a single block in tiles         | uint32_t  | 1 to max (see note) | False (default = 8) |
- * | Template   | full_ct_dim  | Width of a full input in tiles           | uint32_t  | Divisible by block_ct_dim | False    |
- * | Template   | narrow_row   |  Whether the provided input is narrow    | bool      | true/false      | False    |
- * | Template   | row_num_datums | Number of datums per row               | uint32_t  | >= 1            | False    |
- * | Function   | ocb          | Output circular buffer identifier        | uint32_t  | 0 to 31         | True     |
- * | Function   | face_r_dim   | Face height in rows                      | uint32_t  | 1, 8 or 16      | False (default = 16) |
- * | Function   | num_faces    | Number of faces                          | uint32_t  | 1, 2 or 4       | False (default = 4) |
+ * | Param Type | Name           | Description                                      | Type      | Valid Range               | Required              |
+ * |------------|----------------|--------------------------------------------------|-----------|---------------------------|-----------------------|
+ * | Template   | block_ct_dim   | Width of a single block in tiles                 | uint32_t  | 1 to max (see note)       | False (default = 8)   |
+ * | Template   | full_ct_dim    | Width of a full input in tiles                   | uint32_t  | Divisible by block_ct_dim | False                 |
+ * | Template   | narrow_row     |  Whether the provided input is narrow            | bool      | true/false                | False                 |
+ * | Template   | row_num_datums | Number of datums per row                         | uint32_t  | >= 1                      | False                 |
+ * | Template   | dense          | Packs two 2 face tiles in a single 4 face region | bool      | true/false                | False (default false) |
+ * | Function   | ocb            | Output circular buffer identifier                | uint32_t  | 0 to 31                   | True                  |
+ * | Function   | face_r_dim     | Face height in rows                              | uint32_t  | 1, 8 or 16                | False (default = 16)  |
+ * | Function   | num_faces      | Number of faces                                  | uint32_t  | 1, 2 or 4                 | False (default = 4)   |
  */
 // clang-format on
 template <
     uint32_t block_ct_dim = 8,
     uint32_t full_ct_dim = block_ct_dim,
     bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false>
 ALWI void pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::PACK>(ocb, call_line);
@@ -69,7 +71,7 @@ ALWI void pack_untilize_dest_init(
 
     PACK(
         (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums>(
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
 }
@@ -174,20 +176,21 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  *
  * Return value: None
  *
- * | Param Type | Name               | Description                                                                  | Type      | Valid Range                             | Required            |
- * |------------|--------------------|------------------------------------------------------------------------------|-----------|-----------------------------------------|---------------------|
- * | Template   | block_ct_dim       | Width of a single block in tiles                                             | uint32_t  | 1 to max (see note)                     | False (default = 8) |
- * | Template   | full_ct_dim        | Width of a full input in tiles                                               | uint32_t  | Divisible by block_ct_dim               | False               |
- * | Template   | diagonal           | Whether to use diagonal packing                                              | bool      | true/false                              | False               |
- * | Template   | narrow_row         | Whether the provided input is narrow                                         | bool      | true/false                              | False               |
- * | Template   | row_num_datums     | Number of datums per row                                                     | uint32_t  | >= 1                                    | False               |
- * | Template   | tile_dst_ct_offset | Compile time offset for the index of the tile in the dest from which to pack | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)   |
- * | Function   | ocb                | Output circular buffer identifier                                            | uint32_t  | 0 to 31                                 | True                |
- * | Function   | block_rt_dim       | Height of a single block in tiles                                            | uint32_t  | >= 1                                    | False (default=1)   |
- * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)                    | uint32_t  | >= 0                                    | False (default=0)   |
- * | Function   | face_r_dim         | Face height in rows                                                          | uint32_t  | 1, 8 or 16                              | False (default=16)  |
- * | Function   | num_faces          | Number of faces                                                              | uint32_t  | 1, 2 or 4                               | False (default=4)   |
- * | Function   | tile_dst_offset    | Runtime offset for the index of the tile in the dest from which to pack      | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)   |
+ * | Param Type | Name               | Description                                                                  | Type      | Valid Range                             | Required              |
+ * |------------|--------------------|------------------------------------------------------------------------------|-----------|-----------------------------------------|-----------------------|
+ * | Template   | block_ct_dim       | Width of a single block in tiles                                             | uint32_t  | 1 to max (see note)                     | False (default = 8)   |
+ * | Template   | full_ct_dim        | Width of a full input in tiles                                               | uint32_t  | Divisible by block_ct_dim               | False                 |
+ * | Template   | diagonal           | Whether to use diagonal packing                                              | bool      | true/false                              | False                 |
+ * | Template   | narrow_row         | Whether the provided input is narrow                                         | bool      | true/false                              | False                 |
+ * | Template   | row_num_datums     | Number of datums per row                                                     | uint32_t  | >= 1                                    | False                 |
+ * | Template   | tile_dst_ct_offset | Compile time offset for the index of the tile in the dest from which to pack | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)     |
+ * | Template   | dense              | Packs two 2 face tiles in a single 4 face region                             | bool      | true/false                              | False (default false) |
+ * | Function   | ocb                | Output circular buffer identifier                                            | uint32_t  | 0 to 31                                 | True                  |
+ * | Function   | block_rt_dim       | Height of a single block in tiles                                            | uint32_t  | >= 1                                    | False (default=1)     |
+ * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)                    | uint32_t  | >= 0                                    | False (default=0)     |
+ * | Function   | face_r_dim         | Face height in rows                                                          | uint32_t  | 1, 8 or 16                              | False (default=16)    |
+ * | Function   | num_faces          | Number of faces                                                              | uint32_t  | 1, 2 or 4                               | False (default=4)     |
+ * | Function   | tile_dst_offset    | Runtime offset for the index of the tile in the dest from which to pack      | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)     |
  */
 // clang-format on
 template <
@@ -196,7 +199,8 @@ template <
     bool diagonal = false,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    uint32_t tile_dst_ct_offset = 0>
+    uint32_t tile_dst_ct_offset = 0,
+    bool dense = false>
 ALWI void pack_untilize_dest(
     uint32_t ocb,
     uint32_t block_rt_dim = 1,
@@ -204,7 +208,7 @@ ALWI void pack_untilize_dest(
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
 }
 
