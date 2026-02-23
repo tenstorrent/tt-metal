@@ -33,46 +33,36 @@ class TorchTTNNTensor(torch.Tensor):
 
     @property
     def shape(self):
+        if self.ttnn_distributed_tensor_config is not None and self.ttnn_tensor is not None:
+            return self.ttnn_distributed_tensor_config.get_logical_shape(self.ttnn_tensor.shape)
         return self.elem.shape if self.elem is not None else tuple(int(i) for i in self.ttnn_tensor.shape)
 
     def __mul__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.mul.Tensor, None, (self, other), {}
-        )
+        return torch.mul(self, other)
 
     def __rmul__(self, other):
         return self.__mul__(other)
 
     def __sub__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.sub.Tensor, None, (self, other), {}
-        )
+        return torch.sub(self, other)
 
     def __rsub__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.sub.Tensor, None, (other, self), {}
-        )
+        return torch.sub(other, self)
 
     def __add__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.add.Tensor, None, (self, other), {}
-        )
+        return torch.add(self, other)
 
     def __radd__(self, other):
-        return self.__add__(other)
+        return torch.add(other, self)
 
     def __abs__(self):
-        raise RuntimeError("Absolute value is not yet implemented for TTNN tensors.")
+        return torch.abs(self)
 
     def __matmul__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.mm.default, None, (self, other), {}
-        )
+        return torch.matmul(self, other)
 
     def __rmatmul__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.mm.default, None, (other, self), {}
-        )
+        return torch.matmul(other, self)
 
     def bool(self):
         if self.ttnn_tensor is not None:
@@ -99,8 +89,9 @@ class TorchTTNNTensor(torch.Tensor):
             self.ttnn_tensor.clone() if self.ttnn_tensor is not None else self.elem.clone(**kwargs), dtype=self.dtype
         )
 
+    def set_distributed_tensor_config(self, distributed_tensor_config: DistributedTensorConfig):
+        self._distributed_tensor_config = distributed_tensor_config
+
     @property
-    def ttnn_distributed_config(self) -> Optional[DistributedTensorConfig]:
-        if "distributed_config" in self.__dict__:
-            return self.__dict__["distributed_config"]
-        return None
+    def ttnn_distributed_tensor_config(self) -> Optional[DistributedTensorConfig]:
+        return self.__dict__.get("_distributed_tensor_config", None)

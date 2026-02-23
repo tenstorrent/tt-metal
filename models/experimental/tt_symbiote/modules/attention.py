@@ -849,44 +849,16 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return tt_norm.forward(t)
 
     def _rope_torch_fallback(self, q_raw, k_raw, cos_torch, sin_torch, device):
-        """Applies RoPE via TTNN or torch fallback when to_torch fails."""
-        torch_rope = getattr(self.rope, "torch_layer", None) or getattr(self.rope, "_fallback_torch_layer", None)
-        if torch_rope is None:
-            cos_tt = ttnn.from_torch(
-                cos_torch.to(torch.bfloat16).contiguous(), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            sin_tt = ttnn.from_torch(
-                sin_torch.to(torch.bfloat16).contiguous(), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            return self.rope(q_raw, k_raw, cos_tt, sin_tt)
-        try:
-            q_t = ttnn.to_torch(q_raw)
-            k_t = ttnn.to_torch(k_raw)
-        except Exception:
-            if os.environ.get("TT_SYMBIOTE_DIAG_LM_ATTN_STAGES"):
-                _n = getattr(self, "module_name", "?")
-                if "self_attn" in str(_n):
-                    print(f"[DIAG_LM_ATTN] {_n} RoPE: TTNN (to_torch failed)", flush=True)
-            cos_tt = ttnn.from_torch(
-                cos_torch.to(torch.bfloat16).contiguous(), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            sin_tt = ttnn.from_torch(
-                sin_torch.to(torch.bfloat16).contiguous(), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            return self.rope(q_raw, k_raw, cos_tt, sin_tt)
-        if os.environ.get("TT_SYMBIOTE_DIAG_LM_ATTN_STAGES"):
-            _n = getattr(self, "module_name", "?")
-            if "self_attn" in str(_n):
-                print(f"[DIAG_LM_ATTN] {_n} RoPE: torch fallback", flush=True)
-        with torch.no_grad():
-            q_emb, k_emb = torch_rope(q_t, k_t, cos_torch, sin_torch)
-        q_tt = ttnn.from_torch(
-            q_emb.contiguous().to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        """Applies RoPE on device (TTNN). Cos/sin are moved to device and self.rope runs on Tensix."""
+        q = q_raw.to_ttnn if hasattr(q_raw, "to_ttnn") else q_raw
+        k = k_raw.to_ttnn if hasattr(k_raw, "to_ttnn") else k_raw
+        cos_tt = ttnn.from_torch(
+            cos_torch.to(torch.bfloat16).contiguous(), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )
-        k_tt = ttnn.from_torch(
-            k_emb.contiguous().to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        sin_tt = ttnn.from_torch(
+            sin_torch.to(torch.bfloat16).contiguous(), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )
-        return q_tt, k_tt
+        return self.rope(q, k, cos_tt, sin_tt)
 
     def forward(self, hidden_states, *args, **kwargs):
         if self.tt_q_proj is None:

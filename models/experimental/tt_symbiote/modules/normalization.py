@@ -11,42 +11,15 @@ from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devic
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
-class TTNNLayerNormNoAffine(TTNNModule):
-    """TTNN LayerNorm for layers with elementwise_affine=False (weight=None, bias=None)."""
-
-    @classmethod
-    def from_torch(cls, layer_norm: nn.LayerNorm):
-        new_layer_norm = cls()
-        new_layer_norm._fallback_torch_layer = layer_norm
-        return new_layer_norm
-
-    def preprocess_weights_impl(self):
-        self.tt_weight = None
-        self.tt_bias = None
-
-    def move_weights_to_device_impl(self):
-        pass
-
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        if input_tensor.layout != ttnn.TILE_LAYOUT:
-            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        eps = getattr(self.torch_layer, "eps", 1e-5)
-        return ttnn.layer_norm(
-            input_tensor,
-            weight=None,
-            bias=None,
-            epsilon=eps,
-        )
-
-
 class TTNNLayerNorm(TTNNModule):
-    """TTNN-accelerated LayerNorm (with weight/bias)."""
+    """TTNN-accelerated LayerNorm."""
 
     @classmethod
     def from_torch(cls, layer_norm: nn.LayerNorm):
         """Create TTNNLayerNorm from PyTorch LayerNorm."""
         if layer_norm.weight is None:
-            return TTNNLayerNormNoAffine.from_torch(layer_norm)
+            print(f"Warning: LayerNorm layer {layer_norm} has no weight. Using standard LayerNorm.")
+            return layer_norm
         new_layer_norm = cls()
         new_layer_norm._fallback_torch_layer = layer_norm
         return new_layer_norm
@@ -105,16 +78,12 @@ class TTNNRMSNorm(TTNNModule):
         return new_layer_norm
 
     def preprocess_weights_impl(self):
-        """Preprocess RMSNorm weights for TTNN. Weight must match last dim; pad to 32-align with 1.0."""
+        """Preprocess RMSNorm weights for TTNN."""
         if self.torch_layer is None:
             self._fallback_torch_layer = DeepseekV2RMSNorm(hidden_size=1)
-        w = self.torch_layer.weight.clone()
-        D = w.shape[0]
-        pad_d = (32 - (D % 32)) % 32
-        if pad_d > 0:
-            w = torch.nn.functional.pad(w, (0, pad_d), value=1.0)
-        w = w.unsqueeze(0)
-        self.tt_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.tt_weight = ttnn.from_torch(
+            self.torch_layer.weight.unsqueeze(0).expand(32, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
@@ -123,17 +92,7 @@ class TTNNRMSNorm(TTNNModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        cfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
-        x = ttnn.rms_norm(
-            x,
-            weight=self.tt_weight,
-            epsilon=self.torch_layer.variance_epsilon,
-            compute_kernel_config=cfg,
-        )
+        x = ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.torch_layer.variance_epsilon)
         return x
 
 

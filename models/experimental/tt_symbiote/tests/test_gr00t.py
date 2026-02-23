@@ -1,17 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""GR00T model integration tests: dispatch, padded view, and inference validation."""
+
+import operator
 import os
 import subprocess
 import sys
 import time
-import torch
-import ttnn
+from functools import reduce
+from pathlib import Path
+
+import numpy as np
 import pytest
 import requests
-import numpy as np
+import torch
+import ttnn
 from PIL import Image
-from pathlib import Path
 from torch import nn
 from tqdm import tqdm
 from torch.distributions import Beta
@@ -21,14 +26,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Must import groot_utils before modules.* so run_config is patched with DistributedConfig
-from utils import groot_utils  # noqa: F401
+from utils import groot_utils  # noqa: F401  # patches run_config before other imports
 from utils.groot_utils import (
     TTNNEmbedding,
     TTNNSigLIPPositionEmbedding,
     set_dpl_torch_ref_running,
 )
-
 from modules.attention import TTNNGR00TSelfAttention
 from modules.linear import TTNNLinear
 from modules.normalization import TTNNLayerNorm
@@ -40,7 +43,6 @@ from models.experimental.tt_symbiote.core.run_config import DispatchManager
 
 try:
     from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
-
     from utils.groot_utils import apply_gr00t_dit_attention_return_compat
 
     apply_gr00t_dit_attention_return_compat()
@@ -56,13 +58,13 @@ except Exception:
         )
         if _r.returncode != 0:
             print(f"Clone failed: {_r.stderr or _r.stdout}")
-            exit(1)
+            sys.exit(1)
         sys.path.insert(0, str(_groot_dir))
         try:
             from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
         except Exception as _e:
             print(f"groot import failed after clone: {_e}")
-            exit(1)
+            sys.exit(1)
     else:
         _groot_str = str(_groot_dir)
         if _groot_str not in sys.path:
@@ -71,12 +73,11 @@ except Exception:
             from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
         except Exception as _e:
             print(
-                "groot import failed. Make sure you have https://github.com/pandeashwary/Gr00t.git "
-                "in models/experimental/tt_symbiote/groot (or set PYTHONPATH)."
+                "groot import failed. Ensure https://github.com/pandeashwary/Gr00t.git "
+                "is in models/experimental/tt_symbiote/groot or PYTHONPATH is set."
             )
             print(f"Error: {_e}")
-            exit(1)
-
+            sys.exit(1)
     from utils.groot_utils import apply_gr00t_dit_attention_return_compat
 
     apply_gr00t_dit_attention_return_compat()
@@ -95,7 +96,9 @@ PretrainedConfig._attn_implementation_internal = "eager"
 class Qwen2MLP(nn.Module):
     def __init__(self, source):
         super().__init__()
-        self.gate_proj, self.up_proj, self.down_proj = source.gate_proj, source.up_proj, source.down_proj
+        self.gate_proj = source.gate_proj
+        self.up_proj = source.up_proj
+        self.down_proj = source.down_proj
         self.act_fn = nn.SiLU()
 
     @classmethod
@@ -122,15 +125,7 @@ def _apply_speed_optimizations():
 
 
 def test_view_padded_tensor_via_dispatch():
-    """Regression: view on padded tensor (e.g. after im2col) must succeed via dispatch path.
-
-    Padded-view handling lives in run_config.dispatch_to_torch_wrapper; torch_dispatcher.handle_view
-    stays simple (reshape only). This test ensures the run_config logic is exercised.
-    """
-    from functools import reduce
-    import operator
-
-    # Simulate padded buffer: 2965872 elements, view expects (1, 1152, 196, 4) = 903168
+    """View on a padded tensor (e.g. after im2col) must succeed via the dispatch path."""
     padded = torch.randn(2965872, dtype=torch.bfloat16)
     shape = (1, 1152, 196, 4)
     target_numel = reduce(operator.mul, shape, 1)
@@ -140,9 +135,7 @@ def test_view_padded_tensor_via_dispatch():
         def name(self):
             return "aten::view"
 
-    args = (padded, shape)
-    result = DispatchManager.dispatch_to_torch_wrapper(ViewFunc(), args, {})
-    # result may be TorchTTNNTensor-wrapped; .shape and .numel() still work
+    result = DispatchManager.dispatch_to_torch_wrapper(ViewFunc(), (padded, shape), {})
     out = result.to_torch if hasattr(result, "to_torch") else result
     assert out.shape == shape
     assert out.numel() == target_numel
@@ -158,7 +151,6 @@ def test_gr00t_inference_validation(device):
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B", trust_remote_code=True)
     model = Gr00tN1d6.from_pretrained(model_id, dtype=torch.bfloat16, trust_remote_code=True).eval()
 
-    patched = 0
     for _name, mod in model.named_modules():
         if hasattr(mod, "get_spatial_shapes") and hasattr(mod, "patch_size"):
             m = mod
@@ -172,9 +164,7 @@ def test_gr00t_inference_validation(device):
                     for _ in range(b)
                 ]
             )
-            patched += 1
-    if patched:
-        print(f"[gr00ty] Patched get_spatial_shapes on {patched} vision embeddings module(s).")
+            break
 
     try:
         env_steps = os.environ.get("TT_SYMBIOTE_NUM_INFERENCE_TIMESTEPS")
@@ -209,7 +199,6 @@ def test_gr00t_inference_validation(device):
     )
     set_device(model, device)
 
-    # Attach TTNN SigLIP position_embedding (reshape+interpolate+add on device); keep nn.Embedding in _modules
     embeddings = model.backbone.model.vision_model.vision_model.embeddings
     embeddings._ttnn_device = device
     embeddings._ttnn_pos_emb = TTNNSigLIPPositionEmbedding.from_torch(embeddings.position_embedding)
@@ -218,9 +207,7 @@ def test_gr00t_inference_validation(device):
     new_pos_emb._unique_name = "backbone.model.vision_model.vision_model.embeddings.position_embedding"
     new_pos_emb.to_device(device)
 
-    # Monkey-patch Siglip2VisionEmbeddings.forward to use TTNNSigLIPPositionEmbedding when present
     _Siglip2VisionEmbeddings_cls = type(embeddings)
-    _orig_forward = _Siglip2VisionEmbeddings_cls.forward
 
     def _patched_vision_embeddings_forward(self, pixel_values):
         bchw_list = [each.shape for each in pixel_values]
@@ -263,19 +250,17 @@ def test_gr00t_inference_validation(device):
             t_start = time.time()
             module.preprocess_weights()
             module.move_weights_to_device()
-            t_end = time.time()
-            DispatchManager.record_timing("Assimilation", name, module.__class__.__name__, {}, t_end - t_start)
+            DispatchManager.record_timing("Assimilation", name, module.__class__.__name__, {}, time.time() - t_start)
     if hasattr(new_pos_emb, "preprocess_weights"):
         t_start = time.time()
         new_pos_emb.preprocess_weights()
         new_pos_emb.move_weights_to_device()
-        t_end = time.time()
         DispatchManager.record_timing(
             "Assimilation",
             new_pos_emb._unique_name,
             "TTNNSigLIPPositionEmbedding",
             {},
-            t_end - t_start,
+            time.time() - t_start,
         )
     _sync(device)
 
@@ -312,8 +297,6 @@ def test_gr00t_inference_validation(device):
         "velocity": torch.zeros(1, action_len, model.config.max_action_dim, dtype=torch.bfloat16),
     }
 
-    print("\n[RUNNING] Hardware Inference Pass...")
-    # In DPL mode, force torch path for all ops during inference to avoid "Buffer must be allocated" (elem=None)
     _dpl_ref = os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL"
     with torch.inference_mode():
         if _dpl_ref:
@@ -327,8 +310,7 @@ def test_gr00t_inference_validation(device):
             start_pass = time.time()
             output = model(inputs=real_inputs)
             _sync(device)
-            end_pass = time.time()
-            final_inference_s = end_pass - start_pass
+            final_inference_s = time.time() - start_pass
             DispatchManager.record_timing("Inference", "Full_Inference_Graph", "End-to-End", {}, final_inference_s)
 
             backbone_in, action_in = model.prepare_input(real_inputs)
