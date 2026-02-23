@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -68,7 +69,7 @@ class KVCacheBranch:
         trans_mat_tensor,
         output_tensor,
         kv_cache_tensor,
-        kv_cache_write_index,
+        position_ids_tensor,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
     ):
@@ -82,7 +83,7 @@ class KVCacheBranch:
             cos_tensor: Cos tensor (must be sharded)
             sin_tensor: Sin tensor (must be sharded)
             kv_cache_tensor: Optional KV cache tensor in DRAM (interleaved) to write results to
-            kv_cache_write_index: Sequence position index to write to in KV cache
+            position_ids_tensor: Sequence position index to write to in KV cache
             epsilon: Epsilon for RMSNorm
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
@@ -125,6 +126,7 @@ class KVCacheBranch:
         # KV Cache tensor setup
         # Tile size is now derived from output CB in kernel using get_tile_size()
         kv_cache_buffer_addr = kv_cache_tensor.buffer_address()
+        position_ids_tensor_addr = position_ids_tensor.buffer_address()
         kv_cache_tile = kv_cache_tensor.get_tile()
         # Calculate starting tile ID based on write index
         # KV cache shape is [1, 1, seq_len, kv_dim], tiles are [32, 32]
@@ -133,8 +135,8 @@ class KVCacheBranch:
         # CONSOLIDATE!!!!!!!!!
         # Tile sizes: 1x32 = 64 bytes (BF16), 16x32 = 1024 bytes (BF16), 32x32 = 2048 bytes (BF16)
 
-        cos_cb = 0  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
-        sin_cb = 1  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
+        cos_cb = 0  # tile (NCRISC reads from DRAM)
+        sin_cb = 1  # tile (NCRISC reads from DRAM)
         trans_mat_cb = 2  # 1x32 tile, 64 bytes (sharded, 1 tile per core) - actually 32x32 for matmul
         rotated_input_interm_cb = 3  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
         cos_interm_cb = 4  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
@@ -199,7 +201,8 @@ class KVCacheBranch:
         # Sender runs on NCRISC (NOC_0 default), Receiver runs on BRISC (NOC_1 default)
         # ========================================================================
         dkv_gather_receiver_core = gamma_tensor.memory_config().shard_spec.grid.ranges()[0].start
-        dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(cos_tensor.memory_config().shard_spec.grid)
+        krope_core_grid = trans_mat_tensor.memory_config().shard_spec.grid
+        dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(krope_core_grid)
 
         # Get NOC coordinates for gather destination (receiver core)
         dkv_gather_dest_noc_core = device.worker_core_from_logical_core(dkv_gather_receiver_core)
@@ -255,18 +258,35 @@ class KVCacheBranch:
         ]
 
         # ROPE
+        rope_tile = cos_tensor.get_tile()
+        rope_tile_size = rope_tile.get_tile_size(data_format)
+        cos_tensor_address = cos_tensor.buffer_address()
+        sin_tensor_address = sin_tensor.buffer_address()
+
+        krope_Wt = 1
+        krope_Ht = 1
+        num_rope_cores = krope_core_grid.num_cores()
+        total_Wt = krope_Wt * num_rope_cores
+        rope_cores = ttnn.corerange_to_cores(krope_core_grid)
+        start_tile_offset_core_values = [(core, idx * krope_Wt) for idx, core in enumerate(rope_cores)]
+
         krope_brisc_named_compile_time_args = [
             ("k_rope_output_cb", k_rope_output_cb),
-            ("Wt", 1),  # Needed for KV Cache update
-            ("Ht", 1),  # Needed for KV Cache update
+            ("Wt", krope_Wt),
+            ("Ht", krope_Ht),
         ]
         krope_ncrisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
             ("cos_cb", cos_cb),
             ("sin_cb", sin_cb),
+            ("cos_tensor_address", cos_tensor_address),
+            ("sin_tensor_address", sin_tensor_address),
+            ("position_ids_tensor_address", position_ids_tensor_addr),
             ("trans_mat_cb", trans_mat_cb),
-            ("Wt", 1),
-            ("Ht", 1),
+            ("Wt", krope_Wt),
+            ("Ht", krope_Ht),
+            ("cos_sin_page_size", rope_tile_size),
+            ("total_Wt", total_Wt),
         ]
         krope_trisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
@@ -277,8 +297,8 @@ class KVCacheBranch:
             ("cos_interm_cb", cos_interm_cb),
             ("sin_interm_cb", sin_interm_cb),
             ("out_cb", k_rope_output_cb),
-            ("Wt", 1),
-            ("Ht", 1),
+            ("Wt", krope_Wt),
+            ("Ht", krope_Ht),
         ]
 
         # Create tile descriptor for proper tile dimensions
@@ -345,11 +365,30 @@ class KVCacheBranch:
 
         krope_tile_size = TILE_1x32.get_tile_size(data_format)
         krope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        krope_core_grid = cos_tensor.memory_config().shard_spec.grid
-        # CB X: Cos (sharded tensor)
-        cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cos_cb, cos_tensor)
-        # CB X: Sin (sharded tensor)
-        sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sin_cb, sin_tensor)
+
+        rope_tile_descriptor = ttnn.TileDescriptor(rope_tile)
+        cos_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_cb,
+            data_format=data_format,
+            page_size=rope_tile_size,
+            tile=rope_tile_descriptor,
+        )
+        cos_cb_descriptor = ttnn.CBDescriptor(
+            total_size=1 * rope_tile_size,
+            core_ranges=krope_core_grid,
+            format_descriptors=[cos_cb_format],
+        )
+        sin_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=sin_cb,
+            data_format=data_format,
+            page_size=rope_tile_size,
+            tile=rope_tile_descriptor,
+        )
+        sin_cb_descriptor = ttnn.CBDescriptor(
+            total_size=1 * rope_tile_size,
+            core_ranges=krope_core_grid,
+            format_descriptors=[sin_cb_format],
+        )
         # CB X: Trans_mat (sharded tensor)
         trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(trans_mat_cb, trans_mat_tensor)
 
@@ -439,7 +478,7 @@ class KVCacheBranch:
             # BRISC common runtime args: KV cache buffer address and write position
             brisc_common_runtime_args=[
                 kv_cache_buffer_addr,
-                kv_cache_write_index,
+                position_ids_tensor_addr,
             ],
             # TRISC named compile-time args
             trisc_named_compile_time_args=kv_rmsnorm_trisc_named_compile_time_args
@@ -479,8 +518,15 @@ class KVCacheBranch:
                 ),
                 UnifiedCompileTimeCoreDescriptor(
                     named_compile_time_arg="is_krope_core",
-                    core_range=krope_core_grid,  # TODO: could be wrong if shared cos tensor with q rope
+                    core_range=krope_core_grid,
                     value=1,
+                    other_value=0,
+                ),
+            ],
+            per_core_compile_time_descriptors=[
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="start_tile_offset",
+                    core_values=start_tile_offset_core_values,
                     other_value=0,
                 ),
             ],
@@ -511,12 +557,11 @@ class KVCacheBranch:
         )
 
         # Execute generic op
+        # cos_tensor and sin_tensor are accessed by DRAM address, not as io tensors
         io_tensors = [
             input_tensor,
             dkv_matmul_weights_tensor,
             gamma_tensor,
-            cos_tensor,
-            sin_tensor,
             trans_mat_tensor,
             kv_cache_tensor,
             output_tensor,

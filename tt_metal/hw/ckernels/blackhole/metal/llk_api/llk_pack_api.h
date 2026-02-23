@@ -150,15 +150,16 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
-    bool diagonal = false,
-    bool narrow_row = false /* unused */,
-    std::uint32_t row_num_datums = TILE_C_DIM /* unused */>
+    bool diagonal = false /* unused */,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false>
 inline void llk_pack_untilize_init(
     std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
-    static_assert(diagonal == false && "Diagonal packing is not supported for BH!");
+    static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }
 
@@ -170,10 +171,11 @@ inline void llk_pack_untilize_uninit(std::uint32_t output) {
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
-    bool diagonal = false,
-    bool narrow_row = false /* unused */,
+    bool diagonal = false /* unused */,
+    bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
-    uint32_t tile_dst_ct_offset = 0>
+    uint32_t tile_dst_ct_offset = 0,
+    bool dense = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
@@ -181,7 +183,7 @@ inline void llk_pack_untilize(
     const std::uint32_t num_faces = 4,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
-    static_assert(diagonal == false && "Diagonal packing is not supported for BH!");
+    static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
@@ -191,7 +193,7 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
             pack_tile_addr,
             pack_dst_format[output_id],
             face_r_dim,

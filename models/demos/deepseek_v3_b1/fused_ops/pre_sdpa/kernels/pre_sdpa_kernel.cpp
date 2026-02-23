@@ -69,22 +69,40 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
         get_named_compile_time_arg_val("bcast_is_sender"),
         get_named_compile_time_arg_val("bcast_core_noc_x"),
         get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender")>;
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_has_secondary_target"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+        get_named_compile_time_arg_val("bcast_range_hops_forward"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+
     if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_common_arg_val<uint32_t>(0),  // tensor_address0
-            get_common_arg_val<uint32_t>(1),  // tile_id_start
-            get_common_arg_val<uint32_t>(2),  // tile_id_end
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_common_arg_val<uint32_t>(0),   // tensor_address0
+            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(7),   // barrier_sem
+            get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(10),  // ring_index
+            get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
         };
     }
 
@@ -145,11 +163,22 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
 
     // Qrope CTArgs type alias (NCRISC uses ReaderCTArgs)
-    using QRopeCTArgs = deepseek_b1_ops::Rope::
-        ReaderCTArgs<get_named_compile_time_arg_val("qrope_Wt"), get_named_compile_time_arg_val("qrope_Ht")>;
+    using QRopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("qrope_Wt"),
+        get_named_compile_time_arg_val("qrope_Ht"),
+        get_named_compile_time_arg_val("qrope_cos_sin_page_size"),
+        get_named_compile_time_arg_val("qrope_total_Wt"),
+        get_named_compile_time_arg_val("qrope_start_tile_offset")>;
 
-    // Qrope reader args (NCRISC is no-op)
-    deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
+    deepseek_b1_ops::Rope::ReaderArgs qrope_args{
+        .in_cb = get_named_compile_time_arg_val("qrope_in_cb"),
+        .cos_cb = get_named_compile_time_arg_val("qrope_cos_cb"),
+        .sin_cb = get_named_compile_time_arg_val("qrope_sin_cb"),
+        .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
+        .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
+        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb"),
+    };
 
     // NCRISC: Sender args for QNOPE/QROPE cores
     // Senders write to intermediate CB, then compute tilizes to output CB
@@ -209,15 +238,22 @@ void kernel_main() {
     // kv cache rmsnorm reader args
     deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::
-        ReaderCTArgs<get_named_compile_time_arg_val("krope_Wt"), get_named_compile_time_arg_val("krope_Ht")>;
-    constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
-    constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-    constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
-    constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("krope_Wt"),
+        get_named_compile_time_arg_val("krope_Ht"),
+        get_named_compile_time_arg_val("krope_cos_sin_page_size"),
+        get_named_compile_time_arg_val("krope_total_Wt"),
+        get_named_compile_time_arg_val("krope_start_tile_offset")>;
 
-    // Reader args: CB indices for sharded input signaling
-    deepseek_b1_ops::Rope::ReaderArgs krope_args{};
+    deepseek_b1_ops::Rope::ReaderArgs krope_args{
+        .in_cb = get_named_compile_time_arg_val("krope_in_cb"),
+        .cos_cb = get_named_compile_time_arg_val("krope_cos_cb"),
+        .sin_cb = get_named_compile_time_arg_val("krope_sin_cb"),
+        .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
+        .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
+        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb"),
+    };
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
 // ============================================================================
@@ -227,42 +263,16 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
 
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
-        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
-        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_core_noc_x"),
-        get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
-        get_named_compile_time_arg_val("bcast_range_hops_forward"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_is_sender")>;
 
-    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+
     if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
-            get_common_arg_val<uint32_t>(0),   // tensor_address0
-            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(2),   // tile_id_start
-            get_common_arg_val<uint32_t>(3),   // tile_id_end
-            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
-            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
-            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(9),   // barrier_sem
-            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(12),  // ring_index
-            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
-        };
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
     }
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
@@ -385,8 +395,8 @@ void kernel_main() {
     deepseek_b1_ops::Rope::WriterArgs krope_args{};
 
     deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
-        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(15),
-        .position_id = get_common_arg_val<uint32_t>(16),
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
+        .position_id = get_common_arg_val<uint32_t>(1),
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
@@ -408,18 +418,21 @@ void kernel_main() {
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm2_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm2_output_cb")>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-        get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb"),
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
     };
@@ -459,11 +472,8 @@ void kernel_main() {
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
-        get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
-        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
-        get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
-        get_common_arg_val<uint32_t>(0),                       // epsilon (same as rmsnorm1)
-        get_common_arg_val<float>(2),                          // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),     // scalar (1/sqrt(1536))
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -536,13 +546,13 @@ void kernel_main() {
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_output_cb")>;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
-        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
     };
@@ -584,7 +594,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
-    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+    if constexpr (Core::is_input_core) {
         // Multi-device mode: NCRISC sets up gamma buffers while BRISC handles CCL
         // RMSNorm gamma buffer
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
@@ -624,19 +634,8 @@ void kernel_main() {
     }
 
     if constexpr (Core::is_qrope_core) {
-        // Qrope CB indices and parameters from named compile-time args
-        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("qrope_cos_cb");
-        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("qrope_sin_cb");
         constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("qrope_Wt");
-
-        // NOTE: Do NOT setup qrope input CB (matmul2_output_cb) as sharded buffer!
-        // The input to RoPE comes from matmul2 compute output, NOT from a sharded tensor.
-        // Calling setup_sharded_buffer on it would fill the CB and block matmul2's cb_reserve_back.
-        // Only setup the actual sharded tensor CBs (cos, sin, trans_mat).
-        unified_kernels::setup_sharded_buffer(qrope_cos_cb, Wt);
-        unified_kernels::setup_sharded_buffer(qrope_sin_cb, Wt);
-        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);  // trans_mat is 1 tile (32x32)
+        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
     }
 
     if constexpr (Core::is_dkv_matmul_core) {
@@ -655,12 +654,7 @@ void kernel_main() {
     }
 
     if constexpr (Core::is_krope_core) {
-        constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-        constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
         constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
-        constexpr uint32_t krope_Wt = get_named_compile_time_arg_val("krope_Wt");
-        unified_kernels::setup_sharded_buffer(krope_cos_cb, krope_Wt);
-        unified_kernels::setup_sharded_buffer(krope_sin_cb, krope_Wt);
         unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
     }
 #endif
@@ -677,24 +671,7 @@ void kernel_main() {
     }
 
 #if defined(COMPILE_FOR_NCRISC)
-    if constexpr (Core::is_input_core && Core::skip_ccl) {
-        // Single-device mode: NCRISC sets up ALL sharded buffers (input + gamma + gamma2)
-        // This matches the reference kernel behavior
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
-        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
-        constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
-
-        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
-        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
-        unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
-    }
-#endif
-
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_input_core && !Core::skip_ccl) {
-        // Multi-device mode only: BRISC sets up intermediate (broadcast output) buffer
+    if constexpr (Core::is_input_core) {
         // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
