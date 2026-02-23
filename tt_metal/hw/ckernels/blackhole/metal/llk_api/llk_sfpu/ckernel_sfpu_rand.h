@@ -10,12 +10,12 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void rand_init(uint32_t seed) {
     init_prng_seed(seed);
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void rand(uint32_t from, uint32_t scale) {
     // Load scale param to lreg1
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);

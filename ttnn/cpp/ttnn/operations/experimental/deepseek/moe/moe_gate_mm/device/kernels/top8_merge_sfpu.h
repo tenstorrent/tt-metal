@@ -431,13 +431,13 @@ inline void _top8_merge_() {
 }  // namespace sfpu
 
 inline void _llk_math_top8_merge_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, /*APPROXIMATE=*/true>(
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, /*APPROX_MODE=*/true>(
         ckernel::sfpu::_top8_merge_configure_addrmod_);
 }
 
 template <uint32_t column_idx>
 inline void _llk_math_top8_merge_() {
-    _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
+    _llk_math_eltwise_unary_sfpu_params_</*APPROX_MODE=*/true>(
         ckernel::sfpu::_top8_merge_<column_idx>, 0, VectorMode::RC_custom);
 }
 

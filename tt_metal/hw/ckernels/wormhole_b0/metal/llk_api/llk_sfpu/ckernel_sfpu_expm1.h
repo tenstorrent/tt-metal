@@ -113,9 +113,9 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_improved_<true>(sfpi::vFloat val) {
     return _sfpu_expm1_f32_accurate_(val);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_expm1() {
-    if constexpr (APPROXIMATION_MODE) {
+    if constexpr (APPROX_MODE != ckernel::ApproximationMode::Precise) {
         // Use original approximation mode
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat v = sfpi::dst_reg[0];
@@ -132,9 +132,9 @@ inline void calculate_expm1() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 void expm1_init() {
-    if constexpr (APPROXIMATION_MODE || !is_fp32_dest_acc_en) {
+    if constexpr (APPROX_MODE != ckernel::ApproximationMode::Precise || !is_fp32_dest_acc_en) {
         // Polynomial coefficients for approximation of exp on [1; 2]
         // Used by the approximation mode and bfloat16 mode
         sfpi::vConstFloatPrgm0 = 0.40196114e-7f;

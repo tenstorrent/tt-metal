@@ -13,7 +13,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_prelu(uint value) {
     // SFPU microcode
     vFloat init = Converter::as_float(value);

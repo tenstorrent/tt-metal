@@ -11,7 +11,7 @@
 namespace ckernel::sfpu {
 
 constexpr float kOneThird = 1.0f / 3.0f;
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cube_root() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
@@ -21,7 +21,7 @@ inline void calculate_cube_root() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void cube_root_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;

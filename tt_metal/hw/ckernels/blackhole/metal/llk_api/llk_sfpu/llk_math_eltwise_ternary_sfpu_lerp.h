@@ -9,11 +9,11 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
 inline void llk_math_eltwise_ternary_sfpu_lerp(
     uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_ternary_sfpu_params_<APPROXIMATE>(
-        sfpu::calculate_lerp<APPROXIMATE, is_fp32_dest_acc_en, data_format, ITERATIONS>,
+    _llk_math_eltwise_ternary_sfpu_params_<APPROX_MODE>(
+        sfpu::calculate_lerp<APPROX_MODE, is_fp32_dest_acc_en, data_format, ITERATIONS>,
         dst_index0,
         dst_index1,
         dst_index2,
@@ -21,7 +21,7 @@ inline void llk_math_eltwise_ternary_sfpu_lerp(
         vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_ternary_sfpu_lerp_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::lerp>();
 }

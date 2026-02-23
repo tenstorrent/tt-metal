@@ -10,23 +10,23 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_clamp_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::clamp, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::clamp, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_clamp(
     uint dst_index, uint min_val, uint max_val, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_clamp<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, min_val, max_val);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_clamp<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, min_val, max_val);
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_clamp_int32(
     uint dst_index, uint min_val, uint max_val, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_clamp_int32<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, min_val, max_val);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_clamp_int32<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, min_val, max_val);
 }
 
 }  // namespace ckernel

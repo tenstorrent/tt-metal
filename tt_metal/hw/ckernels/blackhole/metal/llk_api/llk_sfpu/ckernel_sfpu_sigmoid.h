@@ -38,10 +38,27 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+// sigmoid is anti-symmetric and offset by 1
+// sigmoid[-x] = 1 - sigmoid[x]
+sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat val) {
+    sfpi::vFloat result = sfpi::vConst0;
+
+    sfpi::vFloat x = sfpi::abs(val);
+
+    // Polynomial approximation of sigmoid on [0; +inf]
+    result = _sigmoid_piecewise_linear_positive_(x);
+
+    // Sigmoid is anti-symmetric and offset by 1.
+    // If input was negative then subtract result from 1.0f to get the correct result
+    v_if(val < sfpi::vConst0) { result = sfpi::vConst1 - result; }
+    v_endif;
+
+    return result;
+}
+
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
-    if constexpr (!APPROXIMATION_MODE) {
-#pragma GCC unroll 8
+    if constexpr (APPROX_MODE == ckernel::ApproximationMode::Precise) {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
@@ -57,10 +74,10 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void sigmoid_init() {
-    if constexpr (!APPROXIMATION_MODE) {
-        _init_sfpu_reciprocal_<false>();
+    if constexpr (APPROX_MODE == ckernel::ApproximationMode::Precise) {
+        _init_sfpu_reciprocal_<ckernel::ApproximationMode::Precise>();
     } else {
         sigmoid_appx_init();
     }

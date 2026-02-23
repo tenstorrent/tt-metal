@@ -10,15 +10,15 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardmish(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::hardmish<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

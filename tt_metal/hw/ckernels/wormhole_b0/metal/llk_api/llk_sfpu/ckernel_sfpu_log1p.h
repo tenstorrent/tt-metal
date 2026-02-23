@@ -15,13 +15,16 @@ namespace sfpu {
  * This function implements ln(1+x) using Chebyshev approximation for bfloat16.
  * Uses 3rd order Chebyshev polynomial approximation with range reduction.
  *
- * @tparam FAST_APPROX If true, skip NaN check for negative inputs
+ * @tparam APPROX_MODE Approximation mode selection
  * @tparam is_fp32_dest_acc_en If false, round result to bfloat16
  * @param val The input value x
  * @return Result of ln(1+val)
  */
-template <bool FAST_APPROX, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
+    static_assert(
+        APPROX_MODE == ApproximationMode::FastApproximate || APPROX_MODE == ApproximationMode::Precise,
+        "Only fast and precise approximation modes are supported");
     sfpi::vFloat abs_x = sfpi::abs(val);
     sfpi::vFloat result;
     v_if(abs_x < 0.0078125) {  // use 2^(-7) as threshold value
@@ -29,7 +32,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
     }
     v_else {
         sfpi::vFloat in = val + sfpi::vConst1;
-        result = calculate_log_body<FAST_APPROX, /*HAS_BASE_SCALING*/ false, /*is_fp32_dest_acc_en*/ true>(in, 0);
+        result = calculate_log_body<APPROX_MODE, /*HAS_BASE_SCALING*/ false, /*is_fp32_dest_acc_en*/ true>(in, 0);
     }
     v_endif;
 
@@ -187,12 +190,11 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
 }
 
 /**
- * @tparam APPROXIMATION_MODE If true, use approximation mode (for consistency with log kernel)
- * @tparam FAST_APPROX If true, skip NaN check for negative inputs
+ * @tparam APPROX_MODE Approximation mode selection
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  * @tparam ITERATIONS Number of iterations for given face
  */
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -201,7 +203,7 @@ inline void calculate_log1p() {
         if constexpr (is_fp32_dest_acc_en) {
             result = calculate_log1p_fp32<is_fp32_dest_acc_en>(in);
         } else {
-            result = calculate_log1p_bf16<FAST_APPROX, is_fp32_dest_acc_en>(in);
+            result = calculate_log1p_bf16<APPROX_MODE, is_fp32_dest_acc_en>(in);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -209,16 +211,15 @@ inline void calculate_log1p() {
 }
 
 /**
- * @tparam APPROXIMATION_MODE If true, use approximation mode (for consistency with log kernel)
- * @tparam FAST_APPROX If true, skip NaN check for negative inputs
+ * @tparam APPROX_MODE Approximation mode selection
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  */
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 inline void log1p_init() {
     if constexpr (!is_fp32_dest_acc_en) {
-        log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
+        log_init<APPROX_MODE, is_fp32_dest_acc_en>();
     } else {
-        _init_reciprocal_</*approximation_mode*/ false, /*legacy_compat*/ false>();
+        _init_reciprocal_<ckernel::ApproximationMode::Precise, false, false>();
         // Note: Unlike blackhole, _init_reciprocal_ uses 3 programmble constants
     }
 }

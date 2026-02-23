@@ -13,7 +13,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(uint value) {
     // SFPU microcode
     vFloat s = Converter::as_float(value);

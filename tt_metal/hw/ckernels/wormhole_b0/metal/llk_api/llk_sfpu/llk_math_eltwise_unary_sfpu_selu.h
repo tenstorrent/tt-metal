@@ -9,16 +9,16 @@
 #include "ckernel_sfpu_unary_selu.h"
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_selu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::selu, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::selu, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_selu(
     uint dst_index, uint scale, uint alpha, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_selu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>,
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_selu<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>,
         dst_index,
         vector_mode,
         scale,

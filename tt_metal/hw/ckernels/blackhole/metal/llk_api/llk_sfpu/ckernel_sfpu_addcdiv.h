@@ -11,7 +11,7 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_addcdiv(
     const uint dst_index_in0,  // input_a
     const uint dst_index_in1,  // input_b
@@ -40,9 +40,9 @@ inline void calculate_addcdiv(
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void init_addcdiv() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    _init_sfpu_reciprocal_<APPROX_MODE>();
 }
 
 }  // namespace ckernel::sfpu

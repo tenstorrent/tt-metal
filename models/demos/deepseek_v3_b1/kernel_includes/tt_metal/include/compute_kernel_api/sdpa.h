@@ -165,13 +165,14 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
+    ckernel::sfpu::
+        calculate_exponential<ckernel::ApproximationMode::FastApproximateClamped, DST_ACCUM_MODE, true, 4, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
 // Could potentially also skip loading prev sum if we manage lregs properly
 // TODO: Try and integrate with calculate_exponential_polynomial instead for perf
-template <bool exp_approx_mode, uint16_t scale_bf16>
+template <ckernel::ApproximationMode exp_approx_mode, uint16_t scale_bf16>
 inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_index) {
     // TODO: Can get rid of this
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, corr_exp_index + get_dest_buffer_base());
@@ -181,7 +182,7 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat curr_max_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    ckernel::sfpu::_init_sfpu_reciprocal_<ckernel::ApproximationMode::Precise>();
     sfpi::vFloat exp_top_4 = ckernel::sfpu::
         _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
             sub_top_4, scale_bf16);
@@ -207,14 +208,14 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
 // TODO: Currently hardcodes the lregs used by red max
 // Could potentially also skip loading prev sum if we manage lregs properly
 // TODO: Try and integrate with calculate_exponential_polynomial instead for perf
-template <bool exp_approx_mode, uint16_t scale_bf16>
+template <ckernel::ApproximationMode exp_approx_mode, uint16_t scale_bf16>
 inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
     // Last op should already be sum offset
     sfpi::vFloat sum_top_4 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat sum_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     // Init after to avoid trampling cached registers before we use them
     // TODO: Putting the prev regs in the upper regs lets us init ahead of time
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    ckernel::sfpu::_init_sfpu_reciprocal_<ckernel::ApproximationMode::Precise>();
     sfpi::vFloat recip_top_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_top_4);
     sfpi::vFloat recip_bottom_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_bottom_4);
 
@@ -237,7 +238,7 @@ template <
     bool transpose_k,
     bool transpose_v,
     uint32_t packed_tile_size,
-    bool exp_approx_mode = false>
+    ckernel::ApproximationMode exp_approx_mode = ckernel::ApproximationMode::Precise>
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
@@ -324,7 +325,7 @@ void compute_sdpa_chunk(
     cb_pop_front(cb_k, num_tiles_k * chunk_size);
 }
 
-template <uint32_t num_tiles_v, bool exp_approx_mode, uint16_t scale_bf16>
+template <uint32_t num_tiles_v, ckernel::ApproximationMode exp_approx_mode, uint16_t scale_bf16>
 void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t recip_dst_offset, uint32_t mm2_dst_offset) {
     PACK((recip_sum<exp_approx_mode, scale_bf16>(sum_dst_offset, recip_dst_offset)));
     PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
@@ -355,10 +356,12 @@ void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t recip_d
  * 2. exp_max_diff_2 = exp((prev_max - cur_max) * scale) * recip(cur_sum), produced in dst_reg[worker_max_base_idx]
  * fused_max_sub_exp_add_tile
  */
-template <bool SDPA_EXP_APPROX_MODE, bool final_norm = false>
+template <ckernel::ApproximationMode SDPA_EXP_APPROX_MODE, bool final_norm = false>
 void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     // Non-Approx mode for exp initializes recip for final normalization
-    static_assert(!(final_norm && SDPA_EXP_APPROX_MODE), "Approx mode must be disabled when final_norm is true");
+    static_assert(
+        !(final_norm && SDPA_EXP_APPROX_MODE != ckernel::ApproximationMode::Precise),
+        "Approx mode must be disabled when final_norm is true");
 
     // 8 rows
     constexpr int ITERATIONS_HALF_FACE = 2;
@@ -413,9 +416,12 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
  * Wrapper for fused max-sub-exp-add SFPI kernel.
  * Invokes calculate_fused_max_sub_exp_add_tile via LLK unary SFPU parameters.
  */
-template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C, bool final_norm = false>
+template <
+    ckernel::ApproximationMode SDPA_EXP_APPROX_MODE,
+    int vector_mode = (int)VectorMode::C,
+    bool final_norm = false>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_<ckernel::ApproximationMode::Precise>(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -441,7 +447,7 @@ void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
  * @param cb_l_for_init CB used for sdpa_mul_bcast_col_reuse_tiles_init
  */
 template <
-    bool SDPA_EXP_APPROX_MODE,
+    ckernel::ApproximationMode SDPA_EXP_APPROX_MODE,
     bool normalize,
     uint32_t block_size,
     uint32_t scale_fp32,
@@ -570,7 +576,7 @@ ALWI void sdpa_tail_finalize(uint32_t cb_worker_ms, uint32_t cb_prev_ms) {
  * @param cb_l_out Output L tiles
  */
 template <
-    bool SDPA_EXP_APPROX_MODE,
+    ckernel::ApproximationMode SDPA_EXP_APPROX_MODE,
     bool normalize,
     uint32_t block_size,
     uint32_t num_blocks,

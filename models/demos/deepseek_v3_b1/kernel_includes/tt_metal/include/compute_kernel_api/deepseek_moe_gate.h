@@ -48,7 +48,7 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
         // Transpose wh (FPU)
         transpose_wh_tile(icb0, 0, 0);
         // Sigmoid (SFPU)
-        sigmoid_tile<VectorMode::RC_custom, false>(0);
+        sigmoid_tile<VectorMode::RC_custom, ckernel::ApproximationMode::Precise>(0);
         // Init add binary reuse (FPU)
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             false, false, icb1)));

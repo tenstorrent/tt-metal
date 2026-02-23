@@ -16,9 +16,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = true>
+template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void erf_tile_init() {
-    MATH(SFPU_UNARY_KERNEL_INIT(erf, fast_and_approx));
+    MATH(SFPU_UNARY_KERNEL_INIT(erf, approx_mode));
 }
 
 // clang-format off
@@ -35,9 +35,9 @@ ALWI void erf_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool fast_and_approx = true>
+template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void erf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erf, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erf, RC, approx_mode, idst));
 }
 
 /************** ERFC *****************/
@@ -45,9 +45,9 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = true>
+template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void erfc_tile_init() {
-    MATH(SFPU_UNARY_KERNEL_INIT(erfc, fast_and_approx));
+    MATH(SFPU_UNARY_KERNEL_INIT(erfc, approx_mode));
 }
 
 // clang-format off
@@ -64,9 +64,9 @@ ALWI void erfc_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool fast_and_approx = true>
+template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erfc, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erfc, RC, approx_mode, idst));
 }
 
 }  // namespace ckernel

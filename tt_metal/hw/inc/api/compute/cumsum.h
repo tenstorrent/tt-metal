@@ -30,14 +30,14 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void cumsum_tile(uint32_t idst, bool first = true) {
-    MATH((llk_math_eltwise_unary_sfpu_cumsum<false>(idst, first)));  // There is only non APPROXIMATE implementation
+    MATH((llk_math_eltwise_unary_sfpu_cumsum<false>(idst, first)));  // There is only non APPROX_MODE implementation
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void cumsum_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_cumsum_init<false>()));  // There is only non APPROXIMATE implementation
+    MATH((llk_math_eltwise_unary_sfpu_cumsum_init<false>()));  // There is only non APPROX_MODE implementation
 }
 
 }  // namespace ckernel

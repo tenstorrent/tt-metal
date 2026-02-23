@@ -12,7 +12,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
 inline void calculate_tanh_derivative() {
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
@@ -37,7 +37,7 @@ inline void calculate_tanh_derivative() {
     l_reg[LRegs::LReg2] = l2;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void tanh_derivative_init() {
     uint imm0;
     uint imm1;

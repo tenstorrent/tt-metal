@@ -109,7 +109,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     return r;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tangent() {
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
     const float P0 = -0x1.92p+0f;   // representable as bf16
@@ -156,7 +156,7 @@ inline void calculate_tangent() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 static sfpi::vFloat sfpu_sinpi(sfpi::vFloat x);
 
 template <>
@@ -174,7 +174,7 @@ sfpi_inline sfpi::vFloat sfpu_sinpi<false>(sfpi::vFloat x) {
            ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sine() {
     // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-PI/2, PI/2].
     // 2. Use odd symmetry (sin(-x) = -sin(x)) via quadrant/sign tracking.
@@ -249,7 +249,7 @@ inline void calculate_sine() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosine() {
     // 1. Build an odd quadrant index j for PI/2-based reduction.
     // 2. Reduce to a in [-PI/2, PI/2] and fold sign from the quadrant parity.
@@ -338,7 +338,7 @@ inline void calculate_cosine() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vFloat t0 = sfpi::abs(val);
     sfpi::vFloat result = sfpi::vConst0;
@@ -350,7 +350,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
 
-        v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
+        v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<ckernel::ApproximationMode::Precise>(t0); }
         v_endif;
 
         sfpi::vFloat t1 = t0 * t0;
@@ -392,11 +392,11 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
+        sfpi::vFloat result = sfpu_atan<APPROX_MODE, is_fp32_dest_acc_en>(in);
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
@@ -408,7 +408,7 @@ inline void calculate_atan() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 sfpi_inline sfpi::vFloat sfpu_asine_maclaurin_series(sfpi::vFloat val) {
     // Valid for x in [-1, 1].
     // Maclaurin series
@@ -442,33 +442,33 @@ sfpi_inline sfpi::vFloat sfpu_asine_maclaurin_series(sfpi::vFloat val) {
     return output;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_asin() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else { sfpi::dst_reg[0] = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        v_else { sfpi::dst_reg[0] = sfpu_asine_maclaurin_series<APPROX_MODE>(v); }
         v_endif;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_acos() {
     // SFPU microcode
     // acos(x) = PI/2 - asin(x)
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else { sfpi::dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        v_else { sfpi::dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROX_MODE>(v); }
         v_endif;
         sfpi::dst_reg++;
     }
 }
 
 // cosh = (exp(x) + exp(-x)) / 2
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -480,7 +480,7 @@ inline void calculate_cosh() {
 }
 
 // sinh = (exp(x) - exp(-x)) / 2
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sinh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -491,7 +491,7 @@ inline void calculate_sinh() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void sine_init() {
     // P2 and P3 of four-part Cody-Waite reduction by PI.
     sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
@@ -500,7 +500,7 @@ void sine_init() {
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void cosine_init() {
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
@@ -509,7 +509,7 @@ void cosine_init() {
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void tangent_init() {
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
@@ -518,15 +518,15 @@ void tangent_init() {
     sfpi::vConstFloatPrgm2 = FRAC_2_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void init_hyperbolic_trig() {
-    _init_exponential_<APPROXIMATION_MODE, false, p_sfpu::kCONST_1_FP16B>();
+    _init_exponential_<APPROX_MODE, false, p_sfpu::kCONST_1_FP16B>();
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void atan_init() {
     // Initialisation for use of sfpu_reciprocal<false>.
-    sfpu_reciprocal_init<false>();
+    sfpu_reciprocal_init<ckernel::ApproximationMode::Precise>();
 }
 
 }  // namespace ckernel::sfpu

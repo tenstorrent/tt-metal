@@ -223,7 +223,10 @@ void calculate_recip_first_column() {
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_ < use_approximate_enum<APPROX>() !=
+                                       ckernel::ApproximationMode::Precise
+                                   ? 2
+                                   : 3 > (in);
             // Note: negate check removed since in always >= 0.0
             // v_if (in < 0.0)
             // {
@@ -259,7 +262,7 @@ void calculate_recip_first_column() {
 
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROX_MODE*/>(
         calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
 }
 #endif
@@ -305,10 +308,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
 
-    // The exponential function uses InputClamping::None for better performance. This version
+    // The exponential function uses FastApproximate (no clamping) for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
-    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, InputClamping::None>();
+    exp_tile_init<ckernel::ApproximationMode::FastApproximate, scale_fp32>();
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     cb_wait_front(in0_cb, rows * cols);
@@ -333,11 +336,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
                 constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<
-                    true /* approx */,
-                    true /* fast+approx */,
+                    ckernel::ApproximationMode::FastApproximate,
                     false /* scale_en */,
                     false /* skip +ve check */,
-                    InputClamping::None,
                     iterations>(j, vector_mode_exp);
             }
             tile_regs_commit();
@@ -824,15 +825,16 @@ void calculate_exponential_polynomial() {
 /**
  * exp_tile on only the columns 0:8 of a face
  */
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+template <ckernel::ApproximationMode SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
-    if constexpr (SDPA_EXP_APPROX_MODE) {
+    if constexpr (SDPA_EXP_APPROX_MODE != ckernel::ApproximationMode::Precise) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = ckernel::sfpu::
-                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                    val, scale_bf16);
+            sfpi::vFloat result = ckernel::sfpu::_calculate_exponential_piecewise_<
+                use_approximate_enum<EXP_APPROX_MODE>(),
+                true /*SCALE_EN*/,
+                true /*SKIP_POSITIVE_CHECK*/>(val, scale_bf16);
             sfpi::dst_reg[0] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
@@ -850,9 +852,9 @@ void calculate_exponential_first_column() {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+template <ckernel::ApproximationMode SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_<ckernel::ApproximationMode::Precise>(
         calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
 #endif
@@ -867,7 +869,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE, false>();
+    exp_tile_init<use_approximate_enum<EXP_APPROX_MODE>()>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -879,7 +881,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+        MATH((exp_tile_first_column<use_approximate_enum<EXP_APPROX_MODE>(), scale_bf16>(0)));
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
@@ -898,7 +900,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
  * 4. cur_max produced in dst_reg[cur_max_base_idx]
  * fused_max_sub_exp_add_tile
  */
-template <bool SDPA_EXP_APPROX_MODE>
+template <ckernel::ApproximationMode SDPA_EXP_APPROX_MODE>
 void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr uint32_t prev_max_base_idx = 0;      // dst_reg_0 (Tile 0)
@@ -923,12 +925,14 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                diff_worker, scale_bf16);
+        sfpi::vFloat exp_prev = ckernel::sfpu::_calculate_exponential_piecewise_<
+            use_approximate_enum<EXP_APPROX_MODE>(),
+            true /*SCALE_EN*/,
+            true /*SKIP_POSITIVE_CHECK*/>(diff_prev, scale_bf16);
+        sfpi::vFloat exp_worker = ckernel::sfpu::_calculate_exponential_piecewise_<
+            use_approximate_enum<EXP_APPROX_MODE>(),
+            true /*SCALE_EN*/,
+            true /*SKIP_POSITIVE_CHECK*/>(diff_worker, scale_bf16);
 
         // Store exponentials for optional debug/pack-out
         sfpi::dst_reg[prev_max_base_idx] = exp_prev;
@@ -945,9 +949,9 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
+template <ckernel::ApproximationMode SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_<ckernel::ApproximationMode::Precise /*APPROX_MODE*/>(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -1102,7 +1106,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 /**
  * softplus_tile on only the columns 0:8 of a face
  */
-template <bool SDPA_EXP_APPROX_MODE>
+template <ckernel::ApproximationMode SDPA_EXP_APPROX_MODE>
 void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
@@ -1115,7 +1119,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
 }
 
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROX_MODE*/>(
         calculate_softplus_first_column<APPROX>, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
 }
 #endif

@@ -9,16 +9,16 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_threshold_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::threshold, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::threshold, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_threshold(
     uint dst_index, uint32_t param0, uint32_t param1, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        static_cast<void (*)(uint32_t, uint32_t)>(ckernel::sfpu::_calculate_threshold_<APPROXIMATE, ITERATIONS>),
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        static_cast<void (*)(uint32_t, uint32_t)>(ckernel::sfpu::_calculate_threshold_<APPROX_MODE, ITERATIONS>),
         dst_index,
         vector_mode,
         param0,

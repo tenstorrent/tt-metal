@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 // SELU(x) = scale ∗ ( max(0, x) + min(0, α ∗ (exp(x)−1) ) )
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS>
 inline void calculate_selu(uint scale, uint alpha) {
     sfpi::vFloat scale_value = Converter::as_float(scale);
     sfpi::vFloat alpha_value = Converter::as_float(alpha);

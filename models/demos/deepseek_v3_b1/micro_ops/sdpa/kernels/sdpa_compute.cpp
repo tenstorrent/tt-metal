@@ -39,10 +39,11 @@ void kernel_main() {
     constexpr uint32_t mm1_dst_offset = corr_exp_dst_offset + packed_tile_size;
     constexpr uint32_t mm1_dst_tile_offset = mm1_dst_offset / packed_tile_size;
 
-    constexpr bool exp_approx_mode = false;
+    constexpr ckernel::ApproximationMode exp_approx_mode = ckernel::ApproximationMode::Precise;
 
     PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-    PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
+    PACK(SFPU_TEMPLATE_INIT_KERNEL(
+        exponential, sfpu::exp_init, ckernel::ApproximationMode::FastApproximateClamped, scale_fp32));
     sdpa_custom_mm_block_init<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
 
     // TODO: Init ahead of time

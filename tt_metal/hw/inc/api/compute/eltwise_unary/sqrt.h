@@ -15,7 +15,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sqrt_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, APPROX)); }
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise>
+ALWI void sqrt_tile_init() {
+    MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, approx_mode));
+}
 
 // clang-format off
 /**
@@ -31,9 +34,9 @@ ALWI void sqrt_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, A
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool FAST_APPROX = false>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise>
 ALWI void sqrt_tile(uint32_t idst) {
-    MATH(SFPU_FOUR_PARAM_KERNEL_ITER_FIRST_FN(calculate_sqrt, APPROX, 8, DST_ACCUM_MODE, FAST_APPROX, idst, RC));
+    MATH(SFPU_THREE_PARAM_KERNEL_ITER_FIRST(calculate_sqrt, approx_mode, 8, DST_ACCUM_MODE, idst, RC));
 }
 
 }  // namespace ckernel

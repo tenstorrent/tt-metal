@@ -10,7 +10,7 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_logical_not() {
     static_assert(
         INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::LO16 ||

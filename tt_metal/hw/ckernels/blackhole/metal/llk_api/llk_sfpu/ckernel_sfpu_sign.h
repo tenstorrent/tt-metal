@@ -12,9 +12,9 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_sign(const uint exponent_size_8) {
-    _calculate_sign_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, exponent_size_8);
+    _calculate_sign_<APPROX_MODE, ITERATIONS>(ITERATIONS, exponent_size_8);
 }
 
 }  // namespace sfpu

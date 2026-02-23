@@ -10,15 +10,15 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_rpow_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::rpow, APPROXIMATE>(sfpu::sfpu_binary_pow_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::rpow, APPROX_MODE>(sfpu::sfpu_binary_pow_init<APPROX_MODE>);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_unary_sfpu_rpow(uint dst_index, uint32_t base_val, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        sfpu::calculate_rpow<APPROXIMATE, 8, is_fp32_dest_acc_en>, dst_index, vector_mode, base_val);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        sfpu::calculate_rpow<APPROX_MODE, 8, is_fp32_dest_acc_en>, dst_index, vector_mode, base_val);
 }
 
 }  // namespace ckernel

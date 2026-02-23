@@ -10,80 +10,80 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_lt_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_lt_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::lt>,
+    _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_binary_comp_int32<APPROX_MODE, 8, SfpuType::lt>,
         dst_index0,
         dst_index1,
         odst,
         vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::gt>,
+    _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_binary_comp_int32<APPROX_MODE, 8, SfpuType::gt>,
         dst_index0,
         dst_index1,
         odst,
         vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_ge_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::ge, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::ge, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_ge_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::ge>,
+    _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_binary_comp_int32<APPROX_MODE, 8, SfpuType::ge>,
         dst_index0,
         dst_index1,
         odst,
         vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_le_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::le, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::le, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_le_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::le>,
+    _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_binary_comp_int32<APPROX_MODE, 8, SfpuType::le>,
         dst_index0,
         dst_index1,
         odst,
         vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_eq_fp32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::eq, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::eq, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_binary_sfpu_eq_fp32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::eq>,
+    _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_binary_comp_fp32<APPROX_MODE, 8, SfpuType::eq>,
         dst_index0,
         dst_index1,
         odst,

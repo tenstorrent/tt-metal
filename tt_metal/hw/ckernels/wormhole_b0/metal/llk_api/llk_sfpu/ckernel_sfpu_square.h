@@ -10,9 +10,9 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_square() {
-    _calculate_square_<APPROXIMATION_MODE, ITERATIONS>();
+    _calculate_square_<APPROX_MODE, ITERATIONS>();
 }
 
 }  // namespace ckernel::sfpu

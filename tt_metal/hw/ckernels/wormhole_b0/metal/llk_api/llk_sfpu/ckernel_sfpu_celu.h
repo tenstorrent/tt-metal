@@ -10,7 +10,7 @@
 namespace ckernel::sfpu {
 
 // CELU: alpha * (exp(x / alpha) - 1)
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_celu(uint32_t param0, uint32_t param1) {
     // All params are in FP16_B format
     // param0 = alpha

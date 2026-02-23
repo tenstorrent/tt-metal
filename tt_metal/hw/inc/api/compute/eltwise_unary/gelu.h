@@ -15,9 +15,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = true>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise>
 ALWI void gelu_tile_init() {
-    MATH(SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, fast_and_approx));
+    MATH(SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, approx_mode));
 }
 
 // clang-format off
@@ -32,12 +32,12 @@ ALWI void gelu_tile_init() {
  * | Argument         | Description                                                                | Type     | Valid Range                                           | Required |
  * |------------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | fast_and_approx  | Computation to be done faster and approximate                              | bool     |                                                       | False    |
+ * | approx_mode      | Approximation mode selection                                               | ApproximationMode | Precise, Approximate, FastApproximate, FastApproximateClamped | False |
  */
 // clang-format on
-template <bool fast_and_approx = true>
+template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu, RC, approx_mode, idst));
 }
 
 // TODO: Add gelu_derivative

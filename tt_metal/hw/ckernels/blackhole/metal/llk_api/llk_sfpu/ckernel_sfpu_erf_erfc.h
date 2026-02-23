@@ -17,7 +17,7 @@ namespace sfpu {
 #define POLYVAL5(coef4, coef3, coef2, coef1, coef0, val) \
     ((((coef4 * val + coef3) * val + coef2) * val + coef1) * val + coef0)
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 sfpi_inline vFloat calculate_erf_body(vFloat x) {
     // assume x >= 0.
     vFloat result = 1.0f;
@@ -28,21 +28,21 @@ sfpi_inline vFloat calculate_erf_body(vFloat x) {
     }
     v_else /* ( x <= 0.0f ) */ { result = 0.0f; }
     v_endif;
-    // TODO: for higher accuracy (non APPROXIMATE) mode use higher degree polynomial.
+    // TODO: for higher accuracy (non APPROX_MODE) mode use higher degree polynomial.
     return result;
 }
 
 // TODO: Fix assertion error for accurate mode
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void calculate_erf() {
     for (int d = 0; d < 8; d++) {
         // SFPU microcode:
         vFloat x = dst_reg[0];
         v_if(x < 0.0f) {
             x = -x;
-            x = -calculate_erf_body<APPROXIMATION_MODE>(x);
+            x = -calculate_erf_body<APPROX_MODE>(x);
         }
-        v_else { x = calculate_erf_body<APPROXIMATION_MODE>(x); }
+        v_else { x = calculate_erf_body<APPROX_MODE>(x); }
         v_endif;
         dst_reg[0] = x;
         dst_reg++;
@@ -50,16 +50,16 @@ inline void calculate_erf() {
 }
 
 // TODO: Fix assertion error for accurate mode
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void calculate_erfc() {
     // SFPU microcode:
     for (int d = 0; d < 8; d++) {
         vFloat x = dst_reg[0];
         v_if(x < 0.0f) {
             x = -x;
-            x = 1.0 + (calculate_erf_body<APPROXIMATION_MODE>(x));
+            x = 1.0 + (calculate_erf_body<APPROX_MODE>(x));
         }
-        v_else { x = 1.0 - (calculate_erf_body<APPROXIMATION_MODE>(x)); }
+        v_else { x = 1.0 - (calculate_erf_body<APPROX_MODE>(x)); }
         v_endif;
         dst_reg[0] = x;
         dst_reg++;

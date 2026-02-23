@@ -314,22 +314,14 @@ sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
 }
 
 template <
-    bool APPROXIMATION_MODE,
-    bool FAST_APPROX,
+    ckernel::ApproximationMode APPROX_MODE,
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false,
-    bool CLAMP_NEGATIVE = true>
+    bool SKIP_POSITIVE_CHECK = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
-    if constexpr (APPROXIMATION_MODE) {
-        _calculate_exponential_<
-            APPROXIMATION_MODE,
-            SCALE_EN,
-            ITERATIONS,
-            FAST_APPROX,
-            SKIP_POSITIVE_CHECK,
-            CLAMP_NEGATIVE>(exp_base_scale_factor);
+    if constexpr (APPROX_MODE != ckernel::ApproximationMode::Precise) {
+        _calculate_exponential_<APPROX_MODE, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>(exp_base_scale_factor);
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -343,9 +335,9 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000, bool CLAMP_NEGATIVE = true>
+template <ckernel::ApproximationMode APPROX_MODE, uint32_t scale = 0x3F800000>
 void exp_init() {
-    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale, CLAMP_NEGATIVE>();
+    _init_exponential_<APPROX_MODE, scale>();
 }
 
 }  // namespace sfpu

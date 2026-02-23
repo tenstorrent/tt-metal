@@ -285,7 +285,7 @@ inline void bitonic_top8_ph3_st4_to_1() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool idir>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, bool idir>
 inline void bitonic_top8_ph0_to_ph3() {
     // Phase 0
     {
@@ -324,7 +324,7 @@ void reverse_sort_order() {
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 inline void _deepseek_moe_gate_sum_top2() {
     constexpr bool idir = false;  // Sort descending order
     constexpr int load_store_replay_count = 8;
@@ -337,12 +337,12 @@ inline void _deepseek_moe_gate_sum_top2() {
 
     // Phase 0-3 Even Columns
     bitonic_topk_load16_concat_indices_single_face<is_fp32_dest_acc_en, 0>();
-    bitonic_top8_ph0_to_ph3<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir>();
+    bitonic_top8_ph0_to_ph3<APPROX_MODE, is_fp32_dest_acc_en, idir>();
     bitonic_topk_store8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
 
     // Phase 0-3 Odd Columns
     bitonic_topk_load16_concat_indices_single_face<is_fp32_dest_acc_en, 2>();
-    bitonic_top8_ph0_to_ph3<APPROXIMATION_MODE, is_fp32_dest_acc_en, !idir>();
+    bitonic_top8_ph0_to_ph3<APPROX_MODE, is_fp32_dest_acc_en, !idir>();
 
     // Instead of a full phase 4, we rerun phase 3 since we are only comparing top8 values
     bitonic_topk_load8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
@@ -364,7 +364,7 @@ inline void _deepseek_moe_gate_sum_top2() {
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 4);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 inline void _deepseek_moe_gate_sort_top4_groups() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // Sort top4
@@ -391,7 +391,7 @@ inline void _deepseek_moe_gate_sort_top4_groups() {
     TTI_SFPSTORE(p_sfpu::LREG6, 0, ADDR_MOD_3, bias_offset + 0);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     constexpr bool idir = false;  // Sort descending order
 
@@ -456,11 +456,11 @@ inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     // Calculate 1 / (sum + eps) * scale
     TTI_SFPCONFIG(0, 0xF, 1);
     // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROX_MODE>();
     sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value = Converter::as_float(eps);
     l0 = l0 + eps_value;
-    l0 = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
+    l0 = sfpu_reciprocal<APPROX_MODE>(l0);
     sfpi::vFloat scale_value = Converter::as_float(scale);
     l0 = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
@@ -476,12 +476,12 @@ inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 inline void _init_deepseek_moe_gate_topk() {
     // Note: For BH there is no conflict with reg usage between the gate and reciprocal
     // For WH, since we use reg 14 to broadcast, this would overwrite the recip value, so we init within the top8 fn
     // instead of ahead of time
-    // sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    // sfpu_reciprocal_init<APPROX_MODE>();
 }
 
 }  // namespace sfpu
