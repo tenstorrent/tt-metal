@@ -177,7 +177,7 @@ void kernel_main() {
             split_forwarding_enabled = true;
             // Match writer's special case: backward worker forwards half slice when num_targets_backward_direction == 1
             if (direction == 1) {
-                // slices_expected = 2;  // Receive additional slice for second half of split data
+                slices_expected++;  // Receive additional slice for second half of split data
                 writes_expected++;  // Forward the first slice (device at +1 hop)
             }
         }
@@ -285,6 +285,27 @@ void kernel_main() {
 
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                     chunk_count = 0;
+
+                    // For backward split-forwarding: wait for first half's semaphores without reading
+                    // The writer sends the FULL slice, so we need to account for all semaphores
+                    // before we can safely read the second half
+                    if (is_split_forwarded_slice && direction == 1) {
+                        uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+                        uint32_t first_half_tiles = total_tiles / 2;
+                        uint32_t skip_tiles = input_tile_id_start;
+                        uint32_t skip_end = input_tile_id_start + first_half_tiles;
+                        while (skip_tiles < skip_end) {
+                            if (chunk_count % chunks_per_sync == 0) {
+                                noc_semaphore_wait_min(
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                                sem_target++;
+                            }
+                            chunk_count++;
+                            uint32_t tiles_remaining = skip_end - skip_tiles;
+                            skip_tiles += std::min(tiles_remaining, num_tiles_to_write_per_packet);
+                        }
+                    }
+
                     while (tiles_read < tiles_to_read) {
                         if (chunk_count % chunks_per_sync == 0) {
                             noc_semaphore_wait_min(
