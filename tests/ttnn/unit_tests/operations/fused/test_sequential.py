@@ -5520,7 +5520,6 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(ln1, rms, ln2).build(device)
-        fused.dump_kernel_sources(f"/localdev/rmiller/tt-metal/tests/ttnn/unit_tests/operations/fused/debug")
         outputs = composite.launch([fused])
 
         result = ttnn.to_torch(outputs[0][0])
