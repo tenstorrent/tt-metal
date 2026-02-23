@@ -2029,7 +2029,6 @@ class MoeSharedExpertOp:
         shared_gate_weights_overlapped,
         shared_up_weights_overlapped,
         shared_down_weights_tensor,
-        shared_output_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
@@ -2040,6 +2039,7 @@ class MoeSharedExpertOp:
         mcast_grid,
         k_parallel=8,
         n_parallel=8,
+        shared_output_tensor=None,  # Deprecated: CB 38 now backed by sdpa_out_interm_buffer
         # Semaphore IDs (overridable, defaults match MoeOp layout)
         ag_receiver_semaphore_id=2,
         bg_receiver_semaphore_id=3,
@@ -2227,6 +2227,7 @@ class MoeSharedExpertOp:
         # ==================================================================
         # Output Gather (matmul cores → sender)
         # ==================================================================
+        output_gather_dst_num_pages = num_matmul_cores * down_matmul_params["out_w"]
         output_gather_params = MoeOp.setup_gather(
             device=device,
             receiver_core=sender_core,
@@ -2236,9 +2237,9 @@ class MoeSharedExpertOp:
             src_cb=shared_residual_add_out_cb,
             src_num_pages=down_matmul_params["out_w"],
             dst_cb=shared_output_gather_dst_cb,
-            dst_tensor=shared_output_tensor,
             noc0_receiver_semaphore_id=output_gather_noc0_receiver_semaphore_id,
             noc1_receiver_semaphore_id=output_gather_noc1_receiver_semaphore_id,
+            dst_num_pages=output_gather_dst_num_pages,
         )
 
         # ==================================================================
@@ -2308,7 +2309,7 @@ class MoeSharedExpertOp:
             ag_receiver_data_addr=ag_receiver_data_addr,
             bg_receiver_data_addr=bg_receiver_data_addr,
             down_mcast_dst_dummy_tensor=None,
-            output_gather_dst_dummy_tensor=shared_output_tensor,
+            output_gather_dst_dummy_tensor=None,  # CB 38 backed by sdpa_out_interm_buffer
             # Setup result dicts
             gu_matmul_params=gu_matmul_params,
             gated_reduce_params=gated_reduce_params,
@@ -3467,6 +3468,27 @@ class MoeOp:
         shared_ctx.bg_receiver_data_addr = out_addr + out_offset
         out_offset += cb31_total_size
 
+        # CB 38: shared_output_gather_dst (total_size=14336, page_size=64, tile=1x32, bfloat16)
+        cb38_offset = out_offset
+        cb38_cb_id = shared_ctx.output_gather_params["dst_cb"]
+        cb38_total_size = 14336
+        cb38_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb38_cb_id,
+            out_buf,
+            address_offset=out_offset,
+            total_size=cb38_total_size,
+        )
+        cb38_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb38_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb38_desc.format_descriptors = [cb38_fmt]
+        shared_ctx.output_gather_params["dst_cb_descriptor"] = cb38_desc
+        shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
+        out_offset += cb38_total_size
+
     @staticmethod
     def op(
         shared_residual_mcast_src_tensor,
@@ -3487,7 +3509,6 @@ class MoeOp:
         shared_gate_weights_overlapped=None,
         shared_up_weights_overlapped=None,
         shared_down_weights_tensor=None,
-        shared_output_tensor=None,
         shared_k_parallel=None,
         shared_n_parallel=None,
         epsilon=1e-6,
@@ -3516,7 +3537,6 @@ class MoeOp:
             shared_gate_weights_overlapped: Gate proj OverlappedTensor
             shared_up_weights_overlapped: Up proj OverlappedTensor
             shared_down_weights_tensor: Shared expert down weights
-            shared_output_tensor: Shared expert output tensor
             shared_k_parallel, shared_n_parallel: Shared expert parallelism factors
             enable_routing: If True, run full MoE with routing. If False, run as dense MLP.
             gate_mm_weights_tensor, gate_bias_tensor, gate_indices_tensor: Gate weights (routing only)
@@ -3575,7 +3595,6 @@ class MoeOp:
             shared_gate_weights_overlapped=shared_gate_weights_overlapped,
             shared_up_weights_overlapped=shared_up_weights_overlapped,
             shared_down_weights_tensor=shared_down_weights_tensor,
-            shared_output_tensor=shared_output_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -3698,7 +3717,6 @@ class MoeOp:
             shared_residual_mcast_src_tensor,
             shared_gate_weights_overlapped.fused_tensor,
             shared_down_weights_tensor,
-            shared_output_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
         ]

@@ -76,25 +76,11 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
         torch_gate_weights, torch_up_weights, torch_down_weights
     )
 
-    # ── Output ──
-    out_shard = ttnn.ShardSpec(sender_core_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
-    out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard)
-    ttnn_output = ttnn.from_torch(
-        torch.zeros((M, N), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=out_mem,
-        tile=out_tile,
-        **from_torch_kwargs,
-    )
-
     return {
         # TTNN tensors
         "shared_gate_weights_overlapped": gate_ov,
         "shared_up_weights_overlapped": up_ov,
         "ttnn_down_weights": ttnn_down_weights,
-        "ttnn_output": ttnn_output,
         # Params
         "k_parallel": k_parallel,
         "n_parallel": n_parallel,
@@ -483,7 +469,6 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
         shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
-        shared_output_tensor=s["ttnn_output"],
         shared_k_parallel=s["k_parallel"],
         shared_n_parallel=s["n_parallel"],
         use_hardcoded_expert_index=use_hardcoded_expert_index,
@@ -705,7 +690,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
         shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
         shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
-        shared_output_tensor=s["ttnn_output"],
         shared_k_parallel=s["k_parallel"],
         shared_n_parallel=s["n_parallel"],
         use_hardcoded_expert_index=use_hardcoded_expert_index,
@@ -875,7 +859,6 @@ def test_mlp(device):
         shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
         shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
-        shared_output_tensor=s["ttnn_output"],
         shared_k_parallel=s["k_parallel"],
         shared_n_parallel=s["n_parallel"],
         enable_routing=False,
@@ -1072,7 +1055,6 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
         shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
         shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
         shared_down_weights_tensor=s["ttnn_down_weights"],
-        shared_output_tensor=s["ttnn_output"],
         shared_k_parallel=s["k_parallel"],
         shared_n_parallel=s["n_parallel"],
         enable_routing=False,
