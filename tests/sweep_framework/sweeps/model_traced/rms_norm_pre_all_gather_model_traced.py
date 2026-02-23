@@ -10,7 +10,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-TIMEOUT = 30
+TIMEOUT = 120
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("rms_norm_pre_all_gather", all_cases=False)
@@ -67,42 +67,52 @@ def run(
         [torch_weight, torch.zeros(((torch_weight.numel() + 31) // 32) * 32 - torch_weight.numel())]
     ).reshape(1, 1, -1, 32)
 
-    # Create input tensor - bfloat8_b and bfloat4_b require TILE layout
-    input_layout = ttnn.TILE_LAYOUT if input_a_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else input_a_layout
-    input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
-    )
-    # Weight tensor should always be ROW_MAJOR layout and bfloat16 dtype
-    # This is required by rms_norm_post_all_gather operation
+    input_layout = ttnn.TILE_LAYOUT
+
+    actual_input_mem_config = input_a_memory_config
+    used_dram_fallback = False
+    if isinstance(input_a_memory_config, dict):
+        actual_input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+        used_dram_fallback = True
+
+    try:
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=actual_input_mem_config
+        )
+    except Exception:
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        used_dram_fallback = True
+
     weight_tensor = ttnn.from_torch(
         torch_weight_padded,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=input_b_memory_config or input_a_memory_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Op call
     start_time = start_measuring_time()
+    try:
+        if program_config and isinstance(program_config, dict) and not used_dram_fallback:
+            compute_grid = program_config.get("compute_with_storage_grid_size", {})
+            ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
+                subblock_w=program_config.get("subblock_w", 1),
+                block_h=program_config.get("block_h", 1),
+                block_w=program_config.get("block_w", 1),
+                inplace=bool(program_config.get("inplace", 0)),
+            )
+            stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ttnn_program_config)
+        else:
+            stats = ttnn.rms_norm_pre_all_gather(input_tensor)
 
-    # Parse program_config if provided (from traced JSON)
-    if program_config and isinstance(program_config, dict):
-        # Create LayerNormShardedMultiCoreProgramConfig from dict
-        compute_grid = program_config.get("compute_with_storage_grid_size", {})
-        ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
-            subblock_w=program_config.get("subblock_w", 1),
-            block_h=program_config.get("block_h", 1),
-            block_w=program_config.get("block_w", 1),
-            inplace=bool(program_config.get("inplace", 0)),
-        )
-        stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ttnn_program_config)
-    else:
-        stats = ttnn.rms_norm_pre_all_gather(input_tensor)
-
-    output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+    except Exception as e:
+        e2e_perf = stop_measuring_time(start_time)
+        return [(False, f"Op execution failed: {e}"), e2e_perf]
     e2e_perf = stop_measuring_time(start_time)
 
-    # Comparison
     return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]

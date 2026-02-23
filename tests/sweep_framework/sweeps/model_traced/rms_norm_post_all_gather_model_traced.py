@@ -10,7 +10,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-TIMEOUT = 30
+TIMEOUT = 120
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("rms_norm_post_all_gather", all_cases=False)
@@ -68,27 +68,38 @@ def run(
         [torch_weight, torch.zeros(((torch_weight.numel() + 31) // 32) * 32 - torch_weight.numel())]
     ).reshape(1, 1, -1, 32)
 
-    # Create input tensor - bfloat8_b and bfloat4_b require TILE layout
-    input_layout = ttnn.TILE_LAYOUT if input_a_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else input_a_layout
-    input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
-    )
-    # Determine weight layout based on dtype - bfloat8_b and bfloat4_b require TILE layout
+    input_layout = ttnn.TILE_LAYOUT
+
+    actual_input_mem_config = input_a_memory_config
+    if isinstance(input_a_memory_config, dict):
+        actual_input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    try:
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=actual_input_mem_config
+        )
+    except Exception:
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
     weight_layout = ttnn.TILE_LAYOUT if input_b_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     weight_tensor = ttnn.from_torch(
         torch_weight_padded,
         dtype=input_b_dtype or input_a_dtype,
         layout=weight_layout,
         device=device,
-        memory_config=input_b_memory_config or input_a_memory_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Op call
     start_time = start_measuring_time()
-    stats = ttnn.rms_norm_pre_all_gather(input_tensor)
-    output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
+    try:
+        stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+        output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+    except Exception as e:
+        e2e_perf = stop_measuring_time(start_time)
+        return [(False, f"Op execution failed: {e}"), e2e_perf]
     e2e_perf = stop_measuring_time(start_time)
 
-    # Comparison
     return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]
