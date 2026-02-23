@@ -5,7 +5,9 @@
 #include "matmul_add_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>  // for div_up and round_up
 namespace ttnn::operations::onboarding {
 
 MatmulAddOperation::program_factory_t MatmulAddOperation::select_program_factory(
@@ -34,14 +36,24 @@ MatmulAddOperation::spec_return_value_t MatmulAddOperation::compute_output_specs
     // Output: (M, N)
     ttnn::SmallVector<uint32_t> out_shape = {a_shape[-2], b_shape[-1]};
 
+    auto M = out_shape[0];
+    auto N = out_shape[1];
+    auto grid_size = tensor_args.a.device()->compute_with_storage_grid_size();
+    auto Mt = M / tt::constants::TILE_HEIGHT;
+    auto num_cores = Mt;                           // — one core per tile-row, capped by device
+    auto shard_height = tt::div_up(M, num_cores);  // — round up to TILE_HEIGHT
+    CoreRangeSet grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
+    auto shard_spec = tt::tt_metal::ShardSpec{grid, {shard_height, N}};
+
     return TensorSpec(
         Shape(out_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.a.dtype(),
             tt::tt_metal::PageConfig(tensor_args.a.layout()),
             MemoryConfig{
-                TensorMemoryLayout::INTERLEAVED,
+                TensorMemoryLayout::HEIGHT_SHARDED,
                 BufferType::L1,
+                shard_spec,
             }));
 }
 
