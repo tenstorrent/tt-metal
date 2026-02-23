@@ -361,9 +361,6 @@ def test_forward_pass_new_moe_gate(
     # Get state dict from actual model or use synthetic weights
     torch.use_deterministic_algorithms(True)
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
-    import pdb
-
-    pdb.set_trace()
 
     # IMPORTANT: Initialize bias to zeros to avoid uninitialized memory values
     # The default model has uninitialized bias which causes non-deterministic behavior
@@ -411,6 +408,8 @@ def test_forward_pass_new_moe_gate(
     reference_topk_indices, reference_topk_weights = reference_model(torch_input)
 
     torch_input_new_moe_gate = torch.reshape(torch_input, (batch_size, seq_len, -1, 16, 16))
+    # the input is (1, 128, 28, 16, 16)
+    # since mesh shape is 4*8, we divide the input by row-wise, so each row will receive (1, 32, 28, 16, 16)
 
     # Convert input to TTNN
     # since each input will take 28 cores, and there are only 70 cores in total
