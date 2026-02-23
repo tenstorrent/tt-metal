@@ -180,7 +180,7 @@ class TestImportGraphUnit:
         rows = cursor.fetchall()
 
         assert len(rows) == 1
-        assert rows[0][0] == 0
+        assert rows[0][0] == 1
         assert "frame1" in rows[0][1]
         assert stats.get("stack_traces", 0) == 1
 
@@ -310,7 +310,7 @@ class TestImportGraphUnit:
         rows = cursor.fetchall()
 
         assert len(rows) == 1
-        assert rows[0][0] == 0  # operation_id
+        assert rows[0][0] == 1  # operation_id
         assert rows[0][1] == 0  # device_id
         assert rows[0][2] == 12345  # address
         assert rows[0][3] == 4096  # size
@@ -409,13 +409,13 @@ class TestImportGraphUnit:
         cursor.execute("SELECT operation_id, address FROM buffers ORDER BY operation_id, address")
         rows = cursor.fetchall()
 
-        op_0_buffers = [r[1] for r in rows if r[0] == 0]
         op_1_buffers = [r[1] for r in rows if r[0] == 1]
         op_2_buffers = [r[1] for r in rows if r[0] == 2]
+        op_3_buffers = [r[1] for r in rows if r[0] == 3]
 
-        assert op_0_buffers == [1000], f"op_A should have 1 buffer, got {op_0_buffers}"
-        assert op_1_buffers == [1000, 2000], f"op_B should have 2 cumulative buffers, got {op_1_buffers}"
-        assert op_2_buffers == [1000, 2000, 3000], f"op_C should have 3 cumulative buffers, got {op_2_buffers}"
+        assert op_1_buffers == [1000], f"op_A should have 1 buffer, got {op_1_buffers}"
+        assert op_2_buffers == [1000, 2000], f"op_B should have 2 cumulative buffers, got {op_2_buffers}"
+        assert op_3_buffers == [1000, 2000, 3000], f"op_C should have 3 cumulative buffers, got {op_3_buffers}"
 
         assert len(rows) == 6  # 1 + 2 + 3
         conn.close()
@@ -1691,7 +1691,7 @@ class TestLinearModelImport:
         """
         conn, cursor = self._import_linear_graph(tmp_path)
 
-        cursor.execute("SELECT input_index, tensor_id FROM input_tensors WHERE operation_id = 4 ORDER BY input_index")
+        cursor.execute("SELECT input_index, tensor_id FROM input_tensors WHERE operation_id = 5 ORDER BY input_index")
         rows = cursor.fetchall()
 
         assert len(rows) == 3, f"MatmulDeviceOperation should have 3 inputs, got {len(rows)}"
@@ -1706,7 +1706,7 @@ class TestLinearModelImport:
         """Each Tensor::to_device should take one host tensor as input."""
         conn, cursor = self._import_linear_graph(tmp_path)
 
-        cursor.execute("SELECT operation_id, tensor_id FROM input_tensors WHERE operation_id < 3 ORDER BY operation_id")
+        cursor.execute("SELECT operation_id, tensor_id FROM input_tensors WHERE operation_id < 4 ORDER BY operation_id")
         rows = cursor.fetchall()
 
         assert len(rows) == 3
@@ -1724,11 +1724,11 @@ class TestLinearModelImport:
         rows = cursor.fetchall()
 
         output_map = {r[0]: int(r[2]) if isinstance(r[2], str) else r[2] for r in rows}
-        assert output_map[0] == 1, "to_device #1 output should be tensor 1"
-        assert output_map[1] == 3, "to_device #2 output should be tensor 3"
-        assert output_map[2] == 5, "to_device #3 output should be tensor 5"
-        assert output_map[3] == 7, "create_device_tensor output should be tensor 7"
-        assert output_map[4] == 7, "MatmulDeviceOperation output should be tensor 7"
+        assert output_map[1] == 1, "to_device #1 output should be tensor 1"
+        assert output_map[2] == 3, "to_device #2 output should be tensor 3"
+        assert output_map[3] == 5, "to_device #3 output should be tensor 5"
+        assert output_map[4] == 7, "create_device_tensor output should be tensor 7"
+        assert output_map[5] == 7, "MatmulDeviceOperation output should be tensor 7"
         conn.close()
 
     def test_buffer_sizes_are_per_bank_not_total(self, tmp_path):
@@ -1760,14 +1760,14 @@ class TestLinearModelImport:
     def test_buffers_are_cumulative_per_operation(self, tmp_path):
         """
         Regression: the correct DB has cumulative buffer snapshots per operation.
-        op 0: 1 buffer, op 1: 2 buffers, op 2: 3 buffers, op 3: 4 buffers, op 4: 5 buffers.
+        op 1: 1 buffer, op 2: 2 buffers, op 3: 3 buffers, op 4: 4 buffers, op 5: 5 buffers.
         """
         conn, cursor = self._import_linear_graph(tmp_path)
 
         cursor.execute("SELECT operation_id, COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
         rows = cursor.fetchall()
 
-        expected_counts = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}
+        expected_counts = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
         actual_counts = {r[0]: r[1] for r in rows}
 
         assert actual_counts == expected_counts, (
