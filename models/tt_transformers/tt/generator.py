@@ -655,6 +655,9 @@ class Generator(WarmupForwardMixin):
             assert (
                 len(set(sampling_dp_values)) == 1
             ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+            # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
+            # (one is always 1). If a future model needs both DP>1 and row-sharded
+            # sampling, this should become data_parallel * sampling_dp_values[0].
             sampling_dp = max(self.data_parallel, sampling_dp_values[0])
 
             sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
