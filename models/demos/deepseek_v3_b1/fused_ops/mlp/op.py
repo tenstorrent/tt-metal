@@ -21,13 +21,21 @@ Pipeline (dense MLP):
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeRoutedExpertOp, MoeSharedExpertOp
+from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import (
+    MESH_LEAF,
+    MESH_ROOT1,
+    MESH_ROOT2,
+    MESH_ROOT3,
+    get_reduce_device_role,
+)
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
+    PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -126,6 +134,18 @@ class _MlpRoutedExpertContext:
     vc_core_values: list
     sender_idx_core_values: list
 
+    # ReduceToOne
+    enable_reduce_to_one: bool = False
+    reduce_local_cb: int = 0
+    reduce_received_cb_r1: int = 0
+    reduce_received_cb_r2: int = 0
+    reduce_received_cb_r3: int = 0
+    reduce_output_cb: int = 0
+    reduce_scratch_cb: int = 0
+    reduce_packet_cb: int = 0
+    reduce_packet_header_cb: int = 0
+    reduce_params: dict = None
+
 
 class MlpRoutedExpertOp:
     """
@@ -137,17 +157,18 @@ class MlpRoutedExpertOp:
 
     @staticmethod
     def setup_eltwise_mul_no_scalar(
-        in0_tensor,
-        in1_tensor,
-        out_tensor,
         cb_in0_index,
         cb_in1_index,
         cb_out_index,
         per_core_n,
+        in0_tensor=None,
+        in1_tensor=None,
+        out_tensor=None,
     ):
         """
         Set up parameters and CB descriptors for element-wise multiply without scalar (MLP mode).
         Same as MoeRoutedExpertOp.setup_eltwise_mul but without scalar CBs.
+        When tensors are None, their CB descriptors are deferred to the overlap function.
         """
         M = 1
         tile_width = 32
@@ -158,23 +179,26 @@ class MlpRoutedExpertOp:
         tile_16x16_size = TILE_16x16.get_tile_size(ttnn.bfloat16)
         tile_16x16_desc = ttnn.TileDescriptor(TILE_16x16)
 
-        # CB for in0: alias of in0_tensor with 16x16 tile format
-        cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
-        cb_in0_descriptor.total_size = mul_num_tiles * tile_16x16_size
-        cb_in0_descriptor.format_descriptors[0].tile = tile_16x16_desc
-        cb_in0_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        cb_in0_descriptor = None
+        if in0_tensor is not None:
+            cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
+            cb_in0_descriptor.total_size = mul_num_tiles * tile_16x16_size
+            cb_in0_descriptor.format_descriptors[0].tile = tile_16x16_desc
+            cb_in0_descriptor.format_descriptors[0].page_size = tile_16x16_size
 
-        # CB for in1: alias of in1_tensor with 16x16 tile format
-        cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
-        cb_in1_descriptor.total_size = mul_num_tiles * tile_16x16_size
-        cb_in1_descriptor.format_descriptors[0].tile = tile_16x16_desc
-        cb_in1_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        cb_in1_descriptor = None
+        if in1_tensor is not None:
+            cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
+            cb_in1_descriptor.total_size = mul_num_tiles * tile_16x16_size
+            cb_in1_descriptor.format_descriptors[0].tile = tile_16x16_desc
+            cb_in1_descriptor.format_descriptors[0].page_size = tile_16x16_size
 
-        # CB for out: output with 16x16 tile format (tensor-backed)
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
-        cb_out_descriptor.total_size = mul_num_tiles * tile_16x16_size
-        cb_out_descriptor.format_descriptors[0].tile = tile_16x16_desc
-        cb_out_descriptor.format_descriptors[0].page_size = tile_16x16_size
+        cb_out_descriptor = None
+        if out_tensor is not None:
+            cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
+            cb_out_descriptor.total_size = mul_num_tiles * tile_16x16_size
+            cb_out_descriptor.format_descriptors[0].tile = tile_16x16_desc
+            cb_out_descriptor.format_descriptors[0].page_size = tile_16x16_size
 
         return {
             "mul_num_tiles": mul_num_tiles,
@@ -189,66 +213,61 @@ class MlpRoutedExpertOp:
 
     @staticmethod
     def _setup_dimensions(
-        input_tensor,
-        mcast_output_tensor,
-        gate_proj_weights_tensor,
-        gate_proj_output_tensor,
-        up_proj_weights_tensor,
-        up_proj_mm_out_tensor,
-        fused_output_tensor,
-        down_proj_gather_output_tensor,
-        down_proj_mcast_output_tensor,
-        down_proj_weights_tensor,
-        down_proj_output_tensor,
-        fused_add_tensor,
-        final_output_tensor,
-        gate_proj_in1_buf_tensor,
-        down_proj_in1_buf_tensor,
         shared_residual_mcast_src_tensor,
-        shared_residual_mcast_dst_tensor,
+        gate_proj_weights_tensor,
+        up_proj_weights_tensor,
+        down_proj_weights_tensor,
+        final_output_tensor,
         rmsnorm_gamma_tensor,
         epsilon=1e-6,
+        use_hardcoded_expert_index=False,
+        reduce_intermediate_tensors=None,
+        reduce_output_tensor=None,
+        reduce_semaphores=None,
+        reduce_root_coord=None,
+        # Semaphore IDs (caller-provided, see MlpOp for top-level definitions)
+        mcast_data_sender_semaphore_id=0,
+        mcast_data_receiver_semaphore_id=1,
+        gather_noc0_receiver_semaphore_id=2,
+        gather_noc1_receiver_semaphore_id=3,
+        residual_mcast_receiver_semaphore_id=5,
     ):
-        """Compute all dimensions, grids, setup params, CB descriptors, and per-core values."""
+        """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
+
+        Non-weight tensors (input, mcast_output, gate_proj_output, up_proj_mm_out, fused_output,
+        down_proj_gather_output, down_proj_mcast_output, down_proj_output, fused_add,
+        gate_proj_in1_buf, down_proj_in1_buf, residual_mcast_dst) are no longer needed — their
+        configuration info is derived from device properties and weight tensor shapes. Their CB
+        descriptors are overridden by _overlap_cbs_with_sdpa_buffer in the production path.
+        """
 
         # ==================================================================
-        # Tensor properties
+        # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
         # ==================================================================
-        data_format = input_tensor.dtype
+        data_format = shared_residual_mcast_src_tensor.dtype
         TILE_1x32 = ttnn.Tile((1, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
-        K = input_tensor.shape[1]
+        K = shared_residual_mcast_src_tensor.shape[1]
         num_tiles_k = K // TILE_1x32.tile_shape[1]
 
-        # Sender core (from input tensor's shard spec)
-        input_core_grid = input_tensor.memory_config().shard_spec.grid
+        input_core_grid = shared_residual_mcast_src_tensor.memory_config().shard_spec.grid
         sender_core = list(input_core_grid.ranges())[0].start
 
-        # Device & mesh
-        mesh_device = input_tensor.device()
+        mesh_device = shared_residual_mcast_src_tensor.device()
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
-        device = ttnn.get_device_tensors(input_tensor)[0].device()
+        device = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0].device()
 
-        # Core grids
-        gate_proj_core_ranges = gate_proj_output_tensor.memory_config().shard_spec.grid
-        mcast_grid = mcast_output_tensor.memory_config().shard_spec.grid
+        gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
+        mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
         num_gate_proj_cores = gate_proj_core_ranges.num_cores()
 
         # Full device grid
         full_device_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
-
-        # ==================================================================
-        # Semaphore IDs (no expert_scale_mcast — fewer needed)
-        # ==================================================================
-        mcast_data_sender_semaphore_id = 0
-        mcast_data_receiver_semaphore_id = 1
-        gather_noc0_receiver_semaphore_id = 2
-        gather_noc1_receiver_semaphore_id = 3
-        residual_mcast_receiver_semaphore_id = 5
 
         # ==================================================================
         # CB indices (skip gate_mm CBs 2-8, gate_proj_cb_index 10, mul_scalar CBs 20-21)
@@ -269,6 +288,16 @@ class MlpRoutedExpertOp:
         add_cb_in0 = 22
         add_cb_in1 = 23
         add_cb_out = 24
+        # ReduceToOne CBs (for multi-device reduce)
+        # Must be after shared expert CBs (25-38) to avoid conflicts
+        reduce_local_cb = add_cb_out  # Local data CB (same as add_cb_out for fusion)
+        reduce_received_cb_r1 = 39  # Round 1: receives LEAF data
+        reduce_received_cb_r2 = 40  # Round 2: receives ROOT3 data
+        reduce_received_cb_r3 = 41  # Round 3: receives ROOT2 data
+        reduce_output_cb = 42  # Final reduced output
+        reduce_scratch_cb = 43  # Scratch for compute
+        reduce_packet_cb = 44  # Scratch for sending packets
+        reduce_packet_header_cb = 45  # Packet header (persistent)
         # Shared expert CBs (defined in MoeSharedExpertOp)
         residual_mcast_src_cb = MoeSharedExpertOp.RESIDUAL_MCAST_SRC_CB
         residual_mcast_dst_cb = MoeSharedExpertOp.RESIDUAL_MCAST_DST_CB
@@ -302,7 +331,7 @@ class MlpRoutedExpertOp:
             src_cb=residual_mcast_src_cb,
             src_tensor=shared_residual_mcast_src_tensor,
             dst_cb=residual_mcast_dst_cb,
-            dst_tensor=shared_residual_mcast_dst_tensor,
+            dst_tensor=None,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
             receiver_semaphore_id=residual_mcast_receiver_semaphore_id,
             data_size_bytes=residual_mcast_data_size_bytes,
@@ -312,7 +341,9 @@ class MlpRoutedExpertOp:
         # ==================================================================
         # RMSNorm
         # ==================================================================
-        rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(rmsnorm_output_cb, input_tensor)
+        rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            rmsnorm_output_cb, shared_residual_mcast_src_tensor
+        )
         rmsnorm_output_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
         rmsnorm_output_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
 
@@ -333,17 +364,18 @@ class MlpRoutedExpertOp:
             sender_core=sender_core,
             mcast_grid=mcast_grid,
             src_cb=rmsnorm_output_cb,
-            src_tensor=input_tensor,
+            src_tensor=None,
             dst_cb=gate_mm_input_cb,
-            dst_tensor=mcast_output_tensor,
+            dst_tensor=None,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
             receiver_semaphore_id=mcast_data_receiver_semaphore_id,
             data_size_bytes=rmsnorm_mcast_data_size_bytes,
+            src_num_pages=num_tiles_k,
         )
         rmsnorm_mcast_params["src_num_pages"] = rmsnorm_num_tiles
 
-        # Pre-built CB descriptors
-        gate_mm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_mm_input_cb, mcast_output_tensor)
+        # CB descriptor placeholder — overridden by _overlap_cbs_with_sdpa_buffer
+        gate_mm_input_cb_descriptor = None
 
         # ==================================================================
         # No Gate MM, Gate MM Gather, Gate, Index Mcast, Expert Scale Mcast
@@ -355,8 +387,6 @@ class MlpRoutedExpertOp:
         gate_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
             weights_tensor=gate_proj_weights_tensor,
-            output_tensor=gate_proj_output_tensor,
-            working_buf_tensor=gate_proj_in1_buf_tensor,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
@@ -370,8 +400,6 @@ class MlpRoutedExpertOp:
         up_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
             weights_tensor=up_proj_weights_tensor,
-            output_tensor=up_proj_mm_out_tensor,
-            working_buf_tensor=gate_proj_in1_buf_tensor,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
@@ -383,9 +411,6 @@ class MlpRoutedExpertOp:
         # Eltwise Mul: silu(gate_proj) * up_proj (no expert_scale)
         # ==================================================================
         mul_params = MlpRoutedExpertOp.setup_eltwise_mul_no_scalar(
-            in0_tensor=up_proj_mm_out_tensor,
-            in1_tensor=gate_proj_output_tensor,
-            out_tensor=fused_output_tensor,
             cb_in0_index=mul_cb_in0,
             cb_in1_index=mul_cb_in1,
             cb_out_index=mul_cb_out,
@@ -397,6 +422,7 @@ class MlpRoutedExpertOp:
         # down_proj Gather
         # ==================================================================
         down_proj_gather_data_size_bytes = gate_proj_params["per_core_n"] * tile_1x32_size
+        down_proj_gather_dst_num_pages = gate_proj_params["per_core_n"] * num_gate_proj_cores
         down_proj_gather_params = MoeOp.setup_gather(
             device=device,
             receiver_core=sender_core,
@@ -406,32 +432,30 @@ class MlpRoutedExpertOp:
             src_cb=mul_cb_out,
             src_num_pages=mul_num_tiles,
             dst_cb=down_proj_gather_dst_cb,
-            dst_tensor=down_proj_gather_output_tensor,
             noc0_receiver_semaphore_id=gather_noc0_receiver_semaphore_id,
             noc1_receiver_semaphore_id=gather_noc1_receiver_semaphore_id,
             row_major=True,
             use_explicit_sender_index=True,
+            dst_num_pages=down_proj_gather_dst_num_pages,
         )
 
         # ==================================================================
         # down_proj Mcast
         # ==================================================================
-        fused_output_shard = down_proj_gather_output_tensor.memory_config().shard_spec.shape
-        down_proj_mcast_num_tiles = (fused_output_shard[0] * fused_output_shard[1]) // (
-            TILE_1x32.tile_shape[0] * TILE_1x32.tile_shape[1]
-        )
+        down_proj_mcast_num_tiles = down_proj_gather_dst_num_pages
         down_proj_mcast_data_size_bytes = down_proj_mcast_num_tiles * tile_1x32_size
         down_proj_mcast_params = MoeOp.setup_mcast(
             device=device,
             sender_core=sender_core,
             mcast_grid=mcast_grid,
             src_cb=down_proj_gather_dst_cb,
-            src_tensor=down_proj_gather_output_tensor,
+            src_tensor=None,
             dst_cb=down_proj_mcast_dst_cb,
-            dst_tensor=down_proj_mcast_output_tensor,
+            dst_tensor=None,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
             receiver_semaphore_id=mcast_data_receiver_semaphore_id,
             data_size_bytes=down_proj_mcast_data_size_bytes,
+            src_num_pages=down_proj_mcast_num_tiles,
         )
 
         # ==================================================================
@@ -440,8 +464,6 @@ class MlpRoutedExpertOp:
         down_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
             weights_tensor=down_proj_weights_tensor,
-            output_tensor=down_proj_output_tensor,
-            working_buf_tensor=down_proj_in1_buf_tensor,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
@@ -452,14 +474,136 @@ class MlpRoutedExpertOp:
         # ==================================================================
         # Eltwise Add: down_proj + fused_add
         # ==================================================================
+        down_proj_width_per_core = down_proj_params["per_core_n"] * 32
+        down_proj_total_width = down_proj_width_per_core * num_gate_proj_cores
         add_params = MoeRoutedExpertOp.setup_eltwise_add(
-            in0_tensor=down_proj_output_tensor,
-            in1_tensor=fused_add_tensor,
-            out_tensor=final_output_tensor,
             cb_in0_index=add_cb_in0,
             cb_in1_index=add_cb_in1,
             cb_out_index=add_cb_out,
+            width_per_core=down_proj_width_per_core,
+            total_width=down_proj_total_width,
+            core_ranges=gate_proj_core_ranges,
+            out_tensor=final_output_tensor,
         )
+
+        # ==================================================================
+        # ReduceToOne Setup
+        # ==================================================================
+        enable_reduce_to_one = (
+            reduce_intermediate_tensors is not None
+            and reduce_output_tensor is not None
+            and reduce_semaphores is not None
+            and reduce_root_coord is not None
+            and mesh_rows == 4
+            and mesh_cols == 2
+        )
+
+        reduce_params = {}
+        if enable_reduce_to_one:
+            # Get semaphore addresses
+            reduce_sem_round1_addr = ttnn.get_global_semaphore_address(reduce_semaphores[0])
+            reduce_sem_round2_addr = ttnn.get_global_semaphore_address(reduce_semaphores[1])
+            reduce_sem_round3_addr = ttnn.get_global_semaphore_address(reduce_semaphores[2])
+            reduce_sem_exit_addr = ttnn.get_global_semaphore_address(reduce_semaphores[3])
+
+            # Get per-device tensors for reduce
+            reduce_intermediate_r1_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors[0])
+            reduce_intermediate_r2_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors[1])
+            reduce_intermediate_r3_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors[2])
+            reduce_output_per_device = ttnn.get_device_tensors(reduce_output_tensor)
+
+            # Calculate reduce tensor properties
+            reduce_sample = reduce_intermediate_r1_per_device[0]
+            reduce_element_size = 2  # bfloat16
+
+            reduce_shard_spec = reduce_sample.memory_config().shard_spec
+            reduce_shard_shape = reduce_shard_spec.shape
+
+            # Compute tiles use 32x32 format
+            reduce_compute_tile_h = 32
+            reduce_compute_tile_w = 32
+            reduce_compute_tile_size = reduce_compute_tile_h * reduce_compute_tile_w * reduce_element_size
+            reduce_shard_elements = reduce_shard_shape[0] * reduce_shard_shape[1]
+            reduce_num_tiles = (reduce_shard_elements + (reduce_compute_tile_h * reduce_compute_tile_w) - 1) // (
+                reduce_compute_tile_h * reduce_compute_tile_w
+            )
+
+            reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
+            reduce_packet_header_size = 96
+            reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
+
+            # Worker cores from final_output_tensor shard grid (same as gate_proj cores)
+            reduce_worker_grid = final_output_tensor.memory_config().shard_spec.grid
+            reduce_worker_cores_list = ttnn.corerange_to_cores(reduce_worker_grid, row_wise=True)
+            reduce_num_workers = len(reduce_worker_cores_list)
+
+            # Build core -> column mapping for fabric core assignment
+            reduce_column_to_cores = {}
+            for core in reduce_worker_cores_list:
+                x = core.x
+                if x not in reduce_column_to_cores:
+                    reduce_column_to_cores[x] = []
+                reduce_column_to_cores[x].append(core)
+
+            reduce_sorted_columns = sorted(reduce_column_to_cores.keys())
+            for x in reduce_sorted_columns:
+                reduce_column_to_cores[x].sort(key=lambda c: c.y)
+
+            reduce_num_columns = len(reduce_sorted_columns)
+            reduce_num_workers_per_column = len(reduce_column_to_cores[reduce_sorted_columns[0]])
+
+            # Fabric cores: one per column, placed to the right of bottom core
+            reduce_fabric_cores = []
+            reduce_column_to_fabric_core = {}
+            for x in reduce_sorted_columns:
+                bottom_core = max(reduce_column_to_cores[x], key=lambda c: c.y)
+                fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
+                reduce_fabric_cores.append(fabric_core)
+                reduce_column_to_fabric_core[x] = fabric_core
+
+            # Core to slot index within column
+            reduce_core_to_slot_idx = {}
+            for x in reduce_sorted_columns:
+                for slot_idx, core in enumerate(reduce_column_to_cores[x]):
+                    reduce_core_to_slot_idx[(core.x, core.y)] = slot_idx
+
+            # Core to shard index
+            reduce_core_to_shard_idx = {}
+            for shard_idx, core in enumerate(reduce_worker_cores_list):
+                reduce_core_to_shard_idx[(core.x, core.y)] = shard_idx
+
+            # Get output core from reduce_output_tensor
+            reduce_output_sample = reduce_output_per_device[0]
+            reduce_output_shard_spec = reduce_output_sample.memory_config().shard_spec
+            reduce_output_core = reduce_output_shard_spec.grid.ranges()[0].start
+
+            # Get per-device final_output_tensor for reduce_local_cb
+            final_output_per_device = ttnn.get_device_tensors(final_output_tensor)
+
+            reduce_params = {
+                "sem_round1_addr": reduce_sem_round1_addr,
+                "sem_round2_addr": reduce_sem_round2_addr,
+                "sem_round3_addr": reduce_sem_round3_addr,
+                "sem_exit_addr": reduce_sem_exit_addr,
+                "intermediate_r1_per_device": reduce_intermediate_r1_per_device,
+                "intermediate_r2_per_device": reduce_intermediate_r2_per_device,
+                "intermediate_r3_per_device": reduce_intermediate_r3_per_device,
+                "output_per_device": reduce_output_per_device,
+                "final_output_per_device": final_output_per_device,
+                "num_tiles": reduce_num_tiles,
+                "payload_size_bytes": reduce_payload_size_bytes,
+                "slot_size_bytes": reduce_slot_size_bytes,
+                "compute_tile_size": reduce_compute_tile_size,
+                "worker_cores_list": reduce_worker_cores_list,
+                "num_workers": reduce_num_workers,
+                "num_workers_per_column": reduce_num_workers_per_column,
+                "num_columns": reduce_num_columns,
+                "fabric_cores": reduce_fabric_cores,
+                "column_to_fabric_core": reduce_column_to_fabric_core,
+                "core_to_slot_idx": reduce_core_to_slot_idx,
+                "core_to_shard_idx": reduce_core_to_shard_idx,
+                "output_core": reduce_output_core,
+            }
 
         # ==================================================================
         # Per-core bank_id, vc, sender_idx
@@ -559,6 +703,17 @@ class MlpRoutedExpertOp:
             bank_id_core_values=bank_id_core_values,
             vc_core_values=vc_core_values,
             sender_idx_core_values=sender_idx_core_values,
+            # ReduceToOne
+            enable_reduce_to_one=enable_reduce_to_one,
+            reduce_local_cb=reduce_local_cb,
+            reduce_received_cb_r1=reduce_received_cb_r1,
+            reduce_received_cb_r2=reduce_received_cb_r2,
+            reduce_received_cb_r3=reduce_received_cb_r3,
+            reduce_output_cb=reduce_output_cb,
+            reduce_scratch_cb=reduce_scratch_cb,
+            reduce_packet_cb=reduce_packet_cb,
+            reduce_packet_header_cb=reduce_packet_header_cb,
+            reduce_params=reduce_params,
         )
 
     @staticmethod
@@ -637,6 +792,12 @@ class MlpRoutedExpertOp:
             ("down_proj_out_num_tiles", ctx.down_proj_params["out_num_tiles"]),
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
+            # ReduceToOne reader args (CB indices + common RT arg base)
+            ("reduce_local_cb", ctx.reduce_local_cb),
+            ("reduce_received_cb_r1", ctx.reduce_received_cb_r1),
+            ("reduce_received_cb_r2", ctx.reduce_received_cb_r2),
+            ("reduce_received_cb_r3", ctx.reduce_received_cb_r3),
+            ("reduce_ncrisc_common_rt_arg_base", 0),
         ]
 
         brisc_named_compile_time_args = [
@@ -689,6 +850,11 @@ class MlpRoutedExpertOp:
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Eltwise add CB
             ("add_cb_in1", ctx.add_cb_in1),
+            # ReduceToOne writer args (CB indices + RT arg bases)
+            ("reduce_local_cb", ctx.reduce_local_cb),
+            ("reduce_scratch_cb", ctx.reduce_scratch_cb),
+            ("reduce_brisc_rt_arg_base", 0),
+            ("reduce_brisc_fabric_rt_arg_base", 0),
         ]
 
         trisc_named_compile_time_args = [
@@ -699,6 +865,7 @@ class MlpRoutedExpertOp:
             ("rmsnorm_fp32_acc", 0),
             ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
             ("rmsnorm_rsqrt_fast_approx", 0),
+            ("rmsnorm_trisc_common_rt_arg_base", 0),
             # No gate_mm, gate compute args
             # gate_proj compute
             ("gate_proj_cb_in0", ctx.gate_mm_input_cb),
@@ -751,6 +918,13 @@ class MlpRoutedExpertOp:
             # CB reset addresses
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
+            # ReduceToOne compute args (CB indices)
+            ("reduce_local_cb", ctx.reduce_local_cb),
+            ("reduce_received_cb_r1", ctx.reduce_received_cb_r1),
+            ("reduce_received_cb_r2", ctx.reduce_received_cb_r2),
+            ("reduce_received_cb_r3", ctx.reduce_received_cb_r3),
+            ("reduce_output_cb", ctx.reduce_output_cb),
+            ("reduce_scratch_cb", ctx.reduce_scratch_cb),
         ]
 
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
@@ -802,6 +976,19 @@ class MlpRoutedExpertOp:
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_gate_proj_core",
                 core_range=ctx.gate_proj_core_ranges,
+                value=1,
+                other_value=0,
+            ),
+            # ReduceToOne core descriptors — will be updated per-device if enabled
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_reduce_worker_core",
+                core_range=ctx.gate_proj_core_ranges if ctx.enable_reduce_to_one else ttnn.CoreRangeSet([]),
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_reduce_fabric_core",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
                 value=1,
                 other_value=0,
             ),
@@ -861,6 +1048,20 @@ class MlpOp:
     merging their CB descriptors, compile-time args, and core descriptors
     into a single unified kernel invocation.
     """
+
+    # Semaphore IDs (top-level definition)
+    # Gather sems overlap 1:1 with mcast receiver sems (different physical cores).
+    # noc1_num_senders=0 for all gathers, so only noc0 sem is used.
+    MCAST_SENDER_SEM = 0
+    MCAST_DATA_RECEIVER_SEM = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER_SEM on sender core
+    DOWN_PROJ_GATHER_SEM = 1  # sender core
+    RESIDUAL_MCAST_RECEIVER_SEM = 2  # mcast grid; overlaps with AG_GATHER_SEM on sender core
+    AG_GATHER_SEM = 2  # sender core
+    BG_GATHER_SEM = 3  # sender core
+    SHARED_DOWN_MCAST_RECEIVER_SEM = 3  # mcast grid; overlaps with BG_GATHER_SEM on sender core
+    OUTPUT_GATHER_SEM = 4  # sender core
+    SHARED_OUTPUT_MCAST_RECEIVER_SEM = 4  # mcast grid; overlaps with OUTPUT_GATHER_SEM on sender core
+    REDUCE_WORKER_FABRIC_SEM_BASE = 5  # on fabric cores only (5, 6, 7, 8 per worker slot)
 
     @staticmethod
     def golden(
@@ -932,101 +1133,573 @@ class MlpOp:
         return final_output
 
     @staticmethod
+    def _overlap_cbs_with_sdpa_buffer(routed_ctx, shared_ctx, sdpa_kv_cache_buffer, sdpa_out_interm_buffer):
+        """
+        Override working-buffer CB descriptors to overlap with SDPA buffers.
+
+        Same as MoeOp._overlap_cbs_with_sdpa_buffer but without MOE-only CBs
+        (gate_mm_output CB 3, gate_input CB 4, expert_index CB 10, expert_scale CBs 20-21).
+        """
+        kv_buf = sdpa_kv_cache_buffer
+        kv_addr = kv_buf.buffer_address()
+        kv_offset = 0
+
+        out_buf = sdpa_out_interm_buffer
+        out_addr = out_buf.buffer_address()
+        out_offset = 0
+
+        # ── Routed Expert CBs → sdpa_kv_cache_buffer ──
+
+        # CB 0: rmsnorm_output (total_size=14336, page_size=2048, tile=32x32, bfloat16)
+        cb0_cb_id = routed_ctx.rmsnorm_output_cb
+        cb0_total_size = 14336
+        cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb0_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb0_total_size,
+        )
+        cb0_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb0_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=2048,
+            tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
+        )
+        cb0_desc.format_descriptors = [cb0_fmt]
+        routed_ctx.rmsnorm_output_cb_descriptor = cb0_desc
+        kv_offset += cb0_total_size
+
+        # CB 1: gate_mm_input (total_size=14336, page_size=64, tile=1x32, bfloat16)
+        cb1_cb_id = routed_ctx.gate_mm_input_cb
+        cb1_total_size = 14336
+        cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb1_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb1_total_size,
+        )
+        cb1_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb1_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb1_desc.format_descriptors = [cb1_fmt]
+        routed_ctx.gate_mm_input_cb_descriptor = cb1_desc
+        kv_offset += cb1_total_size
+
+        # CB 11: gate_proj_output (aliases CB 14) — hardcoded descriptor
+        cb11_offset = kv_offset
+        cb11_cb_id = routed_ctx.gate_proj_cb_out
+        cb11_total_size = 512
+        cb11_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb11_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb11_total_size,
+        )
+        cb11_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb11_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb11_desc.format_descriptors = [cb11_fmt]
+        routed_ctx.gate_proj_params["cb_out_descriptor"] = cb11_desc
+        kv_offset += cb11_total_size
+
+        # CB 12: up_proj_mm_out (aliases CB 13) — hardcoded descriptor
+        cb12_offset = kv_offset
+        cb12_cb_id = routed_ctx.up_proj_cb_mm_out
+        cb12_total_size = 512
+        cb12_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb12_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb12_total_size,
+        )
+        cb12_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb12_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb12_desc.format_descriptors = [cb12_fmt]
+        routed_ctx.up_proj_params["cb_out_descriptor"] = cb12_desc
+        kv_offset += cb12_total_size
+
+        # CB 15: mul_out (fused output) — hardcoded descriptor
+        cb15_cb_id = routed_ctx.mul_cb_out
+        cb15_total_size = 512
+        cb15_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb15_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb15_total_size,
+        )
+        cb15_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb15_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=512,
+            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        )
+        cb15_desc.format_descriptors = [cb15_fmt]
+        routed_ctx.mul_params["cb_out_descriptor"] = cb15_desc
+        kv_offset += cb15_total_size
+
+        # CB 16: down_proj_gather_dst (total_size=4096, page_size=64, tile=1x32, bfloat16)
+        cb16_offset = kv_offset
+        cb16_cb_id = routed_ctx.down_proj_gather_dst_cb
+        cb16_total_size = 4096
+        cb16_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb16_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb16_total_size,
+        )
+        cb16_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb16_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb16_desc.format_descriptors = [cb16_fmt]
+        routed_ctx.down_proj_gather_params["dst_cb_descriptor"] = cb16_desc
+        kv_offset += cb16_total_size
+        routed_ctx.down_proj_gather_params["receiver_data_addr"] = kv_addr + cb16_offset
+
+        # CB 17: down_proj_mcast_dst (total_size=4096, page_size=64, tile=1x32, bfloat16)
+        cb17_cb_id = routed_ctx.down_proj_mcast_dst_cb
+        cb17_total_size = 4096
+        cb17_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb17_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb17_total_size,
+        )
+        cb17_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb17_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb17_desc.format_descriptors = [cb17_fmt]
+        routed_ctx.down_proj_mcast_params["dst_cb_descriptor"] = cb17_desc
+        kv_offset += cb17_total_size
+
+        # CB 19: down_proj_output (total_size=1792, page_size=64, tile=1x32, bfloat16)
+        cb19_offset = kv_offset
+        cb19_cb_id = routed_ctx.down_proj_cb_out
+        cb19_total_size = 1792
+        cb19_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb19_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb19_total_size,
+        )
+        cb19_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb19_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb19_desc.format_descriptors = [cb19_fmt]
+        routed_ctx.down_proj_params["cb_out_descriptor"] = cb19_desc
+        kv_offset += cb19_total_size
+
+        # CB 23: add_cb_in1 (total_size=14336, page_size=1792, tile=32x32, bfloat16)
+        cb23_cb_id = routed_ctx.add_cb_in1
+        cb23_total_size = 14336
+        cb23_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb23_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb23_total_size,
+        )
+        cb23_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb23_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=1792,
+            tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
+        )
+        cb23_desc.format_descriptors = [cb23_fmt]
+        routed_ctx.add_params["cb_in1_descriptor"] = cb23_desc
+        kv_offset += cb23_total_size
+
+        # ── CB 9/18: DRAM matmul in1 (gate/up_proj and down_proj share same offset) ──
+        gate_proj_params = routed_ctx.gate_proj_params
+        down_proj_params = routed_ctx.down_proj_params
+        cb9_total_size = gate_proj_params["in1_total_size"]
+        cb18_total_size = down_proj_params["in1_total_size"]
+        shared_in1_size = max(cb9_total_size, cb18_total_size)
+
+        cb9_offset = kv_offset
+
+        cb9_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            routed_ctx.gate_proj_cb_in1,
+            kv_buf,
+            address_offset=cb9_offset,
+            total_size=cb9_total_size,
+        )
+        gate_weights_tile = gate_proj_params["weights_tile"]
+        gate_weights_tile_size = gate_weights_tile.get_tile_size(gate_proj_params["weights_dtype"])
+        cb9_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=routed_ctx.gate_proj_cb_in1,
+            data_format=gate_proj_params["weights_dtype"],
+            page_size=gate_weights_tile_size,
+            tile=ttnn.TileDescriptor(gate_weights_tile),
+        )
+        cb9_desc.format_descriptors = [cb9_fmt]
+        gate_proj_params["cb_in1_descriptor"] = cb9_desc
+        gate_proj_params["in1_buf_addr"] = kv_addr + cb9_offset
+
+        cb18_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            routed_ctx.down_proj_cb_in1,
+            kv_buf,
+            address_offset=cb9_offset,
+            total_size=cb18_total_size,
+        )
+        down_weights_tile = down_proj_params["weights_tile"]
+        down_weights_tile_size = down_weights_tile.get_tile_size(down_proj_params["weights_dtype"])
+        cb18_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=routed_ctx.down_proj_cb_in1,
+            data_format=down_proj_params["weights_dtype"],
+            page_size=down_weights_tile_size,
+            tile=ttnn.TileDescriptor(down_weights_tile),
+        )
+        cb18_desc.format_descriptors = [cb18_fmt]
+        down_proj_params["cb_in1_descriptor"] = cb18_desc
+        down_proj_params["in1_buf_addr"] = kv_addr + cb9_offset
+
+        kv_offset += shared_in1_size
+
+        # ── Shared Expert CBs → sdpa_kv_cache_buffer (continued) ──
+
+        # CB 29: shared_gu_out (total_size=64, page_size=64, tile=1x32, bfloat16)
+        cb29_cb_id = shared_ctx.gu_out_cb
+        cb29_total_size = 64
+        cb29_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb29_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb29_total_size,
+        )
+        cb29_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb29_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb29_desc.format_descriptors = [cb29_fmt]
+        shared_ctx.gu_matmul_params["cb_out_descriptor"] = cb29_desc
+        kv_offset += cb29_total_size
+
+        # CB 32: shared_intermed (total_size=1024, page_size=512, face tile 16x16, bfloat16)
+        cb32_cb_id = shared_ctx.intermed_cb
+        cb32_total_size = 1024
+        cb32_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb32_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb32_total_size,
+        )
+        cb32_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb32_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=512,
+            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        )
+        cb32_desc.format_descriptors = [cb32_fmt]
+        shared_ctx.gated_reduce_params["cb_intermed_descriptor"] = cb32_desc
+        kv_offset += cb32_total_size
+
+        # CB 33: shared_mcast_src (total_size=512, page_size=512, face tile 16x16, bfloat16)
+        cb33_cb_id = shared_ctx.mcast_src_cb
+        cb33_total_size = 512
+        cb33_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb33_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb33_total_size,
+        )
+        cb33_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb33_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=512,
+            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        )
+        cb33_desc.format_descriptors = [cb33_fmt]
+        shared_ctx.gated_reduce_params["cb_out_descriptor"] = cb33_desc
+        kv_offset += cb33_total_size
+
+        # CB 34: shared_down_mcast_dst (total_size=512, page_size=64, tile=1x32, bfloat16)
+        cb34_cb_id = shared_ctx.down_mcast_dst_cb
+        cb34_total_size = 512
+        cb34_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb34_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb34_total_size,
+        )
+        cb34_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb34_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb34_desc.format_descriptors = [cb34_fmt]
+        shared_ctx.down_mcast_params["dst_cb_descriptor"] = cb34_desc
+        kv_offset += cb34_total_size
+
+        # CB 36: shared_down_matmul_out (total_size=128, page_size=64, tile=1x32, bfloat16)
+        cb36_cb_id = shared_ctx.down_matmul_params["out_cb"]
+        cb36_total_size = 128
+        cb36_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb36_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb36_total_size,
+        )
+        cb36_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb36_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb36_desc.format_descriptors = [cb36_fmt]
+        shared_ctx.down_matmul_params["output_cb_descriptor"] = cb36_desc
+        kv_offset += cb36_total_size
+
+        # CB 37: shared_residual_add_out (total_size=128, page_size=64, tile=1x32, bfloat16)
+        cb37_cb_id = shared_ctx.residual_add_params["out_cb"]
+        cb37_total_size = 128
+        cb37_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb37_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb37_total_size,
+        )
+        cb37_tile = ttnn.Tile([1, 32])
+        cb37_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb37_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(cb37_tile),
+        )
+        cb37_desc.format_descriptors = [cb37_fmt]
+        shared_ctx.residual_add_params["cb_out_descriptor"] = cb37_desc
+        kv_offset += cb37_total_size
+
+        # ── Aliased CBs (share offset with source) → sdpa_kv_cache_buffer ──
+
+        # CB 13: mul_cb_in0 → same memory as CB 12 — hardcoded descriptor
+        cb13_cb_id = routed_ctx.mul_cb_in0
+        cb13_total_size = 512
+        cb13_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb13_cb_id,
+            kv_buf,
+            address_offset=cb12_offset,
+            total_size=cb13_total_size,
+        )
+        cb13_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb13_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=512,
+            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        )
+        cb13_desc.format_descriptors = [cb13_fmt]
+        routed_ctx.mul_params["cb_in0_descriptor"] = cb13_desc
+
+        # CB 14: mul_cb_in1 → same memory as CB 11 — hardcoded descriptor
+        cb14_cb_id = routed_ctx.mul_cb_in1
+        cb14_total_size = 512
+        cb14_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb14_cb_id,
+            kv_buf,
+            address_offset=cb11_offset,
+            total_size=cb14_total_size,
+        )
+        cb14_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb14_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=512,
+            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        )
+        cb14_desc.format_descriptors = [cb14_fmt]
+        routed_ctx.mul_params["cb_in1_descriptor"] = cb14_desc
+
+        # CB 22: add_cb_in0 → same memory as CB 19 (total_size=1792, page_size=1792, tile=32x32, bfloat16)
+        cb22_cb_id = routed_ctx.add_cb_in0
+        cb22_total_size = 1792
+        cb22_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb22_cb_id,
+            kv_buf,
+            address_offset=cb19_offset,
+            total_size=cb22_total_size,
+        )
+        cb22_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb22_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=1792,
+            tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
+        )
+        cb22_desc.format_descriptors = [cb22_fmt]
+        routed_ctx.add_params["cb_in0_descriptor"] = cb22_desc
+
+        # ── CBs → sdpa_out_interm_buffer ──
+
+        # CB 26: residual_mcast_dst (total_size=14336, page_size=64, tile=1x32, bfloat16)
+        cb26_cb_id = routed_ctx.residual_mcast_dst_cb
+        cb26_total_size = 14336
+        cb26_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb26_cb_id,
+            out_buf,
+            address_offset=out_offset,
+            total_size=cb26_total_size,
+        )
+        cb26_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb26_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb26_desc.format_descriptors = [cb26_fmt]
+        routed_ctx.residual_mcast_params["dst_cb_descriptor"] = cb26_desc
+        out_offset += cb26_total_size
+
+        # CB 30: shared_group1 (ag gather dst) (total_size=4096, page_size=512, face tile 16x16, bfloat16)
+        cb30_cb_id = shared_ctx.group1_cb
+        cb30_total_size = 4096
+        cb30_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb30_cb_id,
+            out_buf,
+            address_offset=out_offset,
+            total_size=cb30_total_size,
+        )
+        cb30_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb30_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=512,
+            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        )
+        cb30_desc.format_descriptors = [cb30_fmt]
+        shared_ctx.gated_reduce_params["cb_group1_descriptor"] = cb30_desc
+        shared_ctx.ag_receiver_data_addr = out_addr + out_offset
+        out_offset += cb30_total_size
+
+        # CB 31: shared_group2 (bg gather dst) (total_size=4096, page_size=512, face tile 16x16, bfloat16)
+        cb31_cb_id = shared_ctx.group2_cb
+        cb31_total_size = 4096
+        cb31_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb31_cb_id,
+            out_buf,
+            address_offset=out_offset,
+            total_size=cb31_total_size,
+        )
+        cb31_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb31_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=512,
+            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+        )
+        cb31_desc.format_descriptors = [cb31_fmt]
+        shared_ctx.gated_reduce_params["cb_group2_descriptor"] = cb31_desc
+        shared_ctx.bg_receiver_data_addr = out_addr + out_offset
+        out_offset += cb31_total_size
+
+    @staticmethod
     def op(
-        input_tensor,
-        mcast_output_tensor,
+        shared_residual_mcast_src_tensor,
         gate_proj_weights_tensor,
-        gate_proj_output_tensor,
         up_proj_weights_tensor,
-        up_proj_mm_out_tensor,
-        fused_output_tensor,
-        down_proj_gather_output_tensor,
-        down_proj_mcast_output_tensor,
         down_proj_weights_tensor,
-        down_proj_output_tensor,
-        fused_add_tensor,
         final_output_tensor,
-        gate_proj_in1_buf_tensor,
-        down_proj_in1_buf_tensor,
         # RMSNorm gamma weights (sender core)
         rmsnorm_gamma_tensor,
         # Shared expert tensors
-        shared_residual_mcast_src_tensor,
-        shared_gate_up_weights_tensor,
-        shared_residual_mcast_dst_tensor,
-        shared_down_mcast_dst_tensor,
+        shared_gate_weights_overlapped,
+        shared_up_weights_overlapped,
         shared_down_weights_tensor,
         shared_output_tensor,
-        # Shared expert tensor-backed CB tensors
-        shared_ag_gather_dst_tensor,
-        shared_bg_gather_dst_tensor,
-        shared_gu_out_tensor,
-        shared_intermed_tensor,
-        shared_down_mcast_src_tensor,
-        shared_down_matmul_out_tensor,
-        shared_residual_add_out_tensor,
         shared_k_parallel,
         shared_n_parallel,
         epsilon=1e-6,
+        use_hardcoded_expert_index=False,
+        sdpa_kv_cache_buffer=None,
+        sdpa_out_interm_buffer=None,
         num_iterations=1,
+        # ReduceToOne parameters
+        reduce_intermediate_tensors: Optional[list] = None,
+        reduce_output_tensor: Optional[ttnn.Tensor] = None,
+        reduce_semaphores: Optional[list] = None,
+        reduce_root_coord: Optional[ttnn.MeshCoordinate] = None,
     ):
         """
         Execute the full fused MLP operation (dense MLP + shared expert).
 
-        No routing tensors needed (no gate_mm_weights, gate_bias, gate_indices,
-        gate_output_scores, gate_output_indices, expert_index, expert_scale, mul_scalar_buf).
+        Non-weight tensors (input, mcast_output, gate_proj_output, up_proj_mm_out, fused_output,
+        down_proj_gather_output, down_proj_mcast_output, down_proj_output, fused_add,
+        gate_proj_in1_buf, down_proj_in1_buf, residual_mcast_dst) are no longer accepted — their
+        configuration info is now derived internally. CB descriptors are set by
+        _overlap_cbs_with_sdpa_buffer.
 
         Args:
-            num_iterations: Number of iterations to loop inside the kernel (default 1).
+            shared_residual_mcast_src_tensor: Input activation on sender core (provides device, dtype, K)
+            gate_proj_weights_tensor, up_proj_weights_tensor, down_proj_weights_tensor: Expert weights
+            final_output_tensor: Final output tensor
+            rmsnorm_gamma_tensor: RMSNorm gamma weights on sender core
+            shared_gate_weights_overlapped: Gate proj OverlappedTensor
+            shared_up_weights_overlapped: Up proj OverlappedTensor
+            shared_down_weights_tensor: Shared expert down weights
+            shared_output_tensor: Shared expert output tensor
+            shared_k_parallel, shared_n_parallel: Shared expert parallelism factors
+            sdpa_kv_cache_buffer, sdpa_out_interm_buffer: SDPA buffers for CB memory overlap
+            num_iterations: Number of iterations to loop inside the kernel (default 1)
+            reduce_intermediate_tensors: (Optional) List of 3 intermediate tensors for reduce rounds
+            reduce_output_tensor: (Optional) Final reduced output tensor on ROOT1 device
+            reduce_semaphores: (Optional) List of 4 global semaphores for reduce synchronization
+            reduce_root_coord: (Optional) MeshCoordinate of ROOT1 device
 
         Returns:
-            final_output_tensor
+            final_output_tensor, or reduce_output_tensor if reduce enabled.
         """
         # ==================================================================
         # Setup routed expert context (MLP — no routing)
         # ==================================================================
         routed_ctx = MlpRoutedExpertOp._setup_dimensions(
-            input_tensor,
-            mcast_output_tensor,
+            shared_residual_mcast_src_tensor,
             gate_proj_weights_tensor,
-            gate_proj_output_tensor,
             up_proj_weights_tensor,
-            up_proj_mm_out_tensor,
-            fused_output_tensor,
-            down_proj_gather_output_tensor,
-            down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
-            down_proj_output_tensor,
-            fused_add_tensor,
             final_output_tensor,
-            gate_proj_in1_buf_tensor,
-            down_proj_in1_buf_tensor,
-            shared_residual_mcast_src_tensor=shared_residual_mcast_src_tensor,
-            shared_residual_mcast_dst_tensor=shared_residual_mcast_dst_tensor,
-            rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
+            rmsnorm_gamma_tensor,
             epsilon=epsilon,
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
+            reduce_intermediate_tensors=reduce_intermediate_tensors,
+            reduce_output_tensor=reduce_output_tensor,
+            reduce_semaphores=reduce_semaphores,
+            reduce_root_coord=reduce_root_coord,
+            # Semaphore IDs from top-level
+            mcast_data_sender_semaphore_id=MlpOp.MCAST_SENDER_SEM,
+            mcast_data_receiver_semaphore_id=MlpOp.MCAST_DATA_RECEIVER_SEM,
+            gather_noc0_receiver_semaphore_id=MlpOp.DOWN_PROJ_GATHER_SEM,
+            gather_noc1_receiver_semaphore_id=MlpOp.DOWN_PROJ_GATHER_SEM,
+            residual_mcast_receiver_semaphore_id=MlpOp.RESIDUAL_MCAST_RECEIVER_SEM,
         )
 
         # ==================================================================
         # Setup shared expert context (reused from MoE)
         # ==================================================================
-        device_tensor = ttnn.get_device_tensors(input_tensor)[0]
+        device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
         input_tile = device_tensor.get_tile()
         input_tile_size = input_tile.get_tile_size(routed_ctx.data_format)
 
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
-            shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
-            shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
+            shared_gate_weights_overlapped=shared_gate_weights_overlapped,
+            shared_up_weights_overlapped=shared_up_weights_overlapped,
             shared_down_weights_tensor=shared_down_weights_tensor,
             shared_output_tensor=shared_output_tensor,
-            shared_ag_gather_dst_tensor=shared_ag_gather_dst_tensor,
-            shared_bg_gather_dst_tensor=shared_bg_gather_dst_tensor,
-            shared_gu_out_tensor=shared_gu_out_tensor,
-            shared_intermed_tensor=shared_intermed_tensor,
-            shared_down_mcast_src_tensor=shared_down_mcast_src_tensor,
-            shared_down_matmul_out_tensor=shared_down_matmul_out_tensor,
-            shared_residual_add_out_tensor=shared_residual_add_out_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -1037,7 +1710,28 @@ class MlpOp:
             mcast_grid=routed_ctx.mcast_grid,
             k_parallel=shared_k_parallel,
             n_parallel=shared_n_parallel,
+            # Semaphore IDs from top-level
+            ag_receiver_semaphore_id=MlpOp.AG_GATHER_SEM,
+            bg_receiver_semaphore_id=MlpOp.BG_GATHER_SEM,
+            ag_noc1_receiver_semaphore_id=MlpOp.AG_GATHER_SEM,
+            bg_noc1_receiver_semaphore_id=MlpOp.BG_GATHER_SEM,
+            shared_mcast_sender_semaphore_id=MlpOp.MCAST_SENDER_SEM,
+            shared_mcast_receiver_semaphore_id=MlpOp.SHARED_DOWN_MCAST_RECEIVER_SEM,
+            output_gather_noc0_receiver_semaphore_id=MlpOp.OUTPUT_GATHER_SEM,
+            output_gather_noc1_receiver_semaphore_id=MlpOp.OUTPUT_GATHER_SEM,
+            output_mcast_sender_semaphore_id=MlpOp.MCAST_SENDER_SEM,
+            output_mcast_receiver_semaphore_id=MlpOp.SHARED_OUTPUT_MCAST_RECEIVER_SEM,
         )
+
+        # ==================================================================
+        # Overlap working-buffer CBs with SDPA buffers
+        # ==================================================================
+        if sdpa_kv_cache_buffer is not None and sdpa_out_interm_buffer is not None:
+            sdpa_kv_cache_buffer_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)[0]
+            sdpa_out_interm_buffer_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)[0]
+            MlpOp._overlap_cbs_with_sdpa_buffer(
+                routed_ctx, shared_ctx, sdpa_kv_cache_buffer_device, sdpa_out_interm_buffer_device
+            )
 
         # ==================================================================
         # Build CB descriptors (routed + shared)
@@ -1056,75 +1750,33 @@ class MlpOp:
         per_core_descs += shared_per_core
 
         # ==================================================================
-        # Semaphore descriptors (no expert_scale_mcast semaphore)
+        # Semaphore descriptors (5 unique IDs: 0-4)
+        # Gather sems overlap with mcast receiver sems (different physical cores).
+        # Reduce fabric sems (5+) are added later when enable_reduce_to_one.
         # ==================================================================
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.mcast_data_sender_semaphore_id,
+                id=MlpOp.MCAST_SENDER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.mcast_data_receiver_semaphore_id,
+                id=MlpOp.MCAST_DATA_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.gather_noc0_receiver_semaphore_id,
+                id=MlpOp.RESIDUAL_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.gather_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            # No expert_scale_mcast_receiver_semaphore (was semaphore 4 in MoE)
-        ]
-        # Shared expert gather semaphores
-        semaphore_descriptors += [
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.ag_receiver_semaphore_id,
+                id=MlpOp.SHARED_DOWN_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=shared_ctx.bg_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.ag_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.bg_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.shared_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_gather_noc0_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_gather_noc1_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_mcast_receiver_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=routed_ctx.residual_mcast_receiver_semaphore_id,
+                id=MlpOp.SHARED_OUTPUT_MCAST_RECEIVER_SEM,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
@@ -1134,44 +1786,26 @@ class MlpOp:
         # IO tensors (no routing tensors)
         # ==================================================================
         io_tensors = [
-            input_tensor,
-            mcast_output_tensor,
             gate_proj_weights_tensor,
-            gate_proj_output_tensor,
             up_proj_weights_tensor,
-            up_proj_mm_out_tensor,
-            fused_output_tensor,
-            down_proj_gather_output_tensor,
-            down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
-            down_proj_output_tensor,
-            fused_add_tensor,
             final_output_tensor,
-            # Tensor-backed working buffers
-            gate_proj_in1_buf_tensor,
-            down_proj_in1_buf_tensor,
-            # RMSNorm gamma weights (sender core)
             rmsnorm_gamma_tensor,
-            # Shared expert tensors
             shared_residual_mcast_src_tensor,
-            shared_gate_up_weights_tensor,
-            shared_ag_gather_dst_tensor,
-            shared_bg_gather_dst_tensor,
-            shared_residual_mcast_dst_tensor,
-            shared_down_mcast_dst_tensor,
+            shared_gate_weights_overlapped.fused_tensor,
             shared_down_weights_tensor,
             shared_output_tensor,
-            # Shared expert tensor-backed CB tensors
-            shared_gu_out_tensor,
-            shared_intermed_tensor,
-            shared_down_mcast_src_tensor,
-            shared_down_matmul_out_tensor,
-            shared_residual_add_out_tensor,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
         ]
 
         # ==================================================================
         # Create per-device programs (mesh loop)
         # ==================================================================
+        enable_reduce_to_one = routed_ctx.enable_reduce_to_one
+        reduce_params = routed_ctx.reduce_params
+        mesh_device = shared_residual_mcast_src_tensor.device()
+
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         rmsnorm_mcast_dst_cb = routed_ctx.rmsnorm_mcast_params["dst_cb"]
 
@@ -1194,6 +1828,264 @@ class MlpOp:
                 brisc_args += [("num_iterations", num_iterations)]
                 trisc_args += [("num_iterations", num_iterations)]
 
+                # Per-device copies for reduce modification
+                device_unified_ct_core_descs = list(unified_core_descs)
+                device_per_core_ct_descs = list(per_core_descs)
+                device_cb_descriptors = list(cb_descriptors)
+                device_semaphore_descriptors = list(semaphore_descriptors)
+                device_runtime_args_descriptor = None
+
+                # ReduceToOne per-device setup
+                if enable_reduce_to_one:
+                    # Get device role
+                    device_role = get_reduce_device_role(coord, reduce_root_coord)
+
+                    # Determine destination coordinate based on role
+                    if device_role == MESH_LEAF:
+                        if row == 0:
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                        else:  # row == 3
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                    elif device_role == MESH_ROOT3:
+                        dest_coord = ttnn.MeshCoordinate(reduce_root_coord[0], col)
+                    elif device_role == MESH_ROOT2:
+                        dest_coord = reduce_root_coord
+                    else:  # MESH_ROOT1
+                        dest_coord = reduce_root_coord  # No actual send
+
+                    # Get fabric node IDs
+                    dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
+
+                    # Get per-device tensors for this device
+                    r1_tensor = reduce_params["intermediate_r1_per_device"][chip_id]
+                    r2_tensor = reduce_params["intermediate_r2_per_device"][chip_id]
+                    r3_tensor = reduce_params["intermediate_r3_per_device"][chip_id]
+                    out_tensor = reduce_params["output_per_device"][chip_id]
+
+                    # Create CB descriptors for reduce operation
+                    reduce_all_cores_set = ttnn.CoreRangeSet(
+                        [ttnn.CoreRange(c, c) for c in reduce_params["worker_cores_list"]]
+                        + [ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]]
+                    )
+                    reduce_tile_desc = ttnn.TileDescriptor(32, 32)  # 32x32 compute tiles
+                    reduce_payload = reduce_params["payload_size_bytes"]
+                    reduce_dtype = ttnn.bfloat16
+
+                    # reduce_received_cb_r1: backed by intermediate r1 tensor
+                    reduce_cb_r1_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                        routed_ctx.reduce_received_cb_r1, r1_tensor
+                    )
+                    reduce_cb_r1_desc.core_ranges = reduce_all_cores_set
+                    reduce_cb_r1_desc.total_size = reduce_payload
+                    reduce_cb_r1_desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=routed_ctx.reduce_received_cb_r1,
+                            data_format=reduce_dtype,
+                            page_size=reduce_payload,
+                            tile=reduce_tile_desc,
+                        )
+                    ]
+                    device_cb_descriptors.append(reduce_cb_r1_desc)
+
+                    # reduce_received_cb_r2: backed by intermediate r2 tensor
+                    reduce_cb_r2_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                        routed_ctx.reduce_received_cb_r2, r2_tensor
+                    )
+                    reduce_cb_r2_desc.core_ranges = reduce_all_cores_set
+                    reduce_cb_r2_desc.total_size = reduce_payload
+                    reduce_cb_r2_desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=routed_ctx.reduce_received_cb_r2,
+                            data_format=reduce_dtype,
+                            page_size=reduce_payload,
+                            tile=reduce_tile_desc,
+                        )
+                    ]
+                    device_cb_descriptors.append(reduce_cb_r2_desc)
+
+                    # reduce_received_cb_r3: backed by intermediate r3 tensor
+                    reduce_cb_r3_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                        routed_ctx.reduce_received_cb_r3, r3_tensor
+                    )
+                    reduce_cb_r3_desc.core_ranges = reduce_all_cores_set
+                    reduce_cb_r3_desc.total_size = reduce_payload
+                    reduce_cb_r3_desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=routed_ctx.reduce_received_cb_r3,
+                            data_format=reduce_dtype,
+                            page_size=reduce_payload,
+                            tile=reduce_tile_desc,
+                        )
+                    ]
+                    device_cb_descriptors.append(reduce_cb_r3_desc)
+
+                    # reduce_output_cb: backed by reduce output tensor
+                    reduce_cb_out_desc = ttnn.cb_descriptor_from_sharded_tensor(routed_ctx.reduce_output_cb, out_tensor)
+                    reduce_cb_out_desc.core_ranges = reduce_all_cores_set
+                    reduce_cb_out_desc.total_size = reduce_payload
+                    reduce_cb_out_desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=routed_ctx.reduce_output_cb,
+                            data_format=reduce_dtype,
+                            page_size=reduce_payload,
+                            tile=reduce_tile_desc,
+                        )
+                    ]
+                    device_cb_descriptors.append(reduce_cb_out_desc)
+
+                    # reduce_scratch_cb: scratch buffer for compute (non-tensor-backed)
+                    reduce_scratch_size = reduce_params["compute_tile_size"] * reduce_params["num_tiles"]
+                    reduce_cb_scratch_desc = ttnn.CBDescriptor(
+                        total_size=reduce_scratch_size,
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=routed_ctx.reduce_scratch_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=reduce_params["compute_tile_size"],
+                                tile=reduce_tile_desc,
+                            )
+                        ],
+                    )
+                    device_cb_descriptors.append(reduce_cb_scratch_desc)
+
+                    # reduce_packet_cb
+                    reduce_packet_size = reduce_params["slot_size_bytes"] * reduce_params["num_workers_per_column"]
+                    reduce_cb_packet_desc = ttnn.CBDescriptor(
+                        total_size=reduce_packet_size,
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=routed_ctx.reduce_packet_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=reduce_params["slot_size_bytes"],
+                            )
+                        ],
+                    )
+                    device_cb_descriptors.append(reduce_cb_packet_desc)
+
+                    # reduce_packet_header_cb: persistent packet header storage
+                    reduce_packet_header_size = 96  # Standard packet header size
+                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
+                        total_size=reduce_packet_header_size,
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=routed_ctx.reduce_packet_header_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=reduce_packet_header_size,
+                            )
+                        ],
+                    )
+                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
+
+                    # Destination L1 address depends on role
+                    if device_role == MESH_LEAF:
+                        dst_l1_addr = r1_tensor.buffer_address()
+                        dst_sem_addr = reduce_params["sem_round1_addr"]
+                    elif device_role == MESH_ROOT3:
+                        dst_l1_addr = r2_tensor.buffer_address()
+                        dst_sem_addr = reduce_params["sem_round2_addr"]
+                    elif device_role == MESH_ROOT2:
+                        dst_l1_addr = r3_tensor.buffer_address()
+                        dst_sem_addr = reduce_params["sem_round3_addr"]
+                    else:  # MESH_ROOT1
+                        dst_l1_addr = 0
+                        dst_sem_addr = reduce_params["sem_exit_addr"]
+
+                    # Get physical coords for output core
+                    output_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["output_core"])
+
+                    # Add reduce-specific compile-time args (per-device values)
+                    ncrisc_args.extend(
+                        [
+                            ("reduce_device_role", device_role),
+                            ("reduce_num_tiles", reduce_params["num_tiles"]),
+                        ]
+                    )
+
+                    brisc_args.extend(
+                        [
+                            ("reduce_device_role", device_role),
+                            ("reduce_num_tiles", reduce_params["num_tiles"]),
+                            ("reduce_payload_size_bytes", reduce_params["payload_size_bytes"]),
+                            ("reduce_num_hops", 1),
+                            ("reduce_dst_fabric_node_chip_id", dest_fabric_node_id.chip_id),
+                            ("reduce_dst_fabric_node_mesh_id", int(dest_fabric_node_id.mesh_id)),
+                            ("reduce_output_core_noc_x", output_core_phys.x),
+                            ("reduce_output_core_noc_y", output_core_phys.y),
+                            ("reduce_num_workers", reduce_params["num_workers_per_column"]),
+                            ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
+                            ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
+                            ("reduce_packet_header_cb", routed_ctx.reduce_packet_header_cb),
+                        ]
+                    )
+
+                    trisc_args.extend(
+                        [
+                            ("reduce_device_role", device_role),
+                            ("reduce_num_tiles", reduce_params["num_tiles"]),
+                        ]
+                    )
+
+                    # Update fabric core descriptor for this device
+                    fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
+                    for i, desc in enumerate(device_unified_ct_core_descs):
+                        if desc.named_compile_time_arg == "is_reduce_fabric_core":
+                            device_unified_ct_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                                named_compile_time_arg="is_reduce_fabric_core",
+                                core_range=fabric_core_set,
+                                value=1,
+                                other_value=0,
+                            )
+                            break
+
+                    # Build per-core BRISC args for reduce worker cores
+                    reduce_worker_fabric_sem_base = MlpOp.REDUCE_WORKER_FABRIC_SEM_BASE
+                    reduce_brisc_per_core_args = []
+                    for core in reduce_params["worker_cores_list"]:
+                        fabric_core = reduce_params["column_to_fabric_core"][core.x]
+                        fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(fabric_core)
+                        slot_idx = reduce_params["core_to_slot_idx"][(core.x, core.y)]
+                        shard_idx = reduce_params["core_to_shard_idx"][(core.x, core.y)]
+
+                        worker_args = [
+                            fabric_core_phys.x,  # fabric_core_noc_x
+                            fabric_core_phys.y,  # fabric_core_noc_y
+                            slot_idx,  # my_slot_idx
+                            reduce_worker_fabric_sem_base + slot_idx,  # worker_sem_id
+                            dst_l1_addr,  # dst_l1_addr
+                            dst_sem_addr,  # dst_sem_addr
+                            out_tensor.buffer_address(),  # output_base_addr
+                            shard_idx,  # shard_idx
+                        ]
+                        reduce_brisc_per_core_args.append((core, worker_args))
+
+                    # Fabric cores BRISC args: worker semaphore IDs
+                    for fc in reduce_params["fabric_cores"]:
+                        fabric_args = [
+                            reduce_worker_fabric_sem_base + i for i in range(reduce_params["num_workers_per_column"])
+                        ]
+                        reduce_brisc_per_core_args.append((fc, fabric_args))
+
+                    device_runtime_args_descriptor = PerCoreRuntimeArgsDescriptor(
+                        brisc_args=reduce_brisc_per_core_args,
+                    )
+
+                # Build NCRISC common runtime args for reduce (semaphore addresses)
+                ncrisc_common_rt_args = []
+                if enable_reduce_to_one:
+                    ncrisc_common_rt_args = [
+                        reduce_params["sem_round1_addr"],
+                        reduce_params["sem_round2_addr"],
+                        reduce_params["sem_round3_addr"],
+                    ]
+
+                # Build defines list
+                kernel_defines = []
+                if enable_reduce_to_one:
+                    kernel_defines.append(("ENABLE_REDUCE_TO_ONE", "1"))
+
                 # Create unified kernel
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/mlp/mlp_kernel.cpp",
@@ -1201,6 +2093,7 @@ class MlpOp:
                     ncrisc_named_compile_time_args=ncrisc_args,
                     brisc_named_compile_time_args=brisc_args,
                     trisc_named_compile_time_args=trisc_args,
+                    ncrisc_common_runtime_args=ncrisc_common_rt_args,
                     trisc_common_runtime_args=[
                         routed_ctx.rmsnorm_epsilon_packed,
                         routed_ctx.rmsnorm_scalar_packed,
@@ -1211,20 +2104,79 @@ class MlpOp:
                         fp32_dest_acc_en=False,
                         dst_full_sync_en=False,
                     ),
-                    unified_compile_time_core_descriptors=unified_core_descs,
-                    per_core_compile_time_descriptors=per_core_descs,
+                    unified_compile_time_core_descriptors=device_unified_ct_core_descs,
+                    per_core_compile_time_descriptors=device_per_core_ct_descs,
+                    per_core_runtime_args_descriptor=device_runtime_args_descriptor,
+                    defines=kernel_defines,
                 )
+
+                kernel_result = unified_kernel.get_kernel_descriptors()
+
+                # Add worker→fabric semaphores on fabric cores for reduce signaling
+                if enable_reduce_to_one:
+                    fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
+                    for worker_idx in range(reduce_params["num_workers_per_column"]):
+                        sem_desc = ttnn.SemaphoreDescriptor(
+                            id=reduce_worker_fabric_sem_base + worker_idx,
+                            core_type=ttnn.CoreType.WORKER,
+                            core_ranges=fabric_core_set,
+                            initial_value=0,
+                        )
+                        device_semaphore_descriptors.append(sem_desc)
 
                 # Create program
                 program = ttnn.ProgramDescriptor(
-                    kernels=unified_kernel.get_kernel_descriptors().kernels,
-                    cbs=cb_descriptors,
-                    semaphores=semaphore_descriptors,
+                    kernels=kernel_result.kernels,
+                    cbs=device_cb_descriptors,
+                    semaphores=device_semaphore_descriptors,
                 )
 
+                # Setup fabric connection for reduce fabric cores
+                # Note: fabric cores may span multiple kernel groups due to shared expert
+                # core descriptors (is_shared_gate_compute_core, etc.), so we find the
+                # correct BRISC kernel index per fabric core rather than assuming one group.
+                if enable_reduce_to_one and device_role != MESH_ROOT1:
+                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                    num_columns = reduce_params["num_columns"]
+                    for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
+                        col_idx = fc_idx
+                        link_idx = 0 if col_idx < num_columns // 2 else 1
+                        # Find the kernel group containing this specific fabric core
+                        fc_kernel_idx = None
+                        for group in kernel_result.groups:
+                            if group.compile_time_arg_values.get(
+                                "is_reduce_fabric_core"
+                            ) == 1 and group.core_range_set.contains(fc):
+                                fc_kernel_idx = group.brisc_kernel_index
+                                break
+                        fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
+                        fabric_conn_args = ttnn.setup_fabric_connection(
+                            fabric_node_id,
+                            dest_fabric_node_id,
+                            link_idx,
+                            program,
+                            fc,
+                        )
+                        fabric_rt_args_ref.extend(fabric_conn_args)
+
+                # Assign to mesh coordinate
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+
+        # Add reduce tensors to io_tensors if enabled
+        if enable_reduce_to_one:
+            io_tensors.extend(
+                [
+                    reduce_intermediate_tensors[0],
+                    reduce_intermediate_tensors[1],
+                    reduce_intermediate_tensors[2],
+                    reduce_output_tensor,
+                ]
+            )
 
         # Execute
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
+        # Return appropriate output based on reduce mode
+        if enable_reduce_to_one:
+            return reduce_output_tensor
         return final_output_tensor

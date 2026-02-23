@@ -311,7 +311,7 @@ def run_fwd_decode_q_rope_nope_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 4752000,
+            "trace_region_size": 6052000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
