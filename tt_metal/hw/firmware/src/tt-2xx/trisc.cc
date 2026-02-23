@@ -66,7 +66,6 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BA
 
 #if !defined(UCK_CHLKC_MATH)
 uint32_t tt_l1_ptr* cb_l1_base __attribute__((used));
-thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #endif
 
 #if defined(UCK_CHLKC_UNPACK)
