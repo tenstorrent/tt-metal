@@ -160,7 +160,7 @@ sfpi_inline void calculate_remainder_int32_body(
         r.get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get());
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -169,9 +169,9 @@ inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_i
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void remainder_int32_init() {
-    div_floor_init<APPROXIMATION_MODE>();
+    div_floor_init<APPROX_MODE>();
 }
 
 }  // namespace ckernel::sfpu

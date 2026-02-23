@@ -68,7 +68,8 @@ void kernel_main() {
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
     PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-    PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
+    PACK(SFPU_TEMPLATE_INIT_KERNEL(
+        exponential, sfpu::exp_init, ckernel::ApproximationMode::FastApproximateClamped, scale_fp32));
     sdpa_custom_mm_block_init<transpose_k>(cb_q_in, cb_k_in, cb_out_o, Sk_chunk_t);
 
     // Get cur_pos from height-sharded position tensor (directly from local L1)
@@ -109,7 +110,7 @@ void kernel_main() {
     constexpr uint32_t mm1_dst_offset = corr_exp_dst_offset + packed_tile_size;
     constexpr uint32_t mm1_dst_tile_offset = mm1_dst_offset / packed_tile_size;
 
-    constexpr bool exp_approx_mode = false;
+    constexpr ckernel::ApproximationMode exp_approx_mode = ckernel::ApproximationMode::Precise;
 
     bool sdpa_output_is_final = do_output && (!do_reduce || num_cores_to_wait == 0);
     uint32_t sdpa_output_cb = 0;

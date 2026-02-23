@@ -11,8 +11,11 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base_scale_factor) {
+    static_assert(
+        APPROX_MODE == ApproximationMode::FastApproximate || APPROX_MODE == ApproximationMode::Precise,
+        "Only fast and precise approximation modes are supported");
     ///////////////////////////////////
     // "normalize to calculation range"
     ///////////////////////////////////
@@ -54,7 +57,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
     }
     v_endif;
 
-    if constexpr (!FAST_APPROX) {
+    if constexpr (APPROX_MODE == ApproximationMode::FastApproximate) {
         sfpi::vInt exp = sfpi::exexp(in);
         v_if(sfpi::reinterpret<sfpi::vInt>(in) == 0x7F800000) {
             // If input is infinity, return infinity
@@ -177,19 +180,14 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
     return result;
 }
 
-template <
-    bool APPROXIMATION_MODE,
-    bool FAST_APPROX,
-    bool HAS_BASE_SCALING,
-    bool is_fp32_dest_acc_en,
-    int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result;
         if constexpr (!is_fp32_dest_acc_en) {
-            result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
+            result = calculate_log_body<APPROX_MODE, HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
         } else {
             result = calculate_log_f32_body<HAS_BASE_SCALING>(in, log_base_scale_factor);
         }
@@ -198,14 +196,14 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm0 = 0.69314718246459961f;  // ln(2)
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
-        _init_reciprocal_</*approximation_mode*/ false, /*legacy_compat*/ false>();
+        _init_reciprocal_<ckernel::ApproximationMode::Precise, false, false>();
     }
 }
 

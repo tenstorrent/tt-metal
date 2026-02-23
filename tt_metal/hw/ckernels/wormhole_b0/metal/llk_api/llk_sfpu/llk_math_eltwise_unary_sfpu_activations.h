@@ -12,44 +12,44 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid, APPROXIMATE>(
-        ckernel::sfpu::_init_hardsigmoid_<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid, APPROX_MODE>(
+        ckernel::sfpu::_init_hardsigmoid_<APPROX_MODE>);
 }
 
-template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        static_cast<void (*)()>(ckernel::sfpu::_calculate_activation_<APPROXIMATE, ACTIVATION, ITERATIONS>),
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        static_cast<void (*)()>(ckernel::sfpu::_calculate_activation_<APPROX_MODE, ACTIVATION, ITERATIONS>),
         dst_index,
         vector_mode);
 }
 
 // softsign
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_softsign_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::softsign, APPROXIMATE>(ckernel::sfpu::init_softsign<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::softsign, APPROX_MODE>(ckernel::sfpu::init_softsign<APPROX_MODE>);
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_softsign(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_softsign<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_softsign<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
 }
 
 // celu
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_celu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::celu, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::celu, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_celu(
     uint dst_index, uint32_t alpha, uint32_t alpha_recip, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
         [](uint32_t alpha, uint32_t alpha_recip) {
-            ckernel::sfpu::calculate_celu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>(alpha, alpha_recip);
+            ckernel::sfpu::calculate_celu<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>(alpha, alpha_recip);
         },
         dst_index,
         vector_mode,
@@ -58,15 +58,15 @@ inline void llk_math_eltwise_unary_sfpu_celu(
 }
 
 // softshrink
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_softshrink_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::softshrink, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::softshrink, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_softshrink(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_softshrink<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, param0);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_softshrink<APPROX_MODE, ITERATIONS>, dst_index, vector_mode, param0);
 }
 
 }  // namespace ckernel

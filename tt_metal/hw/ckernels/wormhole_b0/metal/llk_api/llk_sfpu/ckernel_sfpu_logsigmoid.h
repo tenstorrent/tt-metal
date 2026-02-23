@@ -13,7 +13,7 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_logsigmoid(
     const uint dst_index_in0,  // Index for input (x)
     const uint dst_index_in1,  // Index for exp(-x)
@@ -56,7 +56,7 @@ inline void calculate_logsigmoid(
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void logsigmoid_init() {}
 
 }  // namespace sfpu

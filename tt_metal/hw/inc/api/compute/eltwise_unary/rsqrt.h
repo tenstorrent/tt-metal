@@ -14,9 +14,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool legacy_compat = false>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise, bool legacy_compat = false>
 ALWI void rsqrt_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_rsqrt_init<APPROX, legacy_compat>()));
+    MATH((llk_math_eltwise_unary_sfpu_rsqrt_init<approx_mode, legacy_compat>()));
 }
 
 // clang-format off
@@ -33,9 +33,9 @@ ALWI void rsqrt_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool legacy_compat = false, bool FAST_APPROX = false>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise, bool legacy_compat = false>
 ALWI void rsqrt_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_rsqrt<APPROX, DST_ACCUM_MODE, FAST_APPROX, legacy_compat>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_rsqrt<approx_mode, DST_ACCUM_MODE, legacy_compat>(idst)));
 }
 
 }  // namespace ckernel

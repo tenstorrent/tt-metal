@@ -610,11 +610,11 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
 }  // namespace sfpu
 
 inline void _llk_math_top8_tile_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, /*APPROXIMATE=*/true>(ckernel::sfpu::_top8_configure_addrmod_);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, /*APPROX_MODE=*/true>(ckernel::sfpu::_top8_configure_addrmod_);
 }
 
 inline void _llk_math_top8_tile_(uint32_t tile_index, uint32_t dst_index) {
-    _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
+    _llk_math_eltwise_unary_sfpu_params_</*APPROX_MODE=*/true>(
         ckernel::sfpu::_calculate_top8_tile_, dst_index, VectorMode::RC_custom, tile_index);
 }
 

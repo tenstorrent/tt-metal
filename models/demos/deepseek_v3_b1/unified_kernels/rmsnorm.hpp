@@ -125,7 +125,10 @@ struct RMSNorm {
                 mul_reduce_scalar_uninit();
             }
             {
-                add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, args.epsilon);
+                add_rsqrt_tile<
+                    ckernel::use_approximate_mode<APPROX, CTArgs::rsqrt_fast_approx>(),
+                    VectorMode::RC_custom,
+                    1>(0, args.epsilon);
             }
             {
                 // Multiply input by 1/RMS

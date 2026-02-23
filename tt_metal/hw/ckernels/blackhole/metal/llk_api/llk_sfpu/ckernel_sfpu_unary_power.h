@@ -180,7 +180,7 @@ inline void _sfpu_unary_power_(const uint32_t exponent) {
  *
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_power(const uint32_t exponent) {
     _sfpu_unary_power_<ITERATIONS>(exponent);
 }
@@ -190,7 +190,7 @@ inline void calculate_unary_power(const uint32_t exponent) {
  *
  * @param exponent Non-negative integer exponent value
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_power_iterative(const uint32_t exponent) {
     // iterative approach for positive integer exponents
 #pragma GCC unroll 8

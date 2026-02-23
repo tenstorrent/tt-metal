@@ -10,13 +10,13 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat format>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, DataFormat format>
 inline void llk_math_sfpu_sdpa_reduce_row_init() {
     sfpu::init_sdpa_reduce_row<format>();
 }
 
 template <
-    bool APPROXIMATE,
+    ckernel::ApproximationMode APPROX_MODE,
     bool is_fp32_dest_acc_en,
     DataFormat format,
     uint32_t block_width,
@@ -26,7 +26,7 @@ inline void llk_math_sfpu_sdpa_reduce_max_row(uint src_index, uint dst_index, bo
 }
 
 template <
-    bool APPROXIMATE,
+    ckernel::ApproximationMode APPROX_MODE,
     bool is_fp32_dest_acc_en,
     DataFormat format,
     uint32_t block_width,

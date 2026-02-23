@@ -10,15 +10,15 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_tanh_derivative_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::tanh_derivative, APPROXIMATE>(sfpu::tanh_derivative_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::tanh_derivative, APPROX_MODE>(sfpu::tanh_derivative_init<APPROX_MODE>);
 }
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_tanh_derivative(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_tanh_derivative<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_tanh_derivative<APPROX_MODE>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

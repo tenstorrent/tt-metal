@@ -11,7 +11,7 @@ namespace ckernel::sfpu {
 
 // Comparison ops use int32 subtract (whose result is also in the int32 range) + sign check.
 // In order to avoid overflow for inputs of opposite signs, the output is determined directly from a sign check.
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -108,7 +108,7 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
 
 // Float32 binary comparison
 // TODO: Add support for ne, gt, lt, ge, le operations
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(RELATIONAL_OP == SfpuType::eq, "Supported operation types: eq ");
     constexpr uint dst_tile_size_sfpi = 32;

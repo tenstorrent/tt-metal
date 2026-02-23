@@ -24,7 +24,7 @@ namespace sfpu {
           t2) *                                                                                                   \
      t2)
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
 #pragma GCC unroll 0
 

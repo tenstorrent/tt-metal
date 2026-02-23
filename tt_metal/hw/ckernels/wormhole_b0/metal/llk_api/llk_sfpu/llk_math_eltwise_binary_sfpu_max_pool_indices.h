@@ -10,23 +10,23 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE, ckernel::DataLayout layout = ckernel::DataLayout::TILE>
+template <ckernel::ApproximationMode APPROX_MODE, ckernel::DataLayout layout = ckernel::DataLayout::TILE>
 inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::max_pool_with_indices, APPROXIMATE>(
-        sfpu::init_max_pool_with_indices<APPROXIMATE, layout>);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::max_pool_with_indices, APPROX_MODE>(
+        sfpu::init_max_pool_with_indices<APPROX_MODE, layout>);
 }
 
 template <
-    bool APPROXIMATE,
+    ckernel::ApproximationMode APPROX_MODE,
     bool is_fp32_dest_acc_en,
     int num_rows,
     int ITERATIONS = 8,
     ckernel::DataLayout layout = ckernel::DataLayout::TILE,
     bool accumulate = false>
 inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices(uint dst_index, uint32_t idx_index, uint32_t chunk) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
         ckernel::sfpu::
-            calculate_max_pool_with_indices<APPROXIMATE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout, accumulate>,
+            calculate_max_pool_with_indices<APPROX_MODE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout, accumulate>,
         dst_index,
         idx_index,
         chunk);

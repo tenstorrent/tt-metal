@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_exp2() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -29,7 +29,7 @@ inline void calculate_exp2() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void exp2_init() {
     sfpi::vConstFloatPrgm0 = 0.6931471805f;
 }

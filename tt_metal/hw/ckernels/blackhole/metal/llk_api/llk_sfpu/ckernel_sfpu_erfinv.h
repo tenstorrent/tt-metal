@@ -13,7 +13,7 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out;
@@ -32,7 +32,7 @@ sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     return out;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
     // This approximation defines erfinv(x) as:
@@ -43,7 +43,8 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // Compute log(1 - x^2)
     sfpi::vFloat log_value = in * in;
     log_value = 1 - log_value;
-    log_value = calculate_log_body<false, false, true>(log_value, 0);  // use fp32 to avoid intermediate rounding
+    log_value = calculate_log_body<ApproximationMode::Precise, false, true>(
+        log_value, 0);  // use fp32 to avoid intermediate rounding
 
     sfpi::vFloat temp = log_value * 0.5;
 
@@ -67,7 +68,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void calculate_erfinv() {
     // SFPU microcode
     constexpr int ITERATIONS = 8;
@@ -93,7 +94,7 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 void erfinv_init() {
     log_init<false, false, false>();
 }

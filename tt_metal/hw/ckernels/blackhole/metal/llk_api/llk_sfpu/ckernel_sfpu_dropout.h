@@ -11,12 +11,12 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_dropout(uint probability, uint scale) {
-    _calculate_dropout_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, probability, scale);
+    _calculate_dropout_<APPROX_MODE, ITERATIONS>(ITERATIONS, probability, scale);
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void dropout_init(const uint seed) {
     _init_dropout_(seed);
 }

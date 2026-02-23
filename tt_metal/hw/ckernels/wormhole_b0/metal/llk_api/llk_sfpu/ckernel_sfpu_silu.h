@@ -27,9 +27,9 @@ inline void calculate_silu() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void silu_init() {
-    if constexpr (!APPROXIMATION_MODE) {
+    if constexpr (!APPROX_MODE) {
         _init_sfpu_reciprocal_<false>();
     } else {
         _init_sfpu_reciprocal_<true>();

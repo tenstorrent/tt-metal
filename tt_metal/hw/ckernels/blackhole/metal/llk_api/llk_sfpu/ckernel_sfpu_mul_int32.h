@@ -11,9 +11,8 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-
     constexpr uint dst_tile_size = 64;
 
     uint offset_in0 = dst_index_in0 * dst_tile_size;
@@ -87,7 +86,7 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     TTI_SFPNOP;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void mul_int32_init() {
     constexpr uint b1 = p_sfpu::LREG2;
     constexpr uint c = p_sfpu::LREG4;

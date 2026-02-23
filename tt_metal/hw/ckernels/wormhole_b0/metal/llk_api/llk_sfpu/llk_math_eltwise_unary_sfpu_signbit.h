@@ -10,21 +10,21 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_signbit_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::signbit, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::signbit, APPROX_MODE>();
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_signbit(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_signbit<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_signbit<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
 }
 
-template <bool APPROXIMATE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_signbit_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_signbit_int32<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        ckernel::sfpu::calculate_signbit_int32<APPROX_MODE, ITERATIONS>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

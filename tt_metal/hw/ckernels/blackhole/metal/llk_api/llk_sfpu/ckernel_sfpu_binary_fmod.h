@@ -111,7 +111,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -120,7 +120,7 @@ inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary_fmod(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -135,12 +135,12 @@ inline void calculate_sfpu_binary_fmod(const uint dst_index_in0, const uint dst_
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void fmod_int32_init() {
-    div_floor_init<APPROXIMATION_MODE>();
+    div_floor_init<APPROX_MODE>();
 }
 
-template <bool APPROXIMATION_MODE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void fmod_binary_init() {
     _init_sfpu_reciprocal_<false>();
 }

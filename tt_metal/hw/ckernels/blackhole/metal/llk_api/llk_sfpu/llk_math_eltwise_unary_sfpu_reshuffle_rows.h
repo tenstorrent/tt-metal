@@ -20,9 +20,9 @@ namespace ckernel {
  * from different input positions are accumulated into their corresponding embedding rows.
  *
  */
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_reshuffle_rows_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reshuffle_rows, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::reshuffle_rows, APPROX_MODE>();
 }
 
 /**
@@ -44,11 +44,11 @@ inline void llk_math_eltwise_unary_sfpu_reshuffle_rows_init() {
  * @note Must call llk_math_eltwise_unary_sfpu_reshuffle_rows_init() before first use
  * @note idx_addr must point to valid L1 memory accessible by TRISC1 compute thread
  */
-template <bool APPROXIMATE>
+template <ckernel::ApproximationMode APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_reshuffle_rows(
     uint dst_index, uint32_t idx_addr, int vector_mode = (int)VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        sfpu::calculate_reshuffle_rows<APPROXIMATE>, dst_index, vector_mode, idx_addr);
+    _llk_math_eltwise_unary_sfpu_params_<APPROX_MODE>(
+        sfpu::calculate_reshuffle_rows<APPROX_MODE>, dst_index, vector_mode, idx_addr);
 }
 
 }  // namespace ckernel

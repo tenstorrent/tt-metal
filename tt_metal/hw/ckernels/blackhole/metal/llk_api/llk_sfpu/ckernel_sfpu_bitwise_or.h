@@ -8,7 +8,7 @@
 using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ckernel::ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_bitwise_or(const uint value) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
