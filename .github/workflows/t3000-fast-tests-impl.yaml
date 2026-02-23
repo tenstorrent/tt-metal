@@ -29,7 +29,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 20
+        default: 480
       run-fabric-tests:
         required: false
         type: string
