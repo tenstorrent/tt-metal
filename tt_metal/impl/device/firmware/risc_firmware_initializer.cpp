@@ -13,9 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "device/device_manager.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
@@ -39,12 +37,14 @@ namespace tt::tt_metal {
 
 RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
-    tt_fabric::ControlPlane& control_plane,
+    const GetControlPlaneFn& get_control_plane,
     dispatch_core_manager& dispatch_core_manager,
-    size_t fw_compile_hash) :
+    size_t fw_compile_hash,
+    std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores) :
     FirmwareInitializer(std::move(descriptor)),
-    control_plane_(&control_plane),
+    get_control_plane_(get_control_plane),
     dispatch_core_manager_(dispatch_core_manager),
+    get_dispatch_ignore_cores_(std::move(get_dispatch_ignore_cores)),
     fw_compile_hash_(fw_compile_hash),
     num_hw_cqs_(static_cast<uint8_t>(descriptor_->num_cqs())) {
     const Hal& hal = descriptor_->hal();
@@ -54,10 +54,6 @@ RiscFirmwareInitializer::RiscFirmwareInitializer(
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
-
-    // ControlPlane may be replaced during runtime and it's needed for teardown to figure out which ethernet cores are
-    // active It gets replaced when the Fabric mode changes
-    // MetalContext::instance().subscribe_context_descriptor_state(this);
 }
 
 RiscFirmwareInitializer::~RiscFirmwareInitializer() = default;
@@ -74,7 +70,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     std::vector<std::shared_future<void>> futures;
     futures.reserve(device_ids.size());
 
-    // Reserve tables per device ID for multi threaded access below
+    // Reserve tables per device ID (single-threaded)
     dram_bank_offset_map_.reserve(device_ids.size());
     l1_bank_offset_map_.reserve(device_ids.size());
     dram_bank_to_noc_xy_.reserve(device_ids.size());
@@ -90,8 +86,33 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
         worker_logical_row_to_virtual_row_[device_id].reserve(num_hw_cqs_);
     }
 
+    // Set pointers to directly access the tables for each device as
+    // multi threaded unordered_map access is not thread-safe
+    struct PerDeviceTableRefs {
+        tt::ChipId device_id;
+        std::vector<int32_t>* dram_bank_offset_map;
+        std::vector<int32_t>* l1_bank_offset_map;
+        std::vector<uint16_t>* dram_bank_to_noc_xy;
+        std::vector<uint16_t>* l1_bank_to_noc_xy;
+        std::vector<uint8_t>* worker_logical_col_to_virtual_col;
+        std::vector<uint8_t>* worker_logical_row_to_virtual_row;
+    };
+    std::vector<PerDeviceTableRefs> table_refs;
+    table_refs.reserve(device_ids.size());
     for (tt::ChipId device_id : device_ids) {
-        futures.emplace_back(detail::async([this, device_id]() {
+        table_refs.push_back(
+            {device_id,
+             &dram_bank_offset_map_[device_id],
+             &l1_bank_offset_map_[device_id],
+             &dram_bank_to_noc_xy_[device_id],
+             &l1_bank_to_noc_xy_[device_id],
+             &worker_logical_col_to_virtual_col_[device_id],
+             &worker_logical_row_to_virtual_row_[device_id]});
+    }
+
+    for (auto refs : table_refs) {
+        futures.emplace_back(detail::async([this, refs]() {
+            tt::ChipId device_id = refs.device_id;
             // Clear L1/DRAM if requested - skip for mock devices
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
                 if (rtoptions_.get_clear_l1()) {
@@ -103,8 +124,14 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             }
             [[maybe_unused]] int ai_clk = cluster_.get_device_aiclk(device_id);
             log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
-            generate_device_bank_to_noc_tables(device_id);
-            generate_worker_logical_to_virtual_map(device_id);
+            generate_device_bank_to_noc_tables(
+                device_id,
+                *refs.dram_bank_offset_map,
+                *refs.l1_bank_offset_map,
+                *refs.dram_bank_to_noc_xy,
+                *refs.l1_bank_to_noc_xy);
+            generate_worker_logical_to_virtual_map(
+                device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
 
             // Skip firmware building for mock devices
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
@@ -150,7 +177,7 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
         if (hal_.get_eth_fw_is_cooperative()) {
             auto all_devices = cluster_.all_chip_ids();
             for (tt::ChipId device_id : all_devices) {
-                for (const auto& logical_core : control_plane_->get_active_ethernet_cores(device_id)) {
+                for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
                     CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::ETH);
                     erisc_send_exit_signal(device_id, virtual_core, false);
@@ -170,13 +197,8 @@ void RiscFirmwareInitializer::teardown() {
     if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
         for (tt::ChipId device_id : all_devices) {
             std::unordered_set<CoreCoord> ignore_cores;
-            if (MetalContext::instance().is_device_manager_initialized()) {
-                const auto& dispatch_cores =
-                    MetalContext::instance().device_manager()->get_virtual_dispatch_cores(device_id);
-                const auto& routing_cores =
-                    MetalContext::instance().device_manager()->get_virtual_dispatch_routing_cores(device_id);
-                ignore_cores.insert(dispatch_cores.begin(), dispatch_cores.end());
-                ignore_cores.insert(routing_cores.begin(), routing_cores.end());
+            if (get_dispatch_ignore_cores_) {
+                ignore_cores = (*get_dispatch_ignore_cores_)(device_id);
             }
             assert_cores(device_id, ignore_cores);
             cluster_.l1_barrier(device_id);
@@ -203,7 +225,7 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         }
     }
 
-    for (const auto& eth_core : control_plane_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         static uint32_t zero_vec_size = hal::get_erisc_l1_unreserved_size();
         auto zero_vec_addr = hal::get_erisc_l1_unreserved_base();
         static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
@@ -251,17 +273,17 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
     if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         return;
     }
-    for (const auto& eth_core : control_plane_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         clear_ethernet_core(eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
-    for (const auto& eth_core : control_plane_->get_inactive_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         clear_ethernet_core(eth_core, HalProgrammableCoreType::IDLE_ETH);
     }
     cluster_.l1_barrier(device_id);
 }
 
 void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId device_id) {
-    for (const auto& logical_core : control_plane_->get_active_ethernet_cores(device_id)) {
+    for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         if (rtoptions_.get_enable_2_erisc_mode()) {
@@ -277,7 +299,8 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(
     CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     const bool teardown_mode = (ignore_virtual_cores != nullptr);
     const std::unordered_set<CoreCoord>& active_eth_logical =
-        teardown_mode ? control_plane_->get_active_ethernet_cores(device_id, false) : std::unordered_set<CoreCoord>{};
+        teardown_mode ? this->get_control_plane_().get_active_ethernet_cores(device_id, false)
+                      : std::unordered_set<CoreCoord>{};
     const bool skip_active_eth_workers = teardown_mode && !hal_.get_eth_fw_is_cooperative();
 
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -299,7 +322,7 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(
 }
 
 void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_id) {
-    for (const auto& logical_core : control_plane_->get_inactive_ethernet_cores(device_id)) {
+    for (const auto& logical_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
@@ -312,7 +335,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         if (hal_.get_eth_fw_is_cooperative()) {
-            for (const auto& logical_core : control_plane_->get_active_ethernet_cores(device_id)) {
+            for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
                 CoreCoord virtual_core =
                     cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
                 if (erisc_app_still_running(device_id, virtual_core)) {
@@ -373,6 +396,20 @@ CoreCoord RiscFirmwareInitializer::virtual_noc0_coordinate(tt::ChipId device_id,
 }
 
 void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(tt::ChipId device_id) {
+    generate_device_bank_to_noc_tables(
+        device_id,
+        dram_bank_offset_map_[device_id],
+        l1_bank_offset_map_[device_id],
+        dram_bank_to_noc_xy_[device_id],
+        l1_bank_to_noc_xy_[device_id]);
+}
+
+void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
+    tt::ChipId device_id,
+    std::vector<int32_t>& dram_bank_offset_map,
+    std::vector<int32_t>& l1_bank_offset_map,
+    std::vector<uint16_t>& dram_bank_to_noc_xy,
+    std::vector<uint16_t>& l1_bank_to_noc_xy) {
     BankMapping l1_bank_remap(descriptor_->l1_bank_remap().begin(), descriptor_->l1_bank_remap().end());
     auto config = L1BankingAllocator::generate_config(
         device_id,
@@ -384,23 +421,23 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(tt::ChipId devi
     const auto allocator = L1BankingAllocator(config);
     const auto& soc_d = cluster_.get_soc_desc(device_id);
     const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);
-    dram_bank_offset_map_[device_id].clear();
-    dram_bank_offset_map_[device_id].resize(num_dram_banks);
+    dram_bank_offset_map.clear();
+    dram_bank_offset_map.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
+        dram_bank_offset_map[bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-    l1_bank_offset_map_[device_id].clear();
-    l1_bank_offset_map_[device_id].resize(num_l1_banks);
+    l1_bank_offset_map.clear();
+    l1_bank_offset_map.resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         l1_noc_coord_per_bank[bank_id] = cluster_.get_virtual_coordinate_from_logical_coordinates(
             device_id, allocator.get_logical_core_from_bank_id(bank_id), CoreType::WORKER);
-        l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
+        l1_bank_offset_map[bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
     }
 
-    dram_bank_to_noc_xy_[device_id].clear();
-    dram_bank_to_noc_xy_[device_id].reserve(hal_.get_num_nocs() * num_dram_banks);
+    dram_bank_to_noc_xy.clear();
+    dram_bank_to_noc_xy.reserve(hal_.get_num_nocs() * num_dram_banks);
     bool noc_translation_enabled = cluster_.get_target_device_type() != tt::TargetDevice::Mock &&
                                    cluster_.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
@@ -418,40 +455,48 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(tt::ChipId devi
                 noc_y = hal_.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y);
             }
             uint16_t xy = ((noc_y << hal_.get_noc_addr_node_id_bits()) | noc_x) << hal_.get_noc_coord_reg_offset();
-            dram_bank_to_noc_xy_[device_id].push_back(xy);
+            dram_bank_to_noc_xy.push_back(xy);
         }
     }
 
-    l1_bank_to_noc_xy_[device_id].clear();
-    l1_bank_to_noc_xy_[device_id].reserve(hal_.get_num_nocs() * l1_noc_coord_per_bank.size());
+    l1_bank_to_noc_xy.clear();
+    l1_bank_to_noc_xy.reserve(hal_.get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < hal_.get_num_nocs(); noc++) {
         for (const auto& noc_coord : l1_noc_coord_per_bank) {
             auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << hal_.get_noc_addr_node_id_bits()) | noc_x) << hal_.get_noc_coord_reg_offset();
-            l1_bank_to_noc_xy_[device_id].push_back(xy);
+            l1_bank_to_noc_xy.push_back(xy);
         }
     }
 }
 
 void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(tt::ChipId device_id) {
+    generate_worker_logical_to_virtual_map(
+        device_id, worker_logical_col_to_virtual_col_[device_id], worker_logical_row_to_virtual_row_[device_id]);
+}
+
+void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
+    tt::ChipId device_id,
+    std::vector<uint8_t>& worker_logical_col_to_virtual_col,
+    std::vector<uint8_t>& worker_logical_row_to_virtual_row) {
     const auto& soc_desc = cluster_.get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
 
-    worker_logical_col_to_virtual_col_[device_id].clear();
-    worker_logical_row_to_virtual_row_[device_id].clear();
-    worker_logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
-    worker_logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
+    worker_logical_col_to_virtual_col.clear();
+    worker_logical_row_to_virtual_row.clear();
+    worker_logical_col_to_virtual_col.reserve(tensix_grid_size.x);
+    worker_logical_row_to_virtual_row.reserve(tensix_grid_size.y);
 
     for (size_t x = 0; x < tensix_grid_size.x; x++) {
-        worker_logical_col_to_virtual_col_[device_id].push_back(
+        worker_logical_col_to_virtual_col.push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .x);
     }
     for (size_t y = 0; y < tensix_grid_size.y; y++) {
-        worker_logical_row_to_virtual_row_[device_id].push_back(
+        worker_logical_row_to_virtual_row.push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
@@ -998,7 +1043,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     initialize_firmware(
         device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
 
-    for (const auto& eth_core : control_plane_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         static std::vector<uint32_t> zero_vec_erisc_init(
             hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) / sizeof(uint32_t),
             0);
@@ -1021,7 +1066,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
     std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
-    for (const auto& eth_core : control_plane_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info.view().absolute_logical_x() = eth_core.x;
@@ -1045,7 +1090,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
-    for (const auto& eth_core : control_plane_->get_inactive_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info.view().absolute_logical_x() = eth_core.x;
