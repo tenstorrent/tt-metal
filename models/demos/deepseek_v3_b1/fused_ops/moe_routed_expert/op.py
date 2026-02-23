@@ -199,8 +199,8 @@ def setup_dram_matmul(
     in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
     in1_block_size_bytes = subblock_k * weights_tile_size
 
-    # CB in1: weights working buffer
-    num_in1_buffers = 3 * num_subblocks_k
+    # CB in1: weights working buffer (triple-buffered)
+    num_in1_buffers = 3
     assert num_in1_buffers <= 15, f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15)"
     in1_CB_tiles = subblock_k * num_in1_buffers
     in1_CB_size = in1_CB_tiles * weights_tile_size
@@ -1072,7 +1072,7 @@ class MoeRoutedExpert:
 
         # Index mcast parameters
         index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
+        index_mcast_receiver_semaphore_id = 4
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
@@ -1084,7 +1084,7 @@ class MoeRoutedExpert:
 
         # Expert scale mcast parameters (different semaphores to avoid race condition with back-to-back mcasts)
         expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        expert_scale_mcast_receiver_semaphore_id = 4  # Different from index_mcast
+        expert_scale_mcast_receiver_semaphore_id = 5  # Different from index_mcast
         expert_scale_mcast_num_pages = 1
         expert_scale_mcast_data_size_bytes = expert_scale_tile_size
 
@@ -1604,6 +1604,12 @@ class MoeRoutedExpert:
             initial_value=0,
         )
 
+        index_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=index_mcast_receiver_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=0,
+        )
+
         expert_scale_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=expert_scale_mcast_receiver_semaphore_id,
             core_ranges=full_device_grid,
@@ -1758,6 +1764,7 @@ class MoeRoutedExpert:
             mcast_receiver_semaphore_descriptor,
             gather_noc0_semaphore_descriptor,
             gather_noc1_semaphore_descriptor,
+            index_mcast_receiver_semaphore_descriptor,
             expert_scale_mcast_receiver_semaphore_descriptor,
         ]
 
