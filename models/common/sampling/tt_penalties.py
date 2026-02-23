@@ -84,7 +84,7 @@ class TTPenalties(LightweightModule):
         super().__init__()
         self.mesh_device = mesh_device
         self.cluster_shape = mesh_device.shape
-        self.max_batch_size = 32  # max_batch_size -- penalties and sampling only run for padded batch size
+        self.max_batch_size = getattr(args, "max_batch_size", 32)
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
@@ -94,6 +94,13 @@ class TTPenalties(LightweightModule):
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self._op_kwargs = {"sub_core_grids": self.sub_core_grids} if self.sub_core_grids else {}
 
+        # sampling_dp > 1 when multiple mesh rows each sample independently
+        # (e.g. GPT-OSS on [4,8] Galaxy: 4 rows × 32 users = 128 total)
+        self._sampling_dp = getattr(args, "sampling_dp", 1)
+        # Total batch across all rows. Host tensors use this size; after
+        # (0, ...) sharding each row gets max_batch_size entries.
+        self._total_batch = self.max_batch_size * self._sampling_dp
+
         # shard vocab size over larger cluster dim
         if mesh_device.shape[-1] == self.num_devices:
             shard_dims = (None, 1)
@@ -101,18 +108,37 @@ class TTPenalties(LightweightModule):
         else:
             shard_dims = (1, None)
             shard_dims_slice = (0, None)
+
+        # For row-sharded mode (sampling_dp > 1), also shard the batch dimension
+        # across mesh rows so each row gets its own per-user penalty state.
+        if self._sampling_dp > 1:
+            assert (
+                mesh_device.shape[-1] == self.num_devices
+            ), "Row-sharded penalties require vocab sharding along mesh columns"
+            shard_dims = (0, 1)  # batch across rows, vocab across cols
+            shard_dims_gathered = (0, None)  # batch across rows, vocab replicated
+            shard_dims_bf16 = (0, None)  # per-row penalty params
+            per_row_batch = self.max_batch_size  # NOT divided: each row gets max_batch_size
+        else:
+            shard_dims_gathered = (None, None)
+            shard_dims_bf16 = None
+            per_row_batch = self.max_batch_size
+
+        self.per_row_batch_size = per_row_batch
+        self._shard_dims_gathered = shard_dims_gathered
+
         self.prompt_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
-        self.output_counts_gathered = self._alloc_int_buffer(shard_dims=(None, None))
+        self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
         self.decode_src = self._alloc_int_buffer(
-            host=torch.ones(self.max_batch_size, 1), shard_dims=(None, None), layout=ttnn.ROW_MAJOR_LAYOUT
+            host=torch.ones(self._total_batch, 1), shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT
         )
-        self.zeros = self._alloc_int_buffer(shard_dims=(None, None), layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.presence_penalties = self._alloc_bf16_buffer()
-        self.frequency_penalties = self._alloc_bf16_buffer()
-        self.repetition_penalties = self._alloc_bf16_buffer()
-        self.inverse_repetition_penalties = self._alloc_bf16_buffer()
+        self.zeros = self._alloc_int_buffer(shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.presence_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
+        self.frequency_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
+        self.repetition_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
+        self.inverse_repetition_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
 
         vocab_per_dev = self.vocab_size // self.num_devices
         d = torch.arange(self.num_devices, dtype=torch.int32)
@@ -122,9 +148,9 @@ class TTPenalties(LightweightModule):
         start_1d[0::2] = 0
         start_1d[1::2] = d * vocab_per_dev
 
-        # [32, vocab_per_dev, 32, 2*vocab_per_dev, 32, 3*vocab_per_dev, ...]
+        # [batch, vocab_per_dev, batch, 2*vocab_per_dev, ...]
         end_1d = torch.empty(2 * self.num_devices, dtype=torch.int32)
-        end_1d[0::2] = self.max_batch_size  # 32, exclusive
+        end_1d[0::2] = per_row_batch  # per-row batch size, exclusive
         end_1d[1::2] = (d + 1) * vocab_per_dev  # exclusive
 
         self.slice_start = ttnn.from_torch(
@@ -140,7 +166,7 @@ class TTPenalties(LightweightModule):
 
     def _alloc_int_buffer(self, shard_dims, host=None, layout=ttnn.TILE_LAYOUT):
         if host is None:
-            host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
+            host = torch.zeros((self._total_batch, self.vocab_size), dtype=torch.int32)
         return ttnn.from_torch(
             host,
             dtype=ttnn.int32,
@@ -150,12 +176,26 @@ class TTPenalties(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _alloc_bf16_buffer(self):
-        host = torch.zeros((self.max_batch_size, 1), dtype=torch.float32)
+    def _alloc_bf16_buffer(self, shard_dims=None):
+        host = torch.zeros((self._total_batch, 1), dtype=torch.float32)
+        if shard_dims is not None:
+            return ttnn.from_torch(
+                host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.cluster_shape),
+            )
         return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
 
     def _copy_host_to_device(self, dst: ttnn.Tensor, src: torch.Tensor):
-        src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None)
+        if self._sampling_dp > 1:
+            # For row-sharded buffers, create a properly sharded host tensor
+            # so copy_host_to_device_tensor writes per-row shards correctly.
+            mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
+            src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=mapper)
+        else:
+            src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None)
         ttnn.copy_host_to_device_tensor(src_tt, dst)
 
     def reset_params(self, presence: List[float], frequency: List[float], repetition: List[float]):
@@ -171,24 +211,24 @@ class TTPenalties(LightweightModule):
 
     def _pad_params(self, values: List[float]) -> torch.Tensor:
         tensor = torch.tensor(values, dtype=torch.float32)
-        if tensor.numel() < self.max_batch_size:
+        if tensor.numel() < self._total_batch:
             pad_value = tensor[-1] if tensor.numel() > 0 else torch.tensor(0.0)
-            pad = pad_value.repeat(self.max_batch_size - tensor.numel())
+            pad = pad_value.repeat(self._total_batch - tensor.numel())
             tensor = torch.cat([tensor, pad])
-        elif tensor.numel() > self.max_batch_size:
-            tensor = tensor[: self.max_batch_size]
-        return tensor.view(self.max_batch_size, 1)
+        elif tensor.numel() > self._total_batch:
+            tensor = tensor[: self._total_batch]
+        return tensor.view(self._total_batch, 1)
 
     def _pad_batch_to_max(self, tokens_2d: torch.Tensor, pad_value: int) -> torch.Tensor:
-        """Pad/truncate first dim to max_batch_size (32)."""
+        """Pad/truncate first dim to _total_batch."""
         if tokens_2d.dim() != 2:
             raise ValueError(f"Expected 2D tensor [B, S], got {tokens_2d.shape}")
         B, S = tokens_2d.shape
-        if B < self.max_batch_size:
-            pad = torch.full((self.max_batch_size - B, S), pad_value, dtype=tokens_2d.dtype)
+        if B < self._total_batch:
+            pad = torch.full((self._total_batch - B, S), pad_value, dtype=tokens_2d.dtype)
             return torch.cat([tokens_2d, pad], dim=0)
-        if B > self.max_batch_size:
-            return tokens_2d[: self.max_batch_size]
+        if B > self._total_batch:
+            return tokens_2d[: self._total_batch]
         return tokens_2d
 
     def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
@@ -201,12 +241,12 @@ class TTPenalties(LightweightModule):
 
         prompt_tokens_tt = self._alloc_int_buffer(
             host=idx_host,
-            shard_dims=(None, None),
+            shard_dims=self._shard_dims_gathered,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         src_tt = self._alloc_int_buffer(
             host=src_host,
-            shard_dims=(None, None),
+            shard_dims=self._shard_dims_gathered,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=self.prompt_mask)
@@ -224,17 +264,24 @@ class TTPenalties(LightweightModule):
             src_host = (tokens_2d != -1).to(torch.int32)
             idx_host = torch.where(tokens_2d == -1, torch.zeros_like(tokens_2d), tokens_2d)
 
+            mapper = (
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._shard_dims_gathered, mesh_shape=self.cluster_shape)
+                if self._sampling_dp > 1
+                else None
+            )
             tokens_tt = ttnn.from_torch(
                 idx_host,
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
             src_tt = ttnn.from_torch(
                 src_host,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
             self.token_bin_counts_and_mask(
                 new_tokens=tokens_tt,
@@ -245,14 +292,19 @@ class TTPenalties(LightweightModule):
             )
 
     def update_output_tokens(self, new_tokens):
-        # reshape decode token
-        if new_tokens.shape[-1] == 32 and new_tokens.shape[-2] == 1:
-            new_tokens = ttnn.reshape(new_tokens, [32, 1], **self._op_kwargs)
+        # Reshape decode token to [batch, 1] for scatter_add.
+        # Non-row-sharded: token shape is [1,1,1,batch] → shape[-1]==batch, shape[-2]==1
+        # Row-sharded:     token shape is [1,1,batch,1] → shape[-2]==batch, shape[-1]==1
+        batch = self.per_row_batch_size
+        if (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
+            new_tokens.shape[-2] == batch and new_tokens.shape[-1] == 1
+        ):
+            new_tokens = ttnn.reshape(new_tokens, [batch, 1], **self._op_kwargs)
             src = self.decode_src
         else:
             src = self._alloc_int_buffer(
-                host=torch.ones(self.max_batch_size, new_tokens.shape[-1]),
-                shard_dims=(None, None),
+                host=torch.ones(self._total_batch, new_tokens.shape[-1]),
+                shard_dims=self._shard_dims_gathered,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
         self.token_bin_counts_and_mask(
