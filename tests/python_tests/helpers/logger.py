@@ -39,13 +39,13 @@ from loguru import logger
 # Remove loguru's default handler so we can configure our own
 logger.remove()
 
-# Compact format for file output (no colors)
-_PLAIN_FORMAT = "{time:HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
-
-# Error log format with date for the persistent error log
-_ERROR_FORMAT = (
+# Shared format: date + time so logs are unambiguous across day boundaries
+_PLAIN_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
 )
+
+# Error log uses the same format (kept as a separate name for clarity)
+_ERROR_FORMAT = _PLAIN_FORMAT
 
 # Regex to strip ANSI escape codes from messages written to files
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -100,9 +100,11 @@ def configure_logger(level: str = None):
 
     suffix = _xdist_worker_suffix()
 
-    # Propagate to stdlib logging so pytest's --log-cli-level can display them.
-    # pytest's live logging integrates properly with pytest-sugar.
-    logger.add(_PropagateHandler(), format="{message}", level=level)
+    # Propagate everything to stdlib logging at TRACE so pytest's --log-cli-level
+    # is the single level gatekeeper for the terminal — consistent with all other
+    # stdlib loggers (e.g. filelock). Loguru-specific level filtering is kept only
+    # for the file sinks below.
+    logger.add(_PropagateHandler(), format="{message}", level="TRACE")
 
     # Session log - full log for this run (overwritten each session)
     logger.add(
