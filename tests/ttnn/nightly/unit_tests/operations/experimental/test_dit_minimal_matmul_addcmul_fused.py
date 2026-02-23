@@ -44,7 +44,6 @@ def run_dit_minimal_matmul_addcmul_fused_test(
                     Defaults to None, which uses the same dtype as the matmul inputs.
     """
     # Resolve gate dtype: default to the main dtype
-    torch_gate_dtype = torch.float32 if gate_dtype == ttnn.float32 else torch.bfloat16
     tt_gate_dtype = gate_dtype if gate_dtype is not None else dtype
 
     torch.manual_seed(0)
@@ -58,12 +57,10 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 
     # Compute expected torch output (full fused operation) in float32 for accuracy
     with torch.no_grad():
-        torch_matmul_output = torch_matmul_input.float() @ torch_matmul_weight.float()
+        torch_matmul_output = torch_matmul_input @ torch_matmul_weight
         if torch_bias is not None:
-            torch_matmul_output = torch_matmul_output + torch_bias.float()
-        torch_expected_fused = torch.addcmul(
-            torch_addcmul_a.float(), torch_matmul_output, torch_addcmul_b.float(), value=scalar
-        )
+            torch_matmul_output = torch_matmul_output + torch_bias
+        torch_expected_fused = torch.addcmul(torch_addcmul_a, torch_matmul_output, torch_addcmul_b, value=scalar)
 
     # Convert to ttnn tensors
     tt_matmul_input = ttnn.from_torch(torch_matmul_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
