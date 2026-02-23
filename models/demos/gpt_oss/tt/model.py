@@ -388,6 +388,21 @@ class Model:
 
         return logits
 
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        """
+        Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
+
+        Unlike tt_transformers `Transformer`, GPT-OSS `ttnn_prefill_forward` already
+        applies final norm + lm_head, so this method only slices logits.
+        """
+        get_last_token = (last_token_idx // 32) * 32
+        logits = ttnn.slice(
+            logits,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, logits.shape[-1]),
+        )
+        return logits
+
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
         Prepare inputs for decode mode - matches tt_transformers interface (4 values).
@@ -471,7 +486,7 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def prepare_inputs_prefill_trace(
+    def prepare_prefill_inputs_trace(
         self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
     ):
         """Prepare inputs on host so we later send them to device"""
@@ -488,7 +503,8 @@ class Model:
     def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
         """Transform and embed tokens on device"""
         tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        tokens.deallocate(True)
+        # Keep `tokens` allocated: trace replay updates this same device buffer via copy_host_to_device.
+        # Deallocating it here breaks prefill trace replay with "Buffer must be allocated on device".
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         return tokens_embd, tt_page_table, tt_chunk_page_table
