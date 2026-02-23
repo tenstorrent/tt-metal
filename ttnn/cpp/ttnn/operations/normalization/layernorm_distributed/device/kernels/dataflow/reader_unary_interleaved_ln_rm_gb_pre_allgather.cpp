@@ -26,9 +26,8 @@ void kernel_main() {
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
-    uint32_t scaler_bits = get_arg_val<uint32_t>(4);
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce>(scaler_f);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 

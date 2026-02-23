@@ -11,7 +11,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include <bit>
 #include <optional>
 #include <string>
 #include <variant>
@@ -249,6 +248,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         .append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(W * num_devices);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
@@ -407,8 +407,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     }
 
     uint32_t curr_row = 0;
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    uint32_t winv_bits = std::bit_cast<uint32_t>(winv);
     union {
         float f;
         uint32_t u;
@@ -439,7 +437,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                      tiles_per_core_y,
                      tile_offset,
                      stats_offset,
-                     winv_bits,
                      e.u,
                      gamma_dram_addr,
                      beta_dram_addr,
@@ -476,7 +473,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                  Wt,
                  tile_offset,
                  stats_offset,
-                 winv_bits,
                  e.u,
                  gamma_dram_addr,
                  beta_dram_addr,
@@ -518,12 +514,12 @@ void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
             auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
 
             reader_args[0] = input_addr;
-            reader_args[9] = stats_addr;
+            reader_args[8] = stats_addr;
             if (has_gamma) {
-                reader_args[7] = gamma_addr;
+                reader_args[6] = gamma_addr;
             }
             if (has_beta) {
-                reader_args[8] = beta_addr;
+                reader_args[7] = beta_addr;
             }
         }
 

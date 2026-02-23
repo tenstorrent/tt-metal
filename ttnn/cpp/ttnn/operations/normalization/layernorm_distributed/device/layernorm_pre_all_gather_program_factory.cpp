@@ -11,7 +11,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include <bit>
 #include <optional>
 #include <string>
 #include <variant>
@@ -204,7 +203,6 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
     }
 
     uint32_t curr_row = 0;
-    uint32_t winv_bits = std::bit_cast<uint32_t>(1.0f);
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -221,7 +219,7 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
         uint32_t out_tile_offset = curr_row * out0_tiles;
 
         tt::tt_metal::SetRuntimeArgs(
-            program, reader_kernels_id, core, {a_addr, num_tile_rows_per_core, Wt, in_tile_offset, winv_bits});
+            program, reader_kernels_id, core, {a_addr, num_tile_rows_per_core, Wt, in_tile_offset});
         tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
         tt::tt_metal::SetRuntimeArgs(
             program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
@@ -443,7 +441,6 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, merge_cores, cb_out_final_config);
 
-    uint32_t winv_bits = std::bit_cast<uint32_t>(1.0f);
     for (uint32_t x = 0; x < cores_x; ++x) {
         for (uint32_t y = 0; y < cores_y; ++y) {
             CoreCoord core = {x, y};
@@ -466,8 +463,7 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
                  is_merge_core,
                  merge_core.x,
                  merge_core.y,
-                 y,
-                 winv_bits});
+                 y});
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {is_merge_core});
             if (is_merge_core) {
                 tt::tt_metal::SetRuntimeArgs(
