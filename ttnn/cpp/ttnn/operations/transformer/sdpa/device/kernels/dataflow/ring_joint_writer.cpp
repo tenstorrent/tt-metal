@@ -133,7 +133,7 @@ void kernel_main() {
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
-    uint32_t rind_index = fused_op_receiver.ring_index;
+    uint32_t ring_index = fused_op_receiver.ring_index;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -144,9 +144,8 @@ void kernel_main() {
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
         const bool ring_iter_does_work =
-            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
+            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && ring_index < ring_id);
         if (!ring_iter_does_work) {
-            DPRINT << "SKIPPING WRITE" << ENDL();
             continue;
         }
 
@@ -184,9 +183,6 @@ void kernel_main() {
         // JOINT L MASK
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-
-        // DPRINT << "global mask: " << (ring_iter_needs_global_n_mask ? "true" : "false")
-        //        << " local mask: " << (ring_iter_needs_local_n_mask ? "true" : "false") << ENDL();
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
