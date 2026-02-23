@@ -39,6 +39,7 @@ from models.tt_transformers.tt.common import (
 MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 
 
+
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
@@ -588,7 +589,7 @@ class Generator(WarmupForwardMixin):
                     if sampling_enabled:
                         sampling_executed = True
                         per_request_params = format_sampling_params(
-                            _broadcast_formatted_sampling_params(sampling_params, local_idx), 32
+                            broadcast_sampling_params(sampling_params, local_idx, slot_len=32), 32
                         )
                         _apply_prefill_sampling_state(
                             self.model[model_id],
