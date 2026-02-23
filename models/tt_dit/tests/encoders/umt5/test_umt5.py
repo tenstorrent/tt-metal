@@ -24,6 +24,7 @@ from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config as TT_UMT5Config
 from models.tt_dit.encoders.umt5.model_umt5 import UMT5Encoder as TT_UMT5Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils import cache
 from models.tt_dit.utils.check import assert_quality
 
 
@@ -249,6 +250,14 @@ def test_umt5_encoder(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
+    tt_mask = ttnn.from_torch(
+        mask,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=encoder_submesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
+    )
+
     # === TT-DiT UMT5 ====
     config = TT_UMT5Config(
         vocab_size=hf_model.config.vocab_size,
@@ -264,7 +273,15 @@ def test_umt5_encoder(
     )
 
     tt_encoder = TT_UMT5Encoder(config, encoder_submesh, ccl_manager, parallel_config)
-    tt_encoder.load_torch_state_dict(hf_model.state_dict())
+    # tt_encoder.load_torch_state_dict(hf_model.state_dict())
+    cache.load_model(
+        tt_encoder,
+        model_name=model_name_checkpoint,
+        subfolder="text_encoder",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(encoder_submesh.shape),
+        get_torch_state_dict=lambda: hf_model.state_dict(),
+    )
 
     # time TT model inference only
     # with warmup

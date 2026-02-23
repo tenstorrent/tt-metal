@@ -113,13 +113,11 @@ class PixArtAlphaTextProjection(Module):
         self.in_features = in_features
         self.hidden_size = hidden_size
         self.mesh_device = mesh_device
-        self.act_fn = ACT2CLS[act_fn]  # TODO: Fuse with linear instead
-        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device)
+        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device, activation_fn=act_fn)
         self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
-        x = self.act_fn(x)
         return self.linear_2(x)
 
 
@@ -577,6 +575,7 @@ class WanTimeTextImageEmbedding(Module):
             mesh_axis=tp_mesh_axis,
             ccl_manager=ccl_manager,
         )  # Output is fractured according to the older behaviour when sharding from torch. See _prepare_torch_state(...)
+        # NOTE: Reference cose uses gelu_tanh. We have gelu fused with matmul, and use this instead. Test indicates little to no difference in results.
         self.text_embedder = PixArtAlphaTextProjection(
             text_embed_dim, dim, act_fn="gelu_tanh", mesh_device=self.mesh_device
         )

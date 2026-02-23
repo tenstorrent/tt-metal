@@ -14,6 +14,7 @@ from diffusers.models.embeddings import Timesteps as TorchTimesteps
 from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
 from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.models.transformers.transformer_wan import WanTimeTextImageEmbedding as TorchWanTimeTextImageEmbedding
+from loguru import logger
 
 import ttnn
 
@@ -29,10 +30,11 @@ from ...layers.embeddings import (
     WanPatchEmbed,
     WanTimeTextImageEmbedding,
 )
+from ...parallel.manager import CCLManager
 from ...utils import tensor
 from ...utils.check import assert_quality
 from ...utils.substate import substate
-from ...utils.tensor import bf16_tensor, float32_tensor
+from ...utils.tensor import bf16_tensor, float32_tensor, unflatten
 
 
 class TorchCombinedTimestepTextProjEmbeddings(torch.nn.Module):
@@ -702,23 +704,23 @@ def test_wan_patch_embed(
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1)],
-    indirect=True,
+    "mesh_device, device_params",
+    [[(4, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     ("B, seq_len, embed_dim"),
     [
-        (1, 256, 4096),  # Wan2.2
+        (1, 512, 4096),  # Wan2.2
     ],
 )
-# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_time_text_image_embedding(
     mesh_device: ttnn.MeshDevice,
     B: int,
     seq_len: int,
     embed_dim: int,
 ) -> None:
+    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 1))
     torch_dtype = torch.float32
     torch.manual_seed(12334)
     # Create Torch model
@@ -734,14 +736,22 @@ def test_wan_time_text_image_embedding(
     ).to(torch_dtype)
     torch_model.eval()
 
+    mesh_axis = 1
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=4,
+        topology=ttnn.Topology.Ring,
+    )
+
     # Create TT model
     tt_model = WanTimeTextImageEmbedding(
         dim=inner_dim,
         time_freq_dim=time_freq_dim,
-        time_proj_dim=inner_dim * 6,
+        time_proj_dim=time_proj_dim,
         text_embed_dim=text_embed_dim,
         mesh_device=mesh_device,
-        tp_mesh_axis=0,
+        tp_mesh_axis=mesh_axis,
+        ccl_manager=ccl_manager,
     )
 
     tt_model.load_torch_state_dict(torch_model.state_dict())
@@ -764,15 +774,36 @@ def test_wan_time_text_image_embedding(
     # Run TT model
     temb, timestep_proj, encoder_hidden_states = tt_model(tt_timestep, tt_encoder_hidden_states)
 
+    # prepare data for comparison
+    timestep_proj_torch = timestep_proj_torch.unflatten(1, (6, -1))
+    timestep_proj = unflatten(timestep_proj, -1, (6, -1))
+    temb = ccl_manager.all_gather(temb, dim=-1, mesh_axis=mesh_axis, use_hyperparams=True)
+    timestep_proj = ccl_manager.all_gather(timestep_proj, dim=-1, mesh_axis=mesh_axis, use_hyperparams=True)
+
     # Convert back to torch and compare
-    tt_temb_torch = ttnn.to_torch(temb, dtype=torch_dtype).squeeze(0).squeeze(0)
-    tt_timestep_proj_torch = ttnn.to_torch(timestep_proj, dtype=torch_dtype).squeeze(0).squeeze(0)
-    tt_encoder_hidden_states_torch = ttnn.to_torch(encoder_hidden_states).squeeze(0)
-    assert_quality(temb_torch, tt_temb_torch, pcc=0.9999, relative_rmse=0.01)
+    tt_temb_torch = ttnn.to_torch(ttnn.get_device_tensors(temb)[0], dtype=torch_dtype).squeeze(0).squeeze(0)
+    tt_timestep_proj_torch = (
+        ttnn.to_torch(ttnn.get_device_tensors(timestep_proj)[0], dtype=torch_dtype).squeeze(0).squeeze(0)
+    )
+    tt_encoder_hidden_states_torch = ttnn.to_torch(
+        ttnn.get_device_tensors(encoder_hidden_states)[0], dtype=torch_dtype
+    ).squeeze(0)
+
+    logger.info(
+        f"torch shape: {timestep_proj_torch.shape}, mean: {torch.mean(timestep_proj_torch)}, std: {torch.std(timestep_proj_torch)}, min: {torch.min(timestep_proj_torch)}, max: {torch.max(timestep_proj_torch)}"
+    )
+    logger.info(
+        f"tt shape: {tt_timestep_proj_torch.shape}, mean: {torch.mean(tt_timestep_proj_torch)}, std: {torch.std(tt_timestep_proj_torch)}, min: {torch.min(tt_timestep_proj_torch)}, max: {torch.max(tt_timestep_proj_torch)}"
+    )
+
+    assert_quality(temb_torch, tt_temb_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.3%
     assert_quality(
-        encoder_hidden_states_torch, tt_encoder_hidden_states_torch, pcc=0.999, relative_rmse=0.05
+        encoder_hidden_states_torch,
+        tt_encoder_hidden_states_torch,
+        pcc=0.9999,
+        relative_rmse=0.01,  # expected RMSE =0.8%
     )  # Investigate slightly lower PCC and higher RMSE when compared to using Wantransformer.context_embedder
-    assert_quality(timestep_proj_torch, tt_timestep_proj_torch, pcc=0.9999, relative_rmse=0.015)
+    assert_quality(timestep_proj_torch, tt_timestep_proj_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.4%
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2)], indirect=["mesh_device"])

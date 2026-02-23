@@ -86,6 +86,14 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.multiply(x_times_bracket, 0.5)
 
 
+def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
+    inner = ttnn.add(x, ttnn.multiply(ttnn.pow(x, 3), 0.044715))
+    one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
+    return 0.5 * x * one_plus_tanh
+
+
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -322,6 +330,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid_accurate(1.702 * t)  # quick approx gelu
+    if activation_fn == "gelu_tanh":
+        return gelu_tanh(t)
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)

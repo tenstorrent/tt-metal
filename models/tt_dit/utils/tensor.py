@@ -251,12 +251,11 @@ def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
             The unflattened tensor.
     """
     assert (
-        x.shape[dim] % math.abs(math.prod(sizes)) == 0
+        x.shape[dim] % abs(math.prod(sizes)) == 0
     ), f"The total number of elements in the new shape {sizes} must be equal or a factor of the number of elements (when using infered dimensions) in the original shape {x.shape[dim]}"
-    new_shape = []
-    for i, dim_len in enumerate(list(x.shape)):
-        if i == dim:
-            new_shape += sizes
-        else:
-            new_shape.append(dim_len)
+    new_shape = list(x.shape)
+    if dim == -1:
+        new_shape[-1:] = sizes
+    else:
+        new_shape[dim : dim + 1] = sizes
     return ttnn.reshape(x, new_shape)
