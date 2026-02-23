@@ -141,9 +141,11 @@ struct Sampling {
             best_index = 0xFFFFFFFF;
             for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
                 const uint16_t score = scores_ptr[i];
+                DPRINT << "index: " << indices_ptr[i] << " score: " << BF16(score) << ENDL();
                 if (bfloat16_greater(score, best_score)) {
                     best_score = score;
                     best_index = indices_ptr[i];
+                    DPRINT << "best_index: " << best_index << " best_score: " << BF16(best_score) << ENDL();
                 }
             }
         }
@@ -174,9 +176,12 @@ struct Sampling {
                 auto slot_u16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot_addr);
                 auto slot_u32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr);
                 const uint16_t score = slot_u16_ptr[0];
+                DPRINT << "index: " << slot_u32_ptr[1] << " score: " << BF16(score) << ENDL();
                 if (bfloat16_greater(score, global_best_score)) {
                     global_best_score = score;
                     global_best_index = slot_u32_ptr[1];
+                    DPRINT << "phase2: global_best_index: " << global_best_index
+                           << " global_best_score: " << BF16(global_best_score) << ENDL();
                 }
             }
         }
@@ -197,9 +202,12 @@ struct Sampling {
                 auto slot_u32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr);
                 candidate_score = slot_u16_ptr[0];
                 candidate_index = slot_u32_ptr[1];
+                DPRINT << "phase3: index: " << candidate_index << " score: " << candidate_score << ENDL();
                 if (is_better_candidate(candidate_score, candidate_index, stage_best_score, stage_best_index)) {
                     stage_best_score = candidate_score;
                     stage_best_index = candidate_index;
+                    DPRINT << "phase3: stage_best_index: " << stage_best_index
+                           << " stage_best_score: " << stage_best_score << ENDL();
                 }
             }
         }
