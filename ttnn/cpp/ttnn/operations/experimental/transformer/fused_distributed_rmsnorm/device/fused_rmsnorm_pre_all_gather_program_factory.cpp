@@ -86,7 +86,8 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
 
     tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat reduce_scalar_data_format =
+        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
     uint32_t input_tile_size = tt::tile_size(input_data_format);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
