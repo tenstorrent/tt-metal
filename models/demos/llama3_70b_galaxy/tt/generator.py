@@ -176,7 +176,7 @@ class Generator(WarmupForwardMixin):
 
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
-        output_toks = torch.zeros(batch, 1, 1)
+        output_toks = torch.zeros(batch)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
@@ -281,7 +281,7 @@ class Generator(WarmupForwardMixin):
                 if use_batched_prefill:
                     # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
                     tt_tok_tensor = torch.stack(tt_tok, dim=0)
-                    output_toks = tt_tok_tensor[empty_slots].reshape(batch, 1, 1)
+                    output_toks = tt_tok_tensor[empty_slots].reshape(batch)
                 else:
                     output_toks[id] = tt_tok
 
@@ -297,6 +297,7 @@ class Generator(WarmupForwardMixin):
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+        prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
             padded_batch = 32
@@ -365,7 +366,12 @@ class Generator(WarmupForwardMixin):
 
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
-            output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
+            output_toks = sampled_tensor[empty_slots]
+
+            if tt_log_probs is not None:
+                tt_lp = tt_log_probs
+                log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
+                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -376,6 +382,8 @@ class Generator(WarmupForwardMixin):
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        if prefill_log_probs is not None:
+            return output_toks, prefill_log_probs
         return output_toks
 
     def prefill_forward_single_user_text(
