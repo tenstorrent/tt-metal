@@ -461,7 +461,6 @@ protected:
         BHGalaxyTopology topology = BHGalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
 
-        // TODO: Check motherboard
         node.set_motherboard("S7T-MB");
 
         // Add boards
