@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_gpt_ring_common.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/matmul.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK

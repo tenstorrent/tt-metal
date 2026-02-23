@@ -199,8 +199,6 @@ void kernel_main() {
     // a contiguous interleaved DRAM tensor with shape (E, 1, M, K) in TILE_LAYOUT.
     // Each core owns tiles_per_core tiles (7 or 8) of the K dimension per expert.
     if constexpr (enable_dram_output) {
-        constexpr auto dram_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-
         // Read DRAM output runtime args
         const auto dram_output_addr = get_arg_val<uint32_t>(argidx++);
         const auto k_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -211,8 +209,12 @@ void kernel_main() {
         // tiles_per_core for this core (7 or 8)
         const uint32_t tiles_per_core = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];
 
-        // Create TensorAccessor for the interleaved DRAM output
-        const auto dram_output_accessor = TensorAccessor(dram_out_args, dram_output_addr, in_tile_size);
+        // Create address generator for the interleaved DRAM output
+        // Uses InterleavedAddrGen which computes bank-interleaved NOC addresses
+        const InterleavedAddrGen<true> dram_output_addrgen = {
+            .bank_base_address = dram_output_addr,
+            .page_size = in_tile_size,
+        };
 
         // L1 source: cb_c2s_out base address (same buffer as input, output written in-place)
         const uint32_t cb_base = get_write_ptr(cb_c2s_out);
@@ -228,7 +230,7 @@ void kernel_main() {
                 // Expert e occupies tiles [e*K_tiles .. (e+1)*K_tiles-1]
                 uint32_t dram_tile_id = e * K_tiles + k_start_tile + t;
 
-                noc_async_write_tile(dram_tile_id, dram_output_accessor, l1_addr);
+                noc_async_write_tile(dram_tile_id, dram_output_addrgen, l1_addr);
             }
         }
         noc_async_write_barrier();

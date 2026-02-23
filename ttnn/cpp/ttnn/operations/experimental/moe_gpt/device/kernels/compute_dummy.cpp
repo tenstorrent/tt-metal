@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_gpt_ring_common.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
 
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");

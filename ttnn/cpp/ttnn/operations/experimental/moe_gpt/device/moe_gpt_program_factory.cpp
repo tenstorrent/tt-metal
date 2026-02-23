@@ -86,11 +86,8 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
     }
 
     // Create compile args for the program
-    std::vector<const Tensor*> tensors = {
+    const auto tensors = std::vector<const Tensor*>{
         &tensor_args.input_tensor, &tensor_args.w0_w1_tensor, &tensor_args.w2_tensor, &tensor_args.output_tensor};
-    if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
-        tensors.push_back(&*tensor_args.dram_output_tensor);
-    }
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
