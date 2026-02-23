@@ -2,7 +2,7 @@ name: "Fabric Test on a BH Quad"
 
 on:
   schedule:
-    cron: "0 */4 * * *" # Runs every 4 hours
+    - cron: "0 */4 * * *" # Runs every 4 hours
   workflow_dispatch:
 
 run-name: Fabric Test on a BH Quad
