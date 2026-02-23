@@ -8,7 +8,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_blackhole_grid_size
+from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -123,7 +123,7 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     input_height = 35
     input_width = 83
 
-    compute_grid = get_blackhole_grid_size(mesh_device)
+    compute_grid = get_mesh_grid_size(mesh_device)
     compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
     # scale batch_size with num cores to keep sub_block dims

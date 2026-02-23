@@ -7,7 +7,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_blackhole_grid_size
+from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -59,7 +59,7 @@ def test_mla_sdpa(
     grid_size=(8, 8),
 ):
     # Initialize input configurations
-    compute_grid = get_blackhole_grid_size(mesh_device)
+    compute_grid = get_mesh_grid_size(mesh_device)
     logger.info(f"Running on {compute_grid} cores")
 
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
