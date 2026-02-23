@@ -566,12 +566,14 @@ class MoeRoutedExpertOp:
     @staticmethod
     def golden(
         input_tensor,
-        routing_weights_tensor,
-        bias_tensor,
         gate_proj_weights_dict=None,
         up_proj_weights_dict=None,
         down_proj_weights_dict=None,
         fused_add_tensor=None,
+        enable_routing=True,
+        # Routing-only params (ignored when enable_routing=False)
+        routing_weights_tensor=None,
+        bias_tensor=None,
         eps=1e-20,
         scaling_factor=2.5,
         use_hardcoded_expert_index=False,
@@ -581,40 +583,47 @@ class MoeRoutedExpertOp:
         """
         PyTorch reference implementation for validation.
 
+        When enable_routing=False, uses expert 0 with no routing and no expert scale.
+
         Args:
             input_tensor: [1, K] torch.Tensor
-            routing_weights_tensor: [K, N_routing] torch.Tensor
-            bias_tensor: [1, 8, 32] or [16, 16] torch.Tensor
             gate_proj_weights_dict: Dict[int, Tensor] expert_idx → [1,1,K,N_expert]
             up_proj_weights_dict: Dict[int, Tensor] expert_idx → [1,1,K,N_expert]
             down_proj_weights_dict: Dict[int, Tensor] expert_idx → [1,1,N_expert,K]
             fused_add_tensor: [1,1,1,K] torch.Tensor (optional)
-            eps: Gate epsilon
-            scaling_factor: Gate scaling factor
-            use_hardcoded_expert_index: Use fixed expert index
-            hardcoded_expert_index: Which expert to hardcode
-            explicit_expert_scale: Override expert scale value
+            enable_routing: If True, run routing. If False, use expert 0, no scale.
+            routing_weights_tensor: [K, N_routing] (routing only)
+            bias_tensor: [1, 8, 32] (routing only)
+            eps, scaling_factor, use_hardcoded_expert_index, hardcoded_expert_index,
+            explicit_expert_scale: routed expert gate params (routing only)
 
         Returns:
-            (top8_scores, top8_indices, final_output) tensors
+            When enable_routing=True: (top8_scores, top8_indices, final_output)
+            When enable_routing=False: (None, None, final_output)
         """
         import torch
 
-        from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
+        top8_scores = None
+        top8_indices = None
 
-        # 1. Routing matmul + sigmoid
-        logits = input_tensor.float() @ routing_weights_tensor.float()
-        scores = torch.sigmoid(logits)
+        if enable_routing:
+            from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
-        # 2. Gate: top-8 selection with normalized scores
-        gate_input = scores.reshape(1, 8, 32)
-        top8_scores, top8_indices = DeepseekMoeGateSingleCore.golden(
-            gate_input, bias_tensor.float(), eps, scaling_factor, enable_sigmoid=False
-        )
+            # 1. Routing matmul + sigmoid
+            logits = input_tensor.float() @ routing_weights_tensor.float()
+            scores = torch.sigmoid(logits)
+
+            # 2. Gate: top-8 selection with normalized scores
+            gate_input = scores.reshape(1, 8, 32)
+            top8_scores, top8_indices = DeepseekMoeGateSingleCore.golden(
+                gate_input, bias_tensor.float(), eps, scaling_factor, enable_sigmoid=False
+            )
 
         # 3. Expert matmuls (if expert weights provided)
         if gate_proj_weights_dict is not None:
-            if use_hardcoded_expert_index:
+            if not enable_routing:
+                selected_expert_idx = 0
+            elif use_hardcoded_expert_index:
                 selected_expert_idx = hardcoded_expert_index
             else:
                 selected_expert_idx = int(top8_indices[0, 0].item())
@@ -629,8 +638,10 @@ class MoeRoutedExpertOp:
             up_proj_weights = up_proj_weights_dict[selected_expert_idx]
             up_proj_output = input_for_expert @ up_proj_weights.float()
 
-            # Expert scale
-            if explicit_expert_scale is not None:
+            # Expert scale (1.0 when routing disabled)
+            if not enable_routing:
+                expert_scale = 1.0
+            elif explicit_expert_scale is not None:
                 expert_scale = explicit_expert_scale
             else:
                 expert_scale = top8_scores[0, 0].float()
@@ -2810,45 +2821,48 @@ class MoeOp:
     @staticmethod
     def golden(
         input_tensor,
-        routing_weights_tensor,
-        bias_tensor,
         shared_gate_weights,
         shared_up_weights,
         shared_down_weights,
         gate_proj_weights_dict=None,
         up_proj_weights_dict=None,
         down_proj_weights_dict=None,
+        rmsnorm_gamma=None,
+        rmsnorm_epsilon=1e-6,
+        enable_routing=True,
+        # Routing-only params (ignored when enable_routing=False)
+        routing_weights_tensor=None,
+        bias_tensor=None,
         eps=1e-20,
         scaling_factor=2.5,
         use_hardcoded_expert_index=False,
         hardcoded_expert_index=0,
         explicit_expert_scale=None,
-        rmsnorm_gamma=None,
-        rmsnorm_epsilon=1e-6,
     ):
         """
         PyTorch reference for the full fused MoE (routed + shared expert + eltwise add).
 
-        The shared expert residual is the raw (pre-norm) input tensor itself (mcasted at runtime).
-        RMSNorm is applied to the input before feeding it to both shared and routed experts.
+        When enable_routing=False, operates as dense MLP: single expert (index 0),
+        no routing matmul, no expert scale.
 
         Args:
             input_tensor: [1, K] — raw input (pre-norm)
-            routing_weights_tensor: [K, N_routing]
-            bias_tensor: [1, 8, 32] gate bias
             shared_gate_weights: [K, K_down] shared expert gate weights
             shared_up_weights: [K, K_down] shared expert up weights
             shared_down_weights: [K_down, N] shared expert down weights
-            gate_proj_weights_dict: Dict[int, Tensor] routed expert gate weights
-            up_proj_weights_dict: Dict[int, Tensor] routed expert up weights
-            down_proj_weights_dict: Dict[int, Tensor] routed expert down weights
-            eps, scaling_factor, use_hardcoded_expert_index, hardcoded_expert_index,
-            explicit_expert_scale: routed expert gate params
+            gate_proj_weights_dict: Dict[int, Tensor] expert gate weights
+            up_proj_weights_dict: Dict[int, Tensor] expert up weights
+            down_proj_weights_dict: Dict[int, Tensor] expert down weights
             rmsnorm_gamma: [1, K] RMSNorm gamma weights
             rmsnorm_epsilon: RMSNorm epsilon
+            enable_routing: If True, run full MoE routing. If False, dense MLP.
+            routing_weights_tensor: [K, N_routing] (routing only)
+            bias_tensor: [1, 8, 32] gate bias (routing only)
+            eps, scaling_factor, use_hardcoded_expert_index, hardcoded_expert_index,
+            explicit_expert_scale: routed expert gate params (routing only)
 
         Returns:
-            (top8_scores, top8_indices, final_output) tensors
+            (top8_scores, top8_indices, final_output) — scores/indices are None when enable_routing=False
         """
         import torch
 
@@ -2871,15 +2885,15 @@ class MoeOp:
         # Reshape to match routed golden's fused_add_tensor expectation [1,1,1,N]
         shared_for_add = shared_output.float().reshape(1, 1, 1, -1)
 
-        # Routed expert with normalized input and shared output as addend
         return MoeRoutedExpertOp.golden(
             normalized_input,
-            routing_weights_tensor,
-            bias_tensor,
             gate_proj_weights_dict=gate_proj_weights_dict,
             up_proj_weights_dict=up_proj_weights_dict,
             down_proj_weights_dict=down_proj_weights_dict,
             fused_add_tensor=shared_for_add,
+            enable_routing=enable_routing,
+            routing_weights_tensor=routing_weights_tensor,
+            bias_tensor=bias_tensor,
             eps=eps,
             scaling_factor=scaling_factor,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
@@ -2887,7 +2901,6 @@ class MoeOp:
             explicit_expert_scale=explicit_expert_scale,
         )
 
-    # Starting address offset within sdpa_kv_cache_buffer for MOE CBs.
     @staticmethod
     def _overlap_cbs_with_sdpa_buffer(
         routed_ctx, shared_ctx, sdpa_kv_cache_buffer, sdpa_out_interm_buffer, reduce_all_cores_set=None
