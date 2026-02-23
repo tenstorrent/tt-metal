@@ -91,16 +91,23 @@ void kernel_main() {
 
     const auto output_accessor = TensorAccessor(out_args, output_addr, output_page_size);
 
+    DPRINT << "output: shards=" << output_accessor.dspec().num_banks()
+           << " pages=" << output_accessor.dspec().tensor_volume() << " page_size=" << output_page_size
+           << " tile_size=" << output_page_size << ENDL();
+
     // Copy each input to output sequentially; initial offset 0, then use offset returned from previous copy.
-#define CONCAT_ND_DPRINT_INPUT(n)                                                                      \
-    do {                                                                                               \
-        const uint32_t initial_offset_##n = offset;                                                    \
-        constexpr uint32_t in_page_size_##n = get_compile_time_arg_val(CT_INPUT_PAGE_SIZE_BASE + (n)); \
-        const auto in##n##_accessor = TensorAccessor(in##n##_args, input_addrs[n], in_page_size_##n);  \
-        offset = copy_tensor_data(output_accessor, in##n##_accessor, offset);                          \
-        const uint32_t bytes_copied_##n = offset - initial_offset_##n;                                 \
-        DPRINT << "input " << (n) << ": copied " << bytes_copied_##n << " bytes to initial offset "    \
-               << initial_offset_##n << " (input tensor " << (n) << ")" << ENDL();                     \
+#define CONCAT_ND_DPRINT_INPUT(n)                                                                            \
+    do {                                                                                                     \
+        const uint32_t initial_offset_##n = offset;                                                          \
+        constexpr uint32_t in_page_size_##n = get_compile_time_arg_val(CT_INPUT_PAGE_SIZE_BASE + (n));       \
+        const auto in##n##_accessor = TensorAccessor(in##n##_args, input_addrs[n], in_page_size_##n);        \
+        DPRINT << "input " << (n) << " source: shards=" << in##n##_accessor.dspec().num_banks()              \
+               << " pages=" << in##n##_accessor.dspec().tensor_volume() << " page_size=" << in_page_size_##n \
+               << " tile_size=" << in_page_size_##n << ENDL();                                               \
+        offset = copy_tensor_data(output_accessor, in##n##_accessor, offset);                                \
+        const uint32_t bytes_copied_##n = offset - initial_offset_##n;                                       \
+        DPRINT << "input " << (n) << ": copied " << bytes_copied_##n << " bytes to initial offset "          \
+               << initial_offset_##n << " (input tensor " << (n) << ")" << ENDL();                           \
     } while (0)
 
     uint32_t offset = 0;
