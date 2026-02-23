@@ -47,6 +47,22 @@ class TTSampling(LightweightModule):
     """
 
     def _is_force_argmax_sampling(self, k, p, temp):
+        """Detect whether all users request deterministic greedy decoding.
+
+        When every user in the batch has k=1 (top-1), p=1.0 (no top-p filter),
+        and temp=1.0 (no temperature scaling), we can skip the full top-k / top-p /
+        temperature / RNG pipeline and use a single all-gather + argmax instead.
+        This is significantly faster because argmax needs only one all-gather of the
+        full logits tensor vs. three gathers (values, indices, sampled tokens) in the
+        normal path.
+
+        Note: p=1.0 here is the *caller's* convention ("keep all tokens"), distinct
+        from the internal device default of p=0 which also means "no filtering."
+        The model config must also set allow_force_argmax=True for this to activate.
+
+        Changing this state between decode steps invalidates captured traces, so
+        SamplingGenerator maintains separate trace slots keyed by force_argmax.
+        """
         return (
             self._allow_force_argmax_sampling
             and is_default_value(k, 1)
