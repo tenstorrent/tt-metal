@@ -60,6 +60,8 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
         (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat16, False, "sigmoid", True),  # Router gate + sigmoid with FP32 acc
         # SiLU activation test (similar to MoE gate projection)
         (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, "silu", False),  # Gate proj + silu
+        # Tail MMs
+        (1, 7168, 160, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # LM Head
     ],
 )
 def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en):
