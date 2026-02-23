@@ -173,18 +173,30 @@ class Model:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
         )
+        # Pad lm_head vocab dimension to padded_vocab_size BEFORE column-parallel sharding.
+        # TTSampling._create_indices_tensors uses padded_per_device as the stride for device
+        # offset calculation: global_idx = device_id * padded_per_device + local_idx.
+        # If we shard at unpadded boundaries and pad after, the offsets are wrong for devices 1+.
+        # Pre-sharding padding ensures device shard boundaries match the offset stride.
+        sampling_splits = mesh_device.shape[1]
+        per_device_padded = (((self.vocab_size + sampling_splits - 1) // sampling_splits + 31) // 32) * 32
+        padded_vocab_size = per_device_padded * sampling_splits
+        lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
+        if lm_head_weight.shape[1] < padded_vocab_size:
+            lm_head_weight = torch.nn.functional.pad(
+                lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
+            )
         self.lm_head_weight = ttnn.as_tensor(
-            substate(state_dict, "lm_head")["weight"].transpose(0, 1),
+            lm_head_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_sharded.weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
         # Initialize on-device sampling (supported when per-device vocab fits in 64K)
-        sampling_splits = mesh_device.shape[1]
         self._supports_on_device_sampling = self.vocab_size // sampling_splits <= 64 * 1024
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
@@ -220,10 +232,11 @@ class Model:
         args.vocab_size = hf_config.vocab_size
         num_tp = mesh_device.shape[1]
         # padded_vocab_size: per-device vocab must be tile-aligned (multiple of 32)
-        # for TTPenalties scatter operations
+        # for TTPenalties scatter operations.
+        # The lm_head weight is padded to this size BEFORE column-parallel sharding,
+        # so device shard boundaries align with TTSampling device offset strides.
         per_device_vocab = ((args.vocab_size + num_tp - 1) // num_tp + 31) // 32 * 32
         args.padded_vocab_size = per_device_vocab * num_tp
-        self._sampling_vocab_pad = per_device_vocab - (args.vocab_size + num_tp - 1) // num_tp
         args.cluster_shape = tuple(mesh_device.shape)
         args.sampling_all_gather_axis = 1
         args.num_devices = mesh_device.get_num_devices()
@@ -373,9 +386,9 @@ class Model:
             )
             logits.deallocate(True)
             logits = logits_gathered
-        elif skip_gather and getattr(self, "_sampling_vocab_pad", 0) > 0:
-            # Pad per-device logits to tile-aligned vocab size for TTPenalties
-            logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 0), (0, self._sampling_vocab_pad)], value=0.0)
+        # No post-matmul padding needed: the lm_head weight is pre-padded to
+        # padded_vocab_size before column-parallel sharding, so each device's
+        # matmul output is already tile-aligned (per_device_padded width).
 
         return logits
 
