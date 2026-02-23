@@ -361,6 +361,9 @@ def test_forward_pass_new_moe_gate(
     # Get state dict from actual model or use synthetic weights
     torch.use_deterministic_algorithms(True)
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
+    import pdb
+
+    pdb.set_trace()
 
     # IMPORTANT: Initialize bias to zeros to avoid uninitialized memory values
     # The default model has uninitialized bias which causes non-deterministic behavior
@@ -410,19 +413,30 @@ def test_forward_pass_new_moe_gate(
     torch_input_new_moe_gate = torch.reshape(torch_input, (batch_size, seq_len, -1, 16, 16))
 
     # Convert input to TTNN
-    #
-    tt_input = ttnn.from_torch(
-        torch_input_new_moe_gate,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    # since each input will take 28 cores, and there are only 70 cores in total
+    # we divide the 32 inputs into 16 groups
+    torch_input_new_moe_gate_list = list(torch.split(torch_input_new_moe_gate, 2, dim=1))
+    tt_topk_weight_list = []
+    tt_topk_indices_list = []
+    for i in range(len(torch_input_new_moe_gate)):
+        tt_input = ttnn.from_torch(
+            torch_input_new_moe_gate[i],
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
-    # TTNN forward pass using utility function
-    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+        # TTNN forward pass using utility function
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+
+        tt_topk_weight_list.append(tt_topk_weights)
+        tt_topk_indices_list.append(tt_topk_indices)
+
+    tt_topk_weights = ttnn.concat(tt_topk_weight_list, dim=1)
+    tt_topk_indices = ttnn.concat(tt_topk_indices_list, dim=1)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
