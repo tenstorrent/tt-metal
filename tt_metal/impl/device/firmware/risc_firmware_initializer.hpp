@@ -34,7 +34,6 @@ public:
         size_t fw_compile_hash);
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
-    void init_by_device_ids(const std::set<tt::ChipId>& device_ids) override;
     void configure() override;
     void teardown() override;
     bool is_initialized() const override;
@@ -51,15 +50,6 @@ public:
     // Order: run_async_build_phase -> (caller: set_internal_routing, dprint attach, watcher init) -> run_launch_phase.
     void run_async_build_phase(const std::set<tt::ChipId>& device_ids);
     void run_launch_phase(const std::set<tt::ChipId>& device_ids);
-
-    // Copy bank and worker maps into caller-provided maps (used by MetalContext after init).
-    void copy_maps_to(
-        std::unordered_map<tt::ChipId, std::vector<int32_t>>& dram_bank_offset_map,
-        std::unordered_map<tt::ChipId, std::vector<int32_t>>& l1_bank_offset_map,
-        std::unordered_map<tt::ChipId, std::vector<uint16_t>>& dram_bank_to_noc_xy,
-        std::unordered_map<tt::ChipId, std::vector<uint16_t>>& l1_bank_to_noc_xy,
-        std::unordered_map<tt::ChipId, std::vector<uint8_t>>& worker_logical_col_to_virtual_col,
-        std::unordered_map<tt::ChipId, std::vector<uint8_t>>& worker_logical_row_to_virtual_row) const;
 
 private:
     void clear_l1_state(tt::ChipId device_id);
