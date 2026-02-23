@@ -254,6 +254,7 @@ Tests:
       - type: full_ring
 
   - name: "FabricMuxFullRingMulticastDeadlockCheckQuick"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
