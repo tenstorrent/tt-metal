@@ -64,11 +64,12 @@ class Transformer(LightweightModule):
 
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
+        rope_max_seq_len = max(args.max_seq_len, args.max_batch_size * 1024)
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
             head_dim=args.head_dim,
-            max_seq_len=args.max_seq_len,
+            max_seq_len=rope_max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
@@ -188,22 +189,38 @@ class Transformer(LightweightModule):
         )
         return hidden_states
 
-    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
         host_inputs = self.prepare_inputs_prefill(
-            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            batch_size=batch_size,
+            user_id=user_id,
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table, tt_user_id=None):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table
+        return tt_tokens, tt_page_table, tt_chunk_page_table, tt_user_id
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
+    def prepare_inputs_prefill(
+        self,
+        tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        trace_enabled=False,
+        last_token_idx=None,
+        global_user_id=None,
+        batch_size=1,
+        user_id=0,
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
@@ -218,8 +235,16 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
+        # Galaxy 70B approach: tokens come in as [padded_batch, S] for batched prefill
+        # Each user's tokens are at their slot index in dimension 0
+        # Reshape to [1, 1, 1, padded_batch * S] for embedding
+        if batch_size > 1:
+            # Tokens are in slot-based format [padded_batch, S_per_user]
+            S = tokens.shape[-1]  # Per-user sequence length
+            tokens = tokens.reshape(1, 1, 1, -1)  # Flatten to [1, 1, 1, padded_batch * S]
+        else:
+            tokens = tokens.reshape(1, 1, 1, -1)
+            S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
             device=device,
@@ -235,11 +260,9 @@ class Transformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
-        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
-        # Calculate if padding is needed (when required_end > mat_len)
         required_end = start_pos + S
         pad_len = max(0, required_end - mat_len)
 
@@ -281,6 +304,8 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
+            # For batched prefill, replicate page_table to all devices (same as single-user path)
+            # The KV cache fill will loop over users and use batch_idx=user_id for each
             tt_page_table = ttnn.from_torch(
                 page_table,
                 device=device,
@@ -302,12 +327,36 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
+        # Create user_id tensor for batched prefill KV cache filling
+        # For batched prefill: always use scalar [0] because each device reads its local
+        # page table row 0 (which contains that device's users' pages due to sharding)
+        if batch_size > 1:
+            # Scalar user_id = 0 - each device reads row 0 of its sharded page table
+            tt_user_id = ttnn.from_torch(
+                torch.tensor([0], dtype=torch.int32),
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            # Single user - create tensor with single user ID
+            user_id_val = user_id if isinstance(user_id, int) else user_id[0]
+            tt_user_id = ttnn.from_torch(
+                torch.tensor([user_id_val], dtype=torch.int32),
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
         return (
             tokens if trace_enabled else tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
+            tt_user_id,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -472,6 +521,8 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -489,6 +540,8 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
+            batch_size=batch_size,
+            user_id_tensor=user_id_tensor,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -583,6 +636,8 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
@@ -615,6 +670,8 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                batch_size=batch_size,
+                user_id_tensor=user_id_tensor,
             )
 
         if mode == Mode.DECODE:
@@ -642,4 +699,5 @@ class Transformer(LightweightModule):
         x = self.lm_head(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         return x

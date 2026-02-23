@@ -232,6 +232,21 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        self.seeds_tt_tensor = ttnn.as_tensor(
+            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.user_ids_tt_tensor = ttnn.as_tensor(
+            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
         # Create indices tensor for device offsets
