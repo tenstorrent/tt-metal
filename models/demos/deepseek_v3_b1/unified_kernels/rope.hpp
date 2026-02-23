@@ -36,11 +36,19 @@ struct Rope {
     // Compile-time args structs - different layout per RISC
     // ========================================================================
 
-    // Reader CTArgs (NCRISC): Wt and Ht for sharded input signaling
-    template <uint32_t Wt_, uint32_t Ht_>
+    // Reader CTArgs (NCRISC): Wt/Ht for dimensions, TotalWt/StartTileOffset for DRAM interleaved addressing
+    template <
+        uint32_t Wt_,
+        uint32_t Ht_,
+        uint32_t CosSinPageSize_ = 64,
+        uint32_t TotalWt_ = 2,
+        uint32_t StartTileOffset_ = 0>
     struct ReaderCTArgs {
-        static constexpr uint32_t Wt = Wt_;  // head_dim in tiles
+        static constexpr uint32_t Wt = Wt_;  // head_dim in tiles (per core)
         static constexpr uint32_t Ht = Ht_;  // num_heads per core
+        static constexpr uint32_t cos_sin_page_size = CosSinPageSize_;
+        static constexpr uint32_t total_Wt = TotalWt_;                   // total width tiles per row in DRAM tensor
+        static constexpr uint32_t start_tile_offset = StartTileOffset_;  // this core's first tile in row
     };
 
     // Writer CTArgs (BRISC): none
@@ -62,6 +70,9 @@ struct Rope {
         uint32_t in_cb;
         uint32_t cos_cb;
         uint32_t sin_cb;
+        uint32_t cos_tensor_address;
+        uint32_t sin_tensor_address;
+        uint32_t position_ids_tensor_address;
         uint32_t trans_mat_cb;
     };
 
@@ -96,6 +107,44 @@ struct Rope {
 
     private:
         void impl(const RTArgs& args) {
+#if defined(COMPILE_FOR_NCRISC)
+
+            volatile tt_l1_ptr uint32_t* position_ids_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.position_ids_tensor_address);
+            uint32_t position_id = position_ids_ptr[0];
+
+            constexpr uint32_t Wt = CTArgs::Wt;
+            constexpr uint32_t page_size = CTArgs::cos_sin_page_size;
+            constexpr uint32_t total_Wt = CTArgs::total_Wt;
+            constexpr uint32_t start_tile_offset = CTArgs::start_tile_offset;
+
+            // Cos/sin are INTERLEAVED in DRAM. Each row has total_Wt tiles.
+            // This core reads Wt tiles starting at start_tile_offset within the row.
+            uint32_t start_page = position_id * total_Wt + start_tile_offset;
+
+            auto cos_accessor = TensorAccessor(
+                tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), args.cos_tensor_address, page_size);
+            cb_reserve_back(args.cos_cb, Wt);
+            uint32_t l1_write_addr = get_write_ptr(args.cos_cb);
+            for (uint32_t i = 0; i < Wt; i++) {
+                noc_async_read_page(start_page + i, cos_accessor, l1_write_addr);
+                l1_write_addr += page_size;
+            }
+            noc_async_read_barrier();
+            cb_push_back(args.cos_cb, Wt);
+
+            auto sin_accessor = TensorAccessor(
+                tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), args.sin_tensor_address, page_size);
+            cb_reserve_back(args.sin_cb, Wt);
+            l1_write_addr = get_write_ptr(args.sin_cb);
+            for (uint32_t i = 0; i < Wt; i++) {
+                noc_async_read_page(start_page + i, sin_accessor, l1_write_addr);
+                l1_write_addr += page_size;
+            }
+            noc_async_read_barrier();
+            cb_push_back(args.sin_cb, Wt);
+
+#endif
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = CTArgs::Ht;

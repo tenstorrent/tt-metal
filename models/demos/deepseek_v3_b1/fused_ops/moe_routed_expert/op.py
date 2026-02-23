@@ -972,6 +972,7 @@ class MoeRoutedExpert:
         reduce_output_cb = 29  # Final reduced output
         reduce_scratch_cb = 30  # Scratch for compute
         reduce_packet_cb = 31  # Scratch for sending packets
+        reduce_packet_header_cb = 32  # Packet header (persistent)
 
         # Determine if reduce_to_one is enabled (4x2 mesh mode)
         enable_reduce_to_one = (
@@ -1071,7 +1072,7 @@ class MoeRoutedExpert:
 
         # Index mcast parameters
         index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
+        index_mcast_receiver_semaphore_id = 4
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
@@ -1083,7 +1084,7 @@ class MoeRoutedExpert:
 
         # Expert scale mcast parameters (different semaphores to avoid race condition with back-to-back mcasts)
         expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        expert_scale_mcast_receiver_semaphore_id = 4  # Different from index_mcast
+        expert_scale_mcast_receiver_semaphore_id = 5  # Different from index_mcast
         expert_scale_mcast_num_pages = 1
         expert_scale_mcast_data_size_bytes = expert_scale_tile_size
 
@@ -1603,6 +1604,12 @@ class MoeRoutedExpert:
             initial_value=0,
         )
 
+        index_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=index_mcast_receiver_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=0,
+        )
+
         expert_scale_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=expert_scale_mcast_receiver_semaphore_id,
             core_ranges=full_device_grid,
@@ -1757,6 +1764,7 @@ class MoeRoutedExpert:
             mcast_receiver_semaphore_descriptor,
             gather_noc0_semaphore_descriptor,
             gather_noc1_semaphore_descriptor,
+            index_mcast_receiver_semaphore_descriptor,
             expert_scale_mcast_receiver_semaphore_descriptor,
         ]
 
@@ -1941,6 +1949,21 @@ class MoeRoutedExpert:
                     )
                     device_cb_descriptors.append(reduce_cb_packet_desc)
 
+                    # reduce_packet_header_cb (32): persistent packet header storage
+                    reduce_packet_header_size = 96  # Standard packet header size
+                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
+                        total_size=reduce_packet_header_size,
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=reduce_packet_header_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=reduce_packet_header_size,
+                            )
+                        ],
+                    )
+                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
+
                     # Destination L1 address depends on role
                     if device_role == MESH_LEAF:
                         dst_l1_addr = r1_tensor.buffer_address()
@@ -1977,6 +2000,7 @@ class MoeRoutedExpert:
                         ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                         ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                         ("reduce_packet_cb", reduce_packet_cb),
+                        ("reduce_packet_header_cb", reduce_packet_header_cb),
                     ]
                     brisc_ct_args.extend(reduce_brisc_ct_args)
 
