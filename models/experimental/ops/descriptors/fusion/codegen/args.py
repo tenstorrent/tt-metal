@@ -129,6 +129,40 @@ def _append_barrier_runtime_args(
     return updated, barrier_offset
 
 
+def _append_rebind_runtime_args(
+    rt_args: List[Tuple[Any, List[int]]],
+    rebind_info: Dict[int, List[Tuple[int, int, int]]],
+) -> Tuple[List[Tuple[Any, List[int]]], Optional[int]]:
+    """Append rebind (addr, size) pairs to each core's runtime args.
+
+    Flattens rebind_info in sorted phase order.  Each rebind entry
+    contributes two RT args: [addr, size].  The same values are appended
+    to ALL cores (sharded CB addresses are uniform L1 offsets).
+
+    Returns (updated_rt_args, rebind_rt_offset) where rebind_rt_offset
+    is the index in each core's args where the rebind data starts,
+    or None if there are no rebinds.
+    """
+    if not rt_args or not rebind_info:
+        return rt_args, None
+
+    # Flatten (addr, size) pairs in deterministic sorted-phase order
+    rebind_args: List[int] = []
+    for phase_idx in sorted(rebind_info.keys()):
+        for _slot_idx, addr, size in rebind_info[phase_idx]:
+            rebind_args.extend([addr, size])
+
+    if not rebind_args:
+        return rt_args, None
+
+    rebind_offset = len(rt_args[0][1])
+    updated = []
+    for core_coord, args in rt_args:
+        updated.append((core_coord, args + rebind_args))
+
+    return updated, rebind_offset
+
+
 def _concatenate_common_runtime_args(
     phase_kernels: List[Dict[str, Any]],
     kernel_type: str,

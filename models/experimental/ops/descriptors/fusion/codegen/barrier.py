@@ -20,6 +20,7 @@ from models.experimental.ops.descriptors.fusion.common import MultiBarrierSpec
 
 _SECTION_SEP = "// " + "=" * 76
 _BARRIER_RT_OFFSET_CT_ARG = "barrier_rt_offset"
+_REBIND_RT_OFFSET_CT_ARG = "rebind_rt_offset"
 
 # =============================================================================
 # Per-RISC CB Reset/Resync C++ Templates
@@ -97,6 +98,24 @@ _CB_RESET_TEMPLATES = {
     "riscv_1": _RISCV1_RESYNC_CBS,
     "compute": _COMPUTE_RESYNC_CBS,
 }
+
+# Rebind CB buffer addresses from runtime args.  Uses cb_addr_shift from
+# circular_buffer_interface.h (4 on TRISC, 0 on BRISC/NCRISC) to convert
+# byte addresses to the per-RISC CB interface units.
+_REBIND_CBS = """\
+template <size_t N>
+__attribute__((noinline)) void rebind_cbs(
+    const std::array<uint32_t, N>& slots, uint32_t rt_start) {
+    for (uint32_t i = 0; i < N; i++) {
+        uint32_t slot = slots[i];
+        uint32_t addr = get_arg_val<uint32_t>(rebind_rt_offset + rt_start + i * 2);
+        uint32_t size = get_arg_val<uint32_t>(rebind_rt_offset + rt_start + i * 2 + 1);
+        get_local_cb_interface(slot).fifo_rd_ptr = addr >> cb_addr_shift;
+        get_local_cb_interface(slot).fifo_wr_ptr = addr >> cb_addr_shift;
+        get_local_cb_interface(slot).fifo_size = size >> cb_addr_shift;
+        get_local_cb_interface(slot).fifo_limit = (addr + size) >> cb_addr_shift;
+    }
+}"""
 
 # =============================================================================
 # Per-RISC Phase State, Wait, and Init C++ Snippets
@@ -251,20 +270,24 @@ def _build_barrier_dispatch(
     needed for that transition.
     """
     dispatch: List[Dict[str, Any]] = []
+    cumulative_rebind_offset = 0
     for idx in range(len(sources) - 1):
         phase_idx = sources[idx][0]
         next_phase_idx = sources[idx + 1][0]
         done_val = idx + 1
         if phase_idx in multi_barrier.transition_map:
             seg_idx, _ = multi_barrier.transition_map[phase_idx]
+            rebinds = rebind_info.get(next_phase_idx, [])
             dispatch.append(
                 {
                     "done_val": done_val,
                     "seg_idx": seg_idx,
                     "next_phase_idx": next_phase_idx,
-                    "rebinds": rebind_info.get(next_phase_idx, []),
+                    "rebinds": rebinds,
+                    "rebind_entry_offset": cumulative_rebind_offset,
                 }
             )
+            cumulative_rebind_offset += len(rebinds) * 2
     # Trailing barrier (after last phase, e.g. for parent sync in OpGraph)
     last_phase_idx = sources[-1][0]
     if last_phase_idx in multi_barrier.transition_map:
@@ -275,34 +298,31 @@ def _build_barrier_dispatch(
                 "seg_idx": seg_idx,
                 "next_phase_idx": None,
                 "rebinds": [],
+                "rebind_entry_offset": cumulative_rebind_offset,
             }
         )
     return dispatch
 
 
-def _generate_rebind_lines(
-    rebinds: List[Tuple[int, int, int]],
-    next_phase_idx: int,
-    indent: str,
-    for_compute: bool = False,
-) -> List[str]:
-    """Generate C++ rebind code for use inside barrier::phase::reset()."""
-    shift = " >> 4" if for_compute else ""
+def _generate_rebind_call(done_val: int, rebind_entry_offset: int, indent: str) -> str:
+    """Generate a ``rebind_cbs(rebind_slots_K, offset)`` call."""
+    return f"{indent}rebind_cbs(rebind_slots_{done_val}, {rebind_entry_offset});"
+
+
+def _emit_rebind_slot_arrays(dispatch: List[Dict[str, Any]]) -> List[str]:
+    """Emit ``constexpr std::array<uint32_t, N> rebind_slots_K = {...};`` per transition."""
     lines: List[str] = []
-    for slot_idx, _, _ in rebinds:
-        prefix = f"phase_{next_phase_idx}_cb{slot_idx}"
-        lines.append(f"{indent}{{")
-        lines.append(
-            f'{indent}    constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr"){shift};'
-        )
-        lines.append(
-            f'{indent}    constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size"){shift};'
-        )
-        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_rd_ptr = new_addr;")
-        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_wr_ptr = new_addr;")
-        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_size = new_size;")
-        lines.append(f"{indent}    get_local_cb_interface({slot_idx}).fifo_limit = new_addr + new_size;")
-        lines.append(f"{indent}}}")
+    for entry in dispatch:
+        rebinds = entry["rebinds"]
+        if not rebinds:
+            continue
+        done_val = entry["done_val"]
+        slots = [str(slot_idx) for slot_idx, _, _ in rebinds]
+        n = len(slots)
+        slot_str = ", ".join(slots)
+        lines.append(f"constexpr std::array<uint32_t, {n}> rebind_slots_{done_val} = {{{{{slot_str}}}}};")
+    if lines:
+        lines.append("")
     return lines
 
 
@@ -351,7 +371,7 @@ def _emit_coordinator_reset(
         lines.append(f"                reset_cbs(phase_{completed_phase_idx}_cbs);")
         lines.append(f"            }}")
         if rebinds and next_phase_idx is not None:
-            lines.extend(_generate_rebind_lines(rebinds, next_phase_idx, "            "))
+            lines.append(_generate_rebind_call(done_val, entry["rebind_entry_offset"], "            "))
         lines.append(f"            {{")
         lines.append(f'                DeviceZoneScopedN("barrier-segment-sync");')
         lines.append(f"                segment_{seg_idx}::sync();")
@@ -368,7 +388,7 @@ def _emit_follower_reset(
     """Emit ``phase::reset()`` body for NCRISC/compute (followers).
 
     Order: segment sync -> resync_cbs -> rebind.
-    For compute, rebind is guarded by ``#ifndef TRISC_MATH`` and uses ``>> 4``.
+    For compute, rebind is guarded by ``#ifndef TRISC_MATH``.
     """
     lines: List[str] = []
     lines.append("    FORCE_INLINE void reset() {")
@@ -390,7 +410,7 @@ def _emit_follower_reset(
         if rebinds and next_phase_idx is not None:
             if for_compute:
                 lines.append("#ifndef TRISC_MATH")
-            lines.extend(_generate_rebind_lines(rebinds, next_phase_idx, "            ", for_compute=for_compute))
+            lines.append(_generate_rebind_call(done_val, entry["rebind_entry_offset"], "            "))
             if for_compute:
                 lines.append("#endif")
         lines.append(f"        }}")
@@ -416,6 +436,8 @@ def _generate_barrier_namespace(
     num_segments = len(multi_barrier.segments)
     dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
 
+    has_rebinds = any(rebind_info.get(k) for k in rebind_info)
+
     lines: List[str] = []
 
     # Preamble
@@ -423,12 +445,21 @@ def _generate_barrier_namespace(
     lines.append("namespace barrier {")
     lines.append("")
     lines.append(f'constexpr uint32_t rt_offset = get_named_compile_time_arg_val("{_BARRIER_RT_OFFSET_CT_ARG}");')
+    if has_rebinds:
+        lines.append(
+            f'constexpr uint32_t rebind_rt_offset = get_named_compile_time_arg_val("{_REBIND_RT_OFFSET_CT_ARG}");'
+        )
     lines.append("")
 
     # CB reset/resync function + per-phase CB index arrays
     lines.extend(_CB_RESET_TEMPLATES[risc_type].split("\n"))
     lines.append("")
+    if has_rebinds:
+        lines.extend(_REBIND_CBS.split("\n"))
+        lines.append("")
     lines.extend(_emit_phase_cb_arrays(per_phase_cb_slots, len(dispatch)))
+    if has_rebinds:
+        lines.extend(_emit_rebind_slot_arrays(dispatch))
 
     # Segment namespaces
     if is_coordinator:
