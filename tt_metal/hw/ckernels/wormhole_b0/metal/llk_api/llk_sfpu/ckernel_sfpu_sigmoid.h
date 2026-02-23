@@ -58,7 +58,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat val) {
 
 template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
-    if constexpr (!APPROX_MODE) {
+    if constexpr (APPROX_MODE == ckernel::ApproximationMode::Precise) {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
 
@@ -78,8 +78,8 @@ inline void calculate_sigmoid() {
 
 template <ckernel::ApproximationMode APPROX_MODE>
 inline void sigmoid_init() {
-    if constexpr (!APPROX_MODE) {
-        _init_reciprocal_<false, false>();
+    if constexpr (APPROX_MODE == ckernel::ApproximationMode::Precise) {
+        _init_reciprocal_<ckernel::ApproximationMode::Precise, false>();
     } else {
         sigmoid_appx_init();
     }
