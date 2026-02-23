@@ -161,11 +161,6 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
     return SoftmaxProgramFactoryGeneralCLarge{};
 }
 
-void SoftmaxDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensors_args) {
     TT_FATAL(

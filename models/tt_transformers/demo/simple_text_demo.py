@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -25,7 +26,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
@@ -621,7 +622,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
@@ -742,10 +743,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
-@pytest.mark.parametrize(
-    "use_prefetcher",
-    ([False]),
-)
+# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -753,6 +751,10 @@ def prepare_generator_args(
         lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=["performance", "accuracy"],
+)
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -1125,7 +1127,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits, log_probs = generator.decode_forward_text(
+            logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,

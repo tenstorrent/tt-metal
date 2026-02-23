@@ -9,12 +9,15 @@ from models.tt_transformers.tt.common import Mode
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None):
+    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
+
+        # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
+        self.enable_all_gather = enable_all_gather
 
         if TG:
             core_grid_ln = (
@@ -107,7 +110,7 @@ class DistributedNorm(LightweightModule):
         )
 
         # Distributed norm requires a gather
-        if self.args.is_distributed_norm(mode):
+        if self.args.is_distributed_norm(mode) and self.enable_all_gather:
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,

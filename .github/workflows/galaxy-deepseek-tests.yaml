@@ -11,6 +11,7 @@ on:
           - all
           - unit
           - module
+          - long-seq-module
         default: 'all'
       platform:
         required: false

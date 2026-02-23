@@ -353,9 +353,16 @@ def test_sd35_vae_resnet_block(
     ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
-    tt_model = vae_sd35.ResnetBlock.from_torch(
-        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+    tt_model = vae_sd35.ResnetBlock(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        num_groups=groups,
+        eps=1e-6,
+        mesh_device=submesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
     )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input = torch.randn(batch, in_channels, height, width)
 
@@ -414,9 +421,17 @@ def test_sd35_vae_up_decoder_block(
     ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
-    tt_model = vae_sd35.UpDecoderBlock2D.from_torch(
-        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+    tt_model = vae_sd35.UpDecoderBlock2D(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        num_layers=num_layers,
+        resnet_groups=num_groups,
+        add_upsample=add_upsample,
+        mesh_device=submesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
     )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input = torch.randn(batch, in_channels, height, width)
 
@@ -468,9 +483,16 @@ def test_sd35_vae_attention(
     ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
-    tt_model = vae_sd35.Attention.from_torch(
-        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+    tt_model = vae_sd35.Attention(
+        query_dim=in_channels,
+        head_dim=in_channels // num_heads,
+        num_heads=num_heads,
+        norm_num_groups=num_groups,
+        mesh_device=submesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
     )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input = torch.randn(batch, in_channels, height, width)
 
@@ -521,9 +543,15 @@ def test_sd35_vae_unet_mid_block2d(
     ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
-    tt_model = vae_sd35.UnetMidBlock2D.from_torch(
-        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+    tt_model = vae_sd35.UnetMidBlock2D(
+        in_channels=in_channels,
+        resnet_groups=num_groups,
+        attention_head_dim=in_channels // num_heads,
+        mesh_device=submesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
     )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input = torch.randn(batch, in_channels, height, width)
 
@@ -594,9 +622,17 @@ def test_sd35_vae_vae_decoder(
     ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
-    tt_model = vae_sd35.VAEDecoder.from_torch(
-        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+    tt_model = vae_sd35.VAEDecoder(
+        block_out_channels=block_out_channels,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        layers_per_block=layers_per_block,
+        norm_num_groups=norm_num_groups,
+        mesh_device=submesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
     )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input = torch.randn(batch, in_channels, height, width)
 

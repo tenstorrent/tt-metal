@@ -173,17 +173,14 @@ class StableDiffusion3Pipeline:
                 padding_config=padding_config,
             )
 
-            if not cache.initialize_from_cache(
+            cache.load_model(
                 tt_model=tt_transformer,
-                torch_state_dict=torch_transformer.state_dict(),
+                get_torch_state_dict=torch_transformer.state_dict,
                 model_name="stable-diffusion-3.5-large",
                 subfolder="transformer",
                 parallel_config=self.dit_parallel_config,
                 mesh_shape=tuple(submesh_device.shape),
-                dtype="bf16",
-            ):
-                logger.info("Loading transformer weights from PyTorch state dict")
-                tt_transformer.load_state_dict(torch_transformer.state_dict())
+            )
 
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)
@@ -216,6 +213,7 @@ class StableDiffusion3Pipeline:
             layer_norm_eps=self._text_encoder_1.config.layer_norm_eps,
             attention_dropout=self._text_encoder_1.config.attention_dropout,
             hidden_act=self._text_encoder_1.config.hidden_act,
+            projection_dim=self._text_encoder_1.config.projection_dim,
         )
 
         # Create CLIP config for encoder 2
@@ -229,6 +227,7 @@ class StableDiffusion3Pipeline:
             layer_norm_eps=self._text_encoder_2.config.layer_norm_eps,
             attention_dropout=self._text_encoder_2.config.attention_dropout,
             hidden_act=self._text_encoder_2.config.hidden_act,
+            projection_dim=self._text_encoder_2.config.projection_dim,
         )
 
         # Store original state dicts before creating new encoders
@@ -513,9 +512,11 @@ class StableDiffusion3Pipeline:
             tt_latents_step_list = []
             for i, submesh_device in enumerate(self.submesh_devices):
                 tt_prompt_embeds = ttnn.from_torch(
-                    prompt_embeds[i].unsqueeze(0).unsqueeze(0)
-                    if self.dit_parallel_config.cfg_parallel.factor == 2
-                    else prompt_embeds,
+                    (
+                        prompt_embeds[i].unsqueeze(0).unsqueeze(0)
+                        if self.dit_parallel_config.cfg_parallel.factor == 2
+                        else prompt_embeds
+                    ),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=submesh_device if not traced else None,
@@ -527,9 +528,11 @@ class StableDiffusion3Pipeline:
                 )
 
                 tt_pooled_prompt_embeds = ttnn.from_torch(
-                    pooled_prompt_embeds[i].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-                    if self.dit_parallel_config.cfg_parallel.factor == 2
-                    else pooled_prompt_embeds,
+                    (
+                        pooled_prompt_embeds[i].unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                        if self.dit_parallel_config.cfg_parallel.factor == 2
+                        else pooled_prompt_embeds
+                    ),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=submesh_device if not traced else None,
@@ -1015,7 +1018,6 @@ def _get_clip_prompt_embeds(
     encoder_output, projected_output = text_encoder(
         prompt_tokenized=tt_text_input_ids,
         mesh_device=ttnn_device,
-        with_projection=True,
     )
 
     # Handle clip_skip by selecting the appropriate hidden state layer

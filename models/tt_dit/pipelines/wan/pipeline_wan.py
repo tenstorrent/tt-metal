@@ -188,7 +188,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
         )
 
-        self.tt_vae.load_state_dict(self.vae.state_dict())
+        cache.load_model(
+            self.tt_vae,
+            model_name=checkpoint_name.rsplit("/", 1)[-1],
+            subfolder="vae",
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            dtype="bf16",
+            get_torch_state_dict=lambda: self.vae.state_dict(),
+        )
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
@@ -310,16 +318,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             model_type=self.model_type,
         )
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             self.transformer,
-            self.torch_transformer.state_dict(),
-            os.path.basename(self.checkpoint_name),
-            "transformer",
-            self.parallel_config,
-            tuple(self.mesh_device.shape),
-        ):
-            logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformer.load_torch_state_dict(self.torch_transformer.state_dict())
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="transformer",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
+        )
 
     def _load_transformer2(self):
         self.transformer_2 = WanTransformer3DModel(
@@ -342,16 +348,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             model_type=self.model_type,
         )
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             self.transformer_2,
-            self.torch_transformer_2.state_dict(),
-            os.path.basename(self.checkpoint_name),
-            "transformer_2",
-            self.parallel_config,
-            tuple(self.mesh_device.shape),
-        ):
-            logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformer_2.load_torch_state_dict(self.torch_transformer_2.state_dict())
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="transformer_2",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
+        )
 
     def _get_t5_prompt_embeds(
         self,
@@ -593,7 +597,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
-        num_inference_steps: int = 50,
+        num_inference_steps: int = 40,
         guidance_scale: float = 3.0,
         guidance_scale_2: Optional[float] = 4.0,
         num_videos_per_prompt: Optional[int] = 1,
@@ -846,7 +850,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 permuted_model_input = self.get_model_input(permuted_latent, cond_latents)
 
-                permuted_noise_pred = current_model.inner_step(
+                permuted_noise_pred_tt = current_model.inner_step(
                     spatial_1BNI_torch=permuted_model_input,
                     prompt_1BLP=prompt_embeds_map[current_model_name],
                     N=patchified_seqlen,
@@ -855,16 +859,20 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 )
 
                 if self.do_classifier_free_guidance:
-                    permuted_noise_uncond = current_model.inner_step(
+                    permuted_noise_uncond_tt = current_model.inner_step(
                         spatial_1BNI_torch=permuted_model_input,
                         prompt_1BLP=negative_prompt_embeds_map[current_model_name],
                         N=patchified_seqlen,
                         timestep_torch=timestep,
                         **rope_args,
                     )
-                    permuted_noise_pred = permuted_noise_uncond + current_guidance_scale * (
-                        permuted_noise_pred - permuted_noise_uncond
+                    # On-device CFG with high precision fp32 lerp: uncond + scale * (cond - uncond)
+                    permuted_noise_pred_tt = ttnn.lerp(
+                        permuted_noise_uncond_tt, permuted_noise_pred_tt, current_guidance_scale
                     )
+
+                # Move result to host for scheduler step
+                permuted_noise_pred = current_model.device_to_host(permuted_noise_pred_tt)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 permuted_latent = self.scheduler.step(permuted_noise_pred, t, permuted_latent, return_dict=False)[0]

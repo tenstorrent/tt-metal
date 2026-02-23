@@ -58,10 +58,14 @@ def compute_forwarder_scratch_size(
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}],
     indirect=["device_params"],
 )
-def test_sdpa_reduce_to_all(bh_1d_mesh_device):
+@pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
+@pytest.mark.parametrize(
+    "position_vector", [[1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0], [1.0, 1.0, 1.0, 1.0]]
+)
+def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector):
     num_devices = 4
     num_cores = 8
     l_width = 512
@@ -118,6 +122,9 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
     l_data_per_device = [torch.randn(l_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
     ms_data_per_device = [torch.randn(ms_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
 
+    position_mask = torch.tensor(position_vector, dtype=torch.bfloat16)
+    final_reduction = (position_mask.sum() > 1.0).item()
+
     m_data_per_device = []
     s_data_per_device = []
     for d in range(num_devices):
@@ -136,11 +143,43 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
     s_data_f32 = [t.float() for t in s_data_per_device]
     m_data_f32 = [t.float() for t in m_data_per_device]
 
-    ref_l, _, _ = SdpaReduceToAll.golden(l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value)
+    ref_l, _, _ = SdpaReduceToAll.golden(
+        l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value, position_mask, final_reduction
+    )
     ref_l = ref_l.to(torch.bfloat16)
 
     l_data_all = torch.stack(l_data_per_device, dim=0)
     ms_data_all = torch.stack(ms_data_per_device, dim=0)
+
+    position_shape = [num_cores, 32]
+    position_data_base = torch.zeros(position_shape, dtype=torch.int32)
+
+    # Fill all rows identically: replicate position mask across each row
+    for row in range(num_cores):
+        for d in range(num_devices):
+            position_data_base[row, d] = int(position_mask[d])
+
+    # Replicate this same tensor on all devices
+    position_data_per_device = [position_data_base.clone() for _ in range(num_devices)]
+    position_data_all = torch.stack(position_data_per_device, dim=0)
+
+    # HEIGHT_SHARDED: each core gets [1, 32] shard
+    shard_spec_position = ttnn.ShardSpec(shard_grid, [1, 32], ttnn.ShardOrientation.ROW_MAJOR)
+    position_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_position
+    )
+
+    position_mesh = ttnn.from_torch(
+        position_data_all,
+        device=submesh_device,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=ttnn.uint32,
+        memory_config=position_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    if position_vector == [1.0, 1.0, 1.0, 1.0]:
+        position_mesh = None
 
     input_l_mesh = ttnn.from_torch(
         l_data_all,
@@ -220,10 +259,38 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
         mesh_mapper=mesh_mapper2,
     )
 
+    # ========================================================================
+    # Scatter destination tensor (optional): HEIGHT_SHARDED, 1x32 tiles, 8x8 grid
+    # Each of the 64 cores gets [1, 512] after scatter
+    # ========================================================================
+    scatter_dest_mesh = None
+    scatter_grid = None
+    num_scatter_cores = num_cores * batch_size  # 8 * 8 = 64
+
+    if scatter_enabled:
+        scatter_tile = ttnn.Tile((1, 32))
+        scatter_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, batch_size - 1))}
+        )
+        scatter_shard_shape = [1, l_width]  # [1, 512] per core
+        scatter_shard_spec = ttnn.ShardSpec(scatter_grid, scatter_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        scatter_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, scatter_shard_spec
+        )
+        scatter_dest_mesh = ttnn.from_torch(
+            torch.zeros([num_scatter_cores, l_width], dtype=torch.bfloat16),
+            device=submesh_device,
+            layout=layout,
+            tile=scatter_tile,
+            dtype=dtype,
+            memory_config=scatter_mem_config,
+            mesh_mapper=mesh_mapper2,
+        )
+
     semaphores = [ttnn.create_global_semaphore(submesh_device, shard_grid, 0) for _ in range(2)]
     ttnn.synchronize_device(submesh_device)
 
-    logger.info("Running SDPA reduce-to-all (single run)...")
+    logger.info(f"Running SDPA reduce-to-all (scatter={'enabled' if scatter_enabled else 'disabled'})...")
     output_mesh = SdpaReduceToAll.op(
         input_l_mesh,
         input_ms_mesh,
@@ -235,9 +302,16 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
         scale_fp32=scale_value,
         cluster_axis=0,
         input_forwarder_cores=forwarder_cores,
+        scatter_dest_tensor_mesh=scatter_dest_mesh,
+        scatter_dest_grid=scatter_grid,
+        position_tensor_mesh=position_mesh,
+        final_reduction=final_reduction,
     )
     ttnn.synchronize_device(submesh_device)
 
+    # ========================================================================
+    # Verify L output (original reduce-to-all correctness check)
+    # ========================================================================
     output_l_torch = ttnn.to_torch(output_mesh, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
     out_l_root = output_l_torch[0]
 
@@ -246,3 +320,27 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
 
     logger.info(f"L tensor match: {match}, max_diff: {max_diff:.4f}")
     assert match, f"L tensor mismatch! Max diff: {max_diff}"
+
+    # ========================================================================
+    # Verify scatter output (only when scatter is enabled)
+    # Each core (x=i, y=j) should have ref_l[j, i*l_width:(i+1)*l_width]
+    # In HEIGHT_SHARDED ROW_MAJOR order: tensor row (j * num_cores + i) = core (x=i, y=j)
+    # ========================================================================
+    if scatter_enabled:
+        scatter_out_torch = ttnn.to_torch(
+            scatter_dest_mesh, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0)
+        )
+        scatter_out_root = scatter_out_torch[:num_scatter_cores, :]  # First device
+
+        scatter_max_diff = 0.0
+        for j in range(batch_size):
+            for i in range(num_cores):
+                row_idx = j * num_cores + i
+                expected = ref_l[j, i * l_width : (i + 1) * l_width].float()
+                actual = scatter_out_root[row_idx, :].float()
+                diff = torch.max(torch.abs(actual - expected)).item()
+                scatter_max_diff = max(scatter_max_diff, diff)
+
+        scatter_match = scatter_max_diff < 0.07
+        logger.info(f"Scatter output match: {scatter_match}, max_diff: {scatter_max_diff:.4f}")
+        assert scatter_match, f"Scatter output mismatch! Max diff: {scatter_max_diff}"

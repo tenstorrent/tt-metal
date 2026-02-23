@@ -29,6 +29,15 @@
 #       Examples: true for (0,0)->(0,5), false for (0,0)->(2,2)
 #       Leave empty to use real kernel data (same_axis = "")
 #
+# Bandwidth calculation mode:
+#   - bandwidth_mode: How bandwidth is calculated and reported
+#       Values: "per_core" (default) | "combined"
+#       - "per_core": Reports median/average bandwidth per individual core
+#       - "combined": Reports aggregate bandwidth across all cores
+#           combined_bandwidth = total_bytes / wall_clock_time
+#           where wall_clock_time = max(duration) across all cores
+#           Use this for multi-core DRAM tests where cores are synchronized
+#
 # These metadata fields are automatically injected into CSV files when using the --report flag.
 
 tests:
@@ -333,67 +342,85 @@ tests:
 
   110:
     name: "Multi Interleaved Directed Ideal"
+    bandwidth_mode: "combined"
 
   111:
     name: "Multi Interleaved Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   113:
     name: "Multi Interleaved Read Sizes"
     memory_type: "dram"
     mechanism: "unicast"
     pattern: "one_from_one"
+    bandwidth_mode: "combined"
 
   114:
     name: "Multi Interleaved Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   115:
     name: "Multi Interleaved Write Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
+    bandwidth_mode: "combined"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
+    bandwidth_mode: "combined"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
+    bandwidth_mode: "combined"
     # TODO issue #35917
 
   140:
@@ -563,6 +590,30 @@ tests:
 
   320:
     name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+
+  321:
+    name: "Single source Multicast Atomic Increment"
+
+  322:
+    name: "Multi source Multicast Atomic Increment"
+
+  323:
+    name: "Single source Multicast Atomic Increment - NOC 1"
+
+  324:
+    name: "Multi source Multicast Atomic Increment - NOC 1"
+
+  325:
+    name: "Multicast Atomic Larger Increment"
+
+  326:
+    name: "Multicast Atomic Larger Increment - NOC 1"
+
+  327:
+    name: "Single source Multicast Atomic Increment 2.0 API"
+
+  328:
+    name: "Multicast Atomic Larger Increment 2.0 API"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"

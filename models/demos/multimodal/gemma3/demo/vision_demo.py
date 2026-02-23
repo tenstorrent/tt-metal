@@ -4,18 +4,18 @@
 
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
-import llama_models.llama3.reference_impl.generation as llama_reference_generation
 import requests
-from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
 from loguru import logger
 from PIL import Image as PIL_Image
-from pkg_resources import resource_filename
+from pydantic import BaseModel
 
+from models.common.llama_models import sample_top_p
+from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
+IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -32,11 +32,17 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
+class UserMessage(BaseModel):
+    role: Literal[Role.user.value] = Role.user.value
+    content: InterleavedTextMedia
+    context: Optional[InterleavedTextMedia] = None
+
+
 def get_batch_sampler(temperature, top_p, tokenizer):
     def sample(logits):
         if temperature > 0:
             probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-            next_token = llama_reference_generation.sample_top_p(probs, top_p)
+            next_token = sample_top_p(probs, top_p)
         else:
             next_token = torch.argmax(logits[:, -1], dim=-1)
 
@@ -429,7 +435,7 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward(
+                    logits = generator.decode_forward_llama_vision(
                         position_id,
                         next_token_tensor,
                         prefill_batch_xattn_masks,
@@ -439,6 +445,9 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         enable_trace=enable_trace,
                     )
+
+                    if isinstance(logits, tuple):
+                        logits = logits[0]
 
                     next_tokens, next_texts = sampler(logits)
                     # Update next token

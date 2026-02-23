@@ -6,7 +6,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -167,6 +166,9 @@ class TransformerBlock(LightweightModule):
                 prefetcher=self.prefetcher,
                 TG=args.is_galaxy,
             )
+            self.ff_norm.enable_all_gather = (
+                False  # output of ff_norm should be sharded if model uses pre_ff_norm, so skip all_gather
+            )
         else:
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
             self.pre_ff_norm = None
@@ -191,6 +193,7 @@ class TransformerBlock(LightweightModule):
                 tt_ccl=self.tt_ccl,
                 prefetcher=self.prefetcher,
                 TG=args.is_galaxy,
+                enable_all_gather=False,
             )
         else:
             # If post_feedforward_layernorm is not in state_dict, we do not use it
@@ -257,21 +260,15 @@ class TransformerBlock(LightweightModule):
         hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
 
         if self.pre_ff_norm is not None:
-            # The output of the ff_norm is replicated across the device
-            # but the residual is fractured across the devices
-            if self.num_devices > 1:
-                hidden_states = tt_all_reduce(
+            # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded
+            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+                hidden_states = ttnn.mesh_partition(
                     hidden_states,
-                    self.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    cluster_axis=0,
+                    memory_config=hidden_states.memory_config(),
                     dim=3,
-                    topology=ttnn.Topology.Ring,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=self.args.ccl_dtype,
+                    cluster_axis=1,
                 )
 
-                hidden_states = ttnn.div(hidden_states, self.num_devices)
             hidden_states = ttnn.add(
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
@@ -294,19 +291,13 @@ class TransformerBlock(LightweightModule):
         if self.post_ff_norm is not None:
             post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
             hidden_states = self.post_ff_norm(hidden_states, mode, norm_config=post_ff_norm_config)  # Gathered
-            if self.num_devices > 1:
-                hidden_states = tt_all_reduce(
+            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+                hidden_states = ttnn.mesh_partition(
                     hidden_states,
-                    self.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    cluster_axis=0,
+                    memory_config=hidden_states.memory_config(),
                     dim=3,
-                    topology=ttnn.Topology.Ring,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=self.args.ccl_dtype,
+                    cluster_axis=1,
                 )
-
-                hidden_states = ttnn.div(hidden_states, self.num_devices)
 
         out = ttnn.add(
             residual,

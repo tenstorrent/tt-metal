@@ -43,6 +43,9 @@ public:
     // Returns start and end addresses of allocated blocks; addresses are absolute addresses with offset added
     std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_addresses() const override;
 
+    // Returns the size of the allocation at the given absolute address, or nullopt if not found
+    std::optional<DeviceAddr> get_allocation_size(DeviceAddr absolute_address) const override;
+
     // Address limit is used as a final check to see if selected address is > address limit.
     // The selected address is first converted to absolute address by adding offset_bytes_.
     // Based on usage, it seems like offset_bytes_ is used to offset by address limit so that
@@ -128,6 +131,7 @@ private:
     static size_t hash_device_address(DeviceAddr address);
     void insert_block_to_alloc_table(DeviceAddr address, size_t block_index);
     bool is_address_in_alloc_table(DeviceAddr address) const;
+    std::optional<size_t> get_block_index_from_alloc_table(DeviceAddr address) const;
     std::optional<size_t> get_and_remove_from_alloc_table(DeviceAddr address);
 
     void update_lowest_occupied_address(DeviceAddr address);

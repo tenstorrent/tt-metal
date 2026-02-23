@@ -269,7 +269,8 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
 #endif
 }
 
-void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
+bool socket_wait_for_pages(
+    const SocketReceiverInterface& socket, uint32_t num_pages, uint32_t early_exit_iter_count = 0) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.fifo_curr_size);
@@ -279,11 +280,18 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
     uint32_t bytes_recv;
+    uint32_t iter_count = 0;
     do {
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
+        iter_count++;
+        if (early_exit_iter_count && iter_count >= early_exit_iter_count) {
+            return false;
+        }
     } while (bytes_recv < num_bytes);
+    return true;
 #endif
+    return true;
 }
 
 void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
@@ -325,6 +333,20 @@ void fabric_socket_notify_sender(
     auto upstream_bytes_acked_noc_addr =
         get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
     fabric_set_unicast_route(fabric_header_addr, socket);
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
+// Stateful version: route and NOC address are pre-computed by the caller.
+// Avoids redundant get_noc_addr and fabric_set_unicast_route calls in hot loops.
+FORCE_INLINE void fabric_socket_notify_sender_stateful(
+    const SocketReceiverInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr,
+    uint64_t upstream_bytes_acked_noc_addr) {
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
     fabric_connection.wait_for_empty_write_slot();

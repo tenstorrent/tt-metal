@@ -7,13 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import (
-    is_wormhole_b0,
-    torch_random,
-    is_wormhole_b0,
-    is_blackhole,
-    is_watcher_enabled,
-)
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = pytest.mark.use_module_device
@@ -153,9 +147,6 @@ def test_ttnn_linear(
 @pytest.mark.parametrize("k_size", [8192])
 @pytest.mark.parametrize("n_size", [1024])
 def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
-    if is_watcher_enabled() and n_size == 1024 and k_size == 8192 and m_size == 32:
-        pytest.skip("Test is not passing with watcher enabled github issue #36314")
-
     torch.manual_seed(0)
 
     dram_grid_size = device.dram_grid_size().x
