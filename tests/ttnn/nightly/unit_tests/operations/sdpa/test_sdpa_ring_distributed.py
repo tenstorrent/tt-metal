@@ -342,5 +342,58 @@ def test_ring_distributed_sdpa_prefix_and_paged_kv(device, s, prefix_len, page_b
     )
 
 
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+def test_ring_distributed_sdpa_128k(device):
+    """
+    Dedicated test for 128k sequence length ring-distributed SDPA.
+
+    Input tensor sizes for ISL 128k (131072):
+    - batch_size (b): 1
+    - num_heads (nh): 8
+    - num_kv_heads (nkv): 1
+    - head_dim (d): 128
+    - seq_len (s): 131072
+
+    Tensor shapes:
+    - Q: [1, 8, 131072, 128] = 134,217,728 elements (~134 MB in bfloat8_b)
+    - K: [1, 1, 131072, 128] = 16,777,216 elements (~16.8 MB in bfloat8_b)
+    - V: [1, 1, 131072, 128] = 16,777,216 elements (~16.8 MB in bfloat8_b)
+
+    Ring distribution:
+    - ring_size: 4
+    - per_device_seq_len: 131072 / 8 = 16384 tokens per device
+
+    Config:
+    - q_chunk_size: 128 (must divide 16384)
+    - k_chunk_size: 256
+    - dtype: bfloat8_b
+    """
+    # Fixed parameters for 128k test
+    b = 1
+    s = 131072  # 128k
+    ring_size = 4
+    q_chunk_size = 128
+    k_chunk_size = 256
+
+    # Validate constraints
+    assert s % (2 * ring_size) == 0, f"Sequence length {s} must be divisible by {2 * ring_size}"
+    per_device_seq_len = s // (2 * ring_size)
+    assert (
+        per_device_seq_len % q_chunk_size == 0
+    ), f"Per-device seq len {per_device_seq_len} must be divisible by q_chunk_size {q_chunk_size}"
+
+    logger.info(f"Running 128k ring-distributed SDPA test:")
+    logger.info(f"  Sequence length: {s}")
+    logger.info(f"  Ring size: {ring_size}")
+    logger.info(f"  Per-device seq len: {per_device_seq_len}")
+    logger.info(f"  Q shape: [1, 8, {s}, 128]")
+    logger.info(f"  K shape: [1, 1, {s}, 128]")
+    logger.info(f"  V shape: [1, 1, {s}, 128]")
+    logger.info(f"  q_chunk_size: {q_chunk_size}")
+    logger.info(f"  k_chunk_size: {k_chunk_size}")
+
+    run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chunk_size)
+
+
 if __name__ == "__main__":
     print("Minimal ring-distributed SDPA test file ready!")
