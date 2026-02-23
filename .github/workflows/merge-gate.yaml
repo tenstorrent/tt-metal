@@ -57,13 +57,13 @@ jobs:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    # if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
 
   # Build all Docker images ONCE at the start, then share with all downstream jobs
   docker-images:
-    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    # if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/build-all-docker-images.yaml
     secrets: inherit
 
@@ -71,7 +71,7 @@ jobs:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    # if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     needs: docker-images
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
@@ -81,7 +81,7 @@ jobs:
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
 
   fail-fast:
-    if: failure()
+    # if: failure()
     runs-on: ubuntu-latest
     needs: [code-analysis]
     permissions:
@@ -90,7 +90,7 @@ jobs:
       - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
 
   find-changes:
-    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    # if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
@@ -105,12 +105,12 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
   build:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.docs-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true' ||
+    #         needs.find-changes.outputs.docs-changed == 'true' ||
+    #         needs.find-changes.outputs.build-workflows-changed == 'true'
+    #     }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -130,11 +130,11 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
 
   build-tsan:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true' ||
+    #         needs.find-changes.outputs.build-workflows-changed == 'true'
+    #     }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -154,10 +154,10 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
 
   build-sweeps:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true'
+    #     }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-wrapper.yaml
     permissions:
@@ -173,11 +173,11 @@ jobs:
 
   metalium-smoke-tests:
     needs: [find-changes, build-tsan]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+    #     }}
     strategy:
       fail-fast: false
       matrix:
@@ -195,12 +195,12 @@ jobs:
 
   ttnn-smoke-tests:
     needs: [find-changes, build-tsan]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-nn-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+    #     }}
     strategy:
       fail-fast: false
       matrix:
@@ -217,11 +217,11 @@ jobs:
       product: tt-nn
 
   build-asan:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true' ||
+    #         needs.find-changes.outputs.build-workflows-changed == 'true'
+    #     }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -241,12 +241,12 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
 
   metalium-basic-tests:
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-      }}
+    # if: ${{
+    #     github.ref_name == 'main' ||
+    #     needs.find-changes.outputs.cmake-changed == 'true' ||
+    #     needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #     needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+    #   }}
     needs: [ build-asan, find-changes ]
     strategy:
       fail-fast: false
@@ -264,12 +264,12 @@ jobs:
 
   ttnn-basic-tests:
     needs: [build-asan, find-changes]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-nn-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+    #     }}
     strategy:
       fail-fast: false
       matrix:
@@ -286,12 +286,12 @@ jobs:
 
   ttnn-merge-gate-tests:
     needs: [build, find-changes]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-nn-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+    #     }}
     strategy:
       fail-fast: false
       matrix:
@@ -310,12 +310,12 @@ jobs:
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build, find-changes]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-nn-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+    #     }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -332,12 +332,12 @@ jobs:
 
   fabric-unit-tests:
     needs: [build, find-changes]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-nn-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+    #     }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -355,9 +355,9 @@ jobs:
 
   fabric-cpu-only-unit-tests:
     needs: [build, find-changes]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true'
+    #     }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -373,9 +373,9 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   ttsim-unit-tests:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true'
+    #     }}
     needs: [build, find-changes]
     strategy:
       fail-fast: false
@@ -412,12 +412,12 @@ jobs:
     # Force this job to run so GH can 'see' it, provided some other job has actually run.
     # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
     # report FAILED instead of SKIPPED.
-    if: >-
-      ${{
-        always() &&
-        contains(join(needs.*.result, ','), 'success') ||
-        contains(join(needs.*.result, ','), 'failure')
-      }}
+    # if: >-
+    #   ${{
+    #     always() &&
+    #     contains(join(needs.*.result, ','), 'success') ||
+    #     contains(join(needs.*.result, ','), 'failure')
+    #   }}
     needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests]
     runs-on: ubuntu-latest
     steps:
