@@ -1532,9 +1532,8 @@ void MetalContext::initialize_firmware(
                 auto [_, num_build_states] = BuildEnvManager::get_instance().get_build_index_and_state_count(
                     core_type_idx, processor_class, true);
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
-                    auto fw_path = BuildEnvManager::get_instance()
-                                       .get_firmware_build_state(device_id, core_type_idx, processor_class, riscv_id)
-                                       .get_target_out_path("");
+                    auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                        device_id, core_type_idx, processor_class, riscv_id);
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
                     hal_->set_iram_text_size(
@@ -1615,10 +1614,8 @@ void MetalContext::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_->get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
-                        auto fw_path =
-                            BuildEnvManager::get_instance()
-                                .get_firmware_build_state(device_id, core_type_idx, processor_class, eriscv_id)
-                                .get_target_out_path("");
+                        auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                            device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         [[maybe_unused]] uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(
