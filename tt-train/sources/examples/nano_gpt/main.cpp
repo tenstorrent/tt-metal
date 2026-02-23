@@ -8,7 +8,8 @@
 #include <csignal>
 #include <cstdint>
 #include <filesystem>
-#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <fstream>
+#include <regex>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -35,6 +36,68 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 #include "utils/memory_utils.hpp"
+
+namespace {
+
+// Parse device_topology dims from MGD textproto file using regex
+// Returns {dim0, dim1} or empty vector if parsing fails
+std::vector<uint32_t> parse_mgd_device_topology_dims(const std::string &mgd_path) {
+    if (!std::filesystem::exists(mgd_path)) {
+        return {};
+    }
+
+    std::ifstream file(mgd_path);
+    if (!file.is_open()) {
+        return {};
+    }
+
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    // Match: device_topology { dims: [ X, Y ] ... }
+    std::regex dims_regex(R"(device_topology\s*\{\s*dims\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\])");
+    std::smatch match;
+
+    if (std::regex_search(content, match, dims_regex) && match.size() >= 3) {
+        return {static_cast<uint32_t>(std::stoul(match[1].str())), static_cast<uint32_t>(std::stoul(match[2].str()))};
+    }
+    return {};
+}
+
+void validate_mesh_shape_against_mgd(const tt::tt_metal::distributed::MeshShape &mesh_shape, uint32_t num_devices) {
+    auto mgd_path_opt = ttml::ttnn_fixed::distributed::get_mgd_path(num_devices);
+    if (!mgd_path_opt.has_value()) {
+        return;  // No MGD available, skip validation
+    }
+
+    const std::string &mgd_path = mgd_path_opt.value();
+    auto mgd_dims = parse_mgd_device_topology_dims(mgd_path);
+    if (mgd_dims.empty()) {
+        fmt::println("WARNING: Could not parse device_topology dims from MGD file: {}", mgd_path);
+        return;
+    }
+
+    if (mesh_shape.dims() != 2) {
+        throw std::runtime_error(
+            fmt::format("Mesh shape dimensions mismatch: config has {} dims, MGD has 2 dims", mesh_shape.dims()));
+    }
+
+    if (mesh_shape[0] != mgd_dims[0] || mesh_shape[1] != mgd_dims[1]) {
+        throw std::runtime_error(fmt::format(
+            "Mesh shape mismatch!\n"
+            "Config mesh_shape: [{}, {}]\n"
+            "MGD device_topology: [{}, {}]\n"
+            "Please ensure your training config mesh_shape matches the MGD file: {}",
+            mesh_shape[0],
+            mesh_shape[1],
+            mgd_dims[0],
+            mgd_dims[1],
+            mgd_path));
+    }
+
+    fmt::println("Mesh shape validated against MGD: [{}, {}] matches device_topology", mesh_shape[0], mesh_shape[1]);
+}
+
+}  // namespace
 
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
@@ -340,6 +403,9 @@ int main(int argc, char **argv) {
         device_config.enable_cp) {
         fmt::print("Enabling fabric\n");
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
+
+        // Validate that config mesh_shape matches MGD device_topology to catch configuration errors early
+        validate_mesh_shape_against_mgd(device_config.mesh_shape, num_devices);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
