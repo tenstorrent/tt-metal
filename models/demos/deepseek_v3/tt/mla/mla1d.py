@@ -837,7 +837,6 @@ class MLA1D(AbstractModule):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b2_out_shard_spec
         )
 
-        # Tiny tile for wkv_b2: 4x32 tiles for m=4 dimension
         wkv_b2_output_tile = ttnn.Tile((wkv_b2_tile_h, tile_size))
 
         # Input L1 HEIGHT sharded memory config for wkv_b2 in0 (activations)
