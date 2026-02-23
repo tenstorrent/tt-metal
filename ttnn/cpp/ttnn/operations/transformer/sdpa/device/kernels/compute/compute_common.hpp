@@ -1769,7 +1769,7 @@ void sdpa_inner_loop(
                 sub_block(cb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
                 // alias_sub *= alias_sig
                 reconfig_data_format(alias_sub, alias_sig);
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
                 // cb_out = cb_prev_out - alias_sub
                 reconfig_data_format(cb_prev_out, alias_sub);
                 pack_reconfig_data_format(cb_out);
