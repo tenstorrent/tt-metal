@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 
 import ttnn
@@ -61,3 +62,10 @@ def test_worker_l1_fail(device, layout, dtype):
             device,
             memory_config=memory_config,
         )
+
+
+def test_dispatch_context_init_and_terminate(mesh_device):
+    if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") != "1":
+        pytest.skip("Test requires Slow Dispatch mode (TT_METAL_SLOW_DISPATCH_MODE=1)")
+    ttnn.device.initialize_fast_dispatch(mesh_device)
+    ttnn.device.terminate_fast_dispatch(mesh_device)
