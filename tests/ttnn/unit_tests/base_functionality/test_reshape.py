@@ -77,6 +77,7 @@ def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_sha
         ([1, 1024, 1], [1, 1024, 32], ttnn.CoreGrid(x=1, y=8), [1, 1024], [32, 1024], ttnn.CoreGrid(x=8, y=1)),
         ([1, 32, 512], [32, 128], ttnn.CoreGrid(x=4, y=1), [512, 32], [128, 32], ttnn.CoreGrid(x=1, y=4)),
         ([1, 128, 64], [1, 1, 128, 64], ttnn.CoreGrid(x=1, y=1), [64, 128], [64, 128], ttnn.CoreGrid(x=1, y=1)),
+        ([1024, 32, 4], [4096, 32], ttnn.CoreGrid(x=8, y=8), [32, 4, 1024], [128, 128], ttnn.CoreGrid(x=8, y=8)),
     ],
 )
 def test_reshape_block_shard(
