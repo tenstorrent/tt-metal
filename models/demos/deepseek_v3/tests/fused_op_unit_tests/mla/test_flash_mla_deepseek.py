@@ -118,7 +118,7 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
     "device_params",
     [
         {
-            "trace_region_size": 4112384,  # Larger trace region for flash attention
+            "trace_region_size": 5500000,  # Larger trace region for flash attention
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

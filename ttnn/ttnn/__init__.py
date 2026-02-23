@@ -184,6 +184,7 @@ from ttnn._ttnn.mesh_socket import (
     SocketMemoryConfig,
     SocketConnection,
     MeshCoreCoord,
+    SocketEndpoint,
 )
 
 from ttnn._ttnn.hd_socket import (
@@ -281,6 +282,8 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    enable_asynchronous_slow_dispatch,
+    disable_asynchronous_slow_dispatch,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -366,6 +369,8 @@ import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
+
+from ttnn.operations.unary import SigmoidMode
 
 divide = ttnn.div
 sub = ttnn.subtract

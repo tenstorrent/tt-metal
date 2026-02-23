@@ -73,7 +73,7 @@ jobs:
         run: |
             mkdir -p generated/test_reports
             uv pip install -r tools/triage/requirements.txt
-            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest ./tools/tests/triage/
+            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v ./tools/tests/triage/
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
