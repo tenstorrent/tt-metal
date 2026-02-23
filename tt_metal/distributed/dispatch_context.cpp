@@ -71,6 +71,21 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
             cq_shared_state,
             std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl)));
     }
+    // Enable Fast Dispatch on submeshes
+    for (auto& submesh : mesh_device->get_submeshes()) {
+        auto& sub_mesh_device_impl = submesh->impl();
+        sub_mesh_device_impl.mesh_command_queues_.clear();
+        sub_mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
+        for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            sub_mesh_device_impl.mesh_command_queues_.push_back(std::make_unique<distributed::FDMeshCommandQueue>(
+                submesh.get(),
+                cq_id,
+                sub_mesh_device_impl.dispatch_thread_pool_,
+                sub_mesh_device_impl.reader_thread_pool_,
+                cq_shared_state,
+                std::bind(&distributed::MeshDeviceImpl::lock_api, &sub_mesh_device_impl)));
+        }
+    }
     fast_dispatch_enabled_ = true;
     num_fd_inits_++;
 }
@@ -84,8 +99,21 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
     auto& mesh_device_impl = mesh_device->impl();
+
+    // Terminate FD on Submeshes
+    for (auto& submesh : mesh_device->get_submeshes()) {
+        auto& sub_mesh_device_impl = submesh->impl();
+        sub_mesh_device_impl.mesh_command_queues_.clear();
+        sub_mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
+        for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            sub_mesh_device_impl.mesh_command_queues_.push_back(std::make_unique<distributed::SDMeshCommandQueue>(
+                submesh.get(), cq_id, std::bind(&distributed::MeshDeviceImpl::lock_api, &sub_mesh_device_impl)));
+        }
+    }
+
     mesh_device_impl.mesh_command_queues_.clear();
     mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
+
     for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         mesh_device_impl.mesh_command_queues_.push_back(std::make_unique<distributed::SDMeshCommandQueue>(
             mesh_device, cq_id, std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl)));
