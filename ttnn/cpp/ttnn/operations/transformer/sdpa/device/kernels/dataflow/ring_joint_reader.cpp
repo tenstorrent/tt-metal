@@ -140,6 +140,7 @@ void kernel_main() {
     // DPRINT << "NUM LOCAL Q CHUNKS " << num_local_q_chunks << " K CHUNKS " << num_local_k_chunks << ENDL();
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
+        DPRINT << "Ring iter RD: " << ring_iter << ENDL();
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
@@ -323,5 +324,5 @@ void kernel_main() {
         }
         // DPRINT << "READER STEP: " << ring_iter << ENDL();
     }
-    // DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
+    DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
 }

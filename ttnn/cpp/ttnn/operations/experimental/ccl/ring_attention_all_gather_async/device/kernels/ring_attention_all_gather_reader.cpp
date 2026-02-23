@@ -69,7 +69,7 @@ void kernel_main() {
     const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     // Push out our local slice
 
-    DPRINT << "AG reader, num inputs: " << num_inputs << ENDL();
+    // DPRINT << "AG reader, num inputs: " << num_inputs << ENDL();
     uint32_t output_tile_id_start = 0;
     // Read local slice to our buffers, before sending them over
     // DPRINT << "AG reader, reading local slice, tiles_to_read: " << tiles_to_read << ENDL();
@@ -234,7 +234,7 @@ void kernel_main() {
             }
         }
     }
-
     const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
     noc_inline_dw_write(dest_noc_addr, 0);
+    // DPRINT << "AGR finished" << ENDL();
 }

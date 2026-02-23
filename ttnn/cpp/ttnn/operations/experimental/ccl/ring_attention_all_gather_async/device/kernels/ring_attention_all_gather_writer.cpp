@@ -64,7 +64,7 @@ void kernel_main() {
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-    DPRINT << "AG writer, num inputs: " << num_inputs << ENDL();
+    // DPRINT << "AG writer, num inputs: " << num_inputs << ENDL();
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
 
@@ -138,8 +138,8 @@ void kernel_main() {
         } else {
             tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
         }
-        DPRINT << "AG writer, input_index: " << input_idx << " tiles_to_read: " << tiles_to_read
-               << " tiles_read: " << tiles_read << ENDL();
+        // DPRINT << "AG writer, input_index: " << input_idx << " tiles_to_read: " << tiles_to_read
+        //        << " tiles_read: " << tiles_read << ENDL();
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
@@ -355,4 +355,5 @@ void kernel_main() {
 
     noc_async_atomic_barrier();
     noc_async_write_barrier();
+    // DPRINT << "AGW finished" << ENDL();
 }

@@ -305,7 +305,7 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "b, nh, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
     #    [(1, 1, 4 * 32, 32, 32, 32)],
-    [(1, 1, 4 * 64, 32, 32, 32)],
+    [(1, 1, 4 * 32, 64, 64, 32)],
     ids=["deepseek_v3_prefill"],
 )
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
@@ -401,5 +401,5 @@ def test_mla_sdpa(
         all_gather_topology,
         skip_check,
         0.999,
-        is_causal=True,
+        is_causal=False,
     )

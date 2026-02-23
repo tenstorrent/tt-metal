@@ -55,9 +55,12 @@ void write_output_and_lse(
     const uint32_t cb_lse_out,
     const uint32_t tile_bytes,
     const uint32_t lse_tile_bytes) {
+    DPRINT << "Write output and LSE begin" << ENDL();
     write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
 
+    DPRINT << "CB_LSE_OUT wait in write_output_and_lse" << ENDL();
     cb_wait_front(cb_lse_out, Sq_chunk_t);
+    DPRINT << "CB_LSE_OUT waited in write_output_and_lse" << ENDL();
     uint32_t lse_addr = get_read_ptr(cb_lse_out);
     for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
         noc_async_write_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
@@ -136,6 +139,7 @@ void kernel_main() {
 
     uint32_t rind_index = fused_op_receiver.ring_index;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        DPRINT << "Ring iter WR: " << ring_iter << ENDL();
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -195,6 +199,7 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
             bool causality = (ring_iter == 0 ? is_causal : false);
+            DPRINT << "Global q_chunk: " << global_q_chunk << ENDL();
 
             generate_mask<false, 0, true, cb_mask_in>(  // ADD CAUSAL TRUE
                 Sq_chunk_t,
@@ -206,6 +211,7 @@ void kernel_main() {
                 ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
                 L,
                 causality);
+            DPRINT << "Generated mask" << ENDL();
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;
@@ -238,6 +244,7 @@ void kernel_main() {
             }
 
             if (ring_iter > 0) {
+                DPRINT << "Reading prev output and LSE" << ENDL();
                 read_prev_output_and_lse(
                     is_joint_q ? joint_out_generator : out_generator,
                     lse_writer,
@@ -253,8 +260,10 @@ void kernel_main() {
                     cb_lse_in,
                     tile_bytes,
                     lse_tile_bytes);
+                DPRINT << "Read prev output and LSE" << ENDL();
             }
 
+            DPRINT << "Writing output and LSE" << ENDL();
             write_output_and_lse(
                 is_joint_q ? joint_out_generator : out_generator,
                 lse_writer,
@@ -270,8 +279,10 @@ void kernel_main() {
                 cb_lse_out,
                 tile_bytes,
                 lse_tile_bytes);
+            DPRINT << "Written output and LSE" << ENDL();
+            DPRINT << "Global q_chunk end: " << global_q_chunk << ENDL();
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
-    // DPRINT << "WRITER EXIT" << ENDL();
+    DPRINT << "WRITER EXIT" << ENDL();
 }
