@@ -128,15 +128,15 @@
 - name: Phi-3-mini unit tests
   cmd: |
     export HF_MODEL=microsoft/Phi-3-mini-128k-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-3-mini-128k-instruct
-    pytest --timeout 420 models/tt_transformers/tests/test_decoder.py
-    pytest --timeout 420 models/tt_transformers/tests/test_decoder_prefill.py
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py
   model: phi-3-mini
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 5
       tier: 3
     wh_n300:
-      timeout: 7
+      timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
