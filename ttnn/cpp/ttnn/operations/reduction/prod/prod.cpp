@@ -79,7 +79,7 @@ Tensor prod_impl(
     TT_FATAL(size > 0, "Tensor has no dimensions");
     TT_FATAL(
         !dim.has_value() || (*dim >= -size && *dim <= size - 1),
-        "Dimension for prod is out of range (expected to be in range of [{}, {}]",
+        "Dimension for prod is out of range (expected to be in range of [{}, {}])",
         -size,
         size - 1);
 
