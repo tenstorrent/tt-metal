@@ -19,38 +19,11 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 // 2D Program Factory Implementation
 LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DProgramFactory::create(
     const LayerNormPreAllGatherParams& operation_attributes,
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-
     const auto& a = tensor_args.input;
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
@@ -212,9 +185,6 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, merge_cores, cb_out_final_config);
 
-    float winv = 1.0f;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     for (uint32_t x = 0; x < cores_x; ++x) {
         for (uint32_t y = 0; y < cores_y; ++y) {
             CoreCoord core = {x, y};
@@ -237,8 +207,7 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
                  is_merge_core,
                  merge_core.x,
                  merge_core.y,
-                 y,
-                 packed_winv_value});
+                 y});
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {is_merge_core});
             if (is_merge_core) {
                 tt::tt_metal::SetRuntimeArgs(

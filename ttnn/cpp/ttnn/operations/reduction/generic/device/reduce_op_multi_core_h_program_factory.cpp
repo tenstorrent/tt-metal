@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <bit>
 #include <cmath>
 
 using namespace tt::constants;
@@ -122,11 +123,10 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
 
     if (use_width_sharding) {
-        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
+        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
@@ -137,7 +137,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
         // Reader auto-detects chunk_size via DEST_AUTO_LIMIT (row_chunk parameter removed)
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, packed_scaler_value};
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         // Pass DEST config as defines so reader can compute DEST_AUTO_LIMIT
@@ -230,7 +230,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
         std::vector<uint32_t> reader_rt_args = {
-            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
+            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size};
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};

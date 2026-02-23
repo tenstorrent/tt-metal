@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "llk_defs.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -129,7 +130,10 @@ void kernel_main() {
 
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
-    dataflow_kernel_lib::generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW>();
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();

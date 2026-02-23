@@ -18,10 +18,9 @@ void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
-    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    uint32_t b_addr = get_arg_val<uint32_t>(8);
-    uint32_t W = get_arg_val<uint32_t>(9);
+    uint32_t gamma_addr = get_arg_val<uint32_t>(5);
+    uint32_t beta_addr = get_arg_val<uint32_t>(6);
+    uint32_t b_addr = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
@@ -36,6 +35,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr uint32_t W = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 #ifdef FUSE_GAMMA
@@ -55,16 +55,17 @@ void kernel_main() {
     if constexpr (!use_welford) {
         // Scaler(s) for reduce
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        uint32_t scaler = get_arg_val<uint32_t>(4);
-        dataflow_kernel_lib::generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        if (partial_last_tile_cols > 0 && !use_welford) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        constexpr auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        if constexpr (partial_last_tile_cols > 0) {
+            uint32_t packed_scaler = dataflow_kernel_lib::float_to_scaler_bits<get_dataformat(cb_in_2)>(1.0f);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, packed_scaler, partial_last_tile_cols);
         }
     }
 
     constexpr uint32_t eps_cb_id = 3;
-    const uint32_t eps = get_arg_val<uint32_t>(5);
+    const uint32_t eps = get_arg_val<uint32_t>(4);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

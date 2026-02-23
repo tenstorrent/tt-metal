@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <bit>
 #include <cmath>
 
 using namespace tt::constants;
@@ -76,9 +77,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {std::bit_cast<uint32_t>(scaler)};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};

@@ -270,9 +270,6 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {
         float f;
         uint32_t u;
@@ -291,7 +288,7 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        packed_winv_value,
+        W * num_devices,
         e.u,
         has_weight,
         fuse_rope,
