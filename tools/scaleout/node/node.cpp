@@ -48,7 +48,17 @@ google::protobuf::RepeatedPtrField<tt::scaleout_tools::cabling_generator::proto:
 get_port_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node, const std::string& port_type) {
     return (*node->mutable_port_type_connections())[port_type].mutable_connections();
 }
-
+// Galaxy topology options using one-hot encoding:
+// MESH = 0 (00) - Mesh
+// X_TORUS = 0b01 - X-axis torus only (bit 0)
+// Y_TORUS = 0b10 - Y-axis torus only (bit 1)
+// XY_TORUS = 0b11 - Both X and Y torus (bits 0+1)
+enum class GalaxyTopology {
+    MESH = 0b00,
+    X_TORUS = 0b01,
+    Y_TORUS = 0b10,
+    XY_TORUS = 0b11,
+};
 }  // anonymous namespace
 
 // N300 Node class
@@ -140,22 +150,9 @@ private:
         add_connection(qsfp_connections, 2, 2, 4, 2);
     }
 
-public:
-    // WHGalaxy topology options using one-hot encoding:
-    // MESH = 0 (00) - Mesh
-    // X_TORUS = 0b01 - X-axis torus only (bit 0)
-    // Y_TORUS = 0b10 - Y-axis torus only (bit 1)
-    // XY_TORUS = 0b11 - Both X and Y torus (bits 0+1)
-    enum class WHGalaxyTopology {
-        MESH = 0b00,                   // Mesh
-        X_TORUS = 0b01,                // X-axis torus only
-        Y_TORUS = 0b10,                // Y-axis torus only
-        XY_TORUS = X_TORUS | Y_TORUS,  // Both X and Y torus
-    };
-
 protected:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
-        WHGalaxyTopology topology = WHGalaxyTopology::MESH) {
+        GalaxyTopology topology = GalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("S7T-MB");
 
@@ -185,10 +182,10 @@ protected:
         add_connection(lb3_connections, 2, 2, 4, 2);
 
         // Add QSFP connections based on topology (one-hot encoded)
-        if (static_cast<int>(topology) & static_cast<int>(WHGalaxyTopology::X_TORUS)) {  // X_TORUS bit
+        if (static_cast<int>(topology) & static_cast<int>(GalaxyTopology::X_TORUS)) {  // X_TORUS bit
             add_x_torus_connections(&node);
         }
-        if (static_cast<int>(topology) & static_cast<int>(WHGalaxyTopology::Y_TORUS)) {  // Y_TORUS bit
+        if (static_cast<int>(topology) & static_cast<int>(GalaxyTopology::Y_TORUS)) {  // Y_TORUS bit
             add_y_torus_connections(&node);
         }
 
@@ -197,7 +194,7 @@ protected:
 
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(WHGalaxyTopology::MESH);
+        return create_impl(GalaxyTopology::MESH);
     }
 };
 
@@ -205,7 +202,7 @@ public:
 class WHGalaxyXTorusNode : public WHGalaxyNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(WHGalaxyTopology::X_TORUS);
+        return create_impl(GalaxyTopology::X_TORUS);
     }
     Topology get_topology() const override { return Topology::X_TORUS; }
 };
@@ -214,7 +211,7 @@ public:
 class WHGalaxyYTorusNode : public WHGalaxyNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(WHGalaxyTopology::Y_TORUS);
+        return create_impl(GalaxyTopology::Y_TORUS);
     }
     Topology get_topology() const override { return Topology::Y_TORUS; }
 };
@@ -223,7 +220,7 @@ public:
 class WHGalaxyXYTorusNode : public WHGalaxyNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(WHGalaxyTopology::XY_TORUS);
+        return create_impl(GalaxyTopology::XY_TORUS);
     }
     Topology get_topology() const override { return Topology::XY_TORUS; }
 };
@@ -329,22 +326,9 @@ private:
         add_connection(qsfp_connections, 3, 2, 4, 2);
     }
 
-public:
-    // BHGalaxy topology options using one-hot encoding:
-    // MESH = 0 (00) - Mesh
-    // X_TORUS = 0b01 - X-axis torus only (bit 0)
-    // Y_TORUS = 0b10 - Y-axis torus only (bit 1)
-    // XY_TORUS = 0b11 - Both X and Y torus (bits 0+1)
-    enum class BHGalaxyTopology {
-        MESH = 0b00,                   // Mesh
-        X_TORUS = 0b01,                // X-axis torus only
-        Y_TORUS = 0b10,                // Y-axis torus only
-        XY_TORUS = X_TORUS | Y_TORUS,  // Both X and Y torus
-    };
-
 protected:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
-        BHGalaxyTopology topology = BHGalaxyTopology::MESH) {
+        GalaxyTopology topology = GalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("S7T-MB");
 
@@ -373,10 +357,10 @@ protected:
         add_connection(lb3_connections, 3, 2, 4, 2);
 
         // Add QSFP connections based on topology (one-hot encoded)
-        if (static_cast<int>(topology) & static_cast<int>(BHGalaxyTopology::X_TORUS)) {  // X_TORUS bit
+        if (static_cast<int>(topology) & static_cast<int>(GalaxyTopology::X_TORUS)) {  // X_TORUS bit
             add_x_torus_connections(&node);
         }
-        if (static_cast<int>(topology) & static_cast<int>(BHGalaxyTopology::Y_TORUS)) {  // Y_TORUS bit
+        if (static_cast<int>(topology) & static_cast<int>(GalaxyTopology::Y_TORUS)) {  // Y_TORUS bit
             add_y_torus_connections(&node);
         }
 
@@ -385,7 +369,7 @@ protected:
 
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::MESH);
+        return create_impl(GalaxyTopology::MESH);
     }
 };
 
@@ -393,7 +377,7 @@ public:
 class BHGalaxyRevABXTorusNode : public BHGalaxyRevABNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::X_TORUS);
+        return create_impl(GalaxyTopology::X_TORUS);
     }
     Topology get_topology() const override { return Topology::X_TORUS; }
 };
@@ -402,7 +386,7 @@ public:
 class BHGalaxyRevABYTorusNode : public BHGalaxyRevABNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::Y_TORUS);
+        return create_impl(GalaxyTopology::Y_TORUS);
     }
     Topology get_topology() const override { return Topology::Y_TORUS; }
 };
@@ -411,7 +395,7 @@ public:
 class BHGalaxyRevABXYTorusNode : public BHGalaxyRevABNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::XY_TORUS);
+        return create_impl(GalaxyTopology::XY_TORUS);
     }
     Topology get_topology() const override { return Topology::XY_TORUS; }
 };
@@ -443,22 +427,9 @@ private:
         add_connection(qsfp_connections, 2, 2, 4, 2);
     }
 
-public:
-    // BHGalaxy topology options using one-hot encoding:
-    // MESH = 0 (00) - Mesh
-    // X_TORUS = 0b01 - X-axis torus only (bit 0)
-    // Y_TORUS = 0b10 - Y-axis torus only (bit 1)
-    // XY_TORUS = 0b11 - Both X and Y torus (bits 0+1)
-    enum class BHGalaxyTopology {
-        MESH = 0b00,                   // Mesh
-        X_TORUS = 0b01,                // X-axis torus only
-        Y_TORUS = 0b10,                // Y-axis torus only
-        XY_TORUS = X_TORUS | Y_TORUS,  // Both X and Y torus
-    };
-
 protected:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
-        BHGalaxyTopology topology = BHGalaxyTopology::MESH) {
+        GalaxyTopology topology = GalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
 
         node.set_motherboard("S7T-MB");
@@ -488,10 +459,10 @@ protected:
         add_connection(lb3_connections, 2, 2, 4, 2);
 
         // Add QSFP connections based on topology (one-hot encoded)
-        if (static_cast<int>(topology) & static_cast<int>(BHGalaxyTopology::X_TORUS)) {  // X_TORUS bit
+        if (static_cast<int>(topology) & static_cast<int>(GalaxyTopology::X_TORUS)) {  // X_TORUS bit
             add_x_torus_connections(&node);
         }
-        if (static_cast<int>(topology) & static_cast<int>(BHGalaxyTopology::Y_TORUS)) {  // Y_TORUS bit
+        if (static_cast<int>(topology) & static_cast<int>(GalaxyTopology::Y_TORUS)) {  // Y_TORUS bit
             add_y_torus_connections(&node);
         }
 
@@ -500,7 +471,7 @@ protected:
 
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::MESH);
+        return create_impl(GalaxyTopology::MESH);
     }
 };
 
@@ -508,7 +479,7 @@ public:
 class BHGalaxyRevCXTorusNode : public BHGalaxyRevCNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::X_TORUS);
+        return create_impl(GalaxyTopology::X_TORUS);
     }
     Topology get_topology() const override { return Topology::X_TORUS; }
 };
@@ -517,7 +488,7 @@ public:
 class BHGalaxyRevCYTorusNode : public BHGalaxyRevCNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::Y_TORUS);
+        return create_impl(GalaxyTopology::Y_TORUS);
     }
     Topology get_topology() const override { return Topology::Y_TORUS; }
 };
@@ -526,7 +497,7 @@ public:
 class BHGalaxyRevCXYTorusNode : public BHGalaxyRevCNode {
 public:
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
-        return create_impl(BHGalaxyTopology::XY_TORUS);
+        return create_impl(GalaxyTopology::XY_TORUS);
     }
     Topology get_topology() const override { return Topology::XY_TORUS; }
 };
