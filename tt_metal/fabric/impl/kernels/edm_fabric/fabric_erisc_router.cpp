@@ -488,6 +488,23 @@ FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan
     return direction_to_compact_index_map[my_direction][downstream_direction];
 }
 
+// Convert a hop_cmd direction bitmask into a sender channel bitmask using dense channel packing.
+// Each direction bit maps to a compact_index via map_downstream_direction_to_compact_index,
+// and the corresponding sender channel is compact_index + 1 (channel 0 is always worker).
+// my_direction is masked out since it represents a local write, not a forwarding channel.
+FORCE_INLINE uint16_t hop_cmd_to_sender_channel_mask(uint32_t hop_cmd) {
+    uint32_t fwd_directions = hop_cmd & ~(1u << my_direction);
+    uint16_t fwd_mask = 0;
+    constexpr size_t num_directions = z_router_enabled ? eth_chan_directions::COUNT : eth_chan_directions::COUNT - 1;
+    for (uint32_t dir = 0; dir < num_directions && fwd_directions; dir++) {
+        if (fwd_directions & (1u << dir)) {
+            size_t compact_idx = map_downstream_direction_to_compact_index(static_cast<eth_chan_directions>(dir));
+            fwd_mask |= static_cast<uint16_t>(1u << (compact_idx + 1));
+        }
+    }
+    return fwd_mask;
+}
+
 static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> sender_channels_turn_status =
     get_sender_channel_turn_statuses();
 
@@ -574,6 +591,11 @@ FORCE_INLINE void send_next_data(
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
+
+    channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
+    channel_trimming_usage_recorder.update_sender_channel_packet_size(
+        sender_channel_index,
+        static_cast<uint16_t>(pkt_header->payload_size_bytes));
 
     auto const dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
@@ -833,6 +855,7 @@ FORCE_INLINE void receiver_forward_packet(
         if (not_last_destination_device) {
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+            channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
         }
         if (start_distance_is_terminal_value) {
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -847,11 +870,18 @@ FORCE_INLINE void receiver_forward_packet(
             case LowLatencyFields::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+
+                // In 1D, the forwarding sender channel is always sender channel 1
+                // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
+                channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
             case LowLatencyFields::WRITE_AND_FORWARD:
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                // In 1D, the forwarding sender channel is always sender channel 1
+                // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
+                channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
             default: {
                 ASSERT(false);
@@ -1336,6 +1366,9 @@ FORCE_INLINE
             break;
         default: __builtin_unreachable();
     }
+
+    channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(
+        rx_channel_id, hop_cmd_to_sender_channel_mask(hop_cmd));
 }
 #endif
 
@@ -1734,6 +1767,43 @@ FORCE_INLINE
 
 template <
     uint8_t receiver_channel,
+    bool forwarding_disabled,
+    size_t DOWNSTREAM_EDM_SIZE,
+    typename WriteTridTracker,
+    typename DownstreamSenderT,
+    typename LocalRelayInterfaceT>
+FORCE_INLINE void receiver_channel_forward_if_enabled(
+    WriteTridTracker& receiver_channel_trid_tracker,
+    tt::tt_fabric::BufferIndex receiver_buffer_index,
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    LocalRelayInterfaceT& local_relay_interface,
+    uint32_t hop_cmd) {
+    if constexpr (!forwarding_disabled) {
+        uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
+            receiver_buffer_index);
+        if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D)
+            receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
+                packet_header,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                trid,
+                hop_cmd);
+#endif
+        } else {
+#ifndef FABRIC_2D
+            receiver_forward_packet<receiver_channel>(
+                packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
+#endif
+        }
+    }
+}
+
+template <
+    uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
     bool enable_first_level_ack,
     size_t DOWNSTREAM_EDM_SIZE,
@@ -1852,24 +1922,18 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
             }
-            uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
-                receiver_buffer_index);
-            if constexpr (is_2d_fabric) {
-#if defined(FABRIC_2D)
-                receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
-                    packet_header,
-                    cached_routing_fields,
-                    downstream_edm_interfaces,
-                    local_relay_interface,
-                    trid,
-                    hop_cmd);
-#endif
-            } else {
-#ifndef FABRIC_2D
-                receiver_forward_packet<receiver_channel>(
-                    packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
-#endif
-            }
+            channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
+            receiver_channel_forward_if_enabled<
+                receiver_channel,
+                is_receiver_channel_forwarding_disabled[receiver_channel],
+                DOWNSTREAM_EDM_SIZE>(
+                receiver_channel_trid_tracker,
+                receiver_buffer_index,
+                packet_header,
+                cached_routing_fields,
+                downstream_edm_interfaces,
+                local_relay_interface,
+                hop_cmd);
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (!enable_first_level_ack) {
@@ -2710,6 +2774,10 @@ void initialize_fabric_telemetry() {
 }
 
 void kernel_main() {
+    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
+        channel_trimming_usage_recorder.reset();
+    }
+
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif

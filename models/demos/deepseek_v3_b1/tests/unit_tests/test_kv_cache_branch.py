@@ -172,25 +172,22 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     )
 
     # ROPE
-    # Cos/sin indexed by position: [1, batch, 1, head_dim]
-    # Shape stays [1, 1, 1, head_dim] - broadcast multiply will use row 0
     rope_tile = ttnn.Tile((rope_num_heads, ttnn.TILE_SIZE))
     trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
-    cos_selected = torch_cos[position_ids].unsqueeze(0).unsqueeze(2)
-    sin_selected = torch_sin[position_ids].unsqueeze(0).unsqueeze(2)
 
-    # Use same tiny tile as input - data in row 0, rows 1+ are padding
-    cos_sin_shard_spec = ttnn.ShardSpec(
-        rope_crs,
-        (rope_num_heads, rope_head_dim // 2),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
-    )
+    # Full cos/sin cache in DRAM INTERLEAVED: [1, 1, max_seq_len * rope_num_heads, rope_head_dim]
+    # Each position's cos/sin row is repeated rope_num_heads times to match tile height.
+    # Kernel indexes by position_id at runtime via TensorAccessor.
+    num_rope_cores = rope_crs.num_cores()
+    cos_repeated = torch_cos.unsqueeze(1).expand(-1, rope_num_heads, -1).reshape(-1, rope_head_dim)
+    sin_repeated = torch_sin.unsqueeze(1).expand(-1, rope_num_heads, -1).reshape(-1, rope_head_dim)
+    cos_full = cos_repeated.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len * rope_num_heads, rope_head_dim]
+    sin_full = sin_repeated.unsqueeze(0).unsqueeze(0)
+
+    cos_sin_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     tt_cos = ttnn.from_torch(
-        cos_selected,
+        cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -198,7 +195,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tile=rope_tile,
     )
     tt_sin = ttnn.from_torch(
-        sin_selected,
+        sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -280,6 +277,23 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tile=tile,
     )
 
+    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=pos_mem_config,
+    )
+
     logger.info(f"Created KV cache tensor in DRAM with shape {kv_cache_shape}")
 
     logger.info(f"Created tensors sharded on single core with shard shape {output_shard_shape}")
@@ -294,7 +308,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tt_trans_replicated,
         ttnn_output,
         ttnn_kv_cache,
-        kv_cache_write_index=position_id,  # Which sequence position to write to
+        position_ids_tensor=ttnn_position_ids,  # Current decode position, used as DRAM page ID for KV cache write
     )
 
     logger.info("Running KV cache branch golden reference...")

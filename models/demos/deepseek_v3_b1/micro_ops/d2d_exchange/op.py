@@ -34,6 +34,8 @@ class SocketInterface:
         upstream_core_coord=None,
         downstream_core_coord=None,
         mesh_device=None,
+        sender_packet_header_cb_index=None,
+        receiver_packet_header_cb_index=None,
     ):
         if upstream_socket is not None:
             self.upstream_socket = upstream_socket
@@ -90,6 +92,12 @@ class SocketInterface:
             0,
             ttnn.BufferType.L1,
         )
+        self.sender_packet_header_cb_index = (
+            0 if sender_packet_header_cb_index is None else sender_packet_header_cb_index
+        )
+        self.receiver_packet_header_cb_index = (
+            1 if receiver_packet_header_cb_index is None else receiver_packet_header_cb_index
+        )
 
     def _create_program(
         self,
@@ -97,6 +105,7 @@ class SocketInterface:
         my_core_coord,
         my_upstream_socket,
         my_downstream_socket,
+        packet_header_cb_index,
     ):
         # Upstream Socket (feeding this stage) and Downstream Socket (draining this stage) must be on my_core.
         assert my_upstream_socket.get_active_cores()[0] == my_core_coord
@@ -139,7 +148,6 @@ class SocketInterface:
             num_whole_fabric_packets_link_0 = 0
             num_whole_fabric_packets_link_1 = 0
 
-        packet_header_cb_index = 0
         if use_fabric_on_receiver or use_fabric_on_sender:
             packet_header_cb_num_pages = num_fwd_links + num_bwd_links
             packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
@@ -220,6 +228,7 @@ class SocketInterface:
             self.send_core_coord,
             self.upstream_socket,
             self.intermed_socket_pair[0],
+            self.sender_packet_header_cb_index,
         )
 
         receiver_program = self._create_program(
@@ -227,6 +236,7 @@ class SocketInterface:
             self.recv_core_coord,
             self.intermed_socket_pair[1],
             self.downstream_socket,
+            self.receiver_packet_header_cb_index,
         )
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 

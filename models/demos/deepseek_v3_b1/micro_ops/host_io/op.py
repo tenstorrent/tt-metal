@@ -48,6 +48,8 @@ class HostInterface:
         d2h_upstream_core=ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
         embedding_tensor=None,
         loopback_mode=False,
+        embedding_cb_index=None,
+        fabric_packet_header_cb_index=None,
     ):
         self.h2d_socket = h2d_socket
         self.d2h_socket = d2h_socket
@@ -139,9 +141,11 @@ class HostInterface:
             ), f"Expected embedding tensor to be DRAM interleaved with page size {self.embedding_page_size} bytes for shape {self.embedding_tensor.shape}"
             # Tensor is DRAM interleaved, and row major. Page size is inner dim stride.
             self.embedding_page_size = self.embedding_tensor.shape[3] * dtype_size(self.embedding_tensor.dtype)
-            self.embedding_cb_index = 2
+            self.embedding_cb_index = 2 if embedding_cb_index is None else embedding_cb_index
 
-        self.fabric_packet_header_cb_index = 1
+        self.fabric_packet_header_cb_index = (
+            1 if fabric_packet_header_cb_index is None else fabric_packet_header_cb_index
+        )
         self.num_fwd_links = 2
         self.num_bwd_links = 1
 
@@ -306,11 +310,11 @@ class HostInterface:
         my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_downstream_core.device_coord)
         my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_upstream_core.device_coord)
 
-        # h2d_kernel = self._create_h2d_kernel()
+        h2d_kernel = self._create_h2d_kernel()
         d2h_kernel = self._create_d2h_kernel()
-        # h2d_cb_descriptors = self._create_cb_descriptors(
-        #     self.h2d_mesh_core_coord, h2d_fabric_node_id != my_downstream_fabric_node_id
-        # )
+        h2d_cb_descriptors = self._create_cb_descriptors(
+            self.h2d_mesh_core_coord, h2d_fabric_node_id != my_downstream_fabric_node_id
+        )
         d2h_cb_descriptors = self._create_cb_descriptors(
             self.d2h_mesh_core_coord, d2h_fabric_node_id != my_upstream_fabric_node_id
         )
@@ -319,16 +323,16 @@ class HostInterface:
 
         if same_device:
             # Place both kernels in a single program when on the same device
-            # h2d_cb_ids = {fd.buffer_index for cb in h2d_cb_descriptors for fd in cb.format_descriptors}
-            # combined_cbs = h2d_cb_descriptors + [
-            #     cb
-            #     for cb in d2h_cb_descriptors
-            #     if not any(fd.buffer_index in h2d_cb_ids for fd in cb.format_descriptors)
-            # ]
+            h2d_cb_ids = {fd.buffer_index for cb in h2d_cb_descriptors for fd in cb.format_descriptors}
+            combined_cbs = h2d_cb_descriptors + [
+                cb
+                for cb in d2h_cb_descriptors
+                if not any(fd.buffer_index in h2d_cb_ids for fd in cb.format_descriptors)
+            ]
             h2d_program = ttnn.ProgramDescriptor(
-                kernels=[d2h_kernel],
+                kernels=[h2d_kernel, d2h_kernel],
                 semaphores=[],
-                cbs=d2h_cb_descriptors,
+                cbs=combined_cbs,
             )
             d2h_program = h2d_program  # alias so d2h references point to the same program
         else:
@@ -344,42 +348,42 @@ class HostInterface:
             )
 
         # h2d kernel is always kernels[0]
-        # h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
-        #     self.h2d_mesh_core_coord.core_coord.y
-        # ] = []
-        # h2d_rt_args_ref = h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
-        #     self.h2d_mesh_core_coord.core_coord.y
-        # ]
-        # if h2d_fabric_node_id != my_downstream_fabric_node_id:
-        #     for idx in range(self.num_fwd_links):
-        #         fwd_fabric_args = ttnn.setup_fabric_connection(
-        #             h2d_fabric_node_id,
-        #             my_downstream_fabric_node_id,
-        #             idx,
-        #             h2d_program,
-        #             self.h2d_mesh_core_coord.core_coord,
-        #         )
-        #         h2d_rt_args_ref.extend(fwd_fabric_args)
+        h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
+            self.h2d_mesh_core_coord.core_coord.y
+        ] = []
+        h2d_rt_args_ref = h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
+            self.h2d_mesh_core_coord.core_coord.y
+        ]
+        if h2d_fabric_node_id != my_downstream_fabric_node_id:
+            for idx in range(self.num_fwd_links):
+                fwd_fabric_args = ttnn.setup_fabric_connection(
+                    h2d_fabric_node_id,
+                    my_downstream_fabric_node_id,
+                    idx,
+                    h2d_program,
+                    self.h2d_mesh_core_coord.core_coord,
+                )
+                h2d_rt_args_ref.extend(fwd_fabric_args)
 
         # d2h kernel is kernels[1] when combined, kernels[0] when separate
-        # d2h_kernel_idx = 1 if same_device else 0
-        # d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
-        #     self.d2h_mesh_core_coord.core_coord.y
-        # ] = []
-        # d2h_rt_args_ref = d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
-        #     self.d2h_mesh_core_coord.core_coord.y
-        # ]
+        d2h_kernel_idx = 1 if same_device else 0
+        d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+            self.d2h_mesh_core_coord.core_coord.y
+        ] = []
+        d2h_rt_args_ref = d2h_program.kernels[d2h_kernel_idx].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+            self.d2h_mesh_core_coord.core_coord.y
+        ]
 
-        # if d2h_fabric_node_id != my_upstream_fabric_node_id:
-        #     for idx in range(self.num_bwd_links):
-        #         bwd_fabric_args = ttnn.setup_fabric_connection(
-        #             d2h_fabric_node_id,
-        #             my_upstream_fabric_node_id,
-        #             idx,
-        #             d2h_program,
-        #             self.d2h_mesh_core_coord.core_coord,
-        #         )
-        #         d2h_rt_args_ref.extend(bwd_fabric_args)
+        if d2h_fabric_node_id != my_upstream_fabric_node_id:
+            for idx in range(self.num_bwd_links):
+                bwd_fabric_args = ttnn.setup_fabric_connection(
+                    d2h_fabric_node_id,
+                    my_upstream_fabric_node_id,
+                    idx,
+                    d2h_program,
+                    self.d2h_mesh_core_coord.core_coord,
+                )
+                d2h_rt_args_ref.extend(bwd_fabric_args)
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         mesh_program_descriptor[

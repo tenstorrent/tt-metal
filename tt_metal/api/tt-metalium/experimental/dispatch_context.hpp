@@ -21,6 +21,9 @@ namespace experimental {
 // removed once we implement a proper weight loading solution for Low Latency Decode.
 // As such its exposed as experimental.
 
+// Note: Slow Dispatch is a "Back-Door" way of running programs on compute cores.
+// This is productized for extremely application specific use cases.
+
 class DispatchContext {
 public:
     static DispatchContext& get();
