@@ -1535,7 +1535,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
         submesh, dummy_h2d_mesh_core, ttnn.BufferType.L1, socket_fifo_size, ttnn.H2DMode.HOST_PUSH
     )
     d2h_socket = ttnn.D2HSocket(submesh, d2h_mesh_core, socket_fifo_size)
-    print("Creating HostInterface")
+    logger.info("Creating HostInterface")
     host_io = HostInterface(
         h2d_socket,
         d2h_socket,
@@ -1545,7 +1545,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
         h2d_downstream_core=dummy_h2d_mesh_core,
         d2h_upstream_core=d2d2_mesh_core,
     )
-    print("Creating SocketInterface")
+    logger.info("Creating SocketInterface")
     socket_interface = SocketInterface(
         socket_page_size_bytes,
         socket_fifo_size,
@@ -1557,9 +1557,10 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
         mesh_device=submesh,
     )
 
+    logger.info("Running HostInterface")
     host_io.run()
+    logger.info("Running SocketInterface")
     socket_interface.run()
-    # breakpoint()
     logger.info("Running LMHeadSampling")
     LMHeadSampling.op(
         input_tensor_mesh,
