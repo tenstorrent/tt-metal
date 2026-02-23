@@ -52,6 +52,7 @@ const std::vector<std::size_t> kTotalDataSizes = {
 
 const std::vector<std::size_t> kPageSizes = {
     64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
+const std::vector<std::size_t> kPageSizes512KOnly = {512 * 1024};
 
 const std::vector<std::size_t> kD2HThroughputFifoSizes = {
     1024,
@@ -79,6 +80,8 @@ const std::vector<std::size_t> kD2HThroughputFifoSizes = {
 const std::vector<std::size_t> kD2HLatencyFifoSizes = {1024, 4096, 16384, 65536, 512UL * 1024 * 1024};
 const std::vector<std::size_t> kH2DThroughputFifoSizes = {
     1024, 2048, 4096, 8192, 16384, 32768, 65536, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024};
+const std::vector<std::size_t> kH2DThroughputFifoSizes512KOnly = {512 * 1024};
+const std::vector<std::size_t> kH2DThroughputFifoSizes512KDevicePullTemp = {512 * 1024, 768 * 1024};
 const std::vector<std::size_t> kH2DLatencyFifoSizes = {1024, 4096, 16384, 65536, 262144, 524288};
 
 std::size_t compute_iteration_data_size_bytes(std::size_t page_size) {
@@ -475,7 +478,7 @@ TEST_F(HDSocketFixture, H2DSocket) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    for (auto h2d_mode : {H2DMode::HOST_PUSH}) {
+    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
         for (const auto& recv_coord : MeshCoordinateRange(mesh_device_->shape())) {
             if (!is_device_coord_mmio_mapped(mesh_device_, recv_coord)) {
                 continue;
@@ -887,6 +890,109 @@ TEST_F(HDSocketFixture, H2DSocketThroughputBenchmark) {
                 }
             }
         }
+    }
+}
+
+TEST_F(HDSocketFixture, H2DSocketThroughputBenchmarkPage512KOnly) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    MeshCoreCoord recv_core = get_target_benchmark_worker_core(mesh_device_);
+    const auto& recv_coord = recv_core.device_coord;
+
+    std::cout << "page_size,socket_fifo_size,h2d_mode,total_data,data_size,pages_per_iter,"
+              << "num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
+              << "throughput_gbps,device_coord" << std::endl;
+
+    for (auto h2d_mode : {H2DMode::DEVICE_PULL}) {
+        for (auto fifo_size : kH2DThroughputFifoSizes512KOnly) {
+            for (auto page_size : kPageSizes512KOnly) {
+                if (page_size > fifo_size) {
+                    continue;
+                }
+                std::size_t data_size = compute_iteration_data_size_bytes(page_size);
+                std::size_t pages_per_iter = data_size / page_size;
+
+                for (auto total_data : kTotalDataSizes) {
+                    uint32_t num_iterations = total_data / data_size;
+                    if (num_iterations == 0) {
+                        continue;
+                    }
+                    uint64_t total_pages = static_cast<uint64_t>(pages_per_iter) * num_iterations;
+
+                    auto [us, cycles] = benchmark_h2d_socket(
+                        mesh_device_, fifo_size, page_size, data_size, num_iterations, h2d_mode, recv_core);
+
+                    emit_h2d_throughput_csv_row(
+                        page_size,
+                        fifo_size,
+                        h2d_mode,
+                        total_data,
+                        data_size,
+                        pages_per_iter,
+                        num_iterations,
+                        total_pages,
+                        us,
+                        cycles,
+                        recv_coord);
+                    std::cout.flush();
+                }
+            }
+        }
+    }
+}
+
+TEST_F(HDSocketFixture, H2DSocketThroughputBenchmarkPage512KDevicePullTemp) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    constexpr std::size_t kTotalData = 1024UL * 1024 * 1024;  // 1GB
+    const std::vector<std::pair<std::size_t, std::size_t>> test_points = {
+        {512 * 1024, 512 * 1024},               // page=512KB, fifo=512KB
+        {512 * 1024, 768 * 1024},               // page=512KB, fifo=768KB
+        {256 * 1024, 256 * 1024},               // page=256KB, fifo=1MB
+        {256 * 1024, 256 * 1024 + 128 * 1024},  // page=256KB, fifo=1MB
+        {256 * 1024, 512 * 1024},               // page=256KB, fifo=1MB
+        {256 * 1024, 768 * 1024},               // page=256KB, fifo=1MB
+        {256 * 1024, 1024 * 1024},              // page=256KB, fifo=1MB
+        {384 * 1024, 1024 * 1024},              // page=256KB, fifo=1MB
+        {409 * 1024, 409 * 2 * 1024},           // page=256KB, fifo=1MB
+    };
+
+    MeshCoreCoord recv_core = get_target_benchmark_worker_core(mesh_device_);
+    const auto& recv_coord = recv_core.device_coord;
+
+    std::cout << "page_size,socket_fifo_size,h2d_mode,total_data,data_size,pages_per_iter,"
+              << "num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
+              << "throughput_gbps,device_coord" << std::endl;
+
+    for (const auto& [page_size, fifo_size] : test_points) {
+        if (page_size > fifo_size) {
+            continue;
+        }
+        std::size_t data_size = compute_iteration_data_size_bytes(page_size);
+        std::size_t pages_per_iter = data_size / page_size;
+        uint32_t num_iterations = kTotalData / data_size;
+        uint64_t total_pages = static_cast<uint64_t>(pages_per_iter) * num_iterations;
+
+        auto [us, cycles] = benchmark_h2d_socket(
+            mesh_device_, fifo_size, page_size, data_size, num_iterations, H2DMode::DEVICE_PULL, recv_core);
+
+        emit_h2d_throughput_csv_row(
+            page_size,
+            fifo_size,
+            H2DMode::DEVICE_PULL,
+            kTotalData,
+            data_size,
+            pages_per_iter,
+            num_iterations,
+            total_pages,
+            us,
+            cycles,
+            recv_coord);
+        std::cout.flush();
     }
 }
 
