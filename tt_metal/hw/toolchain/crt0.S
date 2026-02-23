@@ -21,13 +21,12 @@ _start:
 	addi	tp,tp,%lo(__local_base)
 	lui	sp,%hi(__local_stride)
 	addi	sp,sp,%lo(__local_stride)
-#ifdef COMPILE_FOR_TRISC
-	csrr	s2, 0xBC2
-#else
+// for TRISCs __local_base and __local_stride are already set by the linker to the correct internal memory addresses
+#ifndef COMPILE_FOR_TRISC
 	csrr	s2,mhartid
-#endif
 	mul	s2,sp,s2
 	add	tp,tp,s2
+#endif
 	add	sp,tp,sp
 
 	/* Enter high-level start.  */
