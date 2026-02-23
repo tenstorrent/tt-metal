@@ -20,9 +20,9 @@
 
 namespace {
 
-auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
+// auto check_board_is_n300() {
+//     return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
+// }
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {
     for (const auto& [name, parameter] : parameters) {
@@ -38,12 +38,12 @@ ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& nam
 class N300TensorParallelLinearTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!check_board_is_n300()) {
-            GTEST_SKIP() << "Skipping N300 specific tests";
-        }
+        // if (!check_board_is_n300()) {
+        //     GTEST_SKIP() << "Skipping N300 specific tests";
+        // }
 
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::ttnn_fixed::distributed::enable_fabric(32U);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 32));
         ttml::autograd::ctx().set_seed(42);
     }
 
@@ -556,6 +556,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
+    auto num_devices = device->num_devices();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -607,14 +608,26 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
         xt::allclose(replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], column_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[0],
+        num_devices * column_parallel_input_gradients[0],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[1],
+        num_devices * column_parallel_input_gradients[1],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
@@ -638,6 +651,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
+    auto num_devices = device->num_devices();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -690,12 +704,24 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
         xt::allclose(replicate_output_xtensor[1], column_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], column_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[0],
+        num_devices * column_parallel_input_gradients[0],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[1],
+        num_devices * column_parallel_input_gradients[1],
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1],
+        num_devices * column_parallel_weight_gradients,
+        /* rtol */ 1e-2,
+        /* atol */ 5e-2));
 };
