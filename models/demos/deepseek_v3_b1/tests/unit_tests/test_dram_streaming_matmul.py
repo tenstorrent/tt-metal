@@ -228,7 +228,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     # ========== Working buffer for CB1 (needed for kernel-level looping) ==========
     in1_tile = ttnn.Tile([tile_w, tile_w])  # in1 uses 32x32 tiles
     in1_dtype = ttnn.bfloat4_b
-    num_in1_buffers = 3 * num_subblocks_k
+    num_in1_buffers = 3
     in1_CB_tiles = subblock_k * num_in1_buffers
     # Working buffer: WIDTH_SHARDED in L1, shard = [tile_w, in1_CB_tiles * tile_w]
     working_buf_shard_shape = (tile_w, in1_CB_tiles * tile_w)
