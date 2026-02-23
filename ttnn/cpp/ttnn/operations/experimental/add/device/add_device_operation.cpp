@@ -33,15 +33,12 @@ static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... oth
 }
 
 AddDeviceOperation::program_factory_t AddDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    bool is_sharded = tensor_args.a_tensor.memory_config().nd_shard_spec().has_value() &&
-                      tensor_args.b_tensor.memory_config().nd_shard_spec().has_value();
-
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // bool is_sharded =
     //     tensor_args.a_tensor.memory_config().is_sharded() && tensor_args.b_tensor.memory_config().is_sharded();
-    if (is_sharded) {
-        return EltNDShardedAddProgram{};
-    }
+    // if (is_sharded) {
+    //     return EltNDShardedAddProgram{};
+    // }
     return ElementWiseMultiCoreAddProgram{};
 }
 
@@ -115,6 +112,7 @@ tt::stl::hash::hash_t AddDeviceOperation::compute_program_hash(
         args.a_tensor.memory_config(),
         args.a_tensor.dtype(),
         args.b_tensor.memory_config(),
+        attributes.worker_grid,
         args.b_tensor.dtype());
 }
 
@@ -130,14 +128,21 @@ std::tuple<AddDeviceOperation::operation_attributes_t, AddDeviceOperation::tenso
     const Tensor& b_tensor,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor) {
+    std::optional<Tensor> output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     CoreRangeSet worker_grid;
     auto* device = a_tensor.device();
-    for (const auto& sub_device_id : device->get_sub_device_ids()) {
-        const auto& sub_device_workers =
-            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
-        worker_grid = worker_grid.merge(sub_device_workers);
+    if (sub_core_grids.has_value()) {
+        worker_grid = sub_core_grids.value();
+    } else {
+        for (const auto& sub_device_id : device->get_sub_device_ids()) {
+            const auto& sub_device_workers =
+                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
+            worker_grid = worker_grid.merge(sub_device_workers);
+        }
     }
+
+    // std::cout << "worker_grid: " << worker_grid.str() << std::endl;
 
     return {
         operation_attributes_t{
