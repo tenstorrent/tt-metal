@@ -2,6 +2,19 @@
 
 Single-core Scaled Dot-Product Attention (SDPA) implementation using TT-Metalium. Processes Q, K, V matrices in chunks with online softmax normalization (FlashAttention-style).
 
+## Setup
+
+```bash
+git checkout dnijemcevic/sdpa_benchmark
+
+# Activate the Python venv
+source python_env/bin/activate
+
+# Verify env vars are set
+echo $ARCH_NAME        # e.g. wormhole_b0, blackhole
+echo $PYTHONPATH       # should include the tt-metal root
+```
+
 ## Building
 
 ```bash
@@ -48,6 +61,13 @@ Where `Sq = num_q_chunks * Sq_chunk_t * 32`, `Sk = num_k_chunks * Sk_chunk_t * 3
 ## Python Correctness Tests
 
 Pytest-based tests that generate inputs, compute a PyTorch reference via `F.scaled_dot_product_attention`, run the C++ binary, and compare results (PCC, RMSE, max absolute error).
+
+### Before running tests: reset the device
+
+```bash
+pkill -9 -f pytest || true
+tt-smi -r $(tt-smi -ls 2>&1 | grep -oP '^\│ \K\d+' | head -1)
+```
 
 ### Run all tests
 
@@ -103,4 +123,29 @@ To regenerate inputs (e.g. after changing seed or data generation):
 
 ```bash
 pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py --save-inputs
+```
+
+## Key Files
+
+| File | Role |
+|------|------|
+| `kernels/compute/sdpa.cpp` | Compute kernel (all SDPA math) |
+| `kernels/dataflow/reader.cpp` | Reader: Q/K/V from DRAM to L1 CBs |
+| `kernels/dataflow/writer.cpp` | Writer: helper tiles + normalized output to DRAM |
+| `sdpa_single_core.cpp` | Host code (CB setup, kernel dispatch) |
+| `generate_and_test_sdpa.py` | Pytest harness (generates inputs, runs binary, compares) |
+| `SDPA_kernel_analysis.md` | Full architecture and data flow documentation |
+
+## Important: After Editing Kernels
+
+Kernels are JIT-compiled from **installed** copies, not the source tree. After editing kernel `.cpp` files, you must rebuild:
+
+```bash
+./build_metal.sh --build-programming-example
+```
+
+This re-installs to `build/share/tenstorrent/kernels/sdpa_single_core/`. If you see stale behavior, also clear the JIT cache:
+
+```bash
+rm -rf built/tt-metal-cache*
 ```
