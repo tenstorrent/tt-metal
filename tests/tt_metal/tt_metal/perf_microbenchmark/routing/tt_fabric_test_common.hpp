@@ -148,6 +148,27 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
+    void setup_channel_trimming_rtoptions(ChannelTrimmingMode channel_trimming_mode) {
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        switch (channel_trimming_mode) {
+            case ChannelTrimmingMode::CAPTURE:
+                rtoptions.set_enable_channel_trimming_capture(true);
+                rtoptions.set_fabric_trimming_profile_path("");
+                break;
+            case ChannelTrimmingMode::REPLAY: {
+                rtoptions.set_enable_channel_trimming_capture(false);
+                auto path = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" /
+                            "channel_trimming_capture.yaml";
+                rtoptions.set_fabric_trimming_profile_path(path.string());
+                break;
+            }
+            case ChannelTrimmingMode::NONE:
+                rtoptions.set_enable_channel_trimming_capture(false);
+                rtoptions.set_fabric_trimming_profile_path("");
+                break;
+        }
+    }
+
     bool open_devices(const TestFabricSetup& fabric_setup,
                       ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
         const auto& topology = fabric_setup.topology;
@@ -203,25 +224,8 @@ public:
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
-            // Configure channel trimming rtoptions before opening devices
-            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-            switch (channel_trimming_mode) {
-                case ChannelTrimmingMode::CAPTURE:
-                    rtoptions.set_enable_channel_trimming_capture(true);
-                    rtoptions.set_fabric_trimming_profile_path("");
-                    break;
-                case ChannelTrimmingMode::REPLAY: {
-                    rtoptions.set_enable_channel_trimming_capture(false);
-                    auto path = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" /
-                                "channel_trimming_capture.yaml";
-                    rtoptions.set_fabric_trimming_profile_path(path.string());
-                    break;
-                }
-                case ChannelTrimmingMode::NONE:
-                    rtoptions.set_enable_channel_trimming_capture(false);
-                    rtoptions.set_fabric_trimming_profile_path("");
-                    break;
-            }
+
+            setup_channel_trimming_rtoptions(channel_trimming_mode);
 
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
