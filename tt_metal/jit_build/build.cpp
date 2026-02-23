@@ -68,6 +68,12 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
+void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
+    if (dir_path.compare(git_hash_path) != 0) {
+        std::filesystem::remove_all(dir_path);
+    }
+}
+
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
@@ -102,51 +108,28 @@ void JitBuildEnv::init(
     this->arch_ = arch;
     this->max_cbs_ = max_cbs;
 
-    // Check if git hash should be disabled (useful for CI to improve cache reuse)
-    const static bool disable_git_hash = std::getenv("TT_METAL_DISABLE_GIT_HASH") != nullptr;
-
 #ifndef GIT_COMMIT_HASH
     log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
 #else
-    if (!disable_git_hash) {
-        std::string git_hash(GIT_COMMIT_HASH);
+    std::string git_hash(GIT_COMMIT_HASH);
 
-        std::filesystem::path git_hash_path(this->out_root_ + git_hash);
-        std::filesystem::path root_path(this->out_root_);
-        if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-            std::ranges::for_each(
-                std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-                    if (dir_entry.path().compare(git_hash_path) != 0) {
-                        std::filesystem::remove_all(dir_entry.path());
-                    }
-                });
-        } else {
-            log_info(tt::LogBuildKernels, "Skipping deleting built cache");
-        }
-
-        this->out_root_ = this->out_root_ + git_hash + "/";
+    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
+    std::filesystem::path root_path(this->out_root_);
+    if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
+        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
+            check_built_dir(dir_entry.path(), git_hash_path);
+        });
     } else {
-        log_info(tt::LogBuildKernels, "Git hash disabled via TT_METAL_DISABLE_GIT_HASH");
+        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
+
+    this->out_root_ = this->out_root_ + git_hash + "/";
 #endif
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
         this->gpp_ = "ccache ";
-
-        // Check if inode cache file exists when CCACHE_TEMPDIR is set
-        const char* ccache_tempdir = std::getenv("CCACHE_TEMPDIR");
-        if (ccache_tempdir) {
-            std::string inode_cache_path = std::string(ccache_tempdir) + "/inode-cache-64.v2";
-            if (!std::filesystem::exists(inode_cache_path)) {
-                log_warning(
-                    tt::LogBuildKernels,
-                    "CCACHE_TEMPDIR is set but inode cache file not found at {}. "
-                    "ccache may not work optimally.",
-                    inode_cache_path);
-            }
-        }
     } else {
         this->gpp_ = "";
     }
@@ -601,9 +584,9 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 }
 
 // Given this elf (A) and a later elf (B):
-// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of
-// the same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to
-// remain strong so to propagate link addresses
+// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
+// same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
+// strong so to propogate link addresses
 void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
@@ -675,8 +658,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!compiled.test(i)) {
                 // If reusing up-to-date .o files, we should give them temporary names for linking because:
-                // 1. There is no guarantee that another process will not rename its compiled object to this .o
-                // during
+                // 1. There is no guarantee that another process will not rename its compiled object to this .o during
                 //    our linking.
                 // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
