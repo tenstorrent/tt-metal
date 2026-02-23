@@ -24,5 +24,6 @@ tt::tt_metal::Tensor convert_python_tensor_to_tt_tensor(
     std::optional<tt::tt_metal::distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
-    std::optional<float> pad_value = std::nullopt);
+    std::optional<float> pad_value = std::nullopt,
+    bool col_tilize = false);
 }  // namespace ttnn

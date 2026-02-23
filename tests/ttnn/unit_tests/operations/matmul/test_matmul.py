@@ -2853,3 +2853,131 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
         assert_with_pcc(torch_output, output, 0.999)
     finally:
         _teardown_subdevice(device, sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "weight_dtype, pcc_threshold",
+    [
+        (ttnn.bfloat8_b, 0.99),
+        (ttnn.bfloat4_b, 0.98),
+    ],
+)
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (32, 64, 32),
+        (128, 256, 128),
+        (64, 512, 256),
+    ],
+)
+def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc_threshold, M, K, N):
+    torch.manual_seed(0)
+    torch_A = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_W = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+    # Golden in float32
+    golden = torch.matmul(torch_A.float(), torch_W.float())
+
+    # Conventional path: row-wise BFP grouping (along N)
+    tt_A_conv = ttnn.from_torch(torch_A, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_W_conv = ttnn.from_torch(torch_W, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    result_conv = ttnn.to_torch(ttnn.matmul(tt_A_conv, tt_W_conv))
+
+    # Column-tilize path: use col_tilize=True instead of manual torch transpose
+    tt_A_col = ttnn.from_torch(torch_A, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_W_col = ttnn.from_torch(torch_W, dtype=weight_dtype, device=device, col_tilize=True)
+    result_col = ttnn.to_torch(ttnn.matmul(tt_A_col, tt_W_col, transpose_b=True))
+
+    # Both paths should match golden
+    assert_with_pcc(golden, result_conv, pcc=pcc_threshold)
+    assert_with_pcc(golden, result_col, pcc=pcc_threshold)
+
+    # The two paths should match each other
+    assert_with_pcc(result_conv, result_col, pcc=pcc_threshold)
+
+
+def test_from_torch_col_tilize_validation():
+    torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
+    torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
+
+    # col_tilize requires BFP dtype
+    with pytest.raises(RuntimeError, match="col_tilize=True requires BFP dtype"):
+        ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat16, col_tilize=True)
+
+    # col_tilize requires ndim >= 2
+    with pytest.raises(RuntimeError, match="col_tilize=True requires tensor.ndim >= 2"):
+        ttnn.from_torch(torch_tensor_1d, dtype=ttnn.bfloat8_b, col_tilize=True)
+
+    # col_tilize not supported with spec
+    spec = ttnn.TensorSpec((32, 64), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
+    with pytest.raises(RuntimeError, match="col_tilize=True is not supported with spec"):
+        ttnn.from_torch(torch_tensor_2d, spec=spec, col_tilize=True)
+
+    # col_tilize requires tile layout
+    with pytest.raises(RuntimeError, match="col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT"):
+        ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat8_b, layout=ttnn.ROW_MAJOR_LAYOUT, col_tilize=True)
+
+
+@pytest.mark.parametrize(
+    "weight_dtype, pcc_threshold",
+    [
+        (ttnn.bfloat8_b, 0.99),
+        (ttnn.bfloat4_b, 0.98),
+    ],
+)
+@pytest.mark.parametrize(
+    "K, N",
+    [
+        (32, 64),
+        (128, 256),
+        (64, 512),
+    ],
+)
+def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_threshold, K, N):
+    """Verify that from_torch(..., col_tilize=True) produces the same tensor as
+    manually transposing in torch and then calling from_torch on W^T."""
+    torch.manual_seed(0)
+    torch_W = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+    # col_tilize path
+    tt_col = ttnn.from_torch(torch_W, dtype=weight_dtype, col_tilize=True)
+    result_col = ttnn.to_torch(tt_col)
+
+    # Manual transpose path: torch transpose then from_torch
+    torch_W_T = torch_W.transpose(-1, -2).contiguous()
+    tt_manual = ttnn.from_torch(torch_W_T, dtype=weight_dtype)
+    result_manual = ttnn.to_torch(tt_manual)
+
+    assert (
+        result_col.shape == result_manual.shape
+    ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
+    assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+
+
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (64, 32),  # 2D, tile-aligned
+        (2, 64, 32),  # 3D with batch
+        (2, 3, 64, 32),  # 4D with batch
+        (48, 80),  # 2D, non-tile-aligned
+        (1, 1, 50, 70),  # 4D, non-tile-aligned K and N
+        (3, 33, 65),  # 3D, odd non-tile-aligned dims
+    ],
+)
+def test_from_torch_col_tilize_batched(weight_dtype, shape):
+    """Verify col_tilize works correctly for tensors of various ranks and shapes,
+    including non-tile-aligned dimensions that exercise the padding path."""
+    torch.manual_seed(0)
+    torch_W = torch.randn(shape, dtype=torch.bfloat16)
+
+    tt_col = ttnn.from_torch(torch_W, dtype=weight_dtype, col_tilize=True)
+    result_col = ttnn.to_torch(tt_col)
+
+    torch_W_T = torch_W.transpose(-1, -2).contiguous()
+    tt_manual = ttnn.from_torch(torch_W_T, dtype=weight_dtype)
+    result_manual = ttnn.to_torch(tt_manual)
+
+    assert result_col.shape == result_manual.shape
+    assert_with_pcc(result_manual, result_col, pcc=0.98)
