@@ -150,7 +150,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_updated_(sfpi::vFloat base, sfpi::vFloat pow) {
+sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
     // 2) Compute base**pow = 2**(pow * log2(base))
@@ -249,7 +249,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_<false>(sfpi::vFloat base, sfpi::vFl
 // is_fp32_dest_acc_en == true
 template <>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_61f_updated_(base, pow);
+    return _sfpu_binary_power_f32_(base, pow);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
