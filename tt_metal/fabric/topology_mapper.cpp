@@ -546,6 +546,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // Update chip_topology_mapping_ entries from the mapping result
         // Note: physical_chip_id is filled in during initialization, so we just need to update
         // fabric_node_id, mesh_coord, mesh_host_rank, and is_mapped
+        // Use the fabric node's host rank from the mesh graph, not the ASIC's input rank
         for (const auto& [fabric_node, asic] : mapping_result.fabric_node_to_asic) {
             auto it = asic_id_to_mapping_.find(asic);
             TT_FATAL(it != asic_id_to_mapping_.end(), "ASIC id {} not found in chip_topology_mapping_", asic);
@@ -553,9 +554,16 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
 
             info.fabric_node_id = fabric_node;
             info.mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node.mesh_id, fabric_node.chip_id);
-            if (asic_id_to_mesh_rank.contains(fabric_node.mesh_id) &&
-                asic_id_to_mesh_rank.at(fabric_node.mesh_id).contains(asic)) {
-                info.mesh_host_rank = asic_id_to_mesh_rank.at(fabric_node.mesh_id).at(asic);
+            // Assign mesh host rank based on the fabric node's rank from the mesh graph
+            // This ensures all mapped ASICs get a valid rank, even if their input rank was UNSET
+            if (fabric_node_id_to_mesh_rank.contains(fabric_node.mesh_id) &&
+                fabric_node_id_to_mesh_rank.at(fabric_node.mesh_id).contains(fabric_node)) {
+                info.mesh_host_rank = fabric_node_id_to_mesh_rank.at(fabric_node.mesh_id).at(fabric_node);
+            } else {
+                // Fallback: get host rank directly from mesh graph
+                auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node.mesh_id, fabric_node.chip_id);
+                TT_FATAL(host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node);
+                info.mesh_host_rank = host_rank.value();
             }
             info.is_mapped = true;
         }
@@ -1105,6 +1113,47 @@ std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_coord(
     return std::nullopt;
 }
 
+std::optional<MeshHostRankId> TopologyMapper::get_local_host_rank(MeshId mesh_id) const {
+    // Get the current hostname
+    const auto& current_hostname = physical_system_descriptor_.my_host_name();
+
+    // Collect all host ranks for fabric nodes on the current host for this mesh
+    std::unordered_set<MeshHostRankId> host_ranks;
+    for (const auto& [fabric_node_id, info_ptr] : fabric_node_id_to_mapping_) {
+        if (fabric_node_id.mesh_id == mesh_id && info_ptr != nullptr && info_ptr->is_mapped &&
+            info_ptr->hostname == current_hostname) {
+            host_ranks.insert(info_ptr->mesh_host_rank);
+        }
+    }
+
+    // If no fabric nodes found on this host for this mesh, return nullopt
+    if (host_ranks.empty()) {
+        return std::nullopt;
+    }
+
+    // All fabric nodes on the same host must have the same mesh host rank
+    if (host_ranks.size() != 1) {
+        std::string ranks_str;
+        bool first = true;
+        for (const auto& rank : host_ranks) {
+            if (!first) {
+                ranks_str += ", ";
+            }
+            first = false;
+            ranks_str += std::to_string(rank.get());
+        }
+        TT_FATAL(
+            false,
+            "TopologyMapper: Inconsistent host ranks found for mesh {} on host {}. "
+            "All fabric nodes on the same host must have the same mesh host rank. Found ranks: [{}]",
+            mesh_id.get(),
+            current_hostname,
+            ranks_str);
+    }
+
+    return *host_ranks.begin();
+}
+
 MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
     // Return global or submesh chip ids using the same indexing convention as MeshGraph.
     if (!host_rank.has_value()) {
@@ -1151,6 +1200,8 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         const auto mesh_id_val = info.fabric_node_id.mesh_id;
         const auto host_rank = info.mesh_host_rank;
         const auto coord = info.mesh_coord;
+        // All mapped entries should have valid host ranks (assigned from fabric node ranks)
+        // No need to check for UNSET here since mapping assigns valid ranks from fabric nodes
         mesh_to_hosts[mesh_id_val].insert(host_rank);
         mesh_host_to_coords[mesh_id_val][host_rank].push_back(coord);
     }

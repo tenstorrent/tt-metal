@@ -287,6 +287,18 @@ public:
     std::optional<MeshHostRankId> get_host_rank_for_coord(MeshId mesh_id, const MeshCoordinate& coord) const;
 
     /**
+     * @brief Get the local host rank for a mesh
+     *
+     * Looks up a fabric node in the mapping for the given mesh that belongs to the current host,
+     * and returns its mesh host rank. This is useful when the host rank needs to be determined from
+     * the physical system rather than from environment variables.
+     *
+     * @param mesh_id The mesh ID
+     * @return Optional mesh host rank if found, std::nullopt otherwise
+     */
+    std::optional<MeshHostRankId> get_local_host_rank(MeshId mesh_id) const;
+
+    /**
      * @brief Get the logical chip ids for a mesh or a host submesh
      *
      * When host_rank is not provided, returns a container of all logical chip

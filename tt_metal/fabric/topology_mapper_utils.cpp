@@ -615,9 +615,37 @@ void add_rank_binding_constraints(
     if (!config.disable_rank_bindings) {
         // Check that rank mappings are provided
         if (fabric_node_id_to_mesh_rank.contains(logical_mesh_id) && asic_id_to_mesh_rank.contains(logical_mesh_id)) {
-            if (!intra_mesh_constraints.add_required_trait_constraint(
-                    fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id))) {
-                TT_THROW("Failed to add required trait constraint for rank bindings in mesh {}", logical_mesh_id.get());
+            const auto& fabric_node_ranks = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
+            const auto& asic_ranks = asic_id_to_mesh_rank.at(logical_mesh_id);
+
+            // Group fabric nodes by rank
+            std::map<MeshHostRankId, std::set<FabricNodeId>> rank_to_fabric_nodes;
+            for (const auto& [fabric_node, rank] : fabric_node_ranks) {
+                rank_to_fabric_nodes[rank].insert(fabric_node);
+            }
+
+            // Group ASICs by rank (exclude ASICs with UNSET rank so fabric nodes can map to any)
+            std::map<MeshHostRankId, std::set<tt::tt_metal::AsicID>> rank_to_asics;
+            for (const auto& [asic_id, rank] : asic_ranks) {
+                // Skip ASICs with UNSET rank - they can be mapped to by any fabric node
+                if (rank == ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+                    continue;
+                }
+                rank_to_asics[rank].insert(asic_id);
+            }
+
+            // Add many-to-many required constraints for each rank
+            // This allows any fabric node with a given rank to map to any ASIC with the same rank
+            for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
+                auto asic_it = rank_to_asics.find(rank);
+                if (asic_it != rank_to_asics.end()) {
+                    if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, asic_it->second)) {
+                        TT_THROW(
+                            "Failed to add required constraint for rank bindings in mesh {} for rank {}",
+                            logical_mesh_id.get(),
+                            rank);
+                    }
+                }
             }
         }
     }
