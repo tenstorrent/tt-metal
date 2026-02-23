@@ -23,8 +23,7 @@ from models.common.llama_models import (
     CompletionPrediction,
 )
 
-from models.common.sampling.generator import format_sampling_params
-from models.common.sampling.sampling_params import SamplingParams
+from models.common.sampling import SamplingParams, format_sampling_params
 from models.common.warmup import WarmupForwardMixin
 
 
