@@ -536,6 +536,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
     tt::tt_metal::Buffer* buffer = nullptr;
+    nlohmann::json device_tensors_json = nlohmann::json::array();
     if (is_device_tensor(t)) {
         const auto& storage = t.device_storage();
         if (storage.mesh_buffer) {
@@ -544,6 +545,20 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
             // buffer.
             buffer = storage.mesh_buffer->get_backing_buffer();
+
+            // For multi-device tensors, capture per-device addresses and mesh device IDs
+            if (storage.mesh_buffer->is_allocated()) {
+                for (const auto& coord : storage.coords) {
+                    auto* device_buffer = storage.mesh_buffer->get_device_buffer(coord);
+                    if (device_buffer != nullptr) {
+                        device_tensors_json.push_back(
+                            {{"device_id", device_buffer->device()->id()},
+                             {kMeshDeviceId,
+                              buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
+                             {"address", device_buffer->address()}});
+                    }
+                }
+            }
         } else {
             buffer = t.buffer();
         }
@@ -582,24 +597,6 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         params[kBufferType] = fmt::format("{}", buffer->buffer_type());
     }
 
-    // For multi-device (mesh) tensors, a single logical tensor has separate physical buffers
-    // across multiple chips. Capture each device's buffer address so the visualizer can show
-    // the full mesh placement. Only populated when the tensor uses DeviceStorage with a mesh_buffer.
-    nlohmann::json device_tensors_json = nlohmann::json::array();
-    if (std::holds_alternative<DeviceStorage>(storage)) {
-        const auto& device_storage = std::get<DeviceStorage>(storage);
-        if (device_storage.mesh_buffer && device_storage.mesh_buffer->is_allocated()) {
-            for (const auto& coord : device_storage.coords) {
-                auto* device_buffer = device_storage.mesh_buffer->get_device_buffer(coord);
-                if (device_buffer != nullptr) {
-                    device_tensors_json.push_back(
-                        {{"device_id", device_buffer->device()->id()},
-                         {kMeshDeviceId, buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
-                         {"address", device_buffer->address()}});
-                }
-            }
-        }
-    }
     if (!device_tensors_json.empty()) {
         params[kDeviceTensors] = device_tensors_json.dump();
     }

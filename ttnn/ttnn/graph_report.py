@@ -444,7 +444,7 @@ def import_graph(
 
     # Track function start nodes to pair with function end
     function_stack = []
-    operation_counter = 0
+    operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
     current_op_nodes = []
