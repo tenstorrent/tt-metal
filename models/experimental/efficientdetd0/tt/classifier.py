@@ -51,7 +51,7 @@ class TtClassifier:
         for feat, conv_list, header in zip(inputs, self.conv_list, self.header_list):
             for conv in conv_list:
                 feat = conv(feat)
-                feat = feat * ttnn.sigmoid_accurate(feat)
+                feat = feat * ttnn.sigmoid(feat)
             feat = header(feat)
             feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)
             feat = ttnn.reshape(feat, (feat.shape[0], -1, self.num_classes))
@@ -59,4 +59,4 @@ class TtClassifier:
         concated_feats = ttnn.concat(feats, dim=1)
         for t in feats:
             ttnn.deallocate(t)
-        return ttnn.sigmoid_accurate(concated_feats)
+        return ttnn.sigmoid(concated_feats)
