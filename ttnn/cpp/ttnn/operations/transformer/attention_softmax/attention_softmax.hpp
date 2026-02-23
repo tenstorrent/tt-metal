@@ -9,8 +9,6 @@
 #include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
 
 namespace ttnn {
-namespace operations::transformer {}  // namespace operations::transformer
-
 namespace transformer {
 
 /**

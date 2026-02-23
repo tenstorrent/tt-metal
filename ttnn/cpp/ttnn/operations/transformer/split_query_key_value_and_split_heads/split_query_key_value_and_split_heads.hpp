@@ -7,16 +7,14 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::transformer {}  // namespace operations::transformer
-
 namespace transformer {
 
 /**
  * @brief Splits input_tensor of shape [batch_size, sequence_size, 3 * hidden_size] into 3 tensors (Query, Key, Value)
- * of shape [batch_size, sequence_size, hidden_size]. Then, reshapes and permutes the output tensors, to make them 
+ * of shape [batch_size, sequence_size, hidden_size]. Then, reshapes and permutes the output tensors, to make them
  * ready for computing attention scores.
  *
- * If kv_input_tensor is passed in, then input_tensor of shape [batch_size, sequence_size, hidden_size] is only used 
+ * If kv_input_tensor is passed in, then input_tensor of shape [batch_size, sequence_size, hidden_size] is only used
  * for Query, and kv_input_tensor of shape [batch_size, sequence_size, 2 * hidden_size] is used for Key and Value.
  */
 std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(

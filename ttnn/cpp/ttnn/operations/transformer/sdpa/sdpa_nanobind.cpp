@@ -97,7 +97,7 @@ void bind_sdpa(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &scaled_dot_product_attention_wrapper,
+            &ttnn::transformer::scaled_dot_product_attention,
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
@@ -209,19 +209,18 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"joint_scaled_dot_product_attention">(
         mod,
         joint_doc,
-        ttnn::overload_t(
-            &joint_scaled_dot_product_attention_wrapper,
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::arg("joint_tensor_q").noconvert(),
-            nb::arg("joint_tensor_k").noconvert(),
-            nb::arg("joint_tensor_v").noconvert(),
-            nb::kw_only(),
-            nb::arg("joint_strategy"),
-            nb::arg("program_config").noconvert(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()));
+        &ttnn::transformer::joint_scaled_dot_product_attention,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("joint_tensor_q").noconvert(),
+        nb::arg("joint_tensor_k").noconvert(),
+        nb::arg("joint_tensor_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("joint_strategy"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("compute_kernel_config").noconvert() = nb::none());
 
     const auto* const ring_joint_doc = R"doc(
         RingJointAttention operation that efficiently performs non-causal attention over two
@@ -271,30 +270,29 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"ring_joint_scaled_dot_product_attention">(
         mod,
         ring_joint_doc,
-        ttnn::overload_t(
-            &ring_joint_scaled_dot_product_attention_wrapper,
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::arg("joint_tensor_q").noconvert(),
-            nb::arg("joint_tensor_k").noconvert(),
-            nb::arg("joint_tensor_v").noconvert(),
-            nb::kw_only(),
-            nb::arg("persistent_output_buffer_k").noconvert(),
-            nb::arg("persistent_output_buffer_v").noconvert(),
-            nb::arg("joint_strategy"),
-            nb::arg("logical_n"),
-            nb::arg("program_config").noconvert(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("num_links"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("topology"),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("ccl_core_grid_offset")));
+        &ttnn::transformer::ring_joint_scaled_dot_product_attention,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("joint_tensor_q").noconvert(),
+        nb::arg("joint_tensor_k").noconvert(),
+        nb::arg("joint_tensor_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer_k").noconvert(),
+        nb::arg("persistent_output_buffer_v").noconvert(),
+        nb::arg("joint_strategy"),
+        nb::arg("logical_n"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("ccl_core_grid_offset"));
 
     const auto* const mla_doc =
         R"doc(
@@ -324,19 +322,18 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"flash_mla_prefill">(
         mod,
         mla_doc,
-        ttnn::overload_t(
-            &flash_mla_prefill_wrapper,
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("head_dim_v").noconvert(),
-            nb::kw_only(),
-            nb::arg("input_tensor_v") = nb::none(),
-            nb::arg("attn_mask") = nb::none(),
-            nb::arg("is_causal").noconvert() = true,
-            nb::arg("scale") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::transformer::flash_mla_prefill,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("head_dim_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("input_tensor_v") = nb::none(),
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("is_causal").noconvert() = true,
+        nb::arg("scale") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     const auto* const chunked_mla_doc =
         R"doc(
@@ -367,18 +364,17 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"chunked_flash_mla_prefill">(
         mod,
         chunked_mla_doc,
-        ttnn::overload_t(
-            &chunked_flash_mla_prefill_wrapper,
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("head_dim_v").noconvert(),
-            nb::arg("page_table_tensor").noconvert(),
-            nb::arg("chunk_start_idx"),
-            nb::kw_only(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::transformer::chunked_flash_mla_prefill,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("head_dim_v").noconvert(),
+        nb::arg("page_table_tensor").noconvert(),
+        nb::arg("chunk_start_idx"),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     const auto* const ring_distributed_doc =
         R"doc(
@@ -426,19 +422,18 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"ring_distributed_scaled_dot_product_attention">(
         mod,
         ring_distributed_doc,
-        ttnn::overload_t(
-            &ring_distributed_scaled_dot_product_attention_wrapper,
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::arg("ring_size").noconvert(),
-            nb::arg("ring_id") = nb::none(),
-            nb::kw_only(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("page_table") = nb::none(),
-            nb::arg("chunk_start_idx") = nb::none()));
+        &ttnn::transformer::ring_distributed_scaled_dot_product_attention,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("ring_size").noconvert(),
+        nb::arg("ring_id") = nb::none(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("page_table") = nb::none(),
+        nb::arg("chunk_start_idx") = nb::none());
 }
 }  // namespace ttnn::operations::transformer

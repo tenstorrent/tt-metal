@@ -9,8 +9,6 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer {}  // namespace ttnn::operations::transformer
-
 namespace ttnn::transformer {
 
 ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {

@@ -7,13 +7,11 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::transformer {}  // namespace operations::transformer
-
 namespace transformer {
 
 /**
- * @brief Takes in a tensor of shape [batch_size, num_heads, sequence_size, head_size], 
- * concatenates heads back along the width dimension and returns the tensor of shape 
+ * @brief Takes in a tensor of shape [batch_size, num_heads, sequence_size, head_size],
+ * concatenates heads back along the width dimension and returns the tensor of shape
  * [batch_size, sequence_size, num_heads * head_size]
  */
 ttnn::Tensor concatenate_heads(

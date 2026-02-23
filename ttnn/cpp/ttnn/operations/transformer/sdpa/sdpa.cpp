@@ -24,7 +24,7 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& attention_sink) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
@@ -61,7 +61,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     int64_t chunk_start_idx,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -97,7 +97,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const ttnn::Tensor& chunk_start_idx_tensor,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -132,7 +132,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& joint_tensor_k,
     const ttnn::Tensor& joint_tensor_v,
     const std::string& joint_strategy,
-    SDPAProgramConfig program_config,
+    ttnn::operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
@@ -160,7 +160,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
-    SDPAProgramConfig program_config,
+    ttnn::operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -205,7 +205,7 @@ ttnn::Tensor flash_mla_prefill(
     bool is_causal,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -240,7 +240,7 @@ ttnn::Tensor chunked_flash_mla_prefill(
     int64_t chunk_start_idx,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -276,7 +276,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
         ring_id,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx) {

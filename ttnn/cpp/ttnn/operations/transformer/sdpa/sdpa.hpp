@@ -21,7 +21,7 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<float> scale = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
 
@@ -37,7 +37,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     int64_t chunk_start_idx,  // Must be a multiple of program_config.q_chunk_size
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
@@ -49,7 +49,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const ttnn::Tensor& chunk_start_idx_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
@@ -60,7 +60,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& joint_tensor_k,
     const ttnn::Tensor& joint_tensor_v,
     const std::string& joint_strategy,
-    SDPAProgramConfig program_config,
+    operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
@@ -75,7 +75,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
-    SDPAProgramConfig program_config,
+    operations::transformer::SDPAProgramConfig program_config,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
@@ -96,7 +96,7 @@ ttnn::Tensor flash_mla_prefill(
     bool is_causal = true,
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 ttnn::Tensor chunked_flash_mla_prefill(
@@ -107,7 +107,7 @@ ttnn::Tensor chunked_flash_mla_prefill(
     int64_t chunk_start_idx,
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(
@@ -119,7 +119,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
         std::nullopt,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<SDPAProgramConfig>& program_config = std::nullopt,
+    const std::optional<operations::transformer::SDPAProgramConfig>& program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& page_table = std::nullopt,
     std::optional<int64_t> chunk_start_idx = std::nullopt);

@@ -27,7 +27,7 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<float> scale = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 ttnn::Tensor paged_scaled_dot_product_attention_decode(
@@ -42,7 +42,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     std::optional<float> scale = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 ttnn::Tensor flash_multi_latent_attention_decode(
@@ -58,7 +58,7 @@ ttnn::Tensor flash_multi_latent_attention_decode(
     std::optional<float> scale = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 ttnn::Tensor paged_flash_multi_latent_attention_decode(
@@ -74,7 +74,7 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     std::optional<float> scale = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace transformer
