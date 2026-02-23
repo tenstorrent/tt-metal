@@ -59,7 +59,7 @@ autograd::TensorPtr all_gather(
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis, grad_output_type]() {
         if (out->is_grad_initialized()) {
             auto reduced_grad = ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis);
-            if (grad_output_type == GRAD_OUTPUT_TYPE::REPLICATED) {
+            if (grad_output_type == GRAD_OUTPUT_TYPE::SHARDED) {
                 tensor->add_grad(reduced_grad);
             } else {
                 auto* device = &autograd::ctx().get_device();
