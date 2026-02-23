@@ -27,10 +27,9 @@ _BARRIER_RT_OFFSET_CT_ARG = "barrier_rt_offset"
 
 # BRISC: equalize stream registers + reset FIFO pointers
 _RISCV0_RESET_CBS = """\
-// Equalize stream registers + reset FIFO pointers for the given CB indices.
-// Picks the shorter direction (increment acked toward received, or received
-// toward acked) to avoid a near-full uint16_t wraparound when acked > received
-// (e.g. sharded input CB where compute pops but reader never pushes).
+// Equalize stream tile counters + reset FIFO pointers for the given CB indices.
+// Skips write when counters already match (writing same value to a stream
+// register may have hardware side-effects).
 template <size_t N>
 __attribute__((noinline)) void reset_cbs(const std::array<uint32_t, N>& cbs) {
     for (uint32_t i = 0; i < N; i++) {
@@ -38,23 +37,9 @@ __attribute__((noinline)) void reset_cbs(const std::array<uint32_t, N>& cbs) {
         uint16_t received = (uint16_t)(*get_cb_tiles_received_ptr(cb));
         uint16_t acked = (uint16_t)(*get_cb_tiles_acked_ptr(cb));
         if (received != acked) {
-            uint16_t fwd = (uint16_t)(received - acked);   // acked→received
-            uint16_t bwd = (uint16_t)(acked - received);   // received→acked
-            if (fwd <= bwd) {
-                // Fewer increments to bring acked up to received
-                volatile tt_reg_ptr uint32_t* acked_ptr = (volatile tt_reg_ptr uint32_t*)
-                    ((uint32_t)(uintptr_t)get_cb_tiles_acked_ptr(cb));
-                while ((uint16_t)(*get_cb_tiles_acked_ptr(cb)) != received) {
-                    acked_ptr[0] += 1;
-                }
-            } else {
-                // Fewer increments to bring received up to acked
-                volatile tt_reg_ptr uint32_t* recv_ptr = (volatile tt_reg_ptr uint32_t*)
-                    ((uint32_t)(uintptr_t)get_cb_tiles_received_ptr(cb));
-                while ((uint16_t)(*get_cb_tiles_received_ptr(cb)) != acked) {
-                    recv_ptr[0] += 1;
-                }
-            }
+            volatile tt_reg_ptr uint32_t* acked_ptr = (volatile tt_reg_ptr uint32_t*)
+                ((uint32_t)(uintptr_t)get_cb_tiles_acked_ptr(cb));
+            *acked_ptr = (uint32_t)received;
         }
         uint32_t fifo_start = get_local_cb_interface(cb).fifo_limit
                             - get_local_cb_interface(cb).fifo_size;
