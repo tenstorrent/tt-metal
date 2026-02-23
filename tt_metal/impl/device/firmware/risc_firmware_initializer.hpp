@@ -4,11 +4,14 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include <vector>
 
+#include "dispatch/kernel_config/fd_kernel.hpp"
 #include "firmware_initializer.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "umd/device/types/cluster_descriptor_types.hpp"
@@ -27,27 +30,21 @@ public:
 
     ~RiscFirmwareInitializer() override;
 
+    // ControlPlane may change from init to teardown. use a getter function to always get the latest ControlPlane.
+    // DispatchIgnoreCores is used to skip cores to put into reset during teardown.
+    using GetDispatchIgnoreCoresFn = std::function<std::unordered_set<CoreCoord>(ChipId)>;
     RiscFirmwareInitializer(
         std::shared_ptr<const ContextDescriptor> descriptor,
-        tt_fabric::ControlPlane& control_plane,
+        const GetControlPlaneFn& get_control_plane,
         dispatch_core_manager& dispatch_core_manager,
-        size_t fw_compile_hash);
+        size_t fw_compile_hash,
+        std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores = std::nullopt);
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
     void configure() override;
     void teardown() override;
     bool is_initialized() const override;
 
-    // Place cores on the device into a reset state except for the cores in the ignore_virtual_cores set.
-    // Used by MetalContext during teardown to put firmware into reset.
-    void assert_cores(tt::ChipId device_id, std::unordered_set<CoreCoord>& ignore_virtual_cores);
-
-    // If simulator is enabled, send exit signal to active ethernet cores and wait for them to stop.
-    // Used by MetalContext during teardown (same order as init).
-    void teardown_simulator_ethernet_cores();
-
-    // Two-phase init to preserve exact order with MetalContext (set_internal_routing, dprint, watcher between phases).
-    // Order: run_async_build_phase -> (caller: set_internal_routing, dprint attach, watcher init) -> run_launch_phase.
     void run_async_build_phase(const std::set<tt::ChipId>& device_ids);
     void run_launch_phase(const std::set<tt::ChipId>& device_ids);
 
@@ -64,7 +61,17 @@ private:
 
     CoreCoord virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(tt::ChipId device_id);
+    void generate_device_bank_to_noc_tables(
+        tt::ChipId device_id,
+        std::vector<int32_t>& dram_bank_offset_map,
+        std::vector<int32_t>& l1_bank_offset_map,
+        std::vector<uint16_t>& dram_bank_to_noc_xy,
+        std::vector<uint16_t>& l1_bank_to_noc_xy);
     void generate_worker_logical_to_virtual_map(tt::ChipId device_id);
+    void generate_worker_logical_to_virtual_map(
+        tt::ChipId device_id,
+        std::vector<uint8_t>& worker_logical_col_to_virtual_col,
+        std::vector<uint8_t>& worker_logical_row_to_virtual_row);
     void initialize_device_bank_to_noc_tables(
         tt::ChipId device_id,
         const HalProgrammableCoreType& core_type,
@@ -86,8 +93,12 @@ private:
     bool erisc_app_still_running(tt::ChipId device_id, CoreCoord virtual_core);
     void erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
 
-    tt_fabric::ControlPlane* control_plane_;
+    void assert_cores(tt::ChipId device_id, std::unordered_set<CoreCoord>& ignore_virtual_cores);
+    void teardown_simulator_ethernet_cores();
+
+    GetControlPlaneFn get_control_plane_;
     dispatch_core_manager& dispatch_core_manager_;
+    std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores_;
     [[maybe_unused]] size_t fw_compile_hash_;
     uint8_t num_hw_cqs_;
     size_t worker_l1_unreserved_start_;

@@ -242,13 +242,27 @@ void MetalContext::initialize(
         return;
     }
 
-    // Clear state, build FW (delegated to RiscFirmwareInitializer; order of actions must match exactly)
+    // Clear state, build FW
     auto all_devices = cluster_->all_chip_ids();
     std::set<ChipId> device_ids(all_devices.begin(), all_devices.end());
 
-    auto descriptor = create_context_descriptor(num_hw_cqs_, 0, 0, worker_l1_size_);
+    auto get_dispatch_ignore_cores = [this](ChipId device_id) {
+        std::unordered_set<CoreCoord> out;
+        if (device_manager_ && device_manager_->is_initialized()) {
+            const auto& dc = device_manager_->get_virtual_dispatch_cores(device_id);
+            const auto& rc = device_manager_->get_virtual_dispatch_routing_cores(device_id);
+            out.insert(dc.begin(), dc.end());
+            out.insert(rc.begin(), rc.end());
+        }
+        return out;
+    };
+    // Use a different descriptor for risc firmware. l1/trace size/fabric settings don't matter for this.
     risc_firmware_initializer_ = std::make_unique<RiscFirmwareInitializer>(
-        descriptor, get_control_plane(), *dispatch_core_manager_, fw_compile_hash);
+        create_context_descriptor(num_hw_cqs_, 0, 0, worker_l1_size_),
+        std::bind(&MetalContext::get_control_plane, this),
+        *dispatch_core_manager_,
+        fw_compile_hash,
+        get_dispatch_ignore_cores);
 
     risc_firmware_initializer_->run_async_build_phase(device_ids);
 
@@ -294,9 +308,6 @@ void MetalContext::teardown() {
     initialized_ = false;
 
     auto all_devices = cluster_->all_chip_ids();
-    if (risc_firmware_initializer_) {
-        risc_firmware_initializer_->teardown_simulator_ethernet_cores();
-    }
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
@@ -320,22 +331,8 @@ void MetalContext::teardown() {
         watcher_server_->detach_devices();
     }
     watcher_server_.reset();
-    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        for (ChipId device_id : all_devices) {
-            if (risc_firmware_initializer_) {
-                std::unordered_set<CoreCoord> ignore_cores;
-                if (device_manager_ && device_manager_->is_initialized()) {
-                    const auto& dispatch_cores = device_manager_->get_virtual_dispatch_cores(device_id);
-                    const auto& routing_cores = device_manager_->get_virtual_dispatch_routing_cores(device_id);
-                    ignore_cores.insert(dispatch_cores.begin(), dispatch_cores.end());
-                    ignore_cores.insert(routing_cores.begin(), routing_cores.end());
-                }
-                risc_firmware_initializer_->assert_cores(device_id, ignore_cores);
-            }
-            cluster_->l1_barrier(device_id);
-        }
-    }
 
+    risc_firmware_initializer_->teardown();
     risc_firmware_initializer_.reset();
 
     if (profiler_state_manager_) {
