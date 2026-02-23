@@ -10,23 +10,16 @@ and provides a builder to create configurations from preprocessed parameters.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import ttnn
-from models.tt_cnn.tt.builder import (
-    AutoShardedStrategyConfiguration,
-    Conv2dConfiguration,
-    HeightShardedStrategyConfiguration,
-    L1FullSliceStrategyConfiguration,
-    MaxPool2dConfiguration,
-    ShardingStrategy,
-)
+from models.tt_cnn.tt.builder import AutoShardedStrategyConfiguration, Conv2dConfiguration, MaxPool2dConfiguration
 
 
 @dataclass
 class UpconvConfiguration:
     """Configuration for upsampling via transposed convolution."""
-    
+
     input_height: int
     input_width: int
     in_channels: int
@@ -42,19 +35,19 @@ class UpconvConfiguration:
 @dataclass
 class DenseLayerConfiguration:
     """Configuration for a single dense layer (bottleneck + expansion convs)."""
-    
-    bottleneck_conv: Conv2dConfiguration  
-    expansion_conv: Conv2dConfiguration   
+
+    bottleneck_conv: Conv2dConfiguration
+    expansion_conv: Conv2dConfiguration
 
 
 @dataclass
 class AttentionGateConfiguration:
     """Configuration for attention gate module."""
-    
-    theta_conv: Conv2dConfiguration  
-    phi_conv: Conv2dConfiguration    
-    psi_conv: Conv2dConfiguration    
-    W_conv: Conv2dConfiguration      
+
+    theta_conv: Conv2dConfiguration
+    phi_conv: Conv2dConfiguration
+    psi_conv: Conv2dConfiguration
+    W_conv: Conv2dConfiguration
     in_channels: int
     gating_channels: int
     inter_channels: int
@@ -63,7 +56,7 @@ class AttentionGateConfiguration:
 @dataclass
 class DecoderBlockConfiguration:
     """Configuration for decoder block (2 conv-bn-relu sequences)."""
-    
+
     conv1: Conv2dConfiguration
     conv2: Conv2dConfiguration
 
@@ -72,9 +65,10 @@ class DecoderBlockConfiguration:
 class TtAttentionDenseUNetConfigs:
     """
     Complete configuration for Attention DenseUNet model.
-    
+
     Contains configurations for all layers in the network.
     """
+
     l1_input_memory_config: ttnn.MemoryConfig
     conv0: Conv2dConfiguration
     encoder_blocks: List[List[DenseLayerConfiguration]]  # List of blocks, each containing dense layers
@@ -96,7 +90,7 @@ class TtAttentionDenseUNetConfigs:
 class TtAttentionDenseUNetConfigBuilder:
     """
     Builder class for creating TtAttentionDenseUNetConfigs from preprocessed parameters.
-    
+
     This builder:
     1. Takes preprocessed PyTorch weights (TTNN tensors)
     2. Tracks spatial dimensions through the network
@@ -104,7 +98,7 @@ class TtAttentionDenseUNetConfigBuilder:
     4. Handles dense block channel growth
     5. Configures attention gates
     """
-    
+
     def __init__(
         self,
         parameters: Dict,
@@ -129,7 +123,7 @@ class TtAttentionDenseUNetConfigBuilder:
         self.num_layers_per_block = num_layers_per_block
         self.compression = compression
         self.num_encoder_blocks = len(num_layers_per_block)
-        
+
     def build_configs(self) -> TtAttentionDenseUNetConfigs:
         """Build complete model configuration."""
         l1_input_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -150,7 +144,7 @@ class TtAttentionDenseUNetConfigBuilder:
         pools = []
         current_channels = self.init_features
         skip_channels = []  # Track channels for skip connections
-        
+
         for block_idx in range(self.num_encoder_blocks):
             num_layers = self.num_layers_per_block[block_idx]
             block_configs = []
@@ -177,14 +171,16 @@ class TtAttentionDenseUNetConfigBuilder:
                     padding=(1, 1),
                     params_key=f"encoder{block_idx}.layer{layer_idx}.expansion",
                 )
-                
-                block_configs.append(DenseLayerConfiguration(
-                    bottleneck_conv=bottleneck,
-                    expansion_conv=expansion,
-                ))
-            
+
+                block_configs.append(
+                    DenseLayerConfiguration(
+                        bottleneck_conv=bottleneck,
+                        expansion_conv=expansion,
+                    )
+                )
+
             encoder_blocks.append(block_configs)
-            
+
             current_channels = current_channels + num_layers * self.growth_rate
             skip_channels.append(current_channels)
             trans_out_channels = int(current_channels * self.compression)
@@ -204,7 +200,7 @@ class TtAttentionDenseUNetConfigBuilder:
             current_height = current_height // 2
             current_width = current_width // 2
             current_channels = trans_out_channels
-        
+
         bottleneck_conv1 = self._create_conv_config_from_params(
             input_height=current_height,
             input_width=current_width,
@@ -215,7 +211,7 @@ class TtAttentionDenseUNetConfigBuilder:
             padding=(1, 1),
             params_key="bottleneck.conv1",
         )
-        
+
         bottleneck_conv2 = self._create_conv_config_from_params(
             input_height=current_height,
             input_width=current_width,
@@ -230,7 +226,7 @@ class TtAttentionDenseUNetConfigBuilder:
         attention_gates = []
         decoder_blocks = []
         reversed_skip_channels = list(reversed(skip_channels))
-        
+
         for stage_idx in range(self.num_encoder_blocks):
             skip_ch = reversed_skip_channels[stage_idx]
             upconv = self._create_upconv_config(
@@ -255,7 +251,7 @@ class TtAttentionDenseUNetConfigBuilder:
             attention_gates.append(attention)
             decoder_in_channels = skip_ch + skip_ch  # Concatenated
             decoder_out_channels = skip_ch
-            
+
             decoder_conv1 = self._create_conv_config_from_params(
                 input_height=current_height,
                 input_width=current_width,
@@ -266,7 +262,7 @@ class TtAttentionDenseUNetConfigBuilder:
                 padding=(1, 1),
                 params_key=f"decoder{stage_idx}.conv1",
             )
-            
+
             decoder_conv2 = self._create_conv_config_from_params(
                 input_height=current_height,
                 input_width=current_width,
@@ -277,12 +273,14 @@ class TtAttentionDenseUNetConfigBuilder:
                 padding=(1, 1),
                 params_key=f"decoder{stage_idx}.conv2",
             )
-            
-            decoder_blocks.append(DecoderBlockConfiguration(
-                conv1=decoder_conv1,
-                conv2=decoder_conv2,
-            ))
-            
+
+            decoder_blocks.append(
+                DecoderBlockConfiguration(
+                    conv1=decoder_conv1,
+                    conv2=decoder_conv2,
+                )
+            )
+
             current_channels = decoder_out_channels
         conv_out = self._create_conv_config_from_params(
             input_height=current_height,
@@ -294,7 +292,7 @@ class TtAttentionDenseUNetConfigBuilder:
             padding=(0, 0),
             params_key="conv_out",
         )
-        
+
         return TtAttentionDenseUNetConfigs(
             l1_input_memory_config=l1_input_memory_config,
             conv0=conv0,
@@ -313,7 +311,7 @@ class TtAttentionDenseUNetConfigBuilder:
             input_height=self.input_height,
             input_width=self.input_width,
         )
-    
+
     def _create_conv_config_from_params(
         self,
         input_height: int,
@@ -333,18 +331,29 @@ class TtAttentionDenseUNetConfigBuilder:
     ) -> Conv2dConfiguration:
         """
         Create Conv2dConfiguration from preprocessed parameters.
-        
+
         For Stage 1, we use simple DRAM memory configuration.
         Stage 2 will add sharding optimizations.
         """
         params = self.parameters
         for key in params_key.split("."):
             params = params[key]
-        
+
         weight = params["weight"]
         bias = params["bias"]
         strategy = AutoShardedStrategyConfiguration()
-        
+        activation = None
+        if (
+            params_key == "conv0"
+            or ".bottleneck" in params_key
+            or ".expansion" in params_key
+            or params_key.startswith("transition_down")
+            or params_key.startswith("bottleneck.conv")
+            or ".conv1" in params_key
+            or ".conv2" in params_key
+        ):
+            activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+
         return Conv2dConfiguration(
             input_height=input_height,
             input_width=input_width,
@@ -356,6 +365,7 @@ class TtAttentionDenseUNetConfigBuilder:
             batch_size=self.batch_size,
             weight=weight,
             bias=bias,
+            activation=activation,
             output_dtype=output_dtype,
             math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
@@ -364,7 +374,7 @@ class TtAttentionDenseUNetConfigBuilder:
             enable_act_double_buffer=enable_act_double_buffer,
             sharding_strategy=strategy,
         )
-    
+
     def _create_pool_config(
         self,
         input_height: int,
@@ -372,9 +382,9 @@ class TtAttentionDenseUNetConfigBuilder:
         channels: int,
     ) -> MaxPool2dConfiguration:
         """Create MaxPool2dConfiguration."""
-        
+
         strategy = AutoShardedStrategyConfiguration()
-        
+
         return MaxPool2dConfiguration(
             input_height=input_height,
             input_width=input_width,
@@ -384,7 +394,7 @@ class TtAttentionDenseUNetConfigBuilder:
             stride=(2, 2),
             padding=(0, 0),
         )
-    
+
     def _create_upconv_config(
         self,
         input_height: int,
@@ -397,10 +407,10 @@ class TtAttentionDenseUNetConfigBuilder:
         params = self.parameters
         for key in params_key.split("."):
             params = params[key]
-        
+
         weight = params["weight"]
         bias = params.get("bias", None)
-        
+
         return UpconvConfiguration(
             input_height=input_height,
             input_width=input_width,
@@ -413,7 +423,7 @@ class TtAttentionDenseUNetConfigBuilder:
             weight=weight,
             bias=bias,
         )
-    
+
     def _create_attention_gate_config(
         self,
         input_height: int,
@@ -503,7 +513,7 @@ class TtAttentionDenseUNetConfigBuilder:
             enable_act_double_buffer=False,
             sharding_strategy=AutoShardedStrategyConfiguration(),
         )
-        
+
         return AttentionGateConfiguration(
             theta_conv=theta_conv,
             phi_conv=phi_conv,
@@ -527,7 +537,7 @@ def create_configs_from_parameters(
 ) -> TtAttentionDenseUNetConfigs:
     """
     Create Attention DenseUNet configuration from preprocessed parameters.
-    
+
     Args:
         parameters: Preprocessed weights dictionary
         in_channels: Number of input channels (default: 3 for RGB)
@@ -537,11 +547,11 @@ def create_configs_from_parameters(
         batch_size: Batch size
         init_features: Initial number of features
         growth_rate: DenseNet growth rate
-        
+
     Returns:
         TtAttentionDenseUNetConfigs object
     """
-    
+
     builder = TtAttentionDenseUNetConfigBuilder(
         parameters=parameters,
         in_channels=in_channels,
@@ -552,5 +562,5 @@ def create_configs_from_parameters(
         init_features=init_features,
         growth_rate=growth_rate,
     )
-    
+
     return builder.build_configs()
