@@ -167,7 +167,23 @@ class DeepSeekV3MoELayerWeights:
     routed_down_proj: list[ttnn.Tensor]
 
 
-DeepSeekV3LayerWeights = DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights
+@dataclass
+class DeepSeekV3EmbeddingLayerWeights:
+    """Weights for the embedding layer."""
+
+    embedding: ttnn.Tensor
+
+
+@dataclass
+class DeepSeekV3LMHeadWeights:
+    """Weights for the LM head."""
+
+    lm_head: ttnn.Tensor
+
+
+DeepSeekV3LayerWeights = (
+    DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights | DeepSeekV3EmbeddingLayerWeights | DeepSeekV3LMHeadWeights
+)
 
 
 @dataclass
