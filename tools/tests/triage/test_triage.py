@@ -32,6 +32,10 @@ from ttexalens.coordinate import OnChipCoordinate
 
 triage.progress_disabled = True  # Disable progress bars for tests
 
+# Exit code used when runtime detects dispatch timeout.
+# Default is 124, but it is configurable via TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE.
+TIMEOUT_EXIT_CODE = int(os.environ.get("TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE", "124"))
+
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
 HANG_APP_EXPECTED_RESULTS = {
@@ -80,11 +84,19 @@ def cause_hang_with_app(request):
     build_dir = os.path.join(metal_home, "build")
     app_path_str = os.path.join(build_dir, app)
     os.environ.pop("TT_METAL_LOGS_PATH", None)
+
+    # Set up environment for timeout tests
+    test_env = {**os.environ, **app_configuration.get("env", {})}
+    # Enable exit on dispatch timeout only for auto-timeout tests (those with TT_METAL_OPERATION_TIMEOUT_SECONDS)
+    if app_configuration.get("auto_timeout", False):
+        test_env["TT_METAL_EXIT_ON_DISPATCH_TIMEOUT"] = "1"
+        test_env["TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE"] = str(TIMEOUT_EXIT_CODE)
+
     proc = subprocess.Popen(
         [app_path_str] + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **app_configuration.get("env", {})},
+        env=test_env,
     )
     auto_timeout = app_configuration.get("auto_timeout", False)
     if auto_timeout:
@@ -94,12 +106,14 @@ def cause_hang_with_app(request):
         except subprocess.TimeoutExpired:
             pass
 
-        # Check if the process has exited
-        if proc.returncode != 0:
+        # Check if the process has exited with expected code
+        # Exit code 0 = successful timeout handling in application
+        # Exit code 124 = timeout detected by runtime (std::_Exit in metal_context.cpp)
+        if proc.returncode not in [0, TIMEOUT_EXIT_CODE]:
             # Print process output for debugging
-            print("The application did not hang as expected.")
+            print(f"The application exited with unexpected code {proc.returncode}.")
             print_process_output(proc)
-            raise RuntimeError("The application did not hang as expected.")
+            raise RuntimeError(f"The application exited with unexpected code {proc.returncode}.")
     else:
         time.sleep(timeout)
 
