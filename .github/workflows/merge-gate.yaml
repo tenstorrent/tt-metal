@@ -81,7 +81,7 @@ jobs:
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
 
   fail-fast:
-    # if: failure()
+    if: failure()
     runs-on: ubuntu-latest
     needs: [code-analysis]
     permissions:
