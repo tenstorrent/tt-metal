@@ -14,9 +14,7 @@
 #include <enchantum/enchantum.hpp>
 #include <map>
 #include <string>
-#include <thread>
 #include <tuple>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -31,7 +29,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "mesh_device.hpp"
