@@ -34,7 +34,6 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     uint32_t ntiles_per_block = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = a.padded_shape()[-1] * a.element_size();
-
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -55,7 +54,20 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
 
     /** reader
      */
-    std::vector<uint32_t> reader_ct_args = {block_size_nbytes};
+    uint32_t stick_size = block_size_nbytes;
+    uint32_t num_sticks_in_row = 1;
+    uint32_t stick_size_of_last_stick_in_row = stick_size;
+    if (a.is_sharded()) {
+        stick_size = a.nd_shard_spec().value().shard_shape[-1] *
+                     a.element_size();  // For ND sharding, a stick is a row of the shard.
+        num_sticks_in_row = tt::div_up(
+            a.padded_shape()[-1],
+            a.nd_shard_spec().value().shard_shape[-1]);  // Compute number of sticks in one tensor row.
+        uint32_t padding_size =
+            num_sticks_in_row * stick_size - block_size_nbytes;  // Compute padding size for the last stick in the row.
+        stick_size_of_last_stick_in_row = stick_size - padding_size;
+    }
+    std::vector<uint32_t> reader_ct_args = {stick_size, num_sticks_in_row, stick_size_of_last_stick_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
@@ -105,7 +117,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
 
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
-    uint32_t row_start_id = 0;
+    uint32_t stick_start_id = 0;
     const auto& cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
@@ -114,13 +126,13 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core * TILE_HEIGHT,
-            block_size_nbytes,
+            stick_size,
             ntiles_per_block,
-            block_size_nbytes,
+            stick_size,
             std::uint32_t{1},  // full blocks in row
             std::uint32_t{0},  // num leftover tiles
             std::uint32_t{0},  // leftover width in row
-            row_start_id};
+            stick_start_id};
 
         // writer runtime args
         const std::array writer_rt_args = {
@@ -133,7 +145,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
-        row_start_id += TILE_HEIGHT * nblocks_per_core;
+        stick_start_id += TILE_HEIGHT * nblocks_per_core * num_sticks_in_row;  // adjust for ND sharded tensors
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
@@ -149,7 +161,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
             std::uint32_t{1},  // full blocks in row
             std::uint32_t{0},  // num leftover tiles
             std::uint32_t{0},  // leftover width in row
-            row_start_id};
+            stick_start_id};
 
         // writer runtime args
         const std::array writer_rt_args = {

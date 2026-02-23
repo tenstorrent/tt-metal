@@ -82,7 +82,7 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("tensor_shape", [[4, 128, 128]])  # [3, 160, 160]
+@pytest.mark.parametrize("tensor_shape", [[4, 128, 128], [3, 160, 160]])
 @pytest.mark.parametrize("shard_shape", [[2, 64, 64]])
 @pytest.mark.parametrize(
     "shard_core_grid",

@@ -10,6 +10,7 @@
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_multi_core_width_sharded_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 using namespace tt::tt_metal;
@@ -44,34 +45,49 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
-    if (input_tensor_a.memory_config().is_sharded() && !input_is_nd_sharded) {
-        TT_FATAL(
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-            "Input tensor memory layout must be HEIGHT_SHARDED or WIDTH_SHARDED but got {}",
-            input_tensor_a.memory_config().memory_layout());
-        TT_FATAL(
-            (input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED ||
-             operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH == 0),
-            "Output shard width ({}) must be a multiple of TILE_WIDTH ({}) for WIDTH_SHARDED input",
-            operation_attributes.output_mem_config.shard_spec().value().shape[1],
-            tt::constants::TILE_WIDTH);
-        TT_FATAL(
-            (input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED ||
-             operation_attributes.output_mem_config.shard_spec().value().shape[0] == tt::constants::TILE_HEIGHT),
-            "Shard height ({}) must equal TILE_HEIGHT ({}) for WIDTH_SHARDED input",
-            operation_attributes.output_mem_config.shard_spec().value().shape[0],
-            tt::constants::TILE_HEIGHT);
-        TT_FATAL(
-            operation_attributes.output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
-            "Output memory config layout ({}) must match input tensor memory layout ({})",
-            operation_attributes.output_mem_config.memory_layout(),
-            input_tensor_a.memory_config().memory_layout());
-        TT_FATAL(operation_attributes.use_multicore == true, "Multicore must be enabled for sharded input");
-        TT_FATAL(
-            input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
-            "Input tensor shard orientation must be ROW_MAJOR but got {}",
-            input_tensor_a.shard_spec().value().orientation);
+    if (input_tensor_a.memory_config().is_sharded()) {
+        if (input_is_nd_sharded) {
+            uint32_t element_size_in_bytes = input_tensor_a.element_size();
+            const uint32_t page_size_bytes =
+                input_tensor_a.nd_shard_spec().value().shard_shape[-1] * element_size_in_bytes;
+            const uint32_t alignment_requirement = hal::get_l1_alignment();
+            TT_FATAL(
+                page_size_bytes % alignment_requirement == 0,
+                "Input row-major shard page size {} bytes must be aligned to {} bytes L1 SRAM buffer alignment "
+                "requirement",
+                page_size_bytes,
+                alignment_requirement);  // The shard width must be an aligned size, or we will face alignment issues
+                                         // when the reader tries to write to the CB.
+        } else {
+            TT_FATAL(
+                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                "Input tensor memory layout must be HEIGHT_SHARDED or WIDTH_SHARDED but got {}",
+                input_tensor_a.memory_config().memory_layout());
+            TT_FATAL(
+                (input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED ||
+                 operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH == 0),
+                "Output shard width ({}) must be a multiple of TILE_WIDTH ({}) for WIDTH_SHARDED input",
+                operation_attributes.output_mem_config.shard_spec().value().shape[1],
+                tt::constants::TILE_WIDTH);
+            TT_FATAL(
+                (input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED ||
+                 operation_attributes.output_mem_config.shard_spec().value().shape[0] == tt::constants::TILE_HEIGHT),
+                "Shard height ({}) must equal TILE_HEIGHT ({}) for WIDTH_SHARDED input",
+                operation_attributes.output_mem_config.shard_spec().value().shape[0],
+                tt::constants::TILE_HEIGHT);
+            TT_FATAL(
+                operation_attributes.output_mem_config.memory_layout() ==
+                    input_tensor_a.memory_config().memory_layout(),
+                "Output memory config layout ({}) must match input tensor memory layout ({})",
+                operation_attributes.output_mem_config.memory_layout(),
+                input_tensor_a.memory_config().memory_layout());
+            TT_FATAL(operation_attributes.use_multicore == true, "Multicore must be enabled for sharded input");
+            TT_FATAL(
+                input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+                "Input tensor shard orientation must be ROW_MAJOR but got {}",
+                input_tensor_a.shard_spec().value().orientation);
+        }
     }  // else {
     //     TT_FATAL(
     //         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -123,11 +139,19 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
                            (operation_attributes.sub_core_grids.has_value() &&
                             (operation_attributes.sub_core_grids.value().num_cores() < 2));
-    if (use_single_core) {
+    if (use_single_core && !input_is_nd_sharded) {
         return ttnn::prim::TilizeSingleCoreProgramFactory{};
     }
 
-    if (input_tensor_a.memory_config().is_sharded() && !input_is_nd_sharded) {
+    if (input_tensor_a.memory_config().is_sharded()) {
+        if (input_is_nd_sharded) {
+            if (use_single_core) {
+                log_warning(
+                    tt::LogOp,
+                    "Tilize: use_multicore=false is ignored for ND sharded inputs; multi-core path will be used");
+            }
+            return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
+        }
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded tilize does not support sub core grid specification");
