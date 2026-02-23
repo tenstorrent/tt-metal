@@ -10,7 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/global_semaphore.hpp>t
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/assert.hpp>
