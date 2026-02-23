@@ -31,7 +31,7 @@ constexpr uint32_t CONCAT_ND_SHARDED_MAX_NUM_INPUTS = ttnn::kernel::CONCAT_ND_SH
 // copies this core's input shards (in concat order) into this core's output shard using
 // TensorAccessors. No writer kernel; the reader does read-from-inputs and write-to-output.
 ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::create(
-    const ConcatParams& /*operation_attributes*/, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
+    const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -90,6 +90,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     // then output TensorAccessorArgs, then 16 input TensorAccessorArgs (absent filled from first input).
     std::vector<uint32_t> reader_compile_time_args = {
         num_input_tensors,
+        static_cast<uint32_t>(operation_attributes.dim),
         output_page_size,
     };
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {

@@ -47,14 +47,16 @@ uint32_t copy_tensor_data(const TensorAccessor<DestDSpec>& dest, const TensorAcc
 // Compile-time layout: [0]=num_input_tensors, [1]=output_page_size, [2..17]=input_page_sizes,
 // [18..]=output TensorAccessorArgs, then input0..input15 TensorAccessorArgs.
 constexpr uint32_t CT_NUM_INPUTS = 0;
-constexpr uint32_t CT_OUTPUT_PAGE_SIZE = 1;
-constexpr uint32_t CT_INPUT_PAGE_SIZE_BASE = 2;
-constexpr uint32_t CT_TENSOR_ACCESSOR_ARGS_BASE = 18;
+constexpr uint32_t CT_CONCAT_DIM = 1;
+constexpr uint32_t CT_OUTPUT_PAGE_SIZE = 2;
+constexpr uint32_t CT_INPUT_PAGE_SIZE_BASE = 3;
+constexpr uint32_t CT_TENSOR_ACCESSOR_ARGS_BASE = 19;
 
 }  // namespace
 
 void kernel_main() {
     constexpr uint32_t num_input_tensors = get_compile_time_arg_val(CT_NUM_INPUTS);
+    constexpr uint32_t concat_dim = get_compile_time_arg_val(CT_CONCAT_DIM);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(CT_OUTPUT_PAGE_SIZE);
 
     uint32_t argidx = 0;
