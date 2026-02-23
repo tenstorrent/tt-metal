@@ -569,6 +569,18 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, con
     return state_dict
 
 
+def convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv=False, fuse_mlp=False, config=None):
+    state_dict = reindex_layers(state_dict, config)
+    if fuse_qkv:
+        state_dict = fuse_qkv_meta(state_dict)
+    if fuse_mlp:
+        state_dict = fuse_mlp_meta(state_dict)
+
+    state_dict = map_meta_to_hf_keys(state_dict)
+    state_dict = rename_layers_to_cross_attn(state_dict, config)
+    return state_dict
+
+
 def replace_keys(state_dict, replacements):
     """
     Replacements are in the form (pattern, replacement).

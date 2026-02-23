@@ -35,6 +35,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta_mllama_no_qkv_permute,
     convert_hf_to_meta_no_qkv_permute,
     convert_meta_to_hf,
+    convert_meta_to_hf_no_qkv_permute,
     convert_vision_hf_to_meta,
     convert_vision_hf_to_meta_no_qkv_permute,
     reverse_permute,
@@ -3453,7 +3454,10 @@ class ModelArgs:
         model = self.reference_transformer(wrap=False)
         layer = model.lm_head
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
@@ -3571,7 +3575,10 @@ class ModelArgs:
         layers = getattr(model, "layers", getattr(model, "model", {}).layers)
         layer = layers[0].input_layernorm
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
@@ -3710,9 +3717,14 @@ class ModelArgs:
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0].mlp
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(
-            convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
-        )
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(x, fuse_mlp=self.fuse_mlp)
+            )
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
+            )
         return layer
 
     def reference_embedding(self, reference_model=None):
@@ -3723,7 +3735,10 @@ class ModelArgs:
             layer = reference_model.model.model.embed_tokens
 
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        if self.use_hf_rope:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
+        else:
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_decoder(self, load_checkpoint=False):
@@ -3883,7 +3898,10 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
-        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
+        if self.use_hf_rope:
+            return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv))
+        else:
+            return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
 
     @property
     def cache_k(self):
@@ -3968,7 +3986,10 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+        if self.use_hf_rope:
+            return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp))
+        else:
+            return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
     @property
     def cache_k(self):
@@ -4033,9 +4054,14 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.model.load_state_dict(
-            convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
-        )
+        if self.use_hf_rope:
+            return self.model.load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config)
+            )
+        else:
+            return self.model.load_state_dict(
+                convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
+            )
 
     def eval(self):
         self.model.eval()
