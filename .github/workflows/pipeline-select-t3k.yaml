@@ -33,7 +33,6 @@ on:
           # - llama3.1-70b
           - llama3.2-90b
           - mistral
-          - mixtral
           - grok
           - unet shallow
           - qwen25_vl
@@ -57,7 +56,6 @@ on:
           - flux1-dev
           - motif
           - mistral
-          - mixtral
           - whisper
           - qwen3
           - qwen25
@@ -101,7 +99,6 @@ on:
           - llama3_70n90b accuracy
           - llama3_90b
           # - llama3_70b # disabled in -impl file
-          # - mixtral # disabled in -impl file
           - resnet
           - sd35_large
           - flux1

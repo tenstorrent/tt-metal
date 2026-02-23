@@ -29,16 +29,6 @@ Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in
 
 - Follow prompts as they come up in CLI to select appropriate weights for Llama 3.1 70B Instruct.
 
-### Step-by-step:
-1. Download the Llama3/3.1-70B weights from Meta at [llama.meta.com](https://llama.meta.com/)
-2. Repack the weights:
-```bash
-python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
-```
-
-Note: Use `5` for `chunk_size`.
-- Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
-
 ### Running the demo from TT-Metalium
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 

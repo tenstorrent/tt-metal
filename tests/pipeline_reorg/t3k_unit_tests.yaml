@@ -116,15 +116,6 @@
   team: models
   model-name: llama3.2-90b
 
-- name: t3k_mixtral_tests
-  cmd: run_t3000_mixtral_tests
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  model-name: mixtral
-
 - name: t3k_grok_tests
   cmd: run_t3000_grok_tests
   skus:

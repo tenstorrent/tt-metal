@@ -78,49 +78,41 @@ setup_model_environment() {
       MODEL="llama-3.1-70b-instruct"
       META_MODEL_NAME="Meta-Llama-3.1-70B-Instruct"
       META_DIR_FILTER="llama3_1"
-      REPACKED=1
       ;;
       "llama-3.1-70b")
       MODEL="llama-3.1-70b"
       META_MODEL_NAME="Meta-Llama-3.1-70B"
       META_DIR_FILTER="llama3_1"
-      REPACKED=1
       ;;
       "llama-3.1-8b-instruct")
       MODEL="llama-3.1-8b-instruct"
       META_MODEL_NAME="Meta-Llama-3.1-8B-Instruct"
       META_DIR_FILTER="llama3_1"
-      REPACKED=0
       ;;
       "llama-3.1-8b")
       MODEL_NAME="llama-3.1-8b"
       META_MODEL_NAME="Meta-Llama-3.1-8B"
       META_DIR_FILTER="llama3_1"
-      REPACKED=0
       ;;
       "llama-3-70b-instruct")
       MODEL="llama-3-70b-instruct"
       META_MODEL_NAME="Meta-Llama-3-70B-Instruct"
       META_DIR_FILTER="llama3"
-      REPACKED=1
       ;;
       "llama-3-70b")
       MODEL="llama-3-70b"
       META_MODEL_NAME="Meta-Llama-3-70B"
       META_DIR_FILTER="llama3"
-      REPACKED=1
       ;;
       "llama-3-8b-instruct")
       MODEL="llama-3-8b-instruct"
       META_MODEL_NAME="Meta-Llama-3-8B-Instruct"
       META_DIR_FILTER="llama3"
-      REPACKED=0
       ;;
       "llama-3-8b")
       MODEL="llama-3-8b"
       META_MODEL_NAME="Meta-Llama-3-8B"
       META_DIR_FILTER="llama3"
-      REPACKED=0
       ;;
       *)
       echo "⛔ Invalid model choice."
@@ -129,13 +121,6 @@ setup_model_environment() {
       ;;
     esac
 
-    if [ "${REPACKED}" -eq 1 ]; then
-        echo "REPACKED is enabled."
-        REPACKED_STR="repacked-"
-    else
-        echo "REPACKED is disabled."
-        REPACKED_STR=""
-    fi
 }
 
 setup_environment() {
@@ -202,15 +187,7 @@ setup_weights() {
 
     huggingface-cli login
 
-    if [ "${REPACKED}" -eq 1 ]; then
-        print_step "Repacking weights"
-        source python_env/bin/activate
-        cp "${LLAMA_WEIGHTS_DIR}/tokenizer.model" "${WEIGHTS_DIR}/tokenizer.model"
-        cp "${LLAMA_WEIGHTS_DIR}/params.json" "${WEIGHTS_DIR}/params.json"
-        python models/demos/t3000/llama2_70b/scripts/repack_weights.py "${LLAMA_WEIGHTS_DIR}" "${WEIGHTS_DIR}" 5
-    else
-        cp -rf "${LLAMA_WEIGHTS_DIR}" "${WEIGHTS_DIR}"
-    fi
+    cp -rf "${LLAMA_WEIGHTS_DIR}" "${WEIGHTS_DIR}"
 
     echo "🔔 Using weights directory ${WEIGHTS_DIR}"
 }
