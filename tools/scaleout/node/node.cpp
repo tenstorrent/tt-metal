@@ -329,9 +329,7 @@ private:
         add_connection(qsfp_connections, 3, 2, 4, 2);
     }
 
-    // public:
-
-protected:
+public:
     // BHGalaxy topology options using one-hot encoding:
     // MESH = 0 (00) - Mesh
     // X_TORUS = 0b01 - X-axis torus only (bit 0)
@@ -343,6 +341,8 @@ protected:
         Y_TORUS = 0b10,                // Y-axis torus only
         XY_TORUS = X_TORUS | Y_TORUS,  // Both X and Y torus
     };
+
+protected:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
         BHGalaxyTopology topology = BHGalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
@@ -443,9 +443,7 @@ private:
         add_connection(qsfp_connections, 2, 2, 4, 2);
     }
 
-    // public:
-
-protected:
+public:
     // BHGalaxy topology options using one-hot encoding:
     // MESH = 0 (00) - Mesh
     // X_TORUS = 0b01 - X-axis torus only (bit 0)
@@ -457,6 +455,8 @@ protected:
         Y_TORUS = 0b10,                // Y-axis torus only
         XY_TORUS = X_TORUS | Y_TORUS,  // Both X and Y torus
     };
+
+protected:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
         BHGalaxyTopology topology = BHGalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
@@ -467,7 +467,6 @@ protected:
         // Add boards
         add_boards(&node, "UBB_BLACKHOLE", 1, 4);
 
-        // TODO: Check Linking Board connections
         // Add LINKING_BOARD_1 connections
         auto* const lb1_connections = get_port_connections(&node, "LINKING_BOARD_1");
         add_connection(lb1_connections, 1, 1, 2, 1);
