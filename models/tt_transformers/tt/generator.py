@@ -360,6 +360,9 @@ class Generator(WarmupForwardMixin):
                     broadcast_sampling_params(sampling_params, idx, slot_len=total_batch), total_batch
                 )
                 assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
+                # empty_slots uses max_batch_size_per_model (not total_batch) because
+                # the seed manager operates on per-row slots (0..31).  When sampling_dp > 1
+                # the params are already broadcast across all rows by broadcast_sampling_params.
                 self.model[model_id].sampling.apply_prefill_state(
                     sampling_params=per_request_params,
                     prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
