@@ -12,8 +12,17 @@ on:
           - all
           - llama3.2-1b
           - llama3.2-3b
+          - falcon-7b
+          - mamba-2.8b
+          - qwen2.5-7b
+          - phi-3-mini
+          - phi-4-mini
+          - falcon-40b
+          - llama3.2-11b-vision
+          - qwen2.5-72b
+          - qwen2.5-vl-32b
       sku:
-        description: "Select SKU to test"
+        description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
         default: "all"
         type: choice
@@ -21,6 +30,7 @@ on:
           - all
           - "wh_n150 (N150)"
           - "wh_n300 (N300)"
+          - "wh_llmbox_perf (T3000)"
       platform:
         required: false
         type: choice
@@ -59,7 +69,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
