@@ -842,6 +842,25 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
+    # Warmup prefill and decode
+    logger.info("Warming up model...")
+    num_blocks = page_params["page_max_num_blocks_per_dp"] // (global_batch_size // data_parallel) if page_params else 0
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=enable_trace,
+        can_sample_on_device=True,
+        non_greedy_decoding_on_device=True,
+    )
+    generator.warmup_model_decode(
+        kv_cache=tt_kv_cache,
+        enable_trace=enable_trace,
+        max_batch_size=global_batch_size,
+        num_blocks=num_blocks,
+        can_sample_on_device=True,
+        non_greedy_decoding_on_device=True,
+    )
+    logger.info("Warmup complete")
+
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
@@ -889,18 +908,6 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            warmup_prefill=False,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
-
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
@@ -945,13 +952,9 @@ def test_demo_text(
 
         logger.info(f"Starting decode loop...")
 
-        # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding:
-            if iteration == 0:  # First iteration also accounts for compile time
-                profiler.start(f"compile_decode", iteration=batch_idx)
-            else:
-                profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
             # below the collect method also applies teacher forcing which is necessary for exact token matching
             if token_accuracy:
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
@@ -979,12 +982,8 @@ def test_demo_text(
                     on_host=True,
                 )
 
-            if iteration == 0:  # First iteration will account the compile time
-                profiler.end(f"compile_decode", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
@@ -1081,45 +1080,35 @@ def test_demo_text(
     profiler.end("run")
 
     # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
-
     total_inference_prefill_time = profiler.get_duration("inference_prefill")
     total_inference_decode_time = 0
-    for i in range(1, iteration):  # Iteration 0 is the compile time
+    for i in range(iteration):
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
     avg_time_to_first_token = total_inference_prefill_time / global_batch_size
     # Average decode time per batch iteration
-    avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
+    avg_decode_iteration_time = total_inference_decode_time / iteration
 
     prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
-    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
-    decode_tok_s = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size
-    )  # Remove the compile time
+    decode_tok_s_user = num_tokens_generated_decode[0] / total_inference_decode_time
+    decode_tok_s = num_tokens_generated_decode[0] / total_inference_decode_time * global_batch_size
 
     measurements = {
-        # Required measurements
-        "compile_prefill": compile_prefill_time,
-        "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
         "prefill_time_to_token": avg_time_to_first_token,
         "prefill_t/s": prefill_tok_s,  # tokens/s
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
-        # Optional measurements
-        "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
 
     # Decode performance for some specific tokens
-    tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
-    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
-    tok_1024_perf = profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < iteration else 0
-    tok_4096_perf = profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < iteration else 0
+    tok_0_perf = profiler.get_duration(f"inference_decode_time_{0}")
+    tok_128_perf = profiler.get_duration(f"inference_decode_time_{128}") if 128 < iteration else 0
+    tok_1024_perf = profiler.get_duration(f"inference_decode_time_{1024}") if 1024 < iteration else 0
+    tok_4096_perf = profiler.get_duration(f"inference_decode_time_{4096}") if 4096 < iteration else 0
 
     if not stop_at_eos:
         logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
@@ -1127,7 +1116,7 @@ def test_demo_text(
     logger.info("")
     logger.info(f"=== Performance metrics ===")
     logger.info(
-        f"1st token decode time: {tok_1_perf * 1000:.2f}ms [{round(1 / tok_1_perf, 2)} t/s/u, {round((1 / tok_1_perf) * global_batch_size, 2)} t/s]"
+        f"1st token decode time: {tok_0_perf * 1000:.2f}ms [{round(1 / tok_0_perf, 2)} t/s/u, {round((1 / tok_0_perf) * global_batch_size, 2)} t/s]"
     )
     if tok_128_perf > 0:
         logger.info(
@@ -1142,10 +1131,6 @@ def test_demo_text(
             f"4096th token decode time: {tok_4096_perf * 1000:.2f}ms [{round(1 / tok_4096_perf, 2)} t/s/u, {round((1 / tok_4096_perf) * global_batch_size, 2)} t/s]"
         )
 
-    # Print some of the perf metrics
-    logger.info("==")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
-    logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
     logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
     logger.info(
