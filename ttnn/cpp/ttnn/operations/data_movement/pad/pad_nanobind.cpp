@@ -32,6 +32,7 @@ void bind_pad(nb::module_& mod) {
         Keyword Args:
             * :attr:`use_multicore`: (Optional[bool]) switch to use multicore implementation
             * :attr:`memory_config`: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to `None`.
+            * :attr:`sub_core_grids`: (Optional[ttnn.CoreRangeSet]): Sub core grids to run the operation on. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -46,13 +47,15 @@ void bind_pad(nb::module_& mod) {
                 const ttnn::SmallVector<std::array<uint32_t, 2>>&,
                 float,
                 bool,
-                const std::optional<MemoryConfig>&>(&ttnn::pad),
+                const std::optional<MemoryConfig>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("padding"),
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = true,
-            nb::arg("memory_config") = nb::none()),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
@@ -60,13 +63,15 @@ void bind_pad(nb::module_& mod) {
                 const tt::tt_metal::Array4D&,
                 float,
                 bool,
-                const std::optional<MemoryConfig>&>(&ttnn::pad),
+                const std::optional<MemoryConfig>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("output_padded_shape"),
             nb::arg("input_tensor_start"),
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = false,
-            nb::arg("memory_config") = nb::none()));
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 }  // namespace ttnn::operations::data_movement::detail

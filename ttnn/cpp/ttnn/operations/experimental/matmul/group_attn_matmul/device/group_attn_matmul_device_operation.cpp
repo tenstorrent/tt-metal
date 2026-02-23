@@ -209,14 +209,8 @@ tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_b.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
+    TT_FATAL(is_device_tensor(input_tensor_b), "Unexpected Tensor type {}", input_tensor_b.storage_type());
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
         operation_attributes.transpose_hw,
         operation_attributes.out_subblock_w,

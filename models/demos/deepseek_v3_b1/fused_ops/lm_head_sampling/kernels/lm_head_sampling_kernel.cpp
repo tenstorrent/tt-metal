@@ -56,59 +56,9 @@ void kernel_main() {
     // --- NCRISC: CCL broadcast reader + mcast receiver + sharded buffer setup ---
 
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
-        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_core_noc_x"),
-        get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender")>;
-
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
-    if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_common_arg_val<uint32_t>(0),  // tensor_address0
-            get_common_arg_val<uint32_t>(1),  // tile_id_start
-            get_common_arg_val<uint32_t>(2),  // tile_id_end
-        };
-    }
-
-    using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
-        get_named_compile_time_arg_val("mcast_dst_cb"),
-        get_named_compile_time_arg_val("mcast_dst_num_pages"),
-    };
-
-    // Matmul reader args (NCRISC is a no-op for matmul; compute runs on TRISC)
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
-
-    // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
-    // Sender core: register mcast_src CB (CB 0) backed by input_tensor (skip_ccl)
-    // or intermediate_tensor (CCL mode, where broadcast placed the data)
-    if constexpr (Core::is_input_core) {
-        constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-        constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
-        unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
-    }
-    // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
-    if constexpr (Core::is_matmul_core) {
-        constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
-        constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
-        constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
-        unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
-    }
-
-#elif defined(COMPILE_FOR_BRISC)
-    // --- BRISC: CCL broadcast writer + mcast sender ---
-
-    // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
         get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
         get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
@@ -128,21 +78,48 @@ void kernel_main() {
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
             get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(2),   // tile_id_start
-            get_common_arg_val<uint32_t>(3),   // tile_id_end
-            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
-            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
-            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(9),   // barrier_sem
-            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(12),  // ring_index
-            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
+            get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(7),   // barrier_sem
+            get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(10),  // ring_index
+            get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
         };
     }
+
+    using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
+        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_named_compile_time_arg_val("mcast_dst_cb"),
+        get_named_compile_time_arg_val("mcast_dst_num_pages"),
+    };
+
+    // Matmul reader args (NCRISC is a no-op for matmul; compute runs on TRISC)
+    using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
+
+    // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
+    if constexpr (Core::is_matmul_core) {
+        constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
+        constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
+        constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
+        unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
+    }
+
+#elif defined(COMPILE_FOR_BRISC)
+    // --- BRISC: CCL broadcast reader + mcast sender ---
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_is_sender")>;
+
+    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
     // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
     // loopback=false because sender does not consume its own multicast data
@@ -212,6 +189,17 @@ void kernel_main() {
         deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
         bcast(bcast_args);
     }
+
+#if defined(COMPILE_FOR_NCRISC)
+    // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
+    // Sender core: register mcast_src CB (CB 0) backed by input_tensor (skip_ccl)
+    // or intermediate_tensor (CCL mode, where broadcast placed the data)
+    if constexpr (Core::is_input_core) {
+        constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
+        constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
+        unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
+    }
+#endif
 
     // ========================================================================
     // Phase 1: Mcast — multicast input from sender core to all device cores

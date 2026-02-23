@@ -7,6 +7,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <ranges>
 #include "ttnn/decorators.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -25,14 +26,16 @@ ttnn::Tensor pad(
     const ttnn::SmallVector<operations::data_movement::PadSpecDim>& padding,
     float value,
     bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
     float value,
     bool use_multicore = false,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 // legacy API
 ttnn::Tensor pad(
@@ -41,6 +44,7 @@ ttnn::Tensor pad(
     const tt::tt_metal::Array4D& input_tensor_start,
     float value,
     bool use_multicore = false,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn
