@@ -7,7 +7,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_blackhole_grid_size
+from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
@@ -299,7 +299,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     batch_size, input_channels, input_height, input_width = test_config["input_shape"]
     output_channels = test_config["output_channels"]
 
-    compute_grid = get_blackhole_grid_size(mesh_device)
+    compute_grid = get_mesh_grid_size(mesh_device)
     logger.info(f"Running on {grid_size} cores")
 
     torch.manual_seed(0)
