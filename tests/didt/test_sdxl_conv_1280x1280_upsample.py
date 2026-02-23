@@ -143,7 +143,7 @@ class SdxlConvTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval, grid_size=(8, 8)):
+def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval):
     groups = 1
     dilation = 1
     pad_w = 1
@@ -158,7 +158,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     input_width = 32
 
     compute_grid = get_mesh_grid_size(mesh_device)
-    logger.info(f"Running on {grid_size} cores")
+    logger.info(f"Running on {compute_grid} cores")
 
     output_channels = 1280
     input_channels = 1280
@@ -229,7 +229,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
-        compute_with_storage_grid_size=grid_size,
+        compute_with_storage_grid_size=compute_grid,
     )
 
     sdxlConvTest.run_op_test()

@@ -74,7 +74,6 @@ def test_duty_cycle(
     determinism_check_interval,
     non_mm_loops,
     wl_loops,
-    grid_size=(8, 8),
 ):
     per_core_M = 4
     per_core_N = 72

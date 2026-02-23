@@ -55,7 +55,6 @@ def test_binary_mul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    grid_size=(8, 8),
 ):
     # Initialize input configurations
     compute_grid = get_mesh_grid_size(mesh_device)
