@@ -84,7 +84,7 @@ HostTensor pad_bfloat8_b(
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
 
@@ -103,7 +103,7 @@ HostTensor pad_bfloat8_b(
     auto padded_float_tensor = tensor_impl::pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
-    auto output_float_data = host_buffer::get_as<const float>(padded_float_tensor.get_host_buffer());
+    auto output_float_data = host_buffer::get_as<const float>(padded_float_tensor);
     auto output_packed_data =
         pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
@@ -126,7 +126,7 @@ HostTensor unpad_bfloat8_b(
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
@@ -144,7 +144,7 @@ HostTensor unpad_bfloat8_b(
     auto unpadded_float_tensor = unpad(float_host_tensor, output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
-    auto output_float_data = host_buffer::get_as<const float>(unpadded_float_tensor.get_host_buffer());
+    auto output_float_data = host_buffer::get_as<const float>(unpadded_float_tensor);
     auto output_packed_data =
         pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
@@ -170,7 +170,7 @@ HostTensor pad_bfloat4_b(
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
@@ -188,7 +188,7 @@ HostTensor pad_bfloat4_b(
     auto padded_float_tensor = tensor_impl::pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
-    auto output_float_data = host_buffer::get_as<const float>(padded_float_tensor.get_host_buffer());
+    auto output_float_data = host_buffer::get_as<const float>(padded_float_tensor);
     auto output_packed_data =
         pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
@@ -211,7 +211,7 @@ HostTensor unpad_bfloat4_b(
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
@@ -229,7 +229,7 @@ HostTensor unpad_bfloat4_b(
     auto unpadded_float_tensor = unpad(float_host_tensor, output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT4_B
-    auto output_float_data = host_buffer::get_as<const float>(unpadded_float_tensor.get_host_buffer());
+    auto output_float_data = host_buffer::get_as<const float>(unpadded_float_tensor);
     auto output_packed_data =
         pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
@@ -726,7 +726,7 @@ void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = device_tensor.mesh_buffer();
+    auto mesh_buffer = device_tensor.mesh_buffer_ptr();
 
     device_tensor = to_device_mesh_buffer(
         queue, host_tensor.get_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology());
@@ -1667,5 +1667,141 @@ HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::S
     }
     return unpad(input_tensor, output_tensor_start, output_tensor_end);
 }
+
+// ======================================================================================
+//                                  HostTensor Factory Functions
+// ======================================================================================
+
+namespace host_tensor {
+
+template <typename T>
+HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value) {
+    size_t volume = spec.logical_shape().volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
+
+    auto buffer_dtype = convert_to_data_type<T>();
+    auto buffer_spec =
+        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+
+    auto host_buffer =
+        logical_matches_physical(buffer_spec)
+            ? HostBuffer(std::move(buffer))
+            : HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+
+    auto result = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
+    return to_dtype(result, spec.data_type());
+}
+
+template HostTensor from_vector<bfloat16>(std::vector<bfloat16>&& buffer, const TensorSpec& spec, bfloat16 pad_value);
+template HostTensor from_vector<float>(std::vector<float>&& buffer, const TensorSpec& spec, float pad_value);
+template HostTensor from_vector<int32_t>(std::vector<int32_t>&& buffer, const TensorSpec& spec, int32_t pad_value);
+template HostTensor from_vector<uint8_t>(std::vector<uint8_t>&& buffer, const TensorSpec& spec, uint8_t pad_value);
+template HostTensor from_vector<uint16_t>(std::vector<uint16_t>&& buffer, const TensorSpec& spec, uint16_t pad_value);
+template HostTensor from_vector<uint32_t>(std::vector<uint32_t>&& buffer, const TensorSpec& spec, uint32_t pad_value);
+
+template <typename T>
+HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value) {
+    return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, pad_value);
+}
+
+template HostTensor from_span<bfloat16>(ttsl::Span<const bfloat16> buffer, const TensorSpec& spec, bfloat16 pad_value);
+template HostTensor from_span<float>(ttsl::Span<const float> buffer, const TensorSpec& spec, float pad_value);
+template HostTensor from_span<int32_t>(ttsl::Span<const int32_t> buffer, const TensorSpec& spec, int32_t pad_value);
+template HostTensor from_span<uint8_t>(ttsl::Span<const uint8_t> buffer, const TensorSpec& spec, uint8_t pad_value);
+template HostTensor from_span<uint16_t>(ttsl::Span<const uint16_t> buffer, const TensorSpec& spec, uint16_t pad_value);
+template HostTensor from_span<uint32_t>(ttsl::Span<const uint32_t> buffer, const TensorSpec& spec, uint32_t pad_value);
+
+template <typename T>
+HostTensor from_borrowed_data(
+    ttsl::Span<T> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile) {
+    size_t volume = shape.volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+
+    auto tensor_spec = TensorSpec(
+        shape,
+        TensorLayout::fromPaddedShape(
+            convert_to_data_type<T>(), PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{}, shape, shape));
+
+    return HostTensor(HostBuffer(buffer, std::move(buffer_pin)), tensor_spec, TensorTopology{});
+}
+
+template HostTensor from_borrowed_data<bfloat16>(
+    ttsl::Span<bfloat16> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile);
+template HostTensor from_borrowed_data<float>(
+    ttsl::Span<float> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile);
+template HostTensor from_borrowed_data<int32_t>(
+    ttsl::Span<int32_t> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile);
+template HostTensor from_borrowed_data<uint8_t>(
+    ttsl::Span<uint8_t> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile);
+template HostTensor from_borrowed_data<uint16_t>(
+    ttsl::Span<uint16_t> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile);
+template HostTensor from_borrowed_data<uint32_t>(
+    ttsl::Span<uint32_t> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile);
+
+// ======================================================================================
+//                                  HostTensor to_vector()
+// ======================================================================================
+
+template <>
+std::vector<float> to_vector<float>(const HostTensor& tensor) {
+    switch (tensor.dtype()) {
+        case DataType::BFLOAT16: {
+            auto buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(tensor);
+            std::vector<float> physical_data;
+            physical_data.reserve(buffer.size());
+            std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
+                return static_cast<float>(val);
+            });
+            if (logical_matches_physical(tensor.tensor_spec())) {
+                return physical_data;
+            }
+            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(physical_data), tensor.tensor_spec());
+        }
+        case DataType::FLOAT32: {
+            auto buffer = tt::tt_metal::host_buffer::get_as<const float>(tensor);
+            return tensor_impl::decode_tensor_data(buffer, tensor.tensor_spec());
+        }
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: {
+            const auto& tile = tensor.tensor_spec().tile();
+            auto buffer = tt::tt_metal::host_buffer::get_as<const uint32_t>(tensor);
+            std::vector<float> unpacked_data =
+                tensor.tensor_spec().data_type() == DataType::BFLOAT8_B
+                    ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                    : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(unpacked_data), tensor.tensor_spec());
+        }
+        default: {
+            TT_THROW("Cannot convert tensor to vector for data type: {}", tensor.dtype());
+        }
+    }
+}
+
+template <typename T>
+std::vector<T> to_vector(const HostTensor& tensor) {
+    TT_FATAL(
+        tensor.dtype() == convert_to_data_type<T>(),
+        "Unsupported data type for to_vector: got {}, expected: {}",
+        tensor.dtype(),
+        convert_to_data_type<T>());
+    auto data = tt::tt_metal::host_buffer::get_as<const T>(tensor);
+    if (logical_matches_physical(tensor.tensor_spec())) {
+        return std::vector<T>(data.begin(), data.end());
+    }
+    return tensor_impl::decode_tensor_data(data, tensor.tensor_spec());
+}
+
+template std::vector<bfloat16> to_vector<bfloat16>(const HostTensor& tensor);
+template std::vector<int32_t> to_vector<int32_t>(const HostTensor& tensor);
+template std::vector<uint8_t> to_vector<uint8_t>(const HostTensor& tensor);
+template std::vector<uint16_t> to_vector<uint16_t>(const HostTensor& tensor);
+template std::vector<uint32_t> to_vector<uint32_t>(const HostTensor& tensor);
+
+}  // namespace host_tensor
 
 }  // namespace tt::tt_metal::tensor_impl

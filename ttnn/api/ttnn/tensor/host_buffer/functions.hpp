@@ -13,7 +13,7 @@
 namespace tt::tt_metal::host_buffer {
 
 template <typename T>
-void validate_datatype(const Tensor& tensor) {
+void validate_datatype(const HostTensor& tensor) {
     using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
@@ -37,6 +37,7 @@ void validate_datatype(const Tensor& tensor) {
 }
 
 HostBuffer get_host_buffer(const Tensor& tensor);
+HostBuffer get_host_buffer(const HostTensor& tensor);
 
 template <typename T>
 tt::stl::Span<const T> get_as(const HostBuffer& buffer) {
@@ -49,7 +50,19 @@ tt::stl::Span<T> get_as(HostBuffer& buffer) {
 }
 
 template <typename T>
+tt::stl::Span<const T> get_as(const HostTensor& tensor) {
+    validate_datatype<T>(tensor);
+    HostBuffer buffer = get_host_buffer(tensor);
+    return buffer.template view_as<T>();
+}
+
+template <typename T>
 tt::stl::Span<const T> get_as(const Tensor& tensor) {
+    return get_as<T>(tensor.host_tensor());
+}
+
+template <typename T>
+tt::stl::Span<T> get_as(HostTensor& tensor) {
     validate_datatype<T>(tensor);
     HostBuffer buffer = get_host_buffer(tensor);
     return buffer.template view_as<T>();
@@ -57,9 +70,7 @@ tt::stl::Span<const T> get_as(const Tensor& tensor) {
 
 template <typename T>
 tt::stl::Span<T> get_as(Tensor& tensor) {
-    validate_datatype<T>(tensor);
-    HostBuffer buffer = get_host_buffer(tensor);
-    return buffer.template view_as<T>();
+    return get_as<T>(tensor.host_tensor());
 }
 
 }  // namespace tt::tt_metal::host_buffer

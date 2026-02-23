@@ -179,49 +179,29 @@ tt::tt_metal::DeviceTensor allocate_tensor_on_device(
 
 namespace host_tensor {
 
-template <typename T>
-HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0) {
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
-        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
-    }
-
-    // Create host tensor with DataType matching buffer
-    auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
-
-    auto host_buffer =
-        logical_matches_physical(buffer_spec)
-            ? HostBuffer(std::move(buffer))
-            : HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
-
-    auto result = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
-    // Convert to datatype from original spec
-    return to_dtype(result, spec.data_type());
-}
+// ======================================================================================
+//                                  HostTensor from_xxx
+// ======================================================================================
 
 template <typename T>
-HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value = 0) {
-    return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, pad_value);
-}
+HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
+
+template <typename T>
+HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
 
 template <typename T>
 HostTensor from_borrowed_data(
-    ttsl::Span<T> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile = std::nullopt) {
-    size_t volume = shape.volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    ttsl::Span<T> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile = std::nullopt);
 
-    auto tensor_spec = TensorSpec(
-        shape,
-        TensorLayout::fromPaddedShape(
-            convert_to_data_type<T>(), PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{}, shape, shape));
+// ======================================================================================
+//                                  HostTensor to_vector()
+// ======================================================================================
 
-    return HostTensor(HostBuffer(buffer, std::move(buffer_pin)), tensor_spec, TensorTopology{});
-}
+// Converts a `HostTensor` to a `std::vector<T>`.
+// Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
+// the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+template <typename T>
+std::vector<T> to_vector(const HostTensor& tensor);
 
 }  // namespace host_tensor
 
