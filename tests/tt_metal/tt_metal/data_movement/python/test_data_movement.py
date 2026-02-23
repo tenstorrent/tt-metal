@@ -95,7 +95,6 @@ def profile_dm_tests(verbose=False, gtest_filter=None):
     os.system(cmd)
 
 
-@pytest.mark.timeout(1200)  # 20 minutes timeout
 def test_data_movement(
     no_profile: bool,
     verbose_log: bool,
