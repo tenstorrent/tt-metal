@@ -20,9 +20,9 @@
 
 namespace {
 
-// auto check_board_is_n300() {
-//     return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-// }
+auto check_board_is_n300() {
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
+}
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {
     for (const auto& [name, parameter] : parameters) {
@@ -38,12 +38,12 @@ ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& nam
 class N300TensorParallelLinearTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // if (!check_board_is_n300()) {
-        //     GTEST_SKIP() << "Skipping N300 specific tests";
-        // }
+        if (!check_board_is_n300()) {
+            GTEST_SKIP() << "Skipping N300 specific tests";
+        }
 
-        ttml::ttnn_fixed::distributed::enable_fabric(32U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 32));
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().set_seed(42);
     }
 

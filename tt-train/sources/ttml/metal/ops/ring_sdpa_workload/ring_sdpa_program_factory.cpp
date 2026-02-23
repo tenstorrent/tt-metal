@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ring_sdpa_workload.hpp"
+#include "ring_sdpa_program_factory.hpp"
 
 #include <fmt/core.h>
 

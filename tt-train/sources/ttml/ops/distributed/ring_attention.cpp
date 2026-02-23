@@ -7,10 +7,8 @@
 #include <fmt/core.h>
 
 #include <core/ttnn_all_includes.hpp>
-#include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/cluster.hpp>
-#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -84,15 +82,36 @@ autograd::TensorPtr ring_attention_sdpa(
         mesh_device,
         ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
 
-    const float neg_inf = std::bit_cast<float>(0xFF800000U);  // -inf in float32
-    const float pos_inf = std::bit_cast<float>(0x7F800000U);  // +inf in float32
-    xt::xarray<float> no_contrib_data =
-        xt::zeros<float>({(size_t)batch_num, (size_t)heads, (size_t)seq_len_local, 64UL});
-    // Set column 0 to -inf (max_val)
-    xt::view(no_contrib_data, xt::all(), xt::all(), xt::all(), 0) = neg_inf;
-    // Set column 32 to +inf (recip_sum_exp, so sum_exp = 1/inf = 0)
-    xt::view(no_contrib_data, xt::all(), xt::all(), xt::all(), 32) = pos_inf;
-    ttnn::Tensor no_contrib_intermediate = ttml::core::from_xtensor(no_contrib_data, mesh_device, ttnn::Layout::TILE);
+    // Create "no contribution" intermediate tensor on device
+    // Shape: (B, H, S, 64), mostly zeros except:
+    // - Column 0: -inf (max_val, so any real max will dominate)
+    // - Column 32: +inf (recip_sum_exp, so sum_exp = 1/inf = 0)
+    ttnn::Tensor col0_neg_inf = ttnn::full(
+        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
+        std::bit_cast<float>(0xF8000000U),  // -inf in bfloat16
+        ttnn::DataType::BFLOAT16,
+        ttnn::Layout::TILE,
+        std::ref(*mesh_device));
+
+    ttnn::Tensor col32_pos_inf = ttnn::full(
+        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
+        std::bit_cast<float>(0x7F800000U),  // +inf
+        ttnn::DataType::BFLOAT16,
+        ttnn::Layout::TILE,
+        std::ref(*mesh_device));
+
+    // Pad to 32 columns each (adds 31 zeros on the right of last dim)
+    ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec = {
+        {0, 0},  // batch
+        {0, 0},  // heads
+        {0, 0},  // seq_len
+        {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
+    };
+    ttnn::Tensor first_32_cols = ttnn::pad(col0_neg_inf, padding_spec, 0.0F, false, std::nullopt);
+    ttnn::Tensor last_32_cols = ttnn::pad(col32_pos_inf, padding_spec, 0.0F, false, std::nullopt);
+
+    // Concat to get full 64 columns
+    ttnn::Tensor no_contrib_intermediate = ttnn::concat(std::vector<ttnn::Tensor>{first_32_cols, last_32_cols}, 3);
 
     for (uint32_t step = 0; step < ring_size; ++step) {
         // For causal masking, initialize intermediate_tensor to "no contribution" values
