@@ -286,7 +286,7 @@ conv_test_cases = [
     ],
     indirect=["mesh_device"],
 )
-def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval, test_config, grid_size=(8, 8)):
+def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval, test_config):
     groups = 1
     dilation = 1
     pad_w = 1
@@ -300,7 +300,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     output_channels = test_config["output_channels"]
 
     compute_grid = get_mesh_grid_size(mesh_device)
-    logger.info(f"Running on {grid_size} cores")
+    logger.info(f"Running on {compute_grid} cores")
 
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -378,7 +378,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
-        compute_with_storage_grid_size=grid_size,
+        compute_with_storage_grid_size=compute_grid,
         slice_config=slice_config,
     )
 

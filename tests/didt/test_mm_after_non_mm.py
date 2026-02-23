@@ -91,7 +91,6 @@ def test_ff1_matmul(
     didt_workload_iterations,
     determinism_check_interval,
     loop_counts,
-    grid_size=(8, 8),
 ):
     per_core_M = 4
     per_core_N = 72

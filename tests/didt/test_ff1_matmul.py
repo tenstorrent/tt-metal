@@ -47,7 +47,6 @@ def test_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    grid_size=(8, 8),
 ):
     per_core_M = 4
     per_core_N = 72
@@ -199,11 +198,6 @@ def test_specific_board_ff1_matmul(
 
 @skip_for_blackhole("Use test_blackhole_grid_size_ff1_matmul for blackhole!")
 @pytest.mark.parametrize(
-    "grid_size",
-    [(i, 8) for i in range(1, 9)] + [(8, i) for i in range(1, 8)],
-    ids=[f"{i}x8" for i in range(1, 9)] + [f"8x{i}" for i in range(1, 8)],  # 1x8, 2x8 ... 8x1, 8x2...
-)
-@pytest.mark.parametrize(
     "gelu, math_fidelity",
     GELU_FIDELITY_PARAMETRIZATION,
     ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
@@ -218,26 +212,17 @@ def test_specific_board_ff1_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
-):
+def test_grid_size_ff1_matmul(mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval):
     test_ff1_matmul(
         mesh_device,
         gelu,
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        grid_size=grid_size,
     )
 
 
 @skip_for_wormhole_b0("Use test_grid_size_ff1_matmul for blackhole!")
-@pytest.mark.parametrize(
-    "grid_size",
-    [(i, 10) for i in range(1, 14)] + [(13, i) for i in range(1, 10)],
-    ids=[f"{i}x10" for i in range(1, 14)]
-    + [f"13x{i}" for i in range(1, 10)],  # 1x10, 2x10 ..., 13x10, 13x1, 13x2, 13x9
-)
 @pytest.mark.parametrize(
     "gelu, math_fidelity",
     GELU_FIDELITY_PARAMETRIZATION,
@@ -254,7 +239,7 @@ def test_grid_size_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
+    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
 ):
     test_ff1_matmul(
         mesh_device,
@@ -262,7 +247,6 @@ def test_blackhole_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        grid_size=grid_size,
     )
 
 

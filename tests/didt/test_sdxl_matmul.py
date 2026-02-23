@@ -138,7 +138,6 @@ def test_sdxl_matmul(
     didt_workload_iterations,
     determinism_check_interval,
     test_config,
-    grid_size=(8, 8),
 ):
     # Initialize input configurations
     compute_grid = get_mesh_grid_size(mesh_device)
@@ -260,11 +259,6 @@ def test_specific_board_sdxl_matmul(
 @skip_for_blackhole("Use test_blackhole_grid_size_ff1_matmul for blackhole!")
 @pytest.mark.parametrize("test_config", mm_test_cases, ids=[c["id"] for c in mm_test_cases])
 @pytest.mark.parametrize(
-    "grid_size",
-    [(i, 8) for i in range(1, 9)] + [(8, i) for i in range(1, 8)],
-    ids=[f"{i}x8" for i in range(1, 9)] + [f"8x{i}" for i in range(1, 8)],  # 1x8, 2x8 ... 8x1, 8x2...
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         pytest.param(1, id="1chips"),
@@ -274,27 +268,18 @@ def test_specific_board_sdxl_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_sdxl_matmul(
-    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, test_config
-):
+def test_grid_size_sdxl_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, test_config):
     test_sdxl_matmul(
         mesh_device,
         didt_workload_iterations,
         determinism_check_interval,
         test_config,
-        grid_size=grid_size,
     )
 
 
 @skip_for_blackhole("Blackhole has not been tested, see #25544")
 @skip_for_wormhole_b0("Use test_grid_size_ff1_matmul for blackhole!")
 @pytest.mark.parametrize("test_config", mm_test_cases, ids=[c["id"] for c in mm_test_cases])
-@pytest.mark.parametrize(
-    "grid_size",
-    [(i, 10) for i in range(1, 14)] + [(13, i) for i in range(1, 10)],
-    ids=[f"{i}x10" for i in range(1, 14)]
-    + [f"13x{i}" for i in range(1, 10)],  # 1x10, 2x10 ..., 13x10, 13x1, 13x2, 13x9
-)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -306,12 +291,11 @@ def test_grid_size_sdxl_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_sdxl_matmul(
-    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, test_config
+    mesh_device, didt_workload_iterations, determinism_check_interval, test_config
 ):
     test_sdxl_matmul(
         mesh_device,
         didt_workload_iterations,
         determinism_check_interval,
         test_config,
-        grid_size=grid_size,
     )
