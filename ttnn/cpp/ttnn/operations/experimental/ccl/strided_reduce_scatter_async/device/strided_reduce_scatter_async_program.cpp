@@ -216,7 +216,9 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t mm_cores_y,
     const uint32_t N_full_block_wt,
     const uint32_t chunk_width_in_tiles,
-    const uint32_t chunks_per_mm_N_full_block) {
+    const uint32_t chunks_per_mm_N_full_block,
+    const uint32_t chunk_width_in_mm_blocks,
+    const uint32_t mm_block_wt) {
     // Strided reader compile args - include MM blocking parameters
     return {
         ring_index,                  // my_chip_id
@@ -240,6 +242,8 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         N_full_block_wt,             // N_full_block_wt
         chunk_width_in_tiles,        // chunk_width_in_tiles
         chunks_per_mm_N_full_block,  // chunks_per_mm_N_full_block
+        chunk_width_in_mm_blocks,    // chunk_width_in_mm_blocks (used by FUSE_MM_OP_SIGNALER)
+        mm_block_wt,                 // mm_block_wt (used by FUSE_MM_OP_SIGNALER)
     };
 }
 
@@ -402,6 +406,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<experimental::ccl::StridedReduceScatterFusedOpSignaler>& mm_fused_op_signaler,
+    [[maybe_unused]] std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
@@ -605,6 +611,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
+    bool fuse_mm_op = mm_fused_op_signaler.has_value();
+    if (fuse_mm_op) {
+        mm_fused_op_signaler->init_strided_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
+        reader_compute_defines["FUSE_MM_OP_SIGNALER"] = "1";
+    }
 
     // Kernel Runtime Args
     const uint32_t l1_unreserved_base_address =
@@ -654,7 +665,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_cores_y_val,
             mm_N_full_block_wt_val,
             chunk_width_in_tiles_val,
-            chunks_per_mm_N_full_block_val);
+            chunks_per_mm_N_full_block_val,
+            chunk_width_in_mm_blocks_val,
+            mm_block_wt_val);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -814,6 +827,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
+                if (fuse_mm_op) {
+                    mm_fused_op_signaler->push_strided_reduce_scatter_fused_op_rt_args(reader_rt_args);
+                }
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
@@ -965,6 +981,7 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
 
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> mm_fused_op_signaler = std::nullopt;
     tt::tt_metal::Program program{};
     auto shared_vars = ::ttnn::build_ring_strided_reduce_scatter_async_program_artifacts(
         program,
@@ -984,6 +1001,8 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.using_persistent_buffers,
         operation_attributes.sub_device_id,
         fused_op_signaler,
+        mm_fused_op_signaler,
+        operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         CoreCoord(0, 0),
