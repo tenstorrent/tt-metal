@@ -18,18 +18,6 @@ void kernel_main() {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
-    // Generate a -inf tile for compute kernel's prev_max initialization.
-    constexpr uint32_t cb_neginf = tt::CBIndex::c_7;
-    cb_reserve_back(cb_neginf, 1);
-    {
-        uint32_t write_addr = get_write_ptr(cb_neginf);
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-        for (uint32_t i = 0; i < 2048 / sizeof(uint32_t); i++) {
-            ptr[i] = 0xFF80FF80;
-        }
-    }
-    cb_push_back(cb_neginf, 1);
-
     // Generate column identity tile for matmul_reduce normalization.
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
