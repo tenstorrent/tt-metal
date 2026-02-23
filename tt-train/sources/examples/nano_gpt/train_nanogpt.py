@@ -18,6 +18,7 @@ including:
 """
 
 import argparse
+import math
 import os
 import random
 from dataclasses import dataclass, field
@@ -84,8 +85,11 @@ class TrainingConfig(BaseTrainingConfig):
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
+        # Re-read with C++ matching defaults (override BaseTrainingConfig defaults)
+        self.seed = int(tc.get("seed", 5489))
+        self.max_steps = int(tc.get("max_steps", 5000))
+
         # Aliases to match expected field names in this example
-        self.max_steps = self.steps
         self.num_epochs = self.epochs
         self.model_save_interval = self.save_every
         self.learning_rate = self.lr
@@ -106,13 +110,13 @@ class ModelConfig:
 
     model_type: str = "gpt2"  # "gpt2" or "llama"
     model_path: str = ""
-    vocab_size: int = 50304
-    embedding_dim: int = 384  # NanoGPT default (reduced from 768)
-    num_blocks: int = 6  # NanoGPT default (reduced from 12)
-    num_heads: int = 6  # NanoGPT default (reduced from 12)
-    dropout_prob: float = 0.2  # Match C++ default: float dropout_prob = 0.2F
+    vocab_size: int = 256
+    embedding_dim: int = 384
+    num_blocks: int = 6
+    num_heads: int = 6
+    dropout_prob: float = 0.2
     bias: bool = True
-    max_sequence_length: int = 128  # Reduced from 1024 to avoid memory issues
+    max_sequence_length: int = 256
     runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
     weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
@@ -838,17 +842,11 @@ def save_checkpoint(
     # Save model parameters
     model_state = {}
     for name, param in model.parameters().items():
-        # Handle both Parameter objects and direct Tensor objects
-        if isinstance(param, Parameter):
-            tensor = param.tensor
-        else:
-            tensor = param
-
         # Get tensor metadata
-        layout = tensor.get_value().get_layout()
+        layout = param.tensor.get_value().get_layout()
 
         # Convert tensor to numpy for serialization
-        numpy_array = tensor.to_numpy(ttnn.DataType.FLOAT32)
+        numpy_array = param.tensor.to_numpy(ttnn.DataType.FLOAT32)
         model_state[name] = {
             "data": numpy_array,
             "layout": layout.value if hasattr(layout, "value") else str(layout),
@@ -1170,14 +1168,13 @@ def main():
         training_config.clip_grad_norm_max_norm = args.clip_grad_norm
     if args.sequence_length is not None:
         model_config.max_sequence_length = args.sequence_length
-    # Only checkpoint when explicitly requested via --model_save_path.
-    # Matches C++ behaviour: no model_path in YAML → no checkpointing.
-    checkpoint_save_path = args.model_save_path
 
-    if checkpoint_save_path:
-        checkpoint_dir = os.path.dirname(checkpoint_save_path)
+    # Only checkpoint when explicitly requested via --model_save_path.
+    # Matches C++ behaviour: no model_path in YAML -> no checkpointing.
+    if args.model_save_path:
+        checkpoint_dir = os.path.dirname(args.model_save_path)
         os.makedirs(checkpoint_dir, exist_ok=True)
-        print(f"Checkpoints will be saved to: {checkpoint_save_path}_step_*.pkl")
+        print(f"Checkpoints will be saved to: {args.model_save_path}_step_*.pkl")
 
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
@@ -1198,9 +1195,8 @@ def main():
 
     # Handle inference-only mode: load model from checkpoint
     if inference_only:
-        model_path = args.model_path
         print("1. Loading model from checkpoint...")
-        print(f"   - Model path: {model_path}")
+        print(f"   - Model path: {args.model_path}")
 
         try:
             (
@@ -1210,14 +1206,14 @@ def main():
                 training_config,
                 loaded_step,
             ) = load_model_from_checkpoint(
-                model_path,
+                args.model_path,
             )
-            sequence_length = model_config.max_sequence_length
+            seq_len = model_config.max_sequence_length
             dataset = []  # Not needed for inference
 
             print(f"   - Model loaded from step {loaded_step}")
             print(f"   - Vocabulary size: {model_config.vocab_size}")
-            print(f"   - Sequence length: {sequence_length}")
+            print(f"   - Sequence length: {seq_len}")
             print(
                 f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
             )
@@ -1261,15 +1257,15 @@ def main():
 
         # Load data
         text = read_file_to_str(training_config.data_path)
-        sequence_length = model_config.max_sequence_length
+        seq_len = model_config.max_sequence_length
 
         # Create dataset
-        dataset, tokenizer = create_dataset_from_text(text, sequence_length)
+        dataset, tokenizer = create_dataset_from_text(text, seq_len)
         model_config.vocab_size = tokenizer.vocab_size
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")
         print(f"   - Dataset size: {len(dataset)} samples")
-        print(f"   - Sequence length: {sequence_length}")
+        print(f"   - Sequence length: {seq_len}")
 
         # Check if resuming from checkpoint (auto-resume by default)
         start_step = 0
@@ -1279,10 +1275,10 @@ def main():
             # Auto-detect or use specified checkpoint
             if args.resume:
                 resume_path = args.resume
-            elif checkpoint_save_path:
+            elif args.model_save_path:
                 # Only auto-detect if a save path is configured — otherwise there's
                 # nowhere to look and find_latest_checkpoint("") would be a no-op anyway.
-                resume_path = find_latest_checkpoint(checkpoint_save_path)
+                resume_path = find_latest_checkpoint(args.model_save_path)
                 if resume_path:
                     print(f"\n   Found existing checkpoint: {resume_path}")
 
@@ -1298,7 +1294,7 @@ def main():
                 ) = load_model_from_checkpoint(resume_path)
                 # Use tokenizer from checkpoint to ensure vocab consistency
                 tokenizer = loaded_tokenizer
-                sequence_length = model_config.max_sequence_length
+                seq_len = model_config.max_sequence_length
                 print(f"   - Resumed from step {start_step}")
                 print(
                     f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
@@ -1311,16 +1307,25 @@ def main():
         if not resume_path:
             print("\n2. Creating model...")
             # Round vocab size to tile boundary (matching C++ behavior)
+            print("Overriding vocab size to be divisible by 32")
             model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
+
+            # Print transformer configuration (matching C++ output)
+            runner_type_str = str(model_config.runner_type).split(".")[-1]
+            weight_tying_str = str(model_config.weight_tying).split(".")[-1]
+            print("Transformer configuration:")
+            print(f"    Vocab size: {model_config.vocab_size}")
+            print(f"    Max sequence length: {model_config.max_sequence_length}")
+            print(f"    Runner type: {runner_type_str}")
+            print(f"    Weight tying: {weight_tying_str}")
 
             # Create model
             model = create_model_from_config(model_config)
 
-            # Count parameters
+            # Count parameters (matching C++ get_number_of_parameters; parameters() returns
+            # ttml.autograd.Tensor objects directly from C++, not Python Parameter wrappers)
             total_params = sum(
-                p.tensor.to_numpy(ttnn.DataType.FLOAT32).size
-                for p in model.parameters().values()
-                if isinstance(p, Parameter) and hasattr(p, "tensor")
+                math.prod(p.shape()) for p in model.parameters().values()
             )
             print(
                 f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
@@ -1401,7 +1406,7 @@ def main():
         print("\n2. Creating attention mask...")
     else:
         print("\n5. Creating attention mask...")
-    mask_np = build_causal_mask(sequence_length)
+    mask_np = build_causal_mask(seq_len)
     mask = ttml.autograd.Tensor.from_numpy(
         mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
     )
@@ -1418,7 +1423,7 @@ def main():
             f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})..."
         )
         print(f"  - Batch size: {training_config.batch_size}")
-        print(f"  - Sequence length: {sequence_length}")
+        print(f"  - Sequence length: {seq_len}")
         print(f"  - Training data: {len(dataset)} samples")
         print(f"  - Scheduler: {training_config.scheduler_type}")
         print(
@@ -1470,7 +1475,7 @@ def main():
 
                 batch_samples = [dataset[i] for i in indices[batch_start:batch_end]]
                 input_tokens, target_tokens = collate_fn(
-                    batch_samples, batch_size, sequence_length
+                    batch_samples, batch_size, seq_len
                 )
 
                 loss_float, step_time, should_step = train_step(
@@ -1497,11 +1502,11 @@ def main():
                     )
 
                     if (
-                        checkpoint_save_path
+                        args.model_save_path
                         and global_step % training_config.model_save_interval == 0
                     ):
                         save_checkpoint(
-                            f"{checkpoint_save_path}_step_{global_step}.pkl",
+                            f"{args.model_save_path}_step_{global_step}.pkl",
                             global_step,
                             model,
                             tokenizer,
@@ -1527,8 +1532,8 @@ def main():
                 break
 
         # Save final checkpoint after training
-        if checkpoint_save_path:
-            final_checkpoint_path = f"{checkpoint_save_path}_final.pkl"
+        if args.model_save_path:
+            final_checkpoint_path = f"{args.model_save_path}_final.pkl"
             save_checkpoint(
                 final_checkpoint_path,
                 global_step,
@@ -1563,7 +1568,7 @@ def main():
             tokenizer,
             args.prompt,
             args.max_new_tokens,
-            sequence_length,
+            seq_len,
             mask,
             temperature=args.temperature,
             top_k=args.top_k,
