@@ -337,6 +337,14 @@ FUSED_OP_CONFIGS = {
         "use_trace": False,  # MLP uses eager mode for device perf measurement
         "description": "Expert MLP computation (batched matmul + SwiGLU)",
     },
+    "fused_moe_kernel": {
+        "test_path": "models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_fused_moe_kernel.py",
+        "test_function": "test_gpt_oss_fused_moe_kernel",
+        "env_var": "GPT_OSS_FUSED_MOE_KERNEL_DEVICE_PERF",
+        "batch_size": 32,  # M=32 tokens
+        "use_trace": False,  # Single device, eager mode
+        "description": "Fused MoE kernel (moe_gpt): W0/W1 + SwiGLU + W2 in one kernel",
+    },
 }
 
 

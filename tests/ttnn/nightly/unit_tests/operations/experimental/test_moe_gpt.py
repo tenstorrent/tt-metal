@@ -31,6 +31,12 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, comp_allclose
+from models.demos.gpt_oss.tt.experts_throughput.weights import (
+    _FUSED_MAX_TILES_PER_CORE as MAX_W0_W1_TILES_PER_CORE,
+    _FUSED_PAD_CORES as PAD_CORES,
+    _prepare_w0_w1_tensor as prepare_w0_w1_tensor,
+    _prepare_w2_tensor as prepare_w2_tensor,
+)
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
@@ -38,19 +44,6 @@ from tracy.process_model_log import (
 )
 
 PCC_THRESHOLD = 0.984
-
-# GPT-OSS: Both W0/W1 and W2 distribute 90 tiles across 12 cores (7.5 per core)
-# Boundary-optimized: pairs at [0,1], [4,5], [8,9] get 8 tiles (FULL)
-FULL_CORES = {0, 1, 4, 5, 8, 9}
-PAD_CORES = {2, 3, 6, 7, 10, 11}
-
-# Max tiles per core for W0/W1 (padded)
-MAX_W0_W1_TILES_PER_CORE = 8
-
-
-def tiles_for_core(ring_pos):
-    """Return the number of valid tiles for a core at a given ring position."""
-    return 7 if ring_pos in PAD_CORES else 8
 
 
 def create_torch_input(L, in0_num_cores, E, M, K):
@@ -80,179 +73,15 @@ def create_torch_w2(L, E, N, K):
     return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
 
 
-def prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores):
-    """
-    Prepare the w0_w1 tensor by interleaving chunks of w0 and w1 width-wise.
-
-    GPT-OSS: 7-8 tiles/core (90/12 = 7.5), padded to 8.
-    Each core's shard has 4 groups of 2 paired tiles.
-
-    Args:
-        torch_w0: Weight tensor of shape (L, E, K, N)
-        torch_w1: Weight tensor of shape (L, E, K, N)
-        L: Number of layers
-        E: Number of experts
-        K: Input dimension (2880)
-        N: Output dimension (2880)
-        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
-
-    Returns:
-        torch_w0_w1_paired: Interleaved tensor of shape (12, L, E, 4, K, 128)
-    """
-    num_cores = len(ring2cores)
-    Nt = N // ttnn.TILE_SIZE  # 2880 / 32 = 90 tiles per tensor
-
-    # Reshape to expose chunks: (L, E, K, N) -> (L, E, K, Nt, TILE_SIZE)
-    w0_chunks = torch_w0.view(L, E, K, Nt, ttnn.TILE_SIZE)
-    w1_chunks = torch_w1.view(L, E, K, Nt, ttnn.TILE_SIZE)
-
-    # Stack w0 and w1 chunks together: (L, E, K, Nt, 2, TILE_SIZE)
-    # This puts w0_chunk_i and w1_chunk_i adjacent to each other
-    stacked = torch.stack([w0_chunks, w1_chunks], dim=4)
-
-    # Reshape to interleave: (L, E, K, Nt, 2 * TILE_SIZE) = (L, E, K, 90, 64)
-    torch_w0_w1_interleaved = stacked.view(L, E, K, Nt, 2 * ttnn.TILE_SIZE)
-
-    # Permute to move Nt before K: (L, E, Nt, K, 2*TILE)
-    torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
-
-    # Split into per-core shards with padding for cores with 7 tiles
-    each_shard = []
-    start_tile = 0
-    for ring_pos in range(num_cores):
-        num_tiles = tiles_for_core(ring_pos)
-        shard = torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :]
-        start_tile += num_tiles
-
-        # Pad to MAX_W0_W1_TILES_PER_CORE if needed
-        if num_tiles < MAX_W0_W1_TILES_PER_CORE:
-            pad_tiles = MAX_W0_W1_TILES_PER_CORE - num_tiles
-            padding = torch.zeros(L, E, pad_tiles, K, 2 * ttnn.TILE_SIZE, dtype=torch_w0.dtype)
-            shard = torch.cat([shard, padding], dim=2)
-
-        each_shard.append(shard)
-
-    # (L, E, 12*8, K, 64) = (L, E, 96, K, 64)
-    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)
-    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2  # 4
-
-    # (L, E, 12, 8, K, 64) -> (12, L, E, 8, K, 64)
-    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, num_cores, MAX_W0_W1_TILES_PER_CORE, K, 2 * ttnn.TILE_SIZE)
-    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)
-
-    # Pair 2 tiles into groups of 4 tiles wide (matching kernel matmul_block ct_dim=4):
-    # (12, L, E, 8, K, 64) -> (12, L, E, 4, 2, K, 64) -> (12, L, E, 4, K, 2, 64) -> (12, L, E, 4, K, 128)
-    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(num_cores, L, E, groups_per_core, 2, K, 2 * ttnn.TILE_SIZE)
-    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
-    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(num_cores, L, E, groups_per_core, K, 4 * ttnn.TILE_SIZE)
-
-    return torch_w0_w1_paired
-
-
-def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
-    """
-    Prepare the w2 tensor by padding and reordering tiles.
-
-    GPT-OSS: W2 is [N, K] = [2880, 2880], distributed as 7-8 K-tiles per core.
-    Grouped into ceil(max_tiles/4) = 2 groups of 4 tiles each.
-
-    Args:
-        torch_w2: Weight tensor of shape (L, E, N, K)
-        L: Number of layers
-        E: Number of experts
-        N: Intermediate dimension (2880)
-        K: Output dimension (2880)
-        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
-
-    Returns:
-        torch_w2_reordered: Reordered tensor of shape (12, L, E, 2, N, 128)
-    """
-    num_cores = len(ring2cores)
-    each_shard = []
-
-    start_col = 0
-    for ring_pos in range(num_cores):
-        (_, _, pad_flag) = ring2cores[ring_pos]
-
-        if pad_flag:
-            # Pad cores: 7 tiles -> 1 group of 4 + 1 group of 3 + 1 pad
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
-            start_col += 4 * ttnn.TILE_SIZE
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 3 * ttnn.TILE_SIZE])
-            start_col += 3 * ttnn.TILE_SIZE
-            # Pad the last group to 4 tiles
-            each_shard.append(torch.zeros(L, E, N, 1 * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
-        else:
-            # Full cores: 8 tiles -> 2 groups of 4 tiles each, no padding
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
-            start_col += 4 * ttnn.TILE_SIZE
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
-            start_col += 4 * ttnn.TILE_SIZE
-
-    torch_w2_reordered = torch.cat(each_shard, dim=-1)  # (L, E, N, 12 * 8 * 32)
-    all_groups_per_bank = torch_w2_reordered.view(L, E, N, num_cores, 2, 4 * ttnn.TILE_SIZE)
-
-    # (L, E, N, 12, 2, 128) -> (12, L, E, 2, N, 128)
-    all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
-
-    # Group N in terms of tiles for ring reordering
-    Nt = N // ttnn.TILE_SIZE  # 90
-    N_grouped = all_groups_per_bank.view(
-        num_cores, L, E, 2, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE
-    )  # (12, L, E, 2, 90, 32, 128)
-
-    # Figure out the order of N tiles based on the ring position.
-    # Each core's intermediate tiles come from different source cores in the ring.
-    core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
-
-    # Chunk sizes per source core: 7 or 8 tiles
-    chunk_sizes = [tiles_for_core(i) for i in range(num_cores)]
-    chunk_start_positions = torch.cat(
-        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
-    )
-
-    each_shard = []
-    for core_id in range(num_cores):
-        each_chunk = []
-        for chunk_id in core_chunk_order:
-            start_pos = chunk_start_positions[chunk_id]
-            end_pos = chunk_start_positions[chunk_id + 1]
-            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
-            each_chunk.append(this_chunk)
-        each_shard.append(torch.cat(each_chunk, dim=3))
-
-        core_chunk_order = core_chunk_order.roll(1)
-
-    N_reordered = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
-
-    # GPT-OSS: N=2880, Nt=90. 90/10=9 exact, no padding needed.
-    return N_reordered
-
-
 def prepare_output_tensor(tt_output, E, M, K, ring2cores):
-    """
-    Prepare the output tensor by extracting valid tiles per core.
+    """Extract valid tiles per core from the raw output tensor.
 
-    GPT-OSS: W2 output has K/32 = 90 tiles total across 12 cores.
-    Cores with 8 tiles produce 8*32 = 256 elements of K.
-    Cores with 7 tiles produce 7*32 = 224 elements of K.
-
-    Args:
-        tt_output: Tensor of shape (num_cores, E, M, K_padded)
-        E: Number of experts
-        M: Number of input features
-        K: Number of output features (2880)
-        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
-
-    Returns:
-        torch_output: Tensor of shape (E, M, K)
+    Wraps :func:`extract_fused_moe_kernel_output` for the case where
+    ``tt_output`` is already a torch tensor (not a ttnn tensor).
     """
     each_shard = []
-
     for ring_pos in range(len(ring2cores)):
         (_, _, pad_flag) = ring2cores[ring_pos]
-        # Full cores (8 tiles) -> 8*32=256 elements; Pad cores (7 tiles) -> 7*32=224 elements
-        # But output is stored with max padding = 8*32 per core
         num_tiles = 7 if pad_flag else 8
         each_shard.append(tt_output[ring_pos, :, :, : num_tiles * ttnn.TILE_SIZE])
 
@@ -299,7 +128,7 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, 0)
+    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(0)
     core2dram = {}
     for dram_bank_id, core_coords in enumerate(in0_core_coords):
         core2dram[core_coords] = dram_bank_id
@@ -587,7 +416,7 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
     # --------------------------------------------------------------------------
     # Shard grid (same setup as run_test_moe_gpt)
     # --------------------------------------------------------------------------
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, 0)
+    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(0)
     core2dram = {}
     for dram_bank_id, core_coords in enumerate(in0_core_coords):
         core2dram[core_coords] = dram_bank_id
