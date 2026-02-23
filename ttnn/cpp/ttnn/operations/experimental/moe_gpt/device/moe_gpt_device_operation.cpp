@@ -26,15 +26,18 @@ void MoEGPTDeviceOperation::validate_on_program_cache_miss(
 }
 
 MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // Use the output tensor's spec since it's passed in with the correct sharded memory config
-    const auto& output_tensor = tensor_args.output_tensor;
-    return output_tensor.tensor_spec();
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
+        return tensor_args.dram_output_tensor->tensor_spec();
+    }
+    return tensor_args.output_tensor.tensor_spec();
 }
 
 MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_output_tensors(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // Return the preallocated output tensor (already sharded with correct memory config)
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
+        return *tensor_args.dram_output_tensor;
+    }
     return tensor_args.output_tensor;
 }
 
@@ -45,14 +48,18 @@ MoEGPTDeviceOperation::invoke(
     const Tensor& w2_tensor,
     const Tensor& output_tensor,
     const uint32_t num_experts,
-    const uint32_t layer_id) {
+    const uint32_t layer_id,
+    bool enable_dram_output,
+    std::optional<Tensor> dram_output_tensor) {
     return {
-        operation_attributes_t{.num_experts = num_experts, .layer_id = layer_id},
+        operation_attributes_t{
+            .num_experts = num_experts, .layer_id = layer_id, .enable_dram_output = enable_dram_output},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,
             .w2_tensor = w2_tensor,
-            .output_tensor = output_tensor}};
+            .output_tensor = output_tensor,
+            .dram_output_tensor = std::move(dram_output_tensor)}};
 }
 
 }  // namespace ttnn::operations::experimental::moe_gpt

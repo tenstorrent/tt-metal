@@ -86,8 +86,11 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
     }
 
     // Create compile args for the program
-    const auto tensors = std::vector<const Tensor*>{
+    std::vector<const Tensor*> tensors = {
         &tensor_args.input_tensor, &tensor_args.w0_w1_tensor, &tensor_args.w2_tensor, &tensor_args.output_tensor};
+    if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
+        tensors.push_back(&*tensor_args.dram_output_tensor);
+    }
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
@@ -98,6 +101,7 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
         {"num_experts", operation_attributes.num_experts},
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
+        {"enable_dram_output", operation_attributes.enable_dram_output ? 1u : 0u},
     };
 
     // Create kernels for the program
@@ -165,18 +169,35 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
         bank2ring_pos[this_bank] = {ring_pos, next_bank};
     }
 
+    // Precompute k_start_tile for each ring position (for DRAM output path)
+    // tiles_per_core: ring positions {0,1,4,5,8,9} get 8 tiles, rest get 7
+    constexpr uint32_t tiles_per_core_table[12] = {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7};
+    uint32_t k_start_tiles[12] = {0};
+    for (uint32_t i = 1; i < num_cores; ++i) {
+        k_start_tiles[i] = k_start_tiles[i - 1] + tiles_per_core_table[i - 1];
+    }
+
     // Set the runtime arguments for the kernels
+    // Layout: [0] dram_bank_id, [1] vchannel, [2-5] tensor addrs, [6] semaphore_id,
+    //         [7] ring_core_id, [8] neighbor_x, [9] neighbor_y
+    // When enable_dram_output: [10] dram_output_addr, [11] k_start_tile
     std::vector<uint32_t> runtime_args;
     runtime_args.push_back(0);  // DRAM Bank ID placeholder
     runtime_args.push_back(0);  // VChannel placeholder
-    for (const auto& tensor : tensors) {
-        runtime_args.push_back(tensor->buffer()->address());
+    // Push addresses for the first 4 tensors (input, w0_w1, w2, output)
+    for (uint32_t i = 0; i < 4; ++i) {
+        runtime_args.push_back(tensors[i]->buffer()->address());
     }
     // Add placeholders for neighbor physical coords and semaphore
     runtime_args.push_back(ring_semaphore_id);  // Semaphore ID
     runtime_args.push_back(0);                  // Ring core ID placeholder
     runtime_args.push_back(0);                  // Neighbor physical x
     runtime_args.push_back(0);                  // Neighbor physical y
+
+    if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
+        runtime_args.push_back(tensor_args.dram_output_tensor->buffer()->address());  // [10] dram_output_addr
+        runtime_args.push_back(0);                                                    // [11] k_start_tile placeholder
+    }
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -210,6 +231,11 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
         runtime_args[8] = static_cast<uint32_t>(next_physical.x);
         runtime_args[9] = static_cast<uint32_t>(next_physical.y);
 
+        if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
+            // runtime_args[10] already set to dram_output_addr
+            runtime_args[11] = k_start_tiles[ring_pos];
+        }
+
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
@@ -227,7 +253,7 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
 
 void MoEGPTProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t&) {
     auto& program = cached_program.program;
@@ -238,12 +264,15 @@ void MoEGPTProgramFactory::override_runtime_arguments(
         program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
 
     // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [3] = w0_w1_tensor address, [5] = w2_tensor address
+    // Runtime args layout: [3] = w0_w1_tensor address, [4] = w2_tensor address
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
             runtime_args[3] = tensor_args.w0_w1_tensor.buffer()->address();
             runtime_args[4] = tensor_args.w2_tensor.buffer()->address();
+            if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
+                runtime_args[10] = tensor_args.dram_output_tensor->buffer()->address();
+            }
         }
     }
 }

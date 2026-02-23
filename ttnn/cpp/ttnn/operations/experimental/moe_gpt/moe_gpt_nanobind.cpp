@@ -32,6 +32,7 @@ void bind_moe_gpt(nb::module_& mod) {
             nb::arg("output_tensor"),
             nb::arg("num_experts"),
             nb::arg("layer_id"),
+            nb::arg("enable_dram_output") = false,
         });
 }
 

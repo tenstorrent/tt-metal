@@ -17,7 +17,8 @@ struct ExecuteMoEGPT {
         const ttnn::Tensor& w2_tensor,
         const ttnn::Tensor& output_tensor,
         const uint32_t num_experts,
-        const uint32_t layer_id);
+        const uint32_t layer_id,
+        bool enable_dram_output = false);
 };
 
 }  // namespace ttnn::operations::experimental::moe_gpt

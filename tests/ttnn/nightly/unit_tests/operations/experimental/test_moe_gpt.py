@@ -545,6 +545,179 @@ def test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
 
 @pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            },
+            id="dispatch_row",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "M, K, N, E, L",
+    SHAPE2TIME.keys(),
+)
+def test_moe_gpt_dram_output(device, M, K, N, E, L):
+    """Test the fused MoE kernel with enable_dram_output=True.
+
+    Verifies that the DRAM output tensor has the correct shape (E, 1, M, K)
+    in TILE_LAYOUT, and that after converting to ROW_MAJOR, accuracy matches
+    the torch reference (PCC >= threshold).
+    """
+    accuracy_metrics = run_test_moe_gpt_dram_output(device, M, K, N, E, L)
+
+    passing = True
+    for (layer_id, expert_id), metrics in accuracy_metrics.items():
+        if metrics["pcc"] < PCC_THRESHOLD:
+            passing = False
+            logger.warning(f"DRAM output - Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f}")
+        else:
+            logger.info(f"DRAM output - Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f} (Passed)")
+
+    assert passing, "Some experts in some layers did not pass the PCC check (DRAM output path)"
+
+
+def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
+    """Run the fused MoE kernel with enable_dram_output=True and check accuracy."""
+    logger.info(f"Running test_moe_gpt_dram_output with M={M}, K={K}, N={N}, E={E}, L={L}")
+
+    # --------------------------------------------------------------------------
+    # Shard grid (same setup as run_test_moe_gpt)
+    # --------------------------------------------------------------------------
+    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, 0)
+    core2dram = {}
+    for dram_bank_id, core_coords in enumerate(in0_core_coords):
+        core2dram[core_coords] = dram_bank_id
+
+    in0_num_cores = len(in0_core_coords)
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in PAD_CORES else 0)
+
+    in0_core_range = [ttnn.CoreRange(ring2cores[i][0], ring2cores[i][0]) for i in range(in0_num_cores)]
+    in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+
+    # --------------------------------------------------------------------------
+    # Constants
+    # --------------------------------------------------------------------------
+    in0_dtype = ttnn.bfloat16
+    w0_dtype = ttnn.bfloat4_b
+    num_dram_banks = 12
+
+    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
+    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
+    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+    # --------------------------------------------------------------------------
+    # Tensor shapes and memory configurations
+    # --------------------------------------------------------------------------
+    input_shape = (in0_num_cores, E, M, K)
+
+    in0_shard_spec = ttnn.ShardSpec(
+        grid=in0_core_range_set,
+        shard_shape=(E * M, K),
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    input_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
+    )
+
+    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    w0_w1_shard_height = L * E * groups_per_core * K
+    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
+
+    w0_w1_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
+
+    w2_shard_height = L * E * 2 * N
+    w2_shard_width = 4 * ttnn.TILE_SIZE
+
+    w2_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
+
+    # --------------------------------------------------------------------------
+    # Prepare the tensors
+    # --------------------------------------------------------------------------
+    torch_input = create_torch_input(L, in0_num_cores, E, M, K)
+    torch_w0 = create_torch_w0(L, E, K, N)
+    torch_w1 = create_torch_w1(L, E, K, N)
+    torch_w2 = create_torch_w2(L, E, N, K)
+
+    torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
+    tt_w0_w1 = ttnn.from_torch(
+        torch_w0_w1_reordered,
+        dtype=w0_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=w0_w1_mem_config,
+    )
+
+    torch_w2_reordered = prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores)
+    tt_w2 = ttnn.from_torch(
+        torch_w2_reordered, dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=w2_mem_config
+    )
+
+    # --------------------------------------------------------------------------
+    # Run the operation with enable_dram_output=True
+    # --------------------------------------------------------------------------
+    all_accuracy_metrics = {}
+
+    for layer_id in range(L):
+        tt_input = ttnn.from_torch(
+            torch_input[layer_id],
+            dtype=in0_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=input_sharded_mem_config,
+        )
+
+        tt_dram_output = ttnn.experimental.moe_gpt(
+            tt_input,
+            w0_w1_tensor=tt_w0_w1,
+            w2_tensor=tt_w2,
+            output_tensor=tt_input,
+            num_experts=E,
+            layer_id=layer_id,
+            enable_dram_output=True,
+        )
+
+        # Verify DRAM output properties
+        assert tt_dram_output.shape == [E, 1, M, K], f"Expected shape [{E}, 1, {M}, {K}], got {tt_dram_output.shape}"
+        assert tt_dram_output.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {tt_dram_output.layout}"
+
+        # Convert to ROW_MAJOR for comparison (matches unfused code path)
+        tt_dram_output_rm = ttnn.to_layout(tt_dram_output, ttnn.ROW_MAJOR_LAYOUT)
+        tt_to_torch_output = ttnn.to_torch(tt_dram_output_rm)  # (E, 1, M, K)
+        tt_to_torch_output = tt_to_torch_output.squeeze(1)  # (E, M, K)
+
+        # Reference calculation
+        with torch.no_grad():
+            torch_input_ref = torch_input[layer_id, 0, ...]  # (E, M, K)
+            torch_w0_output_ref = torch_input_ref @ torch_w0[layer_id]
+            torch_w1_output_ref = torch_input_ref @ torch_w1[layer_id]
+            torch_intermediate_ref = swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)
+            torch_output_ref = torch_intermediate_ref @ torch_w2[layer_id]
+
+        for expert_id in range(E):
+            torch_layer_output = torch_output_ref[expert_id, :, :]
+            tt_layer_output = tt_to_torch_output[expert_id, :, :]
+            layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
+            all_accuracy_metrics[(layer_id, expert_id)] = layer_metrics
+
+    return all_accuracy_metrics
+
+
+@pytest.mark.parametrize(
     "M, K, N, E, L",
     SHAPE2TIME.keys(),
 )

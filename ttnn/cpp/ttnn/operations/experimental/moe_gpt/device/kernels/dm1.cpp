@@ -11,6 +11,7 @@ void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t enable_dram_output = get_named_compile_time_arg_val("enable_dram_output");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -189,5 +190,47 @@ void kernel_main() {
             cb_reserve_back(cb_w2c_rdy, 1);
             cb_push_back(cb_w2c_rdy, 1);
         }
+    }
+
+    //-------------------------------------------------------------------------
+    // DRAM output write phase
+    //-------------------------------------------------------------------------
+    // After all experts are done, copy output tiles from L1 sharded buffer to
+    // a contiguous interleaved DRAM tensor with shape (E, 1, M, K) in TILE_LAYOUT.
+    // Each core owns tiles_per_core tiles (7 or 8) of the K dimension per expert.
+    if constexpr (enable_dram_output) {
+        constexpr auto dram_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+
+        // Read DRAM output runtime args
+        const auto dram_output_addr = get_arg_val<uint32_t>(argidx++);
+        const auto k_start_tile = get_arg_val<uint32_t>(argidx++);
+
+        // K dimension in tiles (K=2880, 2880/32=90)
+        constexpr uint32_t K_tiles = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
+
+        // tiles_per_core for this core (7 or 8)
+        const uint32_t tiles_per_core = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];
+
+        // Create TensorAccessor for the interleaved DRAM output
+        const auto dram_output_accessor = TensorAccessor(dram_out_args, dram_output_addr, in_tile_size);
+
+        // L1 source: cb_c2s_out base address (same buffer as input, output written in-place)
+        const uint32_t cb_base = get_write_ptr(cb_c2s_out);
+
+        // For each expert, write this core's tiles to the DRAM output tensor
+        for (uint32_t e = 0; e < num_experts; ++e) {
+            for (uint32_t t = 0; t < tiles_per_core; ++t) {
+                // L1 source: expert e's section starts at tile (e * K_tiles),
+                // and this core's valid output is at tiles 0..tiles_per_core-1
+                uint32_t l1_addr = cb_base + (e * K_tiles + t) * in_tile_size;
+
+                // DRAM destination: linear tile index in (E, 1, M, K) tensor
+                // Expert e occupies tiles [e*K_tiles .. (e+1)*K_tiles-1]
+                uint32_t dram_tile_id = e * K_tiles + k_start_tile + t;
+
+                noc_async_write_tile(dram_tile_id, dram_output_accessor, l1_addr);
+            }
+        }
+        noc_async_write_barrier();
     }
 }
