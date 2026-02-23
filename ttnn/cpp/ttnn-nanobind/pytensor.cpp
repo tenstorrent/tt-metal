@@ -191,7 +191,7 @@ struct RowMajorHostBuffer {
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
     // conversion to Host storage after
     // issue #31136: to_torch with mesh_composer=None on device-sharded tensor
-    if (std::holds_alternative<DeviceStorage>(tt_tensor.storage())) {
+    if (is_device_tensor(tt_tensor)) {
         return convert_to_row_major_host_buffer(tt_tensor.cpu(), padded_output);
     }
 
@@ -242,26 +242,17 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         TT_THROW("Unreachable");
     };
 
-    return convert_to_logical(std::visit(
-        tt::stl::overloaded{
-            [](const HostStorage& storage) {
-                std::vector<HostBuffer> buffers;
-                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                TT_FATAL(
-                    buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
-                    "composer "
-                    "to concatenate multi-device shards.",
-                    storage.buffer().shape());
-                return buffers.front();
-            },
-            [&tt_tensor](auto&&) -> HostBuffer {
-                TT_THROW(
-                    "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
-            },
-        },
-        tt_tensor.storage()));
+    TT_FATAL(is_cpu_tensor(tt_tensor), "Tensor with {} cannot be converted to torch", tt_tensor.storage_type());
+    const auto& storage = tt_tensor.host_storage();
+    std::vector<HostBuffer> buffers;
+    storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+    TT_FATAL(
+        buffers.size() == 1,
+        "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
+        "composer "
+        "to concatenate multi-device shards.",
+        storage.buffer().shape());
+    return convert_to_logical(buffers.front());
 }
 
 // Overload that converts a distributed tensor to a RowMajorHostBuffer.
@@ -1310,19 +1301,10 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t {
-                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
-                            return s.mesh_buffer->address();
-                        },
-                        [&](auto&&) -> uint32_t {
-                            TT_THROW(
-                                "{} doesn't support buffer_address method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+                TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
+                const auto& storage = self.device_storage();
+                TT_FATAL(storage.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return storage.mesh_buffer->address();
             },
             R"doc(
             Get the address of the underlying buffer.
