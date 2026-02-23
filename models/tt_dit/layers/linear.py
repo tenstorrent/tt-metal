@@ -53,7 +53,7 @@ class Linear(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
         matmul_config = get_matmul_config(M, K, N, core_grid)
@@ -64,6 +64,7 @@ class Linear(Module):
             config=matmul_config,
             fused_activation=self.fused_activation_fn,
             compute_kernel_config=compute_kernel_config or self.compute_config,
+            dtype=dtype,
         )
 
         return _apply_activation_fn(output, self.activation_fn)
@@ -305,7 +306,7 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
-        return t * ttnn.sigmoid_accurate(1.702 * t)  # quick approx gelu
+        return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)

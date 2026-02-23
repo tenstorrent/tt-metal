@@ -248,7 +248,18 @@ def run_math_unary_test_fixed_val(device, h, w, fill_value, ttnn_function, pcc=0
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_recip(device, h, w):
-    run_math_unary_test_recip(device, h, w, ttnn.reciprocal, pcc=0.999)
+    class reciprocal_golden_wrapper:
+        def __call__(self, input_tensor):
+            return ttnn.reciprocal.golden_function(input_tensor, device=device)
+
+    class reciprocal_wrapper:
+        def __init__(self):
+            self.golden_function = reciprocal_golden_wrapper()
+
+        def __call__(self, input_tensor):
+            return ttnn.reciprocal(input_tensor)
+
+    run_math_unary_test_recip(device, h, w, reciprocal_wrapper(), pcc=0.999)
 
 
 def run_math_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):

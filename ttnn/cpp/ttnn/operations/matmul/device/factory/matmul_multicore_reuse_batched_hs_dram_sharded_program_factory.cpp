@@ -492,7 +492,10 @@ create_program_batch_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_reader_compile_args,
-            .defines = reader_defines});
+            .defines = reader_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+            }});
 
     auto mm_kernel_in1_writer_id = tt_metal::CreateKernel(
         program,
@@ -503,7 +506,12 @@ create_program_batch_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_writer_compile_args,
-            .defines = writer_defines});
+            .defines = writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+            }});
 
     auto mm_kernel_compute_id = tt_metal::CreateKernel(
         program,
@@ -514,7 +522,17 @@ create_program_batch_sharded(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Set runtime args - each core only gets SetRuntimeArgs called ONCE per kernel
     // Following the pattern from the mcast DRAM sharded factory

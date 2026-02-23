@@ -200,6 +200,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 )
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "device_params",
     [

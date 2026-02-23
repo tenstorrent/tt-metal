@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_blackhole, is_blackhole, is_watcher_enabled, torch_random
+from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -58,18 +58,20 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("c", [11])
-@pytest.mark.parametrize("h", [67])
-@pytest.mark.parametrize("w", [77])
+# Test a 1D, 2D, 3D, and 4D tensor
+@pytest.mark.parametrize("input_shape", [(2,), (3, 10), (6, 3, 60), (1, 11, 67, 77)])
 @pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
 # prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
+def test_prod(device, input_shape, dim, keepdim, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
+    rank = len(input_shape)
+    if dim is not None and (dim < -rank or dim > rank - 1):
+        pytest.skip("Dimension not applicable for input shape")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     # tensor.size, which is called by torch.prod, doesn't accept dim=None,
     # so we need to handle it separately.
     # See https://github.com/pytorch/pytorch/issues/127882
@@ -84,7 +86,12 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
         torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=dtype
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=dtype,
+        pad_value=1.0,
     )
 
     output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -581,8 +588,6 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     ],
 )
 def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
-    if is_watcher_enabled():
-        pytest.skip("Skipping due to failure with watcher enabled, github issue #37097")
     run_maxpool(device, input_shape, kernel_size, kernel_size, (0, 0), (1, 1))
     run_reduce_sum_h(device, 1, 32, 32, -2)
 
