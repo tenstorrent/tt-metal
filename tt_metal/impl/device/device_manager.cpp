@@ -693,10 +693,11 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     }
 
     // Order matters
-    initializers_[DispatchKernelInitializer::key]->teardown();
-    initializers_[FabricFirmwareInitializer::key]->teardown();
-    initializers_[ProfilerInitializer::key]->teardown();
-    initializers_[CommandQueueInitializer::key]->teardown();
+    initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+    initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+    initializers_[ProfilerInitializer::key]->teardown(init_done_);
+    initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+    TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
 
     initializers_[DispatchKernelInitializer::key]->post_teardown();
     initializers_[FabricFirmwareInitializer::key]->post_teardown();
@@ -723,6 +724,7 @@ DeviceManager::~DeviceManager() {
     }
     this->devices_.clear();
     init_done_.clear();
+    TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
     initializers_.clear();
     descriptor_.reset();
 }
