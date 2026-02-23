@@ -44,6 +44,12 @@ enum class WaitMode : uint8_t {
 
 // Standalone init/uninit wrappers for manual lifecycle control.
 // Prefer using the unified untilize() with InitUninitMode enums instead.
+//
+// NOTE: When using standalone init/uninit,
+// the caller must NOT pass UnpackReconfigure or UnpackAndPackReconfigure to the
+// untilize() reconfig_mode — use NoReconfigure or PackReconfigure only.
+// If you need unpacker reconfiguration, call unpacker and packer reconfiguration manually
+// before untilize_init(), or use the unified untilize() which handles it automatically.
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 ALWI void untilize_init();
 
@@ -117,7 +123,7 @@ template <
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
+        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib
