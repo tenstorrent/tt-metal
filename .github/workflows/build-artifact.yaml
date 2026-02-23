@@ -451,7 +451,7 @@ jobs:
       - name: 📦 Restore CPM source cache
         uses: actions/cache@v4
         with:
-          path: /work/.cpmcache
+          path: .cpmcache
           key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
           restore-keys: |
             cpm-
