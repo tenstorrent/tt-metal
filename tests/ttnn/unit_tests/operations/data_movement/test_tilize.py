@@ -10,6 +10,8 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
 
+from tests.ttnn.utils_for_testing import assert_equal
+
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
 
@@ -129,4 +131,17 @@ def test_tilize_nd_sharded(
     ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=use_multicore)
     output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
 
-    assert torch.equal(input_torch_tensor, output_torch_tensor)
+    assert_equal(input_torch_tensor, output_torch_tensor)
+
+
+@pytest.mark.parametrize("input_shape", [(32, 15936), (160, 5210112)])
+def test_run_tilize_large_row_input(device, input_shape):
+    orig_shape = input_shape
+
+    input = torch.randn(orig_shape, dtype=torch.bfloat16)
+    halos = ttnn.from_torch(input, dtype=ttnn.bfloat16, device=device)
+    halos_tile = ttnn.to_layout(halos, layout=ttnn.TILE_LAYOUT)
+    halos_rm = ttnn.to_layout(halos_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    output = ttnn.to_torch(halos_rm)
+    assert_equal(input, output)
