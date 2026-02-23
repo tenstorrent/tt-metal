@@ -1376,7 +1376,7 @@ FORCE_INLINE
 #endif
 
 template <typename EdmChannelWorkerIFs>
-FORCE_INLINE void establish_edm_connection(
+__attribute__((optimize("Os"))) FORCE_INLINE void establish_edm_connection(
     EdmChannelWorkerIFs& local_sender_channel_worker_interface, uint32_t stream_id) {
     local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
 }
@@ -2021,7 +2021,7 @@ FORCE_INLINE bool run_receiver_channel_step(
 template<
     typename OutboundReceiverChannelPointers,
     typename RemoteEthReceiverChannels>
-FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
+__attribute__((optimize("Os"))) FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
     OutboundReceiverChannelPointers& outbound_to_receiver_channel_pointers,
     RemoteEthReceiverChannels& remote_receiver_channels) {
     static_assert(OutboundReceiverChannelPointers::N == RemoteEthReceiverChannels::num_channels);
@@ -2482,6 +2482,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
+__attribute__((optimize("Os")))
 void
 #ifdef FABRIC_2D
     __attribute__((noinline))
@@ -2530,7 +2531,7 @@ constexpr size_t get_credits_init_val() {
 // SFINAE helper to initialize a single sender channel worker interface
 // Only enabled when I < NUM_SENDER_CHANNELS
 template <size_t I, size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
-FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init_sender_channel_worker_interface(
+__attribute__((optimize("Os"))) FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init_sender_channel_worker_interface(
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
@@ -2556,6 +2557,7 @@ typename std::enable_if<(I >= NUM_SENDER_CHANNELS), void>::type init_sender_chan
 }
 
 template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
+__attribute__((optimize("Os")))
 void
 #ifdef FABRIC_2D
     __attribute__((noinline))
@@ -2598,7 +2600,7 @@ void
 
 // copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
 template <size_t NUM_SENDER_CHANNELS>
-void populate_local_sender_channel_free_slots_stream_id_ordered_map(
+__attribute__((optimize("Os"))) void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
@@ -2613,7 +2615,7 @@ constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 // loops naturally. Adding a termination check here would be unsafe — if one ERISC
 // broke out of the sync early and skipped its scratch register write, the other
 // could spin forever waiting for a value that never arrives.
-void wait_for_other_local_erisc() {
+__attribute__((optimize("Os"))) void wait_for_other_local_erisc() {
     constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
     constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
     if constexpr (IS_TEARDOWN_MASTER()) {
@@ -2632,7 +2634,7 @@ void wait_for_other_local_erisc() {
     }
 }
 
-FORCE_INLINE void teardown(
+__attribute__((optimize("Os"))) void teardown(
     volatile tt_l1_ptr tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status_ptr,
     WriteTransactionIdTracker<
@@ -2699,7 +2701,7 @@ FORCE_INLINE void teardown(
     }
 }
 
-void initialize_state_for_txq1_active_mode() {
+__attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode() {
     eth_enable_packet_mode(receiver_txq_id);
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
@@ -2707,7 +2709,7 @@ void initialize_state_for_txq1_active_mode() {
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
 }
-void initialize_state_for_txq1_active_mode_sender_side() {
+__attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sender_side() {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
         reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
@@ -2716,7 +2718,7 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 
 // Initialize fabric telemetry structure in L1
 // This must be called early in kernel_main to ensure telemetry is properly initialized
-void initialize_fabric_telemetry() {
+__attribute__((optimize("Os"))) void initialize_fabric_telemetry() {
     // Get pointer to telemetry structure in L1
     volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
         reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);

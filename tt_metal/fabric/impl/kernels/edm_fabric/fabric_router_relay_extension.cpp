@@ -139,7 +139,7 @@ constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
 template <uint8_t NUM_BUFFERS>
-void wait_for_static_connection_to_ready(
+__attribute__((optimize("Os"))) void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore) &&
@@ -151,7 +151,7 @@ void wait_for_static_connection_to_ready(
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
-FORCE_INLINE void wait_for_mux_endpoint_ready(
+__attribute__((optimize("Os"))) FORCE_INLINE void wait_for_mux_endpoint_ready(
     uint8_t mux_noc_x,
     uint8_t mux_noc_y,
     size_t mux_status_address,
@@ -170,7 +170,7 @@ FORCE_INLINE void wait_for_mux_endpoint_ready(
 }
 
 template <uint8_t NUM_BUFFERS>
-void setup_channel(
+__attribute__((optimize("Os"))) void setup_channel(
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>* channel_ptr,
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
