@@ -1018,16 +1018,10 @@ def test_demo_text(
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
                 seed=sampling_params["seed"] if "seed" in sampling_params else None,
-                frequency_penalty=sampling_params["frequency_penalty"]
-                if "frequency_penalty" in sampling_params
-                else 0.0,
-                presence_penalty=sampling_params["presence_penalty"] if "presence_penalty" in sampling_params else 0.0,
-                repetition_penalty=sampling_params["repetition_penalty"]
-                if "repetition_penalty" in sampling_params
-                else 1.0,
-                enable_log_probs=sampling_params["enable_log_probs"]
-                if "enable_log_probs" in sampling_params
-                else False,
+                frequency_penalty=1.2,
+                presence_penalty=1.2,
+                repetition_penalty=1.5,
+                enable_log_probs=False,
             )
             if model[0]._supports_on_device_sampling
             else None
