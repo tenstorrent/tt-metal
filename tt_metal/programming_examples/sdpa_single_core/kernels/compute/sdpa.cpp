@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
@@ -730,28 +731,6 @@ void recip_tile_first_column(uint32_t idst) {
 #endif
 
 /**
- * in_cb = 1 / in_cb (column 0 only)
- */
-void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
-    copy_tile_to_dst_init_short(in_cb);
-    recip_tile_init();
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(in_cb);
-
-    cb_wait_front(in_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
-        copy_tile(in_cb, i, 0);
-        MATH((recip_tile_first_column(0)));
-        pack_tile(0, in_cb);
-        release_dst();
-    }
-    cb_pop_front(in_cb, num_tiles);
-    cb_reserve_back(in_cb, num_tiles);
-    cb_push_back(in_cb, num_tiles);
-}
-
-/**
  * Per-row streaming normalization for one subblock row (SBH tiles of sum, SBH*head_dim_t tiles of output).
  * For each sub-row tile:
  *   1. matmul_reduce: sum_tile × col_identity → scratch (collapses partial row sums to column 0)
@@ -865,7 +844,6 @@ void sdpa_inner_loop_step(
     static_assert(Sq_chunk_t % sbh == 0, "Sq_chunk_t must be divisible by subblock_h");
 
     uint32_t pushed_rows = 0;
-    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "sdpa_inner_loop_step");
     uint32_t q_wait_tiles = q_subblock_num_tiles;
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
@@ -1236,28 +1214,43 @@ void kernel_main() {
         uint32_t alias_prev_out = cb_out_A, alias_cur_out = cb_out_B;
 
         for (uint32_t k_chunk = 0; k_chunk < num_k_chunks; k_chunk++) {
+            DeviceZoneScopedN("sdpa_inner_loop_step");
             bool is_last = (k_chunk == num_k_chunks - 1);
 
-            sdpa_inner_loop_step<
-                false,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                Sv_chunk_t,
-                head_dim_t,
-                cb_q_in,
-                cb_kt_in,
-                cb_v_in,
-                cb_qkt_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                scale_fp32,
-                subblock_h,
-                cb_qkt_row_A,
-                cb_qkt_row_B,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_normalized_out>(
-                alias_prev_max, alias_cur_max, alias_prev_sum, alias_cur_sum, alias_prev_out, alias_cur_out, is_last);
+            auto call_step = [&](auto profiling_tag) {
+                sdpa_inner_loop_step<
+                    decltype(profiling_tag)::value,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    Sv_chunk_t,
+                    head_dim_t,
+                    cb_q_in,
+                    cb_kt_in,
+                    cb_v_in,
+                    cb_qkt_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    scale_fp32,
+                    subblock_h,
+                    cb_qkt_row_A,
+                    cb_qkt_row_B,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_normalized_out>(
+                    alias_prev_max,
+                    alias_cur_max,
+                    alias_prev_sum,
+                    alias_cur_sum,
+                    alias_prev_out,
+                    alias_cur_out,
+                    is_last);
+            };
+
+            // Uncomment this (or follow the pattern above) to profile specific iterations of the inner loop.
+            // if (is_last)
+            //     call_step(std::true_type{});
+            // else
+            call_step(std::false_type{});
 
             // Post-iteration cleanup: pop prev buffers
             cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
