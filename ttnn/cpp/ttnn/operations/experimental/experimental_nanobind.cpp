@@ -118,7 +118,7 @@ void py_module(nb::module_& mod) {
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     reshape::detail::bind_view(mod);
-    scaleout::detail::bind_blitz_decode_pipeline(mod);
+    distributed::detail::bind_blitz_decode_pipeline(mod);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
 

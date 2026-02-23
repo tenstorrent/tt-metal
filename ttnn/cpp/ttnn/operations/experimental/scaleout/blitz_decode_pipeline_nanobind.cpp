@@ -9,12 +9,12 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
-#include "tt_metal/experimental/scaleout/blitz_decode_pipeline.hpp"
+#include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
 
-namespace ttnn::operations::experimental::scaleout::detail {
+namespace ttnn::operations::experimental::distributed::detail {
 
 void bind_blitz_decode_pipeline(nb::module_& mod) {
-    using tt::tt_metal::experimental::scaleout::BlitzDecodePipelineStage;
+    using tt::tt_metal::experimental::distributed::BlitzDecodePipelineStage;
 
     nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage")
         .def_ro("stage_index", &BlitzDecodePipelineStage::stage_index)
@@ -31,7 +31,7 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
     mod.def(
         "generate_blitz_decode_pipeline",
         [](tt::tt_metal::distributed::MeshDevice& mesh_device) {
-            return tt::tt_metal::experimental::scaleout::generate_blitz_decode_pipeline(mesh_device);
+            return tt::tt_metal::experimental::distributed::generate_blitz_decode_pipeline(mesh_device);
         },
         nb::arg("mesh_device"),
         R"doc(
@@ -45,4 +45,4 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
         )doc");
 }
 
-}  // namespace ttnn::operations::experimental::scaleout::detail
+}  // namespace ttnn::operations::experimental::distributed::detail
