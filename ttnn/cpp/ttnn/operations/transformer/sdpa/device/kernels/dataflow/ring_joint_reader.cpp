@@ -129,10 +129,7 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
-    uint32_t rind_index = fused_op_receiver.ring_index;
-    // uint32_t tmp = global_q_end - global_q_start;
-    // DPRINT << "GLOBAL Q RANGE: " << global_q_start << " - " << global_q_end << ENDL();
-    // DPRINT << "NUM LOCAL Q CHUNKS " << num_local_q_chunks << " K CHUNKS " << num_local_k_chunks << ENDL();
+    uint32_t ring_index = fused_op_receiver.ring_index;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
@@ -140,21 +137,15 @@ void kernel_main() {
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
-        // const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : (ring_iter == 0 &&
-        // is_causal ? tmp : num_local_k_chunks); DPRINT << "NUM KV CHUNKS: " << num_kv_chunks << ENDL(); DPRINT << "IS
-        // CAUSAL" << (is_causal ? "TRUE" : "FALSE") << ENDL(); DPRINT << "ORIGINAL CHUNKS " << num_local_k_chunks <<
-        // ENDL();
 
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
         const bool ring_iter_does_work =
-            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
+            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && ring_index < ring_id);
 
         uint32_t KV_chunks_processed_in_iter = 0;
-        DPRINT << "RING ITER: " << ring_id << ENDL();
         if (!ring_iter_does_work) {
-            DPRINT << "SKIPPING WORK FOR: " << rind_index << ENDL();
             continue;
         }
 
@@ -163,9 +154,6 @@ void kernel_main() {
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
-            const uint32_t q_low_idx = q_chunk * Sq_chunk_t;
-            const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
-            // DPRINT << "Q CHUNK " << q_chunk << ENDL();
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
@@ -191,10 +179,7 @@ void kernel_main() {
                 false /*transpose*/
             );
 
-            uint32_t k_high =
-                (is_causal && ring_iter == 0 ? (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t : num_kv_chunks);
-
-            for (uint32_t k_chunk = 0; k_chunk < k_high; ++k_chunk) {
+            for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
                  * If this is the last ring ID, we will also read from joint KV.
@@ -224,9 +209,6 @@ void kernel_main() {
                     if (ring_iter == 0) {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                        DPRINT << "Q CHUNK: " << q_chunk << " K: [" << nb << ", " << nq << ", "
-                               << local_k_row_start_tile << ", " << local_k_row_start_tile + Sk_chunk_t << "]"
-                               << ENDL();
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
@@ -312,7 +294,5 @@ void kernel_main() {
             cb_push_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_v_in, k_chunk_tiles);
         }
-        DPRINT << "READER STEP: " << ring_iter << ENDL();
     }
-    DPRINT << "READER EXIT FOR: " << rind_index << ENDL();
 }
