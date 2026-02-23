@@ -663,9 +663,11 @@ class MLA1D(AbstractModule):
         qkv_a_out_core_grid = ttnn.CoreGrid(y=1, x=8)
 
         # Program config for qkv_a
-        qkv_a_in0_block_w = 4  # 896 // 7 // 32 = 4
-        qkv_a_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        qkv_a_per_core_N = 9  # 2304 // 8 // 32 = 9
+        qkv_a_num_in0_cores = qkv_a_in0_core_grid.x * qkv_a_in0_core_grid.y
+        qkv_a_num_out_cores = qkv_a_out_core_grid.x * qkv_a_out_core_grid.y
+        qkv_a_in0_block_w = hidden_size_per_device // qkv_a_num_in0_cores // tile_size  # 896 // 7 // 32 = 4
+        qkv_a_per_core_M = USERS_PER_ROW // tile_size  # 32 // 32 = 1
+        qkv_a_per_core_N = qkv_a_n_padded // qkv_a_num_out_cores // tile_size  # 2304 // 8 // 32 = 9
 
         qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=qkv_a_in0_block_w,
@@ -706,9 +708,11 @@ class MLA1D(AbstractModule):
         wq_b_out_core_grid = ttnn.CoreGrid(y=2, x=8)
 
         # Program config for wq_b
-        wq_b_in0_block_w = 3  # 1536 // 16 // 32 = 3
-        wq_b_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wq_b_per_core_N = 6  # 3072 // 16 // 32 = 6
+        wq_b_num_in0_cores = wq_b_in0_core_grid.x * wq_b_in0_core_grid.y
+        wq_b_num_out_cores = wq_b_out_core_grid.x * wq_b_out_core_grid.y
+        wq_b_in0_block_w = q_lora_rank // wq_b_num_in0_cores // tile_size  # 1536 // 16 // 32 = 3
+        wq_b_per_core_M = USERS_PER_ROW // tile_size  # 32 // 32 = 1
+        wq_b_per_core_N = wq_b_n_padded // wq_b_num_out_cores // tile_size  # 3072 // 16 // 32 = 6
 
         wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=wq_b_in0_block_w,
@@ -750,9 +754,9 @@ class MLA1D(AbstractModule):
         wkv_b1_n = kv_lora_rank  # 512
 
         # Program config for wkv_b1 (batched DRAM sharded)
-        wkv_b1_in0_block_w = 4  # 128 // 32 = 4
-        wkv_b1_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wkv_b1_per_core_N = 16  # 512 // 32 = 16
+        wkv_b1_in0_block_w = wkv_b1_k // tile_size  # 128 // 32 = 4
+        wkv_b1_per_core_M = wkv_b1_m // tile_size  # 32 // 32 = 1
+        wkv_b1_per_core_N = wkv_b1_n // tile_size  # 512 // 32 = 16
 
         wkv_b1_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
             in0_block_w=wkv_b1_in0_block_w,
@@ -808,9 +812,9 @@ class MLA1D(AbstractModule):
         wkv_b2_tile_h = 32  # Tiny tile for wkv_b2
 
         # Program config for wkv_b2 (batched DRAM sharded)
-        wkv_b2_in0_block_w = 16  # 512 // 32 = 16
-        wkv_b2_per_core_M = 1  # m // tile_h = 4 // 4 = 1
-        wkv_b2_per_core_N = 4  # 128 // 32 = 4
+        wkv_b2_in0_block_w = wkv_b2_k // tile_size  # 512 // 32 = 16
+        wkv_b2_per_core_M = wkv_b2_m // wkv_b2_tile_h  # 32 // 32 = 1
+        wkv_b2_per_core_N = wkv_b2_n // tile_size  # 128 // 32 = 4
 
         wkv_b2_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
             in0_block_w=wkv_b2_in0_block_w,
@@ -861,15 +865,18 @@ class MLA1D(AbstractModule):
         # wo: m=32, k=16384, n=896 (pads to 1152)
         # in0_core_grid=(8,1), out_core_grid=(6,1), WIDTH sharding
         # =====================================================================
+        wo_k = num_heads * v_head_dim  # 16384
         wo_n = dim // mesh_device.shape[1]  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
         wo_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
         wo_out_core_grid = ttnn.CoreGrid(y=2, x=6)
 
         # Program config for wo
-        wo_in0_block_w = 32  # 16384 // 8 // 32 = 64
-        wo_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wo_per_core_N = 3  # 1152 // 6 // 32 = 6
+        wo_num_in0_cores = wo_in0_core_grid.x * wo_in0_core_grid.y
+        wo_num_out_cores = wo_out_core_grid.x * wo_out_core_grid.y
+        wo_in0_block_w = wo_k // wo_num_in0_cores // tile_size  # 16384 // 16 // 32 = 32
+        wo_per_core_M = USERS_PER_ROW // tile_size  # 32 // 32 = 1
+        wo_per_core_N = wo_n_padded // wo_num_out_cores // tile_size  # 1152 // 12 // 32 = 3
 
         wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=wo_in0_block_w // 2,
