@@ -51,7 +51,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
 
 template <ckernel::ApproximationMode APPROX_MODE>
 inline void div_init() {
-    _init_sfpu_reciprocal_<false>();
+    _init_sfpu_reciprocal_<ckernel::ApproximationMode::Precise>();
 }
 
 }  // namespace ckernel::sfpu

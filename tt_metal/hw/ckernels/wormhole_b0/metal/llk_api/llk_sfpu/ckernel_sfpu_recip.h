@@ -15,13 +15,13 @@ namespace ckernel {
 namespace sfpu {
 
 template <
-    ckernel::ApproximationMode APPROX_MODE = false,
+    ckernel::ApproximationMode APPROX_MODE = ckernel::ApproximationMode::Precise,
     bool save_reg = true /* Unused. Enough registers available. */>
 sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
-    return _sfpu_reciprocal_<APPROX_MODE ? 0 : 2>(in);
+    return _sfpu_reciprocal_ < APPROX_MODE != ckernel::ApproximationMode::Precise ? 0 : 2 > (in);
 }
 
-template <ckernel::ApproximationMode APPROX_MODE = false>
+template <ckernel::ApproximationMode APPROX_MODE = ckernel::ApproximationMode::Precise>
 sfpi_inline void sfpu_reciprocal_init() {
     _init_sfpu_reciprocal_<APPROX_MODE>();
 }

@@ -350,7 +350,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
 
-        v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
+        v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<ckernel::ApproximationMode::Precise>(t0); }
         v_endif;
 
         sfpi::vFloat t1 = t0 * t0;
@@ -526,7 +526,7 @@ void init_hyperbolic_trig() {
 template <ckernel::ApproximationMode APPROX_MODE>
 void atan_init() {
     // Initialisation for use of sfpu_reciprocal<false>.
-    sfpu_reciprocal_init<false>();
+    sfpu_reciprocal_init<ckernel::ApproximationMode::Precise>();
 }
 
 }  // namespace ckernel::sfpu

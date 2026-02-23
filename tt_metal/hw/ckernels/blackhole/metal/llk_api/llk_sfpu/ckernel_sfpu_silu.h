@@ -30,7 +30,7 @@ inline void calculate_silu() {
 template <ckernel::ApproximationMode APPROX_MODE>
 inline void silu_init() {
     // calculate_silu uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must use non-approx sigmoid_init
-    sigmoid_init<false>();
+    sigmoid_init<ckernel::ApproximationMode::Precise>();
 }
 
 }  // namespace ckernel::sfpu

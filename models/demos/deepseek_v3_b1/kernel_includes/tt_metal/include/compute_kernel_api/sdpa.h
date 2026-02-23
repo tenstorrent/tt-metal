@@ -182,7 +182,7 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat curr_max_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    ckernel::sfpu::_init_sfpu_reciprocal_<ckernel::ApproximationMode::Precise>();
     sfpi::vFloat exp_top_4 = ckernel::sfpu::
         _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
             sub_top_4, scale_bf16);
@@ -215,7 +215,7 @@ inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
     sfpi::vFloat sum_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     // Init after to avoid trampling cached registers before we use them
     // TODO: Putting the prev regs in the upper regs lets us init ahead of time
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    ckernel::sfpu::_init_sfpu_reciprocal_<ckernel::ApproximationMode::Precise>();
     sfpi::vFloat recip_top_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_top_4);
     sfpi::vFloat recip_bottom_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_bottom_4);
 

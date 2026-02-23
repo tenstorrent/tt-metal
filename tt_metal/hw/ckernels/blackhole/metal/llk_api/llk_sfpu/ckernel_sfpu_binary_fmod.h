@@ -142,7 +142,7 @@ inline void fmod_int32_init() {
 
 template <ckernel::ApproximationMode APPROX_MODE>
 inline void fmod_binary_init() {
-    _init_sfpu_reciprocal_<false>();
+    _init_sfpu_reciprocal_<ckernel::ApproximationMode::Precise>();
 }
 
 }  // namespace ckernel::sfpu
