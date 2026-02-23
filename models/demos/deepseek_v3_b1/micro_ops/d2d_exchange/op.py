@@ -20,6 +20,7 @@ and forwards it downstream, optionally using fabric connections for cross-device
 
 import ttnn
 
+
 class MeshWrapper:
     def __init__(self, mesh_device=None, mesh_id=None):
         self.mesh_device = mesh_device
