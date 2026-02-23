@@ -5,7 +5,12 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
+#ifdef SRS_FUSE_OP_SIGNALER
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
+#ifdef FUSE_AG
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -159,6 +164,18 @@ void kernel_main() {
 #endif
 #endif
 
+#ifdef SRS_FUSE_OP_SIGNALER
+    // OpSignaler runtime args start after output addresses and optional FUSE_AG args
+    uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+#ifdef FUSE_AG
+    srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
+#endif
+    OpSignaler srs_fuse_signaler;
+    if constexpr (is_output_writer) {
+        srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
+    }
+#endif
+
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
     *(in0_valid_semaphore_addr_ptr) = VALID;
@@ -207,6 +224,7 @@ void kernel_main() {
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
+                    DPRINT << "This should never happen" << ENDL();
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
@@ -344,6 +362,12 @@ void kernel_main() {
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
             defer_write = defer_write && !is_injector_core;
+#ifdef SRS_FUSE_OP_SIGNALER
+            // Disable deferred writes so all cores sync at the same point (end of each output block).
+            // Deferred writes stagger sync points across cores, which deadlocks the OpSignaler.
+            defer_write = false;
+            DPRINT << "setting defer_write to false" << ENDL();
+#endif
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
@@ -370,6 +394,10 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
+#ifdef SRS_FUSE_OP_SIGNALER
+                    noc_async_write_barrier();
+                    srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+#endif
                 }
             }
         }

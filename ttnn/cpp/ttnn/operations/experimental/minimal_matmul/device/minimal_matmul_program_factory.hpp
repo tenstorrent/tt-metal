@@ -36,6 +36,18 @@ struct MinimalMatmulProgramFactory {
         std::vector<Tensor>& tensor_return_value);
 };
 
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const MinimalMatmulConfig>& config,
+    const Tensor& output_tensor,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler);
+
 // Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
 // Unlike minimal_matmul_factory_helper, this function takes a number of output tensors as an argument (N_chunks) and
 // a vector of output tensors.
@@ -50,8 +62,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
     uint32_t N_chunks,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt);
+
+// Common helper for override_runtime_arguments - used by both minimal_matmul and minimal_matmul_split
+void override_runtime_arguments_common(
+    MinimalMatmulProgramFactory::cached_program_t& cached_program,
+    uint32_t in0_addr,
+    uint32_t in1_addr,
+    uint32_t in2_addr,
+    uint32_t in3_addr,
+    const std::vector<uint32_t>& output_addrs);
 
 }  // namespace ttnn::experimental::prim
