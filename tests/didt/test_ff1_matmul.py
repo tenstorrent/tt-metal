@@ -7,7 +7,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_mesh_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -16,7 +16,7 @@ MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
 MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
-class FF1Test(OpTestBaseMulti):
+class FF1Test(OpTestBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

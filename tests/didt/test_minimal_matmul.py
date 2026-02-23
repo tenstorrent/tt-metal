@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_mesh_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -15,7 +15,7 @@ MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
 MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
-class MinimalMatmulWorstCaseTest(OpTestBaseMulti):
+class MinimalMatmulWorstCaseTest(OpTestBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

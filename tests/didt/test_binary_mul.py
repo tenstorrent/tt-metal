@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_mesh_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -17,7 +17,7 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 # This test was created to measure power consumption of BH chip on non-matmul workload.
 # The underlying workload is binary eltwise multiplication.
-class BinaryMulTest(OpTestBaseMulti):
+class BinaryMulTest(OpTestBase):
     def __init__(self, *args, gelu=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.gelu = gelu

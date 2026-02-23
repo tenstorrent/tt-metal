@@ -18,7 +18,7 @@ class OpParameter:
         self.layout = layout
 
 
-class OpTestBaseMulti:
+class OpTestBase:
     def __init__(
         self,
         mesh_device,
