@@ -25,17 +25,17 @@ inline void calculate_cube_root() {
         sfpi::vFloat a = sfpi::dst_reg[0];
         sfpi::vFloat x = sfpi::abs(a);
 
-        // Paper wants i = 0x54a223b4 - i/3.
+        // Paper wants i = 0x548c2b4b - i/3.
         // Due to lack of integer division and lack of fp32 to u32 cast, we
         // compute this using two instructions: SFPMAD and SFPSHFT.
         //
-        // First, we compute (0x54a223b4 - i/3) in fp32, but we also need to
+        // First, we compute (0x548c2b4b - i/3) in fp32, but we also need to
         // add 2^23 to shift the result into the mantissa bits for extraction
-        // as integer.  This only works if (0x54a223b4 - i/3)*k < 2^23, so we
+        // as integer.  This only works if (0x548c2b4b - i/3)*k < 2^23, so we
         // divide everything by 2^8.
         //
-        // f = (0x54a223b4 - i * 1.0/3.0) / 256.0 + 2^23
-        //   = (0x54a223b4/256.0 - i * 1.0/3.0/256.0) + 2^23
+        // f = (0x548c2b4b - i * 1.0/3.0) / 256.0 + 2^23
+        //   = (0x548c2b4b/256.0 - i * 1.0/3.0/256.0) + 2^23
 
         sfpi::vFloat f = sfpi::int32_to_float(sfpi::reinterpret<sfpi::vInt>(x), 0);
 
