@@ -813,14 +813,8 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
-
-    // Only clear if control plane exists; do not call get_control_plane() or
-    // we may lazily create one during teardown (e.g. after devices are
-    // closed), which can trigger topology mapper failures.
-    std::lock_guard<std::mutex> lock(control_plane_mutex_);
-    if (control_plane_) {
-        control_plane_->clear_fabric_context();
-    }
+    // Stub control plane for mock devices will make this a no-op
+    this->get_control_plane().clear_fabric_context();
 }
 
 void MetalContext::set_fabric_config(
