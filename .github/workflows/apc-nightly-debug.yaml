@@ -19,6 +19,14 @@ on:
         default: false
         type: boolean
         description: "Enable watcher"
+      run-wormhole-tests:
+        default: true
+        type: boolean
+        description: "Run Wormhole (APC) tests"
+      run-blackhole-tests:
+        default: true
+        type: boolean
+        description: "Run Blackhole tests"
 
 permissions:
   actions: read
@@ -46,6 +54,7 @@ jobs:
   apc-nightly-debug:
     name: apc nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: determine-watcher
+    if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests }}
     strategy:
       matrix:
         platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
@@ -63,6 +72,7 @@ jobs:
   blackhole-nightly-debug:
     name: blackhole nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: determine-watcher
+    if: ${{ github.event_name == 'schedule' || inputs.run-blackhole-tests }}
     strategy:
       matrix:
         platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
