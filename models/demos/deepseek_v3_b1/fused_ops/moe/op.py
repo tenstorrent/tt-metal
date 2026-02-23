@@ -64,18 +64,10 @@ class _MoeRoutedExpertContext:
     tile_1x32_size: int
     num_tiles_k: int
 
-    # CB indices (26 total)
+    # CB indices (shared between routed and non-routed paths)
     rmsnorm_output_cb: int
-    gate_mm_input_cb: int
-    gate_mm_weights_cb: int
-    gate_mm_output_cb: int
-    gate_input_cb: int
-    gate_bias_cb: int
-    gate_indices_cb: int
-    gate_output_cb: int
-    gate_output_indices_cb: int
+    gate_mm_input_cb: int  # Also used as mcast destination for gate_proj/up_proj input
     gate_proj_cb_in1: int
-    gate_proj_cb_index: int
     gate_proj_cb_out: int
     up_proj_cb_in1: int
     up_proj_cb_mm_out: int
@@ -86,25 +78,18 @@ class _MoeRoutedExpertContext:
     down_proj_mcast_dst_cb: int
     down_proj_cb_in1: int
     down_proj_cb_out: int
-    mul_cb_scalar_src: int
-    mul_cb_scalar: int
     add_cb_in0: int
     add_cb_in1: int
     add_cb_out: int
 
-    # Semaphore IDs
+    # Semaphore IDs (shared)
     mcast_data_sender_semaphore_id: int
     mcast_data_receiver_semaphore_id: int
     gather_noc0_receiver_semaphore_id: int
     gather_noc1_receiver_semaphore_id: int
-    expert_scale_mcast_sender_semaphore_id: int
-    expert_scale_mcast_receiver_semaphore_id: int
 
-    # Setup result dicts (from helper functions)
+    # Setup result dicts (shared)
     rmsnorm_mcast_params: dict
-    gate_mm_params: dict
-    gate_mm_gather_params: dict
-    gate_params: dict
     gate_proj_params: dict
     up_proj_params: dict
     mul_params: dict
@@ -113,23 +98,12 @@ class _MoeRoutedExpertContext:
     down_proj_params: dict
     add_params: dict
 
-    # Index mcast params
-    index_mcast_sender_semaphore_id: int
-    index_mcast_receiver_semaphore_id: int
-    index_mcast_num_pages: int
-    index_mcast_data_size_bytes: int
-
-    # Expert scale mcast params
-    expert_scale_mcast_num_pages: int
-    expert_scale_mcast_data_size_bytes: int
-
     # Derived values
     mul_num_tiles: int
 
-    # Pre-built CB descriptors (tensor-backed, built in _setup_dimensions)
+    # Pre-built CB descriptors (shared)
     rmsnorm_output_cb_descriptor: Any
     gate_mm_input_cb_descriptor: Any
-    gate_proj_cb_index_descriptor: Any
 
     # Residual mcast (input → shared expert matmul cores)
     residual_mcast_src_cb: int
@@ -151,8 +125,45 @@ class _MoeRoutedExpertContext:
     vc_core_values: list
     sender_idx_core_values: list
 
-    # Testing flag
-    use_hardcoded_expert_index: bool
+    # --- Routing-only fields (unused when enable_routing=False) ---
+    enable_routing: bool = True
+
+    # Routing CB indices
+    gate_mm_weights_cb: int = 0
+    gate_mm_output_cb: int = 0
+    gate_input_cb: int = 0
+    gate_bias_cb: int = 0
+    gate_indices_cb: int = 0
+    gate_output_cb: int = 0
+    gate_output_indices_cb: int = 0
+    gate_proj_cb_index: int = 0
+    mul_cb_scalar_src: int = 0
+    mul_cb_scalar: int = 0
+
+    # Routing semaphore IDs
+    expert_scale_mcast_sender_semaphore_id: int = 0
+    expert_scale_mcast_receiver_semaphore_id: int = 0
+
+    # Routing setup result dicts
+    gate_mm_params: dict = None
+    gate_mm_gather_params: dict = None
+    gate_params: dict = None
+
+    # Index mcast params (routing only)
+    index_mcast_sender_semaphore_id: int = 0
+    index_mcast_receiver_semaphore_id: int = 0
+    index_mcast_num_pages: int = 0
+    index_mcast_data_size_bytes: int = 0
+
+    # Expert scale mcast params (routing only)
+    expert_scale_mcast_num_pages: int = 0
+    expert_scale_mcast_data_size_bytes: int = 0
+
+    # Routing CB descriptor
+    gate_proj_cb_index_descriptor: Any = None
+
+    # Testing flag (routing only)
+    use_hardcoded_expert_index: bool = False
 
     # ReduceToOne
     enable_reduce_to_one: bool = False
@@ -644,17 +655,20 @@ class MoeRoutedExpertOp:
     @staticmethod
     def _setup_dimensions(
         shared_residual_mcast_src_tensor,
-        gate_mm_weights_tensor,
-        gate_bias_tensor,
-        gate_indices_tensor,
-        gate_output_scores_tensor,
-        gate_output_indices_tensor,
-        gate_proj_weights_tensor,
-        up_proj_weights_tensor,
-        down_proj_weights_tensor,
-        final_output_tensor,
-        rmsnorm_gamma_tensor,
+        # Routing-only tensors (None when enable_routing=False)
+        gate_mm_weights_tensor=None,
+        gate_bias_tensor=None,
+        gate_indices_tensor=None,
+        gate_output_scores_tensor=None,
+        gate_output_indices_tensor=None,
+        # Expert weights (always required)
+        gate_proj_weights_tensor=None,
+        up_proj_weights_tensor=None,
+        down_proj_weights_tensor=None,
+        final_output_tensor=None,
+        rmsnorm_gamma_tensor=None,
         epsilon=1e-6,
+        enable_routing=True,
         use_hardcoded_expert_index=False,
         reduce_intermediate_tensors=None,
         reduce_output_tensor=None,
@@ -712,16 +726,8 @@ class MoeRoutedExpertOp:
         # CB indices
         # ==================================================================
         rmsnorm_output_cb = 0
-        gate_mm_input_cb = 1
-        gate_mm_weights_cb = 2
-        gate_mm_output_cb = 3
-        gate_input_cb = 4
-        gate_bias_cb = 5
-        gate_indices_cb = 6
-        gate_output_cb = 7
-        gate_output_indices_cb = 8
+        gate_mm_input_cb = 1  # Also used as mcast destination for gate_proj/up_proj input
         gate_proj_cb_in1 = 9
-        gate_proj_cb_index = 10
         gate_proj_cb_out = 11
         up_proj_cb_in1 = gate_proj_cb_in1  # Shared CB: same buffer, kernel resets pointers between uses
         up_proj_cb_mm_out = 12
@@ -732,11 +738,21 @@ class MoeRoutedExpertOp:
         down_proj_mcast_dst_cb = 17
         down_proj_cb_in1 = 18
         down_proj_cb_out = 19
-        mul_cb_scalar_src = 20
-        mul_cb_scalar = 21
         add_cb_in0 = 22
         add_cb_in1 = 23
         add_cb_out = 24
+
+        # Routing-only CB indices (0 when routing disabled)
+        gate_mm_weights_cb = 2 if enable_routing else 0
+        gate_mm_output_cb = 3 if enable_routing else 0
+        gate_input_cb = 4 if enable_routing else 0
+        gate_bias_cb = 5 if enable_routing else 0
+        gate_indices_cb = 6 if enable_routing else 0
+        gate_output_cb = 7 if enable_routing else 0
+        gate_output_indices_cb = 8 if enable_routing else 0
+        gate_proj_cb_index = 10 if enable_routing else 0
+        mul_cb_scalar_src = 20 if enable_routing else 0
+        mul_cb_scalar = 21 if enable_routing else 0
         # ReduceToOne CBs (for multi-device reduce)
         # Must be after shared expert CBs (25-38) to avoid conflicts
         reduce_local_cb = add_cb_out  # Local data CB (same as add_cb_out for fusion)
@@ -833,78 +849,80 @@ class MoeRoutedExpertOp:
         )
         rmsnorm_mcast_params["src_num_pages"] = rmsnorm_num_tiles
 
-        # ==================================================================
-        # Gate MM (SRAM Matmul)
-        # ==================================================================
-        gate_mm_params = MoeOp.setup_sram_matmul(
-            in0_cb=gate_mm_input_cb,
-            in1_cb=gate_mm_weights_cb,
-            out_cb=gate_mm_output_cb,
-            weights_tensor=gate_mm_weights_tensor,
-            k_num_tiles=num_tiles_k,
-            fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
-        )
-
         # CB descriptor placeholder — overridden by _overlap_cbs_with_sdpa_buffer
         gate_mm_input_cb_descriptor = None
 
         # ==================================================================
-        # Gate MM Gather
+        # Routing-only setup (gate MM, gate gather, gate, index/expert_scale mcast)
         # ==================================================================
-        gate_mm_output_tile = ttnn.Tile([1, 32])
-        gate_mm_output_tile_size = gate_mm_output_tile.get_tile_size(data_format)
-        gate_mm_gather_data_size_bytes = gate_mm_params["out_w"] * gate_mm_output_tile_size
-
-        gate_mm_gather_params = MoeOp.setup_gather(
-            device=device,
-            receiver_core=sender_core,
-            sender_core_ranges=gate_mm_params["core_grid"],
-            num_senders=gate_mm_params["num_cores"],
-            data_size_bytes_per_sender=gate_mm_gather_data_size_bytes,
-            src_cb=gate_mm_params["out_cb"],
-            src_num_pages=gate_mm_params["out_w"],
-            dst_cb=gate_input_cb,
-            noc0_receiver_semaphore_id=gather_noc0_receiver_semaphore_id,
-            noc1_receiver_semaphore_id=gather_noc1_receiver_semaphore_id,
-            row_major=False,
-            use_explicit_sender_index=False,
-            dst_num_pages=1,  # gate_input is [16,16] with tile 16x16 → 1 page
-        )
-
-        # ==================================================================
-        # Gate
-        # ==================================================================
-        gate_params = MoeRoutedExpertOp.setup_gate(
-            input_cb=gate_input_cb,
-            bias_cb=gate_bias_cb,
-            indices_cb=gate_indices_cb,
-            output_cb=gate_output_cb,
-            output_indices_cb=gate_output_indices_cb,
-            bias_tensor=gate_bias_tensor,
-            indices_tensor=gate_indices_tensor,
-            output_scores_tensor=gate_output_scores_tensor,
-            output_indices_tensor=gate_output_indices_tensor,
-            eps=1e-20,
-            scaling_factor=2.5,
-            enable_sigmoid=False,
-        )
-
-        # ==================================================================
-        # Index Mcast — tile info hardcoded (1x16 tile, uint16/bfloat16 = 32 bytes)
-        # CB descriptor overridden by _overlap_cbs_with_sdpa_buffer.
-        # ==================================================================
+        gate_mm_params = None
+        gate_mm_gather_params = None
+        gate_params = None
         gate_proj_cb_index_descriptor = None
-        TILE_1x16 = ttnn.Tile((1, 16))
-        index_tile_size = TILE_1x16.get_tile_size(ttnn.bfloat16)  # 1*16*2 = 32 bytes
-        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        index_mcast_num_pages = 1
-        index_mcast_data_size_bytes = index_tile_size
+        index_mcast_sender_semaphore_id = 0
+        index_mcast_num_pages = 0
+        index_mcast_data_size_bytes = 0
+        expert_scale_mcast_num_pages = 0
+        expert_scale_mcast_data_size_bytes = 0
 
-        # ==================================================================
-        # Expert Scale Mcast — same tile format (1x16, bfloat16, 32 bytes)
-        # ==================================================================
-        expert_scale_mcast_num_pages = 1
-        expert_scale_mcast_data_size_bytes = index_tile_size
+        if enable_routing:
+            # Gate MM (SRAM Matmul)
+            gate_mm_params = MoeOp.setup_sram_matmul(
+                in0_cb=gate_mm_input_cb,
+                in1_cb=gate_mm_weights_cb,
+                out_cb=gate_mm_output_cb,
+                weights_tensor=gate_mm_weights_tensor,
+                k_num_tiles=num_tiles_k,
+                fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
+            )
+
+            # Gate MM Gather
+            gate_mm_output_tile = ttnn.Tile([1, 32])
+            gate_mm_output_tile_size = gate_mm_output_tile.get_tile_size(data_format)
+            gate_mm_gather_data_size_bytes = gate_mm_params["out_w"] * gate_mm_output_tile_size
+
+            gate_mm_gather_params = MoeOp.setup_gather(
+                device=device,
+                receiver_core=sender_core,
+                sender_core_ranges=gate_mm_params["core_grid"],
+                num_senders=gate_mm_params["num_cores"],
+                data_size_bytes_per_sender=gate_mm_gather_data_size_bytes,
+                src_cb=gate_mm_params["out_cb"],
+                src_num_pages=gate_mm_params["out_w"],
+                dst_cb=gate_input_cb,
+                noc0_receiver_semaphore_id=gather_noc0_receiver_semaphore_id,
+                noc1_receiver_semaphore_id=gather_noc1_receiver_semaphore_id,
+                row_major=False,
+                use_explicit_sender_index=False,
+                dst_num_pages=1,  # gate_input is [16,16] with tile 16x16 → 1 page
+            )
+
+            # Gate
+            gate_params = MoeRoutedExpertOp.setup_gate(
+                input_cb=gate_input_cb,
+                bias_cb=gate_bias_cb,
+                indices_cb=gate_indices_cb,
+                output_cb=gate_output_cb,
+                output_indices_cb=gate_output_indices_cb,
+                bias_tensor=gate_bias_tensor,
+                indices_tensor=gate_indices_tensor,
+                output_scores_tensor=gate_output_scores_tensor,
+                output_indices_tensor=gate_output_indices_tensor,
+                eps=1e-20,
+                scaling_factor=2.5,
+                enable_sigmoid=False,
+            )
+
+            # Index Mcast — tile info hardcoded (1x16 tile, uint16/bfloat16 = 32 bytes)
+            TILE_1x16 = ttnn.Tile((1, 16))
+            index_tile_size = TILE_1x16.get_tile_size(ttnn.bfloat16)  # 1*16*2 = 32 bytes
+            index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
+            index_mcast_num_pages = 1
+            index_mcast_data_size_bytes = index_tile_size
+
+            # Expert Scale Mcast — same tile format (1x16, bfloat16, 32 bytes)
+            expert_scale_mcast_num_pages = 1
+            expert_scale_mcast_data_size_bytes = index_tile_size
 
         # ==================================================================
         # DRAM Streaming Matmul: gate_proj
@@ -933,7 +951,7 @@ class MoeRoutedExpertOp:
         )
 
         # ==================================================================
-        # Eltwise Mul: silu(gate_proj) * up_proj * expert_scale
+        # Eltwise Mul: silu(gate_proj) * up_proj [* expert_scale if routing]
         # ==================================================================
         mul_params = MoeRoutedExpertOp.setup_eltwise_mul(
             cb_in0_index=mul_cb_in0,
@@ -1181,18 +1199,10 @@ class MoeRoutedExpertOp:
             data_format=data_format,
             tile_1x32_size=tile_1x32_size,
             num_tiles_k=num_tiles_k,
-            # CB indices
+            # CB indices (shared)
             rmsnorm_output_cb=rmsnorm_output_cb,
             gate_mm_input_cb=gate_mm_input_cb,
-            gate_mm_weights_cb=gate_mm_weights_cb,
-            gate_mm_output_cb=gate_mm_output_cb,
-            gate_input_cb=gate_input_cb,
-            gate_bias_cb=gate_bias_cb,
-            gate_indices_cb=gate_indices_cb,
-            gate_output_cb=gate_output_cb,
-            gate_output_indices_cb=gate_output_indices_cb,
             gate_proj_cb_in1=gate_proj_cb_in1,
-            gate_proj_cb_index=gate_proj_cb_index,
             gate_proj_cb_out=gate_proj_cb_out,
             up_proj_cb_in1=up_proj_cb_in1,
             up_proj_cb_mm_out=up_proj_cb_mm_out,
@@ -1203,23 +1213,16 @@ class MoeRoutedExpertOp:
             down_proj_mcast_dst_cb=down_proj_mcast_dst_cb,
             down_proj_cb_in1=down_proj_cb_in1,
             down_proj_cb_out=down_proj_cb_out,
-            mul_cb_scalar_src=mul_cb_scalar_src,
-            mul_cb_scalar=mul_cb_scalar,
             add_cb_in0=add_cb_in0,
             add_cb_in1=add_cb_in1,
             add_cb_out=add_cb_out,
-            # Semaphore IDs
+            # Semaphore IDs (shared)
             mcast_data_sender_semaphore_id=mcast_data_sender_semaphore_id,
             mcast_data_receiver_semaphore_id=mcast_data_receiver_semaphore_id,
             gather_noc0_receiver_semaphore_id=gather_noc0_receiver_semaphore_id,
             gather_noc1_receiver_semaphore_id=gather_noc1_receiver_semaphore_id,
-            expert_scale_mcast_sender_semaphore_id=expert_scale_mcast_sender_semaphore_id,
-            expert_scale_mcast_receiver_semaphore_id=expert_scale_mcast_receiver_semaphore_id,
-            # Setup result dicts
+            # Setup result dicts (shared)
             rmsnorm_mcast_params=rmsnorm_mcast_params,
-            gate_mm_params=gate_mm_params,
-            gate_mm_gather_params=gate_mm_gather_params,
-            gate_params=gate_params,
             gate_proj_params=gate_proj_params,
             up_proj_params=up_proj_params,
             mul_params=mul_params,
@@ -1227,20 +1230,11 @@ class MoeRoutedExpertOp:
             down_proj_mcast_params=down_proj_mcast_params,
             down_proj_params=down_proj_params,
             add_params=add_params,
-            # Index mcast
-            index_mcast_sender_semaphore_id=index_mcast_sender_semaphore_id,
-            index_mcast_receiver_semaphore_id=index_mcast_receiver_semaphore_id,
-            index_mcast_num_pages=index_mcast_num_pages,
-            index_mcast_data_size_bytes=index_mcast_data_size_bytes,
-            # Expert scale mcast
-            expert_scale_mcast_num_pages=expert_scale_mcast_num_pages,
-            expert_scale_mcast_data_size_bytes=expert_scale_mcast_data_size_bytes,
             # Derived
             mul_num_tiles=mul_num_tiles,
-            # Pre-built CB descriptors
+            # Pre-built CB descriptors (shared)
             rmsnorm_output_cb_descriptor=rmsnorm_output_cb_descriptor,
             gate_mm_input_cb_descriptor=gate_mm_input_cb_descriptor,
-            gate_proj_cb_index_descriptor=gate_proj_cb_index_descriptor,
             # Residual mcast
             residual_mcast_src_cb=residual_mcast_src_cb,
             residual_mcast_dst_cb=residual_mcast_dst_cb,
@@ -1258,7 +1252,37 @@ class MoeRoutedExpertOp:
             bank_id_core_values=bank_id_core_values,
             vc_core_values=vc_core_values,
             sender_idx_core_values=sender_idx_core_values,
-            # Testing flag
+            # --- Routing-only fields ---
+            enable_routing=enable_routing,
+            # Routing CB indices
+            gate_mm_weights_cb=gate_mm_weights_cb,
+            gate_mm_output_cb=gate_mm_output_cb,
+            gate_input_cb=gate_input_cb,
+            gate_bias_cb=gate_bias_cb,
+            gate_indices_cb=gate_indices_cb,
+            gate_output_cb=gate_output_cb,
+            gate_output_indices_cb=gate_output_indices_cb,
+            gate_proj_cb_index=gate_proj_cb_index,
+            mul_cb_scalar_src=mul_cb_scalar_src,
+            mul_cb_scalar=mul_cb_scalar,
+            # Routing semaphore IDs
+            expert_scale_mcast_sender_semaphore_id=expert_scale_mcast_sender_semaphore_id,
+            expert_scale_mcast_receiver_semaphore_id=expert_scale_mcast_receiver_semaphore_id,
+            # Routing setup result dicts
+            gate_mm_params=gate_mm_params,
+            gate_mm_gather_params=gate_mm_gather_params,
+            gate_params=gate_params,
+            # Index mcast (routing only)
+            index_mcast_sender_semaphore_id=index_mcast_sender_semaphore_id,
+            index_mcast_receiver_semaphore_id=index_mcast_receiver_semaphore_id,
+            index_mcast_num_pages=index_mcast_num_pages,
+            index_mcast_data_size_bytes=index_mcast_data_size_bytes,
+            # Expert scale mcast (routing only)
+            expert_scale_mcast_num_pages=expert_scale_mcast_num_pages,
+            expert_scale_mcast_data_size_bytes=expert_scale_mcast_data_size_bytes,
+            # Routing CB descriptor
+            gate_proj_cb_index_descriptor=gate_proj_cb_index_descriptor,
+            # Testing flag (routing only)
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             # ReduceToOne
             enable_reduce_to_one=enable_reduce_to_one,
@@ -1294,27 +1318,33 @@ class MoeRoutedExpertOp:
             # RMSNorm (setup_sharded_buffer for gamma on sender core)
             ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
             ("rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
-            # Gate matmul reader
-            ("gate_mm_in0", ctx.gate_mm_params["in0_cb"]),
-            ("gate_mm_in1", ctx.gate_mm_params["in1_cb"]),
-            ("gate_mm_k_num_tiles", ctx.gate_mm_params["k_num_tiles"]),
-            ("gate_mm_out_w", ctx.gate_mm_params["out_w"]),
-            # Gate gather receiver (MoeGather: receiver on NCRISC)
-            ("gather_noc0_num_senders", ctx.gate_mm_gather_params["noc0_num_senders"]),
-            ("gather_noc1_num_senders", ctx.gate_mm_gather_params["noc1_num_senders"]),
-            ("gather_noc0_receiver_semaphore_id", ctx.gate_mm_gather_params["noc0_receiver_semaphore_id"]),
-            ("gather_noc1_receiver_semaphore_id", ctx.gate_mm_gather_params["noc1_receiver_semaphore_id"]),
-            ("gather_dst_cb", ctx.gate_mm_gather_params["dst_cb"]),
-            ("gather_dst_num_pages", ctx.gate_mm_gather_params["dst_num_pages"]),
-            # Gate reader
-            ("gate_input_cb", ctx.gate_params["input_cb"]),
-            ("gate_bias_cb", ctx.gate_params["bias_cb"]),
-            ("gate_input_indices_cb", ctx.gate_params["indices_cb"]),
-            # Index mcast receiver
+            # Gate matmul reader (routing only — 0 when disabled)
+            ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
+            ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
+            ("gate_mm_k_num_tiles", ctx.gate_mm_params["k_num_tiles"] if ctx.enable_routing else 0),
+            ("gate_mm_out_w", ctx.gate_mm_params["out_w"] if ctx.enable_routing else 0),
+            # Gate gather receiver (routing only)
+            ("gather_noc0_num_senders", ctx.gate_mm_gather_params["noc0_num_senders"] if ctx.enable_routing else 0),
+            ("gather_noc1_num_senders", ctx.gate_mm_gather_params["noc1_num_senders"] if ctx.enable_routing else 0),
+            (
+                "gather_noc0_receiver_semaphore_id",
+                ctx.gate_mm_gather_params["noc0_receiver_semaphore_id"] if ctx.enable_routing else 0,
+            ),
+            (
+                "gather_noc1_receiver_semaphore_id",
+                ctx.gate_mm_gather_params["noc1_receiver_semaphore_id"] if ctx.enable_routing else 0,
+            ),
+            ("gather_dst_cb", ctx.gate_mm_gather_params["dst_cb"] if ctx.enable_routing else 0),
+            ("gather_dst_num_pages", ctx.gate_mm_gather_params["dst_num_pages"] if ctx.enable_routing else 0),
+            # Gate reader (routing only)
+            ("gate_input_cb", ctx.gate_params["input_cb"] if ctx.enable_routing else 0),
+            ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
+            ("gate_input_indices_cb", ctx.gate_params["indices_cb"] if ctx.enable_routing else 0),
+            # Index mcast receiver (routing only)
             ("index_mcast_receiver_semaphore", ctx.index_mcast_receiver_semaphore_id),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
             ("index_mcast_num_pages", ctx.index_mcast_num_pages),
-            # Expert scale mcast receiver
+            # Expert scale mcast receiver (routing only)
             ("expert_scale_mcast_receiver_semaphore", ctx.expert_scale_mcast_receiver_semaphore_id),
             ("mul_cb_scalar_src", ctx.mul_cb_scalar_src),
             ("expert_scale_mcast_num_pages", ctx.expert_scale_mcast_num_pages),
@@ -1348,7 +1378,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_in1_block_size_bytes", ctx.gate_proj_params["in1_block_size_bytes"]),
             ("gate_proj_out_num_tiles", ctx.gate_proj_params["out_num_tiles"]),
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
-            ("gate_proj_index_offset", mesh_chip_id),
+            ("gate_proj_index_offset", mesh_chip_id if ctx.enable_routing else 0),
             # up_proj DRAM matmul reader
             ("up_proj_cb_in1", ctx.up_proj_cb_in1),
             ("up_proj_in1_tensor_addr", ctx.up_proj_params["in1_tensor_addr"]),
@@ -1361,7 +1391,7 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_cb_index", ctx.gate_proj_cb_index),
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
-            ("up_proj_index_offset", mesh_chip_id),
+            ("up_proj_index_offset", mesh_chip_id if ctx.enable_routing else 0),
             ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
             # down_proj DRAM matmul reader
             ("down_proj_cb_in1", ctx.down_proj_cb_in1),
@@ -1376,9 +1406,11 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_cb_index", ctx.gate_proj_cb_index),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
-            ("down_proj_index_offset", mesh_chip_id),
-            # Testing flag
+            ("down_proj_index_offset", mesh_chip_id if ctx.enable_routing else 0),
+            # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
+            # Routing flag
+            ("enable_routing", 1 if ctx.enable_routing else 0),
             # ReduceToOne reader args (CB indices + common RT arg base)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_received_cb_r1", ctx.reduce_received_cb_r1),
@@ -1408,36 +1440,45 @@ class MoeRoutedExpertOp:
             ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
             ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
             ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
-            # Gate gather sender (MoeGather: sender on BRISC)
-            ("gather_dest_noc_x", ctx.gate_mm_gather_params["dest_noc_x"]),
-            ("gather_dest_noc_y", ctx.gate_mm_gather_params["dest_noc_y"]),
-            ("gather_data_size_bytes", ctx.gate_mm_gather_params["data_size_bytes"]),
-            ("gather_receiver_semaphore_id", ctx.gate_mm_gather_params["receiver_semaphore_id"]),
-            ("gather_src_cb", ctx.gate_mm_gather_params["src_cb"]),
-            ("gather_src_num_pages", ctx.gate_mm_gather_params["src_num_pages"]),
-            ("gather_sender_grid_start_x", ctx.gate_mm_gather_params["sender_grid_start_x"]),
-            ("gather_sender_grid_start_y", ctx.gate_mm_gather_params["sender_grid_start_y"]),
-            ("gather_sender_grid_end_x", ctx.gate_mm_gather_params["sender_grid_end_x"]),
-            ("gather_sender_grid_end_y", ctx.gate_mm_gather_params["sender_grid_end_y"]),
-            ("gather_row_major", ctx.gate_mm_gather_params["row_major"]),
-            ("gather_receiver_data_addr", ctx.gate_mm_gather_params["receiver_data_addr"]),
-            # Gate writer
-            ("gate_output_cb", ctx.gate_params["output_cb"]),
-            ("gate_output_indices_cb", ctx.gate_params["output_indices_cb"]),
-            # Index mcast sender
+            # Gate gather sender (routing only — 0 when disabled)
+            ("gather_dest_noc_x", ctx.gate_mm_gather_params["dest_noc_x"] if ctx.enable_routing else 0),
+            ("gather_dest_noc_y", ctx.gate_mm_gather_params["dest_noc_y"] if ctx.enable_routing else 0),
+            ("gather_data_size_bytes", ctx.gate_mm_gather_params["data_size_bytes"] if ctx.enable_routing else 0),
+            (
+                "gather_receiver_semaphore_id",
+                ctx.gate_mm_gather_params["receiver_semaphore_id"] if ctx.enable_routing else 0,
+            ),
+            ("gather_src_cb", ctx.gate_mm_gather_params["src_cb"] if ctx.enable_routing else 0),
+            ("gather_src_num_pages", ctx.gate_mm_gather_params["src_num_pages"] if ctx.enable_routing else 0),
+            (
+                "gather_sender_grid_start_x",
+                ctx.gate_mm_gather_params["sender_grid_start_x"] if ctx.enable_routing else 0,
+            ),
+            (
+                "gather_sender_grid_start_y",
+                ctx.gate_mm_gather_params["sender_grid_start_y"] if ctx.enable_routing else 0,
+            ),
+            ("gather_sender_grid_end_x", ctx.gate_mm_gather_params["sender_grid_end_x"] if ctx.enable_routing else 0),
+            ("gather_sender_grid_end_y", ctx.gate_mm_gather_params["sender_grid_end_y"] if ctx.enable_routing else 0),
+            ("gather_row_major", ctx.gate_mm_gather_params["row_major"] if ctx.enable_routing else 0),
+            ("gather_receiver_data_addr", ctx.gate_mm_gather_params["receiver_data_addr"] if ctx.enable_routing else 0),
+            # Gate writer (routing only)
+            ("gate_output_cb", ctx.gate_params["output_cb"] if ctx.enable_routing else 0),
+            ("gate_output_indices_cb", ctx.gate_params["output_indices_cb"] if ctx.enable_routing else 0),
+            # Index mcast sender (routing only)
             ("index_mcast_sender_semaphore", ctx.index_mcast_sender_semaphore_id),
             ("index_mcast_receiver_semaphore", ctx.index_mcast_receiver_semaphore_id),
             ("index_mcast_data_size_bytes", ctx.index_mcast_data_size_bytes),
             ("index_mcast_num_pages", ctx.index_mcast_num_pages),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
-            # Expert scale mcast sender
+            # Expert scale mcast sender (routing only)
             ("expert_scale_mcast_sender_semaphore", ctx.expert_scale_mcast_sender_semaphore_id),
             ("expert_scale_mcast_receiver_semaphore", ctx.expert_scale_mcast_receiver_semaphore_id),
             ("expert_scale_mcast_data_size_bytes", ctx.expert_scale_mcast_data_size_bytes),
             ("expert_scale_mcast_num_pages", ctx.expert_scale_mcast_num_pages),
             ("mul_cb_scalar_src", ctx.mul_cb_scalar_src),
             ("mul_cb_scalar", ctx.mul_cb_scalar),
-            ("mul_scalar_index_offset", mesh_chip_id),
+            ("mul_scalar_index_offset", mesh_chip_id if ctx.enable_routing else 0),
             # Mul writer
             ("mul_cb_out", ctx.mul_cb_out),
             ("mul_num_tiles", ctx.mul_num_tiles),
@@ -1466,6 +1507,8 @@ class MoeRoutedExpertOp:
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Eltwise add CB (needed by output mcast sender for get_write_ptr)
             ("add_cb_in1", ctx.add_cb_in1),
+            # Routing flag
+            ("enable_routing", 1 if ctx.enable_routing else 0),
             # ReduceToOne writer args (CB indices + RT arg bases)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
@@ -1482,24 +1525,24 @@ class MoeRoutedExpertOp:
             ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
             ("rmsnorm_rsqrt_fast_approx", 0),
             ("rmsnorm_trisc_common_rt_arg_base", 0),
-            # Gate matmul compute
-            ("gate_mm_in0", ctx.gate_mm_params["in0_cb"]),
-            ("gate_mm_in1", ctx.gate_mm_params["in1_cb"]),
-            ("gate_mm_out", ctx.gate_mm_params["out_cb"]),
-            ("gate_mm_k_num_tiles", ctx.gate_mm_params["k_num_tiles"]),
-            ("gate_mm_out_w", ctx.gate_mm_params["out_w"]),
-            ("gate_mm_fused_activation", ctx.gate_mm_params["fused_activation"]),
-            # Gate compute
-            ("gate_input_cb", ctx.gate_params["input_cb"]),
-            ("gate_bias_cb", ctx.gate_params["bias_cb"]),
-            ("gate_input_indices_cb", ctx.gate_params["indices_cb"]),
-            ("gate_output_cb", ctx.gate_params["output_cb"]),
-            ("gate_output_indices_cb", ctx.gate_params["output_indices_cb"]),
-            ("gate_eps", ctx.gate_params["eps"]),
-            ("gate_scaling_factor", ctx.gate_params["scaling_factor"]),
-            ("gate_enable_sigmoid", ctx.gate_params["enable_sigmoid"]),
+            # Gate matmul compute (routing only — 0 when disabled)
+            ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
+            ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
+            ("gate_mm_out", ctx.gate_mm_params["out_cb"] if ctx.enable_routing else 0),
+            ("gate_mm_k_num_tiles", ctx.gate_mm_params["k_num_tiles"] if ctx.enable_routing else 0),
+            ("gate_mm_out_w", ctx.gate_mm_params["out_w"] if ctx.enable_routing else 0),
+            ("gate_mm_fused_activation", ctx.gate_mm_params["fused_activation"] if ctx.enable_routing else 0),
+            # Gate compute (routing only)
+            ("gate_input_cb", ctx.gate_params["input_cb"] if ctx.enable_routing else 0),
+            ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
+            ("gate_input_indices_cb", ctx.gate_params["indices_cb"] if ctx.enable_routing else 0),
+            ("gate_output_cb", ctx.gate_params["output_cb"] if ctx.enable_routing else 0),
+            ("gate_output_indices_cb", ctx.gate_params["output_indices_cb"] if ctx.enable_routing else 0),
+            ("gate_eps", ctx.gate_params["eps"] if ctx.enable_routing else 0),
+            ("gate_scaling_factor", ctx.gate_params["scaling_factor"] if ctx.enable_routing else 0),
+            ("gate_enable_sigmoid", ctx.gate_params["enable_sigmoid"] if ctx.enable_routing else 0),
             # gate_proj compute
-            ("gate_proj_cb_in0", ctx.gate_mm_params["in0_cb"]),
+            ("gate_proj_cb_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else ctx.gate_mm_input_cb),
             ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
             ("gate_proj_cb_out", ctx.gate_proj_cb_out),
             ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
@@ -1510,7 +1553,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_fuse_silu", 1),
             ("gate_proj_fp32_dest_acc_en", 1),
             # up_proj compute
-            ("up_proj_cb_in0", ctx.gate_mm_params["in0_cb"]),
+            ("up_proj_cb_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else ctx.gate_mm_input_cb),
             ("up_proj_cb_in1", ctx.up_proj_cb_in1),
             ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
@@ -1539,8 +1582,10 @@ class MoeRoutedExpertOp:
             ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
             ("down_proj_fuse_silu", 0),
             ("down_proj_fp32_dest_acc_en", 1),
-            # Testing flag
+            # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
+            # Routing flag
+            ("enable_routing", 1 if ctx.enable_routing else 0),
             # Eltwise add compute
             ("add_cb_in0", ctx.add_cb_in0),
             ("add_cb_in1", ctx.add_cb_in1),
@@ -1566,25 +1611,45 @@ class MoeRoutedExpertOp:
     @staticmethod
     def _build_cb_descriptors(ctx):
         """Build circular buffer descriptors for routed expert."""
-        return [
+        descriptors = [
             ctx.rmsnorm_output_cb_descriptor,
             ctx.gate_mm_input_cb_descriptor,
-            ctx.gate_mm_params["weights_cb_descriptor"],
-            ctx.gate_mm_params["output_cb_descriptor"],
-            ctx.gate_params["input_cb_descriptor"],
-            ctx.gate_params["bias_cb_descriptor"],
-            ctx.gate_params["indices_cb_descriptor"],
-            ctx.gate_params["output_cb_descriptor"],
-            ctx.gate_params["output_indices_cb_descriptor"],
+        ]
+
+        # Routing-only CB descriptors (gate_mm, gate, gate_proj_cb_index, mul_scalar)
+        if ctx.enable_routing:
+            descriptors += [
+                ctx.gate_mm_params["weights_cb_descriptor"],
+                ctx.gate_mm_params["output_cb_descriptor"],
+                ctx.gate_params["input_cb_descriptor"],
+                ctx.gate_params["bias_cb_descriptor"],
+                ctx.gate_params["indices_cb_descriptor"],
+                ctx.gate_params["output_cb_descriptor"],
+                ctx.gate_params["output_indices_cb_descriptor"],
+            ]
+
+        descriptors += [
             ctx.gate_proj_params["cb_in1_descriptor"],  # Shared by gate_proj and up_proj
-            ctx.gate_proj_cb_index_descriptor,
+        ]
+
+        if ctx.enable_routing:
+            descriptors.append(ctx.gate_proj_cb_index_descriptor)
+
+        descriptors += [
             ctx.gate_proj_params["cb_out_descriptor"],
             ctx.up_proj_params["cb_out_descriptor"],
             ctx.mul_params["cb_in0_descriptor"],
             ctx.mul_params["cb_in1_descriptor"],
             ctx.mul_params["cb_out_descriptor"],
-            ctx.mul_params["cb_scalar_src_descriptor"],
-            ctx.mul_params["cb_scalar_descriptor"],
+        ]
+
+        if ctx.enable_routing:
+            descriptors += [
+                ctx.mul_params["cb_scalar_src_descriptor"],
+                ctx.mul_params["cb_scalar_descriptor"],
+            ]
+
+        descriptors += [
             ctx.down_proj_gather_params["dst_cb_descriptor"],
             ctx.down_proj_mcast_params["dst_cb_descriptor"],
             ctx.down_proj_params["cb_in1_descriptor"],
@@ -1596,6 +1661,8 @@ class MoeRoutedExpertOp:
             ctx.residual_mcast_params["dst_cb_descriptor"],
             ctx.rmsnorm_gamma_cb_descriptor,
         ]
+
+        return descriptors
 
     @staticmethod
     def _build_core_descriptors(ctx):
@@ -1615,7 +1682,7 @@ class MoeRoutedExpertOp:
             ),
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_gate_mm_core",
-                core_range=ctx.gate_mm_params["core_grid"],
+                core_range=ctx.gate_mm_params["core_grid"] if ctx.enable_routing else ttnn.CoreRangeSet([]),
                 value=1,
                 other_value=0,
             ),
@@ -2876,64 +2943,66 @@ class MoeOp:
         routed_ctx.gate_mm_input_cb_descriptor = cb1_desc
         kv_offset += cb1_total_size
 
-        # CB 3: gate_mm_output (total_size=64, page_size=64, tile=1x32, bfloat16)
-        cb3_cb_id = routed_ctx.gate_mm_output_cb
-        cb3_total_size = 64
-        cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb3_cb_id,
-            kv_buf,
-            address_offset=kv_offset,
-            total_size=cb3_total_size,
-        )
-        cb3_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb3_cb_id,
-            data_format=ttnn.bfloat16,
-            page_size=64,
-            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
-        )
-        cb3_desc.format_descriptors = [cb3_fmt]
-        routed_ctx.gate_mm_params["output_cb_descriptor"] = cb3_desc
-        kv_offset += cb3_total_size
+        # Routing-only CBs (gate_mm_output, gate_input, expert_index)
+        if routed_ctx.enable_routing:
+            # CB 3: gate_mm_output (total_size=64, page_size=64, tile=1x32, bfloat16)
+            cb3_cb_id = routed_ctx.gate_mm_output_cb
+            cb3_total_size = 64
+            cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb3_cb_id,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=cb3_total_size,
+            )
+            cb3_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb3_cb_id,
+                data_format=ttnn.bfloat16,
+                page_size=64,
+                tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+            )
+            cb3_desc.format_descriptors = [cb3_fmt]
+            routed_ctx.gate_mm_params["output_cb_descriptor"] = cb3_desc
+            kv_offset += cb3_total_size
 
-        # CB 4: gate_input (total_size=512, page_size=512, tile=16x16, bfloat16)
-        cb4_offset = kv_offset
-        cb4_cb_id = routed_ctx.gate_input_cb
-        cb4_total_size = 512
-        cb4_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb4_cb_id,
-            kv_buf,
-            address_offset=kv_offset,
-            total_size=cb4_total_size,
-        )
-        cb4_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb4_cb_id,
-            data_format=ttnn.bfloat16,
-            page_size=512,
-            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
-        )
-        cb4_desc.format_descriptors = [cb4_fmt]
-        routed_ctx.gate_params["input_cb_descriptor"] = cb4_desc
-        kv_offset += cb4_total_size
-        routed_ctx.gate_mm_gather_params["receiver_data_addr"] = kv_addr + cb4_offset
+            # CB 4: gate_input (total_size=512, page_size=512, tile=16x16, bfloat16)
+            cb4_offset = kv_offset
+            cb4_cb_id = routed_ctx.gate_input_cb
+            cb4_total_size = 512
+            cb4_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb4_cb_id,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=cb4_total_size,
+            )
+            cb4_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb4_cb_id,
+                data_format=ttnn.bfloat16,
+                page_size=512,
+                tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
+            )
+            cb4_desc.format_descriptors = [cb4_fmt]
+            routed_ctx.gate_params["input_cb_descriptor"] = cb4_desc
+            kv_offset += cb4_total_size
+            routed_ctx.gate_mm_gather_params["receiver_data_addr"] = kv_addr + cb4_offset
 
-        # CB 10: expert_index (total_size=32, page_size=32, tile=1x16, bfloat16)
-        cb10_cb_id = routed_ctx.gate_proj_cb_index
-        cb10_total_size = 32
-        cb10_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb10_cb_id,
-            kv_buf,
-            address_offset=kv_offset,
-            total_size=cb10_total_size,
-        )
-        cb10_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb10_cb_id,
-            data_format=ttnn.bfloat16,
-            page_size=32,
-            tile=ttnn.TileDescriptor(ttnn.Tile([1, 16])),
-        )
-        cb10_desc.format_descriptors = [cb10_fmt]
-        routed_ctx.gate_proj_cb_index_descriptor = cb10_desc
-        kv_offset += cb10_total_size
+            # CB 10: expert_index (total_size=32, page_size=32, tile=1x16, bfloat16)
+            cb10_cb_id = routed_ctx.gate_proj_cb_index
+            cb10_total_size = 32
+            cb10_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb10_cb_id,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=cb10_total_size,
+            )
+            cb10_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb10_cb_id,
+                data_format=ttnn.bfloat16,
+                page_size=32,
+                tile=ttnn.TileDescriptor(ttnn.Tile([1, 16])),
+            )
+            cb10_desc.format_descriptors = [cb10_fmt]
+            routed_ctx.gate_proj_cb_index_descriptor = cb10_desc
+            kv_offset += cb10_total_size
 
         # CB 11: gate_proj_output (aliases CB 14) — hardcoded descriptor
         cb11_offset = kv_offset
@@ -3054,45 +3123,47 @@ class MoeOp:
         routed_ctx.down_proj_params["cb_out_descriptor"] = cb19_desc
         kv_offset += cb19_total_size
 
-        # CB 20: expert_scale (total_size=32, page_size=32, tile=1x16, bfloat16)
-        cb20_cb_id = routed_ctx.mul_cb_scalar_src
-        cb20_total_size = 32
-        cb20_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb20_cb_id,
-            kv_buf,
-            address_offset=kv_offset,
-            total_size=cb20_total_size,
-        )
-        cb20_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb20_cb_id,
-            data_format=ttnn.bfloat16,
-            page_size=32,
-            tile=ttnn.TileDescriptor(ttnn.Tile([1, 16])),
-        )
-        cb20_desc.format_descriptors = [cb20_fmt]
-        routed_ctx.mul_params["cb_scalar_src_descriptor"] = cb20_desc
-        kv_offset += cb20_total_size
+        # Routing-only CBs (expert_scale, scalar working buffer)
+        if routed_ctx.enable_routing:
+            # CB 20: expert_scale (total_size=32, page_size=32, tile=1x16, bfloat16)
+            cb20_cb_id = routed_ctx.mul_cb_scalar_src
+            cb20_total_size = 32
+            cb20_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb20_cb_id,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=cb20_total_size,
+            )
+            cb20_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb20_cb_id,
+                data_format=ttnn.bfloat16,
+                page_size=32,
+                tile=ttnn.TileDescriptor(ttnn.Tile([1, 16])),
+            )
+            cb20_desc.format_descriptors = [cb20_fmt]
+            routed_ctx.mul_params["cb_scalar_src_descriptor"] = cb20_desc
+            kv_offset += cb20_total_size
 
-        # CB 21: scalar working buffer
-        TILE_16x16 = ttnn.Tile((16, 16))
-        tile_16x16_size = TILE_16x16.get_tile_size(ttnn.bfloat16)
-        tile_16x16_desc = ttnn.TileDescriptor(TILE_16x16)
-        scalar_total_size = tile_16x16_size  # 512 B (single 16x16 tile)
-        cb21_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            routed_ctx.mul_cb_scalar,
-            kv_buf,
-            address_offset=kv_offset,
-            total_size=scalar_total_size,
-        )
-        cb21_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=routed_ctx.mul_cb_scalar,
-            data_format=ttnn.bfloat16,
-            page_size=tile_16x16_size,
-            tile=tile_16x16_desc,
-        )
-        cb21_desc.format_descriptors = [cb21_fmt]
-        routed_ctx.mul_params["cb_scalar_descriptor"] = cb21_desc
-        kv_offset += scalar_total_size
+            # CB 21: scalar working buffer
+            TILE_16x16 = ttnn.Tile((16, 16))
+            tile_16x16_size = TILE_16x16.get_tile_size(ttnn.bfloat16)
+            tile_16x16_desc = ttnn.TileDescriptor(TILE_16x16)
+            scalar_total_size = tile_16x16_size  # 512 B (single 16x16 tile)
+            cb21_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.mul_cb_scalar,
+                kv_buf,
+                address_offset=kv_offset,
+                total_size=scalar_total_size,
+            )
+            cb21_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=routed_ctx.mul_cb_scalar,
+                data_format=ttnn.bfloat16,
+                page_size=tile_16x16_size,
+                tile=tile_16x16_desc,
+            )
+            cb21_desc.format_descriptors = [cb21_fmt]
+            routed_ctx.mul_params["cb_scalar_descriptor"] = cb21_desc
+            kv_offset += scalar_total_size
 
         # CB 23: add_cb_in1 (total_size=14336, page_size=1792, tile=32x32, bfloat16)
         cb23_cb_id = routed_ctx.add_cb_in1
@@ -3399,25 +3470,28 @@ class MoeOp:
     @staticmethod
     def op(
         shared_residual_mcast_src_tensor,
-        gate_mm_weights_tensor,
-        gate_bias_tensor,
-        gate_indices_tensor,
-        gate_output_scores_tensor,
-        gate_output_indices_tensor,
-        gate_proj_weights_tensor,
-        up_proj_weights_tensor,
-        down_proj_weights_tensor,
-        final_output_tensor,
+        # Routing-only tensors (None when enable_routing=False)
+        gate_mm_weights_tensor=None,
+        gate_bias_tensor=None,
+        gate_indices_tensor=None,
+        gate_output_scores_tensor=None,
+        gate_output_indices_tensor=None,
+        # Expert weights (always required)
+        gate_proj_weights_tensor=None,
+        up_proj_weights_tensor=None,
+        down_proj_weights_tensor=None,
+        final_output_tensor=None,
         # RMSNorm gamma weights (sender core)
-        rmsnorm_gamma_tensor,
+        rmsnorm_gamma_tensor=None,
         # Shared expert tensors
-        shared_gate_weights_overlapped,
-        shared_up_weights_overlapped,
-        shared_down_weights_tensor,
-        shared_output_tensor,
-        shared_k_parallel,
-        shared_n_parallel,
+        shared_gate_weights_overlapped=None,
+        shared_up_weights_overlapped=None,
+        shared_down_weights_tensor=None,
+        shared_output_tensor=None,
+        shared_k_parallel=None,
+        shared_n_parallel=None,
         epsilon=1e-6,
+        enable_routing=True,
         use_hardcoded_expert_index=False,
         sdpa_kv_cache_buffer=None,
         sdpa_out_interm_buffer=None,
@@ -3431,15 +3505,11 @@ class MoeOp:
         """
         Execute the full fused MoE operation (routed + shared expert).
 
-        Non-weight tensors (gate_input, mcast_output, expert_index/scale, down_proj_gather_output,
-        down_proj_output, fused_add) are no longer accepted — their configuration info is now derived
-        internally from device properties and weight tensor shapes. CB descriptors are set by
-        _overlap_cbs_with_sdpa_buffer.
+        When enable_routing=False, operates as a dense MLP without routing logic
+        (no gate MM, gate gather, gate/TopK, index mcast, expert scale mcast).
 
         Args:
             shared_residual_mcast_src_tensor: Input activation on sender core (provides device, dtype, K)
-            gate_mm_weights_tensor, gate_bias_tensor, gate_indices_tensor: Gate weights
-            gate_output_scores_tensor, gate_output_indices_tensor: Gate output tensors
             gate_proj_weights_tensor, up_proj_weights_tensor, down_proj_weights_tensor: Expert weights
             final_output_tensor: Final output tensor
             rmsnorm_gamma_tensor: RMSNorm gamma weights on sender core
@@ -3448,6 +3518,9 @@ class MoeOp:
             shared_down_weights_tensor: Shared expert down weights
             shared_output_tensor: Shared expert output tensor
             shared_k_parallel, shared_n_parallel: Shared expert parallelism factors
+            enable_routing: If True, run full MoE with routing. If False, run as dense MLP.
+            gate_mm_weights_tensor, gate_bias_tensor, gate_indices_tensor: Gate weights (routing only)
+            gate_output_scores_tensor, gate_output_indices_tensor: Gate output tensors (routing only)
             sdpa_kv_cache_buffer, sdpa_out_interm_buffer: SDPA buffers for CB memory overlap
             num_iterations: Number of iterations to loop inside the kernel (default 1)
             reduce_intermediate_tensors: (Optional) List of 3 intermediate tensors for reduce rounds
@@ -3463,17 +3536,18 @@ class MoeOp:
         # ==================================================================
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
             shared_residual_mcast_src_tensor,
-            gate_mm_weights_tensor,
-            gate_bias_tensor,
-            gate_indices_tensor,
-            gate_output_scores_tensor,
-            gate_output_indices_tensor,
-            gate_proj_weights_tensor,
-            up_proj_weights_tensor,
-            down_proj_weights_tensor,
-            final_output_tensor,
-            rmsnorm_gamma_tensor,
+            gate_mm_weights_tensor=gate_mm_weights_tensor,
+            gate_bias_tensor=gate_bias_tensor,
+            gate_indices_tensor=gate_indices_tensor,
+            gate_output_scores_tensor=gate_output_scores_tensor,
+            gate_output_indices_tensor=gate_output_indices_tensor,
+            gate_proj_weights_tensor=gate_proj_weights_tensor,
+            up_proj_weights_tensor=up_proj_weights_tensor,
+            down_proj_weights_tensor=down_proj_weights_tensor,
+            final_output_tensor=final_output_tensor,
+            rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
             epsilon=epsilon,
+            enable_routing=enable_routing,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             reduce_intermediate_tensors=reduce_intermediate_tensors,
             reduce_output_tensor=reduce_output_tensor,
@@ -3551,10 +3625,9 @@ class MoeOp:
         per_core_descs += shared_per_core
 
         # ==================================================================
-        # Semaphore descriptors (8 unique IDs: 0-7)
-        # Gather sems overlap with mcast receiver sems (different physical cores).
-        # MoE-only mcast receivers (5-7) are separate.
-        # Reduce fabric sems (8+) are added later when enable_reduce_to_one.
+        # Semaphore descriptors
+        # Shared sems (0-4) + routing-only sems (5-7) when enable_routing.
+        # Reduce fabric sems are added later when enable_reduce_to_one.
         # ==================================================================
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(
@@ -3582,32 +3655,41 @@ class MoeOp:
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
-            ttnn.SemaphoreDescriptor(
-                id=MoeOp.EXPERT_SCALE_MCAST_RECEIVER_SEM,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=MoeOp.INDEX_MCAST_RECEIVER_SEM,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
-            ttnn.SemaphoreDescriptor(
-                id=MoeOp.DOWN_PROJ_MCAST_RECEIVER_SEM,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=0,
-            ),
         ]
+
+        # Routing-only semaphores (expert scale, index mcast, down_proj mcast)
+        if enable_routing:
+            semaphore_descriptors += [
+                ttnn.SemaphoreDescriptor(
+                    id=MoeOp.EXPERT_SCALE_MCAST_RECEIVER_SEM,
+                    core_ranges=routed_ctx.full_device_grid,
+                    initial_value=0,
+                ),
+                ttnn.SemaphoreDescriptor(
+                    id=MoeOp.INDEX_MCAST_RECEIVER_SEM,
+                    core_ranges=routed_ctx.full_device_grid,
+                    initial_value=0,
+                ),
+                ttnn.SemaphoreDescriptor(
+                    id=MoeOp.DOWN_PROJ_MCAST_RECEIVER_SEM,
+                    core_ranges=routed_ctx.full_device_grid,
+                    initial_value=0,
+                ),
+            ]
 
         # ==================================================================
         # IO tensors
         # ==================================================================
-        io_tensors = [
-            gate_mm_weights_tensor,
-            gate_bias_tensor,
-            gate_indices_tensor,
-            gate_output_scores_tensor,
-            gate_output_indices_tensor,
+        io_tensors = []
+        if enable_routing:
+            io_tensors += [
+                gate_mm_weights_tensor,
+                gate_bias_tensor,
+                gate_indices_tensor,
+                gate_output_scores_tensor,
+                gate_output_indices_tensor,
+            ]
+        io_tensors += [
             gate_proj_weights_tensor,
             up_proj_weights_tensor,
             down_proj_weights_tensor,
@@ -3904,6 +3986,8 @@ class MoeOp:
 
                 # Build defines list
                 kernel_defines = []
+                if enable_routing:
+                    kernel_defines.append(("ENABLE_ROUTING", "1"))
                 if enable_reduce_to_one:
                     kernel_defines.append(("ENABLE_REDUCE_TO_ONE", "1"))
 
@@ -3996,5 +4080,9 @@ class MoeOp:
 
         # Return appropriate output based on reduce mode
         if enable_reduce_to_one:
-            return gate_output_scores_tensor, gate_output_indices_tensor, reduce_output_tensor
-        return gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor
+            if enable_routing:
+                return gate_output_scores_tensor, gate_output_indices_tensor, reduce_output_tensor
+            return reduce_output_tensor
+        if enable_routing:
+            return gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor
+        return final_output_tensor
