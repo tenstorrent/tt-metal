@@ -5,7 +5,6 @@
 from typing import List, Mapping, Optional, Sequence, Union
 
 import torch
-from llama_models.llama3.api.chat_format import create_vision_mask
 from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
