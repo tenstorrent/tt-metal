@@ -273,10 +273,8 @@ def prefill_forward(
             next_states,
             mesh_config,
             mesh_device,
-            ccl_manager,
-            activation_dtype,
             seq_len_global,
-            tp,
+            ccl_manager,
         )
 
     # Sequence parallel all-gather
