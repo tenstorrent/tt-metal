@@ -16,6 +16,10 @@ namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
 
+namespace tt::tt_metal {
+class MetalContext;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 
 // SystemMesh creates a virtualization over the physical devices in the system.
@@ -23,14 +27,16 @@ namespace tt::tt_metal::distributed {
 // It serves as a query interface between the logical coordinates to physical device IDs.
 class SystemMesh {
 private:
+    friend class tt::tt_metal::MetalContext;
+
     class Impl;  // Forward declaration only
 
     std::unique_ptr<Impl> pimpl_;
 
-public:
     explicit SystemMesh(const tt::tt_fabric::ControlPlane& control_plane);
-    ~SystemMesh();
 
+public:
+    ~SystemMesh();
     // Convenience accessor — delegates to MetalContext::instance().get_system_mesh().
     // Retained because MetalContext is not part of the public API.
     static SystemMesh& instance();

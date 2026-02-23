@@ -786,7 +786,7 @@ distributed::SystemMesh& MetalContext::get_system_mesh() {
         if (!control_plane_) {
             this->initialize_control_plane_impl();
         }
-        system_mesh_ = std::make_unique<distributed::SystemMesh>(*control_plane_);
+        system_mesh_ = std::unique_ptr<distributed::SystemMesh>(new distributed::SystemMesh(*control_plane_));
     }
     return *system_mesh_;
 }
