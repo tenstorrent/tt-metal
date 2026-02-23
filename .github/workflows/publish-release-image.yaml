@@ -61,6 +61,14 @@ jobs:
           UBUNTU_VERSION="${OS_VERSION#ubuntu-}"
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_ENV
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
+          # Determine Python version based on Ubuntu version
+          if [ "$UBUNTU_VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+          echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_ENV
+          echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_OUTPUT
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
@@ -74,6 +82,7 @@ jobs:
           build-args: |
             WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
             UBUNTU_VERSION=${{ steps.generate-tag-name.outputs.UBUNTU_VERSION }}
+            PYTHON_VERSION=${{ steps.generate-tag-name.outputs.PYTHON_VERSION }}
             GIT_REF=${{ github.ref_name || 'main' }}
           tags: ${{ env.TAG_NAME }}
           context: .
