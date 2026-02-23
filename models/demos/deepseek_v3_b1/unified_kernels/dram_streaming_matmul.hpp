@@ -128,7 +128,8 @@ struct DRAMStreamingMatmul {
         bool PopIn0 = true,
         bool ResetCBIn1 = false,
         uint32_t CBIn1ResetAddr = 0,
-        bool PopIndex = false>
+        bool PopIndex = false,
+        bool WaitForOutput = false>
     class Op {
     public:
         void operator()() {
@@ -183,9 +184,9 @@ struct DRAMStreamingMatmul {
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
 
-            // Multi-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3 * CTArgs::num_subblocks_k;
-            constexpr uint32_t extra_blocks_in_flight = 2;
+            // Triple-buffering with transaction IDs for pipelining
+            constexpr uint32_t num_buffers = 3;
+            constexpr uint32_t extra_blocks_in_flight = 1;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
@@ -239,6 +240,11 @@ struct DRAMStreamingMatmul {
             // Pop index CB after the last consumer is done reading
             if constexpr (PopIndex && CTArgs::enable_indexing) {
                 cb_pop_front(CTArgs::cb_index, 1);
+            }
+
+            // Optionally wait for compute to finish writing output
+            if constexpr (WaitForOutput) {
+                cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
             }
 
 #elif defined(COMPILE_FOR_TRISC)
