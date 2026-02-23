@@ -175,8 +175,10 @@ static_assert(noc_index == 0, "Mux kernel requires noc_index to be 0 so relay ke
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
-    while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    while (!connect_is_requested(*worker_interface.connection_live_semaphore) &&
+           !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         invalidate_l1_cache();
     }
 
@@ -509,19 +511,19 @@ void kernel_main() {
     // Wait for persistent channels to be ready
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         if (worker_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i]);
+            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr);
         }
     }
 
     for (uint32_t i = 0; i < NUM_RELAY_TO_MUX_CHANNELS; i++) {
         if (relay_to_mux_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_RELAY_TO_MUX>(relay_to_mux_channel_interfaces[i]);
+            wait_for_static_connection_to_ready<NUM_BUFFERS_RELAY_TO_MUX>(relay_to_mux_channel_interfaces[i], termination_signal_ptr);
         }
     }
 
     for (uint32_t i = 0; i < NUM_MUX_TO_MUX_CHANNELS; i++) {
         if (mux_to_mux_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_MUX_TO_MUX>(mux_to_mux_channel_interfaces[i]);
+            wait_for_static_connection_to_ready<NUM_BUFFERS_MUX_TO_MUX>(mux_to_mux_channel_interfaces[i], termination_signal_ptr);
         }
     }
 
