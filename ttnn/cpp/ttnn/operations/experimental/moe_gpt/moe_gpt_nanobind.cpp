@@ -23,12 +23,18 @@ void bind_moe_gpt(nb::module_& mod) {
             output_tensor: Output tensor (sharded)
             num_experts: Number of experts per layer
             layer_id: The layer for which the MoE operation is being performed
+            bias0_tensor: Bias tensor for the first matmul (shape: (1, 2880), tile layout)
+            bias1_tensor: Bias tensor for the second matmul (shape: (1, 2880), tile layout)
+            bias2_tensor: Bias tensor for the third matmul (shape: (1, 2880), tile layout)
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("w0_w1_tensor"),
             nb::arg("w2_tensor"),
+            nb::arg("bias0_tensor"),
+            nb::arg("bias1_tensor"),
+            nb::arg("bias2_tensor"),
             nb::arg("output_tensor"),
             nb::arg("num_experts"),
             nb::arg("layer_id"),

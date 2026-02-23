@@ -43,6 +43,9 @@ MoEGPTDeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& w0_w1_tensor,
     const Tensor& w2_tensor,
+    const Tensor& bias0_tensor,
+    const Tensor& bias1_tensor,
+    const Tensor& bias2_tensor,
     const Tensor& output_tensor,
     const uint32_t num_experts,
     const uint32_t layer_id) {
@@ -52,7 +55,10 @@ MoEGPTDeviceOperation::invoke(
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,
             .w2_tensor = w2_tensor,
-            .output_tensor = output_tensor}};
+            .output_tensor = output_tensor,
+            .bias0_tensor = bias0_tensor,
+            .bias1_tensor = bias1_tensor,
+            .bias2_tensor = bias2_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::moe_gpt

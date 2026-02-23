@@ -11,10 +11,22 @@ ttnn::Tensor ExecuteMoEGPT::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& w0_w1_tensor,
     const ttnn::Tensor& w2_tensor,
+    const ttnn::Tensor& bias0_tensor,
+    const ttnn::Tensor& bias1_tensor,
+    const ttnn::Tensor& bias2_tensor,
     const ttnn::Tensor& output_tensor,
     const uint32_t num_experts,
     const uint32_t layer_id) {
-    return ttnn::prim::moe_gpt(input_tensor, w0_w1_tensor, w2_tensor, output_tensor, num_experts, layer_id);
+    return ttnn::prim::moe_gpt(
+        input_tensor,
+        w0_w1_tensor,
+        w2_tensor,
+        bias0_tensor,
+        bias1_tensor,
+        bias2_tensor,
+        output_tensor,
+        num_experts,
+        layer_id);
 }
 
 }  // namespace ttnn::operations::experimental::moe_gpt

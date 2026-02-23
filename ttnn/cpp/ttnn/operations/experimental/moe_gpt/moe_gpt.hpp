@@ -15,6 +15,9 @@ struct ExecuteMoEGPT {
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& w0_w1_tensor,
         const ttnn::Tensor& w2_tensor,
+        const ttnn::Tensor& bias0_tensor,
+        const ttnn::Tensor& bias1_tensor,
+        const ttnn::Tensor& bias2_tensor,
         const ttnn::Tensor& output_tensor,
         const uint32_t num_experts,
         const uint32_t layer_id);

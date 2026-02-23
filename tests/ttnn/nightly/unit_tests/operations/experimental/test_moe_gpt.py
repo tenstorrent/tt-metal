@@ -80,6 +80,11 @@ def create_torch_w2(L, E, N, K):
     return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
 
 
+def create_torch_bias(N):
+    """Create a bias tensor of shape (1, N)."""
+    return torch.rand((1, N), dtype=torch.bfloat16) - 0.5
+
+
 def prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores):
     """
     Prepare the w0_w1 tensor by interleaving chunks of w0 and w1 width-wise.
@@ -374,6 +379,8 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
     w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
+    bias_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
     # --------------------------------------------------------------------------
     # Prepare the tensors
     # --------------------------------------------------------------------------
@@ -382,6 +389,9 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
         torch_w0 = create_torch_w0(L, E, K, N)
         torch_w1 = create_torch_w1(L, E, K, N)
         torch_w2 = create_torch_w2(L, E, N, K)
+        torch_bias0 = create_torch_bias(N)
+        torch_bias1 = create_torch_bias(N)
+        torch_bias2 = create_torch_bias(K)
 
         # Prepare w0_w1 tensor (interleaved, and reordered)
         torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
@@ -399,6 +409,16 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
         tt_w2 = ttnn.from_torch(
             torch_w2_reordered, dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=w2_mem_config
+        )
+
+        tt_bias0 = ttnn.from_torch(
+            torch_bias0, dtype=in0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=bias_mem_config
+        )
+        tt_bias1 = ttnn.from_torch(
+            torch_bias1, dtype=in0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=bias_mem_config
+        )
+        tt_bias2 = ttnn.from_torch(
+            torch_bias2, dtype=in0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=bias_mem_config
         )
     else:
         tt_input = ttnn.empty(
@@ -422,6 +442,15 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             layout=ttnn.TILE_LAYOUT,
             memory_config=w2_mem_config,
         )
+        tt_bias0 = ttnn.empty(
+            [1, N], dtype=in0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=bias_mem_config
+        )
+        tt_bias1 = ttnn.empty(
+            [1, N], dtype=in0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=bias_mem_config
+        )
+        tt_bias2 = ttnn.empty(
+            [1, K], dtype=in0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=bias_mem_config
+        )
 
     # --------------------------------------------------------------------------
     # Run the operation
@@ -443,6 +472,9 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             tt_input,
             w0_w1_tensor=tt_w0_w1,
             w2_tensor=tt_w2,
+            bias0_tensor=tt_bias0,
+            bias1_tensor=tt_bias1,
+            bias2_tensor=tt_bias2,
             output_tensor=tt_input,
             num_experts=E,
             layer_id=layer_id,

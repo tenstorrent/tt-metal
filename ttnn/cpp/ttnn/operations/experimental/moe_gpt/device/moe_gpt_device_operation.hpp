@@ -34,6 +34,9 @@ struct MoEGPTDeviceOperation {
         const Tensor& input_tensor,
         const Tensor& w0_w1_tensor,
         const Tensor& w2_tensor,
+        const Tensor& bias0_tensor,
+        const Tensor& bias1_tensor,
+        const Tensor& bias2_tensor,
         const Tensor& output_tensor,
         const uint32_t num_experts,
         const uint32_t layer_id);

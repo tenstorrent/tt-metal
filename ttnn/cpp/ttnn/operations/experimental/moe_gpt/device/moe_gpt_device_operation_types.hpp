@@ -19,6 +19,9 @@ struct tensor_args_t {
     const Tensor& w0_w1_tensor;
     const Tensor& w2_tensor;
     const Tensor& output_tensor;
+    const Tensor& bias0_tensor;
+    const Tensor& bias1_tensor;
+    const Tensor& bias2_tensor;
 };
 
 using tensor_return_value_t = Tensor;
