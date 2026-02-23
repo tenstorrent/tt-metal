@@ -1,0 +1,85 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include <optional>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+#include "moe_compute_nanobind.hpp"
+#include "moe_compute.hpp"
+
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+
+namespace ttnn::operations::experimental::ccl {
+
+namespace {
+
+template <typename ccl_operation_t>
+void bind_moe_compute(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
+    bind_registered_operation(
+        mod,
+        operation,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& tilize_input_tensor,
+               const ttnn::Tensor& tilize_expert_indices_tensor,
+               const ttnn::Tensor& tilize_expert_scores_tensor,
+               const ttnn::Tensor& tilize_expert_mapping_tensor,
+               const ttnn::Tensor& matmul_w0_w1_tensor,
+               const ttnn::Tensor& matmul_w2_tensor,
+               const uint32_t layer_id,
+               const uint32_t output_height_shard_dim,
+               const uint32_t output_width_shard_dim,
+               const std::optional<uint32_t> cluster_axis) {
+                return self(
+                    tilize_input_tensor,
+                    tilize_expert_indices_tensor,
+                    tilize_expert_scores_tensor,
+                    tilize_expert_mapping_tensor,
+                    matmul_w0_w1_tensor,
+                    matmul_w2_tensor,
+                    layer_id,
+                    output_height_shard_dim,
+                    output_width_shard_dim,
+                    cluster_axis);
+            },
+            nb::arg("tilize_input_tensor").noconvert(),
+            nb::arg("tilize_expert_indices_tensor").noconvert(),
+            nb::arg("tilize_expert_scores_tensor").noconvert(),
+            nb::arg("tilize_expert_mapping_tensor").noconvert(),
+            nb::arg("matmul_w0_w1_tensor").noconvert(),
+            nb::arg("matmul_w2_tensor").noconvert(),
+            nb::kw_only(),
+            nb::arg("layer_id"),
+            nb::arg("output_height_shard_dim"),
+            nb::arg("output_width_shard_dim"),
+            nb::arg("cluster_axis") = nb::none()});
+}
+
+}  // namespace
+
+void bind_moe_compute(nb::module_& mod) {
+    bind_moe_compute(
+        mod,
+        ttnn::experimental::moe_compute,
+        R"doc(
+        Experimental, high-performance MoE operation for DeepSeek.
+        )doc");
+}
+
+void bind_get_moe_combine_cores(nb::module_& mod) {
+    const auto* doc = R"doc(Return the ordered list of cores assigned to A2A Combine for the MoE module flow )doc";
+    ttnn::bind_function<"get_moe_combine_cores">(
+        mod,
+        doc,
+        // Overload 1: single split_size (int64_t)
+        ttnn::overload_t(
+            nb::overload_cast<ttnn::MeshDevice*>(&ttnn::experimental::get_moe_combine_cores), nb::arg("input_tensor")));
+}
+}  // namespace ttnn::operations::experimental::ccl
