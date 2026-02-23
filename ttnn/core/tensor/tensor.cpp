@@ -411,6 +411,12 @@ bool Tensor::is_sharded() const {
     return tt::tt_metal::is_device_tensor(*this) ? this->memory_config().is_sharded() : false;
 }
 
+bool Tensor::is_nd_sharded() const {
+    return tt::tt_metal::is_device_tensor(*this)
+               ? this->memory_config().nd_shard_spec().has_value() && !this->memory_config().shard_spec().has_value()
+               : false;
+}
+
 uint32_t Tensor::element_size() const {
     switch (this->dtype()) {
         case DataType::BFLOAT16: return sizeof(bfloat16);

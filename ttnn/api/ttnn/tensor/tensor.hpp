@@ -245,6 +245,7 @@ public:
     distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
+    bool is_nd_sharded() const;  // Returns true if the tensor is ND-sharded AND not legacy 2D sharded.
 
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;

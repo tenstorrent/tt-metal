@@ -20,9 +20,8 @@ namespace ttnn::prim {
 void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
-    bool input_is_nd_sharded =
-        tensor_args.input_tensor.is_sharded() && !tensor_args.input_tensor.shard_spec().has_value();
     const auto& input_tensor_a = tensor_args.input_tensor;
+    bool input_is_nd_sharded = input_tensor_a.is_nd_sharded();
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
@@ -94,8 +93,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
-    bool input_is_nd_sharded =
-        tensor_args.input_tensor.is_sharded() && !tensor_args.input_tensor.shard_spec().has_value();
+    bool input_is_nd_sharded = tensor_args.input_tensor.is_nd_sharded();
     const auto& input_tensor = tensor_args.input_tensor;
     if (input_tensor.memory_config().is_sharded() && !input_is_nd_sharded) {
         auto mem_config =
@@ -123,14 +121,13 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
-    bool input_is_nd_sharded =
-        tensor_args.input_tensor.is_sharded() && !tensor_args.input_tensor.shard_spec().has_value();
+    bool input_is_nd_sharded = tensor_args.input_tensor.is_nd_sharded();
     const auto& input_tensor_a = tensor_args.input_tensor;
 
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
                            (operation_attributes.sub_core_grids.has_value() &&
                             (operation_attributes.sub_core_grids.value().num_cores() < 2));
-    if (use_single_core && !input_is_nd_sharded) {
+    if (use_single_core) {
         return ttnn::prim::TilizeSingleCoreProgramFactory{};
     }
 
