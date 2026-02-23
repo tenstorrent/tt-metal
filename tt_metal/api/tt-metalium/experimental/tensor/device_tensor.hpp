@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
+#include <tt_stl/optional_reference.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
@@ -35,9 +36,16 @@ class MeshDevice;
  * - No equality/inequality operator. (If we did add this, equality would mean the same underlying allocation – no value
  *   semantics)
  *
+ * Invariants of Device Tensor:
+ * - Default constructed: Acts like a nullptr, any access to any member function outside of assignment and move
+ *   construction will be UB, this is checked by TT_ASSERT (enabled at debug build) in accessors. This is similar to
+ *   HostTensor.
+ * - Allocated: The device memory is allocated and **solely owned** by DeviceTensor, user is able to get non-null
+ *   pointers to the device and underlying storage (MeshBuffer).
+ * - Deallocated: The device memory is deallocated and the DeviceTensor is in a default constructed state, pointer to
+ *   Device and MeshBuffer will be null.
  */
 class DeviceTensor {
-    // TODO: internal constructor
     using attribute_type = TensorAttributes<DeviceStorage>;
 
 public:
@@ -50,53 +58,167 @@ public:
      */
     DeviceTensor() = default;
 
-    // TODO: Close this constructor after refactoring.
-    DeviceTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    // TODO: This should be a private constructor, external user should not be able to construct a DeviceTensor
+    // directly. As this will lead to leaks of the MeshBuffer unique ownership.
+    explicit DeviceTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
         impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
     }
 
     /**
-     * Deallocates any owning device memory.
+     * Release ownership of the underlying device memory.
+     * Whether or not the device memory is actually deallocated depends on the destructor semantics of the underlying
+     * MeshBuffer.
      */
     ~DeviceTensor() = default;
 
+    /**
+     * A device tensor is non-copyable as this is the sole owner of the underlying device memory.
+     */
     DeviceTensor(const DeviceTensor&) = delete;
+
+    /**
+     * A device tensor is non-copyable as this is the sole owner of the underlying device memory.
+     */
     DeviceTensor& operator=(const DeviceTensor&) = delete;
 
-    // Transfers ownership of other's memory
+    /**
+     * Transfer ownership of the underlying device memory to the other DeviceTensor.
+     *
+     * post-condition: The other DeviceTensor will be in a default constructed state.
+     */
     DeviceTensor(DeviceTensor&& other) = default;
+
+    /**
+     * Transfer ownership of the underlying device memory to the other DeviceTensor.
+     *
+     * post-condition: The other DeviceTensor will be in a default constructed state.
+     */
     DeviceTensor& operator=(DeviceTensor&& other) = default;
 
     // End speical member functions
 
+    // Deallocation related:
+
     /**
-     * Deallocate and release owned device memory.
+     * Release ownership of the underlying device memory.
+     *
+     * pre-condition: The device tensor must not be in a default constructed state.
      */
     void deallocate() {
         auto& device_storage = get_storage();
         // This implicitly deallocates the root mesh buffer if we are the sole owner.
+        // An explicit deallocation call is not performed, as current day MeshBuffer could still be shared by other
+        // owners. See: #38375
         device_storage.reset_root_mesh_buffer();
     }
 
-    // Getters
+    /**
+     * Check if the device tensor owns any device memory.
+     *
+     * pre-condition: The device tensor must not be in a default constructed state.
+     */
+    bool is_allocated() const { return mesh_buffer().has_value(); }
 
     /**
-     * Get the device this DeviceTensor is on.
+     * Return the underlying device storage MeshBuffer.
+     * empty optional when the device tensor is in deacllocated state via deallocate().
      *
-     * nullptr when deallocated.
+     * pre-condition: The device tensor must not be in a default constructed state.
      */
-    // TODO: make this optional_ref?
-    distributed::MeshDevice* get_device() const {
+    ttsl::optional_reference<distributed::MeshBuffer> mesh_buffer() const {
+        if (auto ptr = mesh_buffer_ptr()) {
+            return (*ptr);
+        }
+        return std::nullopt;
+    }
+
+    /**
+     * Current-day compatiable version of mesh_buffer().
+     * This should go away as this breaks unique ownership semantics easily.
+     * See: TODO(River): create an issue for `let's-not-pass-MeshBuffer-as-shared-ptr-everywhere`.
+     */
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_ptr() const {
         if (const auto& mesh_buffer = get_storage().mesh_buffer; mesh_buffer != nullptr) {
-            return mesh_buffer->device();
+            return mesh_buffer;
         }
         return nullptr;
     }
 
-    // TODO: Should we make this mean something?
-    std::string write_to_string() const;
+    /**
+     * Get the device the allocated device memory is on.
+     * Returns an empty optional when owned device memory is released via deallocate().
+     *
+     * pre-condition: The device tensor must not be in a default constructed state.
+     */
+    ttsl::optional_reference<distributed::MeshDevice> get_device() const {
+        if (auto buffer = mesh_buffer()) {
+            return *buffer->device();
+        }
+        return std::nullopt;
+    }
 
+    // Getters:
+
+    const TensorSpec& tensor_spec() const {
+        // Pre-condition
+        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        return impl->tensor_spec_;
+    }
+
+    /**
+     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
+     *
+     * pre-condition: The device tensor must not be in a default constructed state.
+     */
+    const TensorTopology& tensor_topology() const {
+        // Pre-condition
+        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        return impl->tensor_topology_;
+    }
+
+    // DeviceStorage is meant to bridge ttnn::Tensor and DeviceTensor,
+    // this should go away as part of refactoring, see: #38376
+    const DeviceStorage& get_storage() const {
+        // Pre-condition
+        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        return impl->storage_;
+    }
+
+private:
+    // Mutable version of get_storage().
+    DeviceStorage& get_storage() {
+        // Pre-condition
+        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        return impl->storage_;
+    }
+
+public:
+    // Derivables:
+
+    DataType dtype() const { return tensor_spec().data_type(); }
+    Layout layout() const { return tensor_spec().layout(); }
+    const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
+    const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
+
+    volumn_type logical_volume() const { return logical_shape().volume(); }
+    volumn_type physical_volume() const { return padded_shape().volume(); }
+
+    const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
     bool is_sharded() const { return memory_config().is_sharded(); }
+
+    // From original Tensor:
+    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
+    // TODO: Is there a way to express this "either or"?
+    const std::optional<ShardSpec>& shard_spec() const { return memory_config().shard_spec(); }
+    const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
+
+    // Utils:
+
+    /**
+     * Get the size in bytes of a single element held in the tensor.
+     *
+     * pre-condition: The device tensor must not be in a default constructed state.
+     */
     std::size_t element_size() const {
         switch (dtype()) {
             case DataType::BFLOAT16: return sizeof(bfloat16);
@@ -111,49 +233,9 @@ public:
         }
     }
 
-    // "misc getters"
-    DataType dtype() const { return tensor_spec().data_type(); }
-    Layout layout() const { return tensor_spec().layout(); }
-    const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
-    const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
-
-    const TensorSpec& tensor_spec() const { return impl->tensor_spec_; }
-
-    volumn_type logical_volume() const { return logical_shape().volume(); }
-    volumn_type physical_volume() const { return padded_shape().volume(); }
-
-    const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
-
-    /**
-     * From original Tensor:
-     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     */
-    const TensorTopology& tensor_topology() const { return impl->tensor_topology_; }
-
-    // From original Tensor:
-    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    // TODO: Is there a way to express this "either or"?
-    const std::optional<ShardSpec>& shard_spec() const { return memory_config().shard_spec(); }
-    const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
-
     Strides strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
-    // TODO: this is implemented dependening on both if we have released the buffer and if the buffer is deallocated.
-    //     Who would dealloate the buffer?
-    bool is_allocated() const {
-        if (const auto& mesh_buffer = get_storage().mesh_buffer; mesh_buffer != nullptr) {
-            return mesh_buffer->is_allocated();
-        }
-        return false;
-    }
-
-    /**
-     * From original tensor:
-     *  Returns device `MeshBuffer`.
-     */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const { return get_storage().mesh_buffer; }
-
-    const DeviceStorage& get_storage() const { return impl->storage_; }
+    // Questionables:
 
     // TODO: This is a hack right now, because this allows multiple device tensor holding on to the same conceptual
     // storage, find a better way to do this.
@@ -162,9 +244,10 @@ public:
     }
 
 private:
+    // impl could be a nullptr if DeviceTensor is in a default constructed state.
+    // Avoid using impl pointer directly, use the accessors instead.
+    // Otherwise, please add manual TT_ASSERT checks for nullptr.
     std::unique_ptr<attribute_type> impl;
-
-    DeviceStorage& get_storage() { return impl->storage_; }
 };
 
 }  // namespace tt::tt_metal
