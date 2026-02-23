@@ -394,15 +394,25 @@ def _build_globalcb_consumer_op(output_tensor, core_ranges, gcb, num_tiles):
 # =============================================================================
 
 
+@pytest.fixture(params=[1, 2], ids=["warmup", "timed"], scope="class")
+def iteration(request):
+    return request.param
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestFusedDemo:
-    """Fusion infrastructure demo tests."""
+    """Fusion infrastructure demo tests.
+
+    The suite runs twice via the ``iteration`` parameter.  The first pass
+    (warmup) populates the JIT cache for ALL kernels -- fused and unfused.
+    The second pass (timed) is all cache hits and provides accurate timing.
+    """
 
     # -----------------------------------------------------------------
     # Demo 1: RMS -> Matmul -> RMS (DRAM, 4x2 grid)
     # -----------------------------------------------------------------
 
-    def test_demo1_rms_matmul_rms(self, device):
+    def test_demo1_rms_matmul_rms(self, device, iteration):
         """3-op chain: RMS -> Matmul -> RMS on a 4x2 grid with DRAM I/O.
 
         Demonstrates basic sequential chaining of heterogeneous ops.
@@ -463,12 +473,6 @@ class TestFusedDemo:
         tt_w = _tt(torch_w, device)
         tt_B = _tt(torch_b, device)
 
-        # Warmup: populate per-process JIT cache so measured run has clean dispatch
-        _ = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
-        _ = ttnn.matmul(_, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
-        _ = ttnn.rms_norm(_, weight=tt_w, epsilon=1e-5)
-        ttnn.synchronize_device(device)
-
         u1 = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
         u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
         u3 = ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
@@ -482,11 +486,12 @@ class TestFusedDemo:
         passing_f, pcc_f = comp_pcc(golden, fused_result, pcc=0.97)
         passing_u, pcc_u = comp_pcc(golden, unfused_result, pcc=0.97)
 
-        print(f"\n{'='*60}")
-        print(f"Demo 1: RMS -> Matmul -> RMS (4x2 grid, DRAM)")
-        print(f"  Fused compile: {build_time*1000:.2f} ms")
-        print(f"  PCC: fused={pcc_f:.6f}  unfused={pcc_u:.6f}")
-        print(f"{'='*60}")
+        if iteration == 2:
+            print(f"\n{'='*60}")
+            print(f"Demo 1: RMS -> Matmul -> RMS (4x2 grid, DRAM)")
+            print(f"  Fused compile: {build_time*1000:.2f} ms")
+            print(f"  PCC: fused={pcc_f:.6f}  unfused={pcc_u:.6f}")
+            print(f"{'='*60}")
 
         assert passing_f, f"Fused PCC: {pcc_f}"
         assert passing_u, f"Unfused PCC: {pcc_u}"
@@ -495,7 +500,7 @@ class TestFusedDemo:
     # Demo 2: RMS -> LN (block-sharded, 4x4 grid)
     # -----------------------------------------------------------------
 
-    def test_demo2_rms_ln_sharded(self, device):
+    def test_demo2_rms_ln_sharded(self, device, iteration):
         """2-op chain: RMS -> LN with block-sharded input/output on 4x4 grid.
 
         Demonstrates pinned buffer address reassignment in the CB allocator.
@@ -568,25 +573,6 @@ class TestFusedDemo:
         fused_result = ttnn.to_torch(outputs[0][0])
 
         # ---- Unfused path ----
-        # Warmup: populate per-process JIT cache so measured run has clean dispatch
-        _w1 = ttnn.rms_norm(
-            tt_input,
-            weight=tt_w,
-            epsilon=1e-5,
-            program_config=program_cfg,
-            compute_kernel_config=compute_cfg,
-            memory_config=sharded_mem,
-        )
-        _ = ttnn.layer_norm(
-            _w1,
-            weight=tt_w,
-            epsilon=1e-5,
-            program_config=program_cfg,
-            compute_kernel_config=compute_cfg,
-            memory_config=sharded_mem,
-        )
-        ttnn.synchronize_device(device)
-
         u1 = ttnn.rms_norm(
             tt_input,
             weight=tt_w,
@@ -612,11 +598,12 @@ class TestFusedDemo:
         passing_f, pcc_f = comp_pcc(golden, fused_result, pcc=0.98)
         passing_u, pcc_u = comp_pcc(golden, unfused_result, pcc=0.98)
 
-        print(f"\n{'='*60}")
-        print(f"Demo 2: RMS -> LN (4x4 grid, block-sharded)")
-        print(f"  Fused compile: {build_time*1000:.2f} ms")
-        print(f"  PCC: fused={pcc_f:.6f}  unfused={pcc_u:.6f}")
-        print(f"{'='*60}")
+        if iteration == 2:
+            print(f"\n{'='*60}")
+            print(f"Demo 2: RMS -> LN (4x4 grid, block-sharded)")
+            print(f"  Fused compile: {build_time*1000:.2f} ms")
+            print(f"  PCC: fused={pcc_f:.6f}  unfused={pcc_u:.6f}")
+            print(f"{'='*60}")
 
         assert passing_f, f"Fused PCC: {pcc_f}"
         assert passing_u, f"Unfused PCC: {pcc_u}"
@@ -625,7 +612,7 @@ class TestFusedDemo:
     # Demo 4: Two parallel 2-op chains
     # -----------------------------------------------------------------
 
-    def test_demo4_parallel_chains(self, device):
+    def test_demo4_parallel_chains(self, device, iteration):
         """Two independent 2-op chains on disjoint 4x4 cores, fused in parallel.
 
         Chain A: LN -> Matmul on (0,0)-(3,3) = 16 cores
@@ -703,13 +690,6 @@ class TestFusedDemo:
         result_b = ttnn.to_torch(outputs[0][1])
 
         # ---- Unfused path (4 sequential dispatches) ----
-        # Warmup: populate per-process JIT cache so measured run has clean dispatch
-        _ = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=_compute())
-        _ = ttnn.matmul(_, tB, program_config=mm_cfg, compute_kernel_config=_compute())
-        _ = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5)
-        _ = ttnn.matmul(_, tB, program_config=mm_cfg, compute_kernel_config=_compute())
-        ttnn.synchronize_device(device)
-
         ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=_compute())
         ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
         ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5)
@@ -727,12 +707,13 @@ class TestFusedDemo:
         passing_ua, pcc_ua = comp_pcc(golden_a, unfused_a, pcc=0.97)
         passing_ub, pcc_ub = comp_pcc(golden_b, unfused_b, pcc=0.97)
 
-        print(f"\n{'='*60}")
-        print(f"Demo 4: Two parallel chains (disjoint cores)")
-        print(f"  Fused compile: {build_time*1000:.2f} ms")
-        print(f"  PCC: chain_a={pcc_a:.6f}  chain_b={pcc_b:.6f}")
-        print(f"  Unfused PCC: chain_a={pcc_ua:.6f}  chain_b={pcc_ub:.6f}")
-        print(f"{'='*60}")
+        if iteration == 2:
+            print(f"\n{'='*60}")
+            print(f"Demo 4: Two parallel chains (disjoint cores)")
+            print(f"  Fused compile: {build_time*1000:.2f} ms")
+            print(f"  PCC: chain_a={pcc_a:.6f}  chain_b={pcc_b:.6f}")
+            print(f"  Unfused PCC: chain_a={pcc_ua:.6f}  chain_b={pcc_ub:.6f}")
+            print(f"{'='*60}")
 
         assert passing_a, f"Chain A PCC: {pcc_a}"
         assert passing_b, f"Chain B PCC: {pcc_b}"
@@ -743,7 +724,7 @@ class TestFusedDemo:
     # Demo 3: Branching topology on full 8x8 grid (segment barriers)
     # -----------------------------------------------------------------
 
-    def test_demo3_branching(self, device):
+    def test_demo3_branching(self, device, iteration):
         """Branching graph with nested Sequential/Parallel on full 8x8 grid.
 
         Topology:
@@ -850,16 +831,6 @@ class TestFusedDemo:
         # Norm ops use the default interleaved grid (64 cores) because the ttnn
         # API does not expose a core_range parameter for interleaved inputs.
         # This makes the unfused norm kernel times a lower bound (more cores = faster).
-
-        # Warmup: populate per-process JIT cache so measured run has clean dispatch
-        _w_stem = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
-        _w_left = ttnn.layer_norm(_w_stem, weight=tt_w, epsilon=1e-5)
-        _ = ttnn.matmul(_w_left, tt_B, program_config=ll_mm_cfg, compute_kernel_config=mm_compute)
-        _ = ttnn.rms_norm(_w_left, weight=tt_w, epsilon=1e-5)
-        _ = ttnn.matmul(_w_stem, tt_B, program_config=right_mm_cfg, compute_kernel_config=mm_compute)
-        ttnn.synchronize_device(device)
-
-        # Measured: 5 ops matching the fused tree structure
         u_stem = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
         u_left = ttnn.layer_norm(u_stem, weight=tt_w, epsilon=1e-5)
         u_ll = ttnn.matmul(u_left, tt_B, program_config=ll_mm_cfg, compute_kernel_config=mm_compute)
@@ -884,12 +855,13 @@ class TestFusedDemo:
         passing_ulr, pcc_ulr = comp_pcc(lr_rms_golden, u_lr_result, pcc=0.97)
         passing_ur, pcc_ur = comp_pcc(right_mm_golden, u_right_result, pcc=0.97)
 
-        print(f"\n{'='*60}")
-        print(f"Demo 3: Branching (8x8 grid = 64 cores)")
-        print(f"  Fused compile: {build_time*1000:.2f} ms")
-        print(f"  PCC: ll_mm={pcc_ll:.6f}  lr_rms={pcc_lr:.6f}  right_mm={pcc_r:.6f}")
-        print(f"  Unfused PCC: ll_mm={pcc_ull:.6f}  lr_rms={pcc_ulr:.6f}  right_mm={pcc_ur:.6f}")
-        print(f"{'='*60}")
+        if iteration == 2:
+            print(f"\n{'='*60}")
+            print(f"Demo 3: Branching (8x8 grid = 64 cores)")
+            print(f"  Fused compile: {build_time*1000:.2f} ms")
+            print(f"  PCC: ll_mm={pcc_ll:.6f}  lr_rms={pcc_lr:.6f}  right_mm={pcc_r:.6f}")
+            print(f"  Unfused PCC: ll_mm={pcc_ull:.6f}  lr_rms={pcc_ulr:.6f}  right_mm={pcc_ur:.6f}")
+            print(f"{'='*60}")
 
         assert passing_ll, f"ll_mm PCC: {pcc_ll}"
         assert passing_lr, f"lr_rms PCC: {pcc_lr}"
@@ -902,7 +874,7 @@ class TestFusedDemo:
     # Demo 5: GlobalCircularBuffer mid-kernel write
     # -----------------------------------------------------------------
 
-    def test_demo5_global_cb_mid_kernel(self, device):
+    def test_demo5_global_cb_mid_kernel(self, device, iteration):
         """Mid-kernel data exfiltration via GlobalCircularBuffer.
 
         Architecture:
@@ -968,11 +940,12 @@ class TestFusedDemo:
         passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
         passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
 
-        print(f"\n{'='*60}")
-        print(f"Demo 5: GlobalCB mid-kernel write")
-        print(f"  Fused compile: {build_time*1000:.2f} ms")
-        print(f"  PCC: receiver={pcc_recv:.6f}  phase1={pcc_b:.6f}")
-        print(f"{'='*60}")
+        if iteration == 2:
+            print(f"\n{'='*60}")
+            print(f"Demo 5: GlobalCB mid-kernel write")
+            print(f"  Fused compile: {build_time*1000:.2f} ms")
+            print(f"  PCC: receiver={pcc_recv:.6f}  phase1={pcc_b:.6f}")
+            print(f"{'='*60}")
 
         assert passing_recv, f"Receiver PCC: {pcc_recv}"
         assert passing_b, f"Phase 1 PCC: {pcc_b}"
