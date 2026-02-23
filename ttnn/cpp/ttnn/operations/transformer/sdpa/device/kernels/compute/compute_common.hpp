@@ -1476,7 +1476,6 @@ void sdpa_inner_loop(
         uint32_t q_low_idx;
         uint32_t q_high_idx;
         if constexpr (sdpa_type == STANDARD) {
-            // if ((sdpa_type == STANDARD) || (sdpa_type == RING && is_causal)) {
             uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
             uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
@@ -1505,6 +1504,7 @@ void sdpa_inner_loop(
             const uint32_t q_chunk = q_iter % q_num_chunks;
             q_low_idx = q_chunk * Sq_chunk_t;
             q_high_idx = q_low_idx + Sq_chunk_t;
+            q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
         }
 
         // Set up ping pong buffers
@@ -1516,8 +1516,7 @@ void sdpa_inner_loop(
         uint32_t alias_mm2_cur_out = cb_out_im_B;
 
         uint32_t k_chunk_end;
-        // if constexpr (sdpa_type == STANDARD) {
-        if ((sdpa_type == STANDARD) || (sdpa_type == RING && is_causal)) {
+        if constexpr (sdpa_type == STANDARD) {
             // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_idx.
             k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
         } else {  // RING or JOINT.
@@ -1526,7 +1525,6 @@ void sdpa_inner_loop(
 
         uint32_t processed_k_chunks = 0;
 
-        DPRINT << "Q CHUNK: " << q_iter << " K chunks: " << k_chunk_end << ENDL();
         for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
@@ -1539,6 +1537,15 @@ void sdpa_inner_loop(
             }
 
             KV_chunks_processed_in_iter++;
+
+            if (sdpa_type == RING && k_chunk >= q_high_idx && is_causal) {
+                cb_wait_front(cb_k_in, k_chunk_tiles);
+                cb_wait_front(cb_v_in, k_chunk_tiles);
+                cb_pop_front(cb_k_in, k_chunk_tiles);
+                cb_pop_front(cb_v_in, k_chunk_tiles);
+
+                continue;
+            }
 
             /**
              * QK = Q_CHUNK @ K_CHUNK

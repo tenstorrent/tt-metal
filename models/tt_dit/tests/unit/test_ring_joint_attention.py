@@ -990,6 +990,7 @@ def test_ring_joint_sdpa_dit_bh_glx(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
     "b, nh, base_seq_len, d",
+    # [(1, 2, 4 * 64, 32)],
     [(1, 128, 4 * 4096, 128)],
     ids=["deepseek_v3_prefill"],
 )

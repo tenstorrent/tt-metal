@@ -82,10 +82,9 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
-    uint32_t rind_index = fused_op_indexer.ring_index;
+    uint32_t ring_index = fused_op_indexer.ring_index;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-        // DPRINT << "ring_id: " << ring_id << ENDL();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
@@ -95,10 +94,9 @@ void kernel_main() {
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
         const bool ring_iter_does_work =
-            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && rind_index < ring_id);
+            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && ring_index < ring_id);
 
         if (!ring_iter_does_work) {
-            DPRINT << "SKIPPING WORK FOR: " << rind_index << ENDL();
             continue;
         }
 
@@ -172,5 +170,4 @@ void kernel_main() {
             cb_out,
             causality);
     }
-    DPRINT << "COMPUTE EXIT FOR: " << rind_index << ENDL();
 }
