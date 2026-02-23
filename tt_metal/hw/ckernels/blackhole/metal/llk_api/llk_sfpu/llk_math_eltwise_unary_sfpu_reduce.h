@@ -15,10 +15,10 @@ inline void llk_math_eltwise_unary_sfpu_reduce_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::reduce, APPROXIMATE>(sfpu::init_reduce<pool_type, format>);
 }
 
-template <bool APPROXIMATE, PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
+template <bool APPROXIMATE, PoolType pool_type, ReduceDim reduce_dim, DataFormat format, uint32_t ct_dim, uint32_t rt_dim>
 inline void llk_math_eltwise_unary_sfpu_reduce(uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        sfpu::calculate_reduce<pool_type, reduce_dim, format>, dst_index, vector_mode);
+        sfpu::calculate_reduce<pool_type, reduce_dim, format, ct_dim, rt_dim>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel
