@@ -220,9 +220,15 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     )
     logger.info("Created HostInterface for D2H on EXIT device")
 
-    # Allocate D2D_0's output core
-    d2d0_output_core = ttnn.CoreCoord(12, 9)  # Free core on ROOT1 device
-    d2d0_output_mesh_core = ttnn.MeshCoreCoord(root_coord, d2d0_output_core)
+    d2d0_infra_temp = ReduceToOneB1.create_d2d0_infrastructure(
+        submesh_device,
+        root_coord,
+        shard_cores,
+        payload_size_bytes,  # Per-worker page size
+        None,
+    )
+    d2d0_core = d2d0_infra_temp["d2d0_core"]  # Get actual D2D_0 core
+    d2d0_output_mesh_core = ttnn.MeshCoreCoord(root_coord, d2d0_core)
 
     socket_interface = SocketInterface(
         aggregated_size_bytes,  # page_size
@@ -238,17 +244,8 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     )
     logger.info("Created SocketInterface for D2D_1 cross-device forwarding (ROOT1 → EXIT)")
 
-    # Create D2D_0 infrastructure
-    # Pass the sender socket [0] from SocketInterface's upstream socket pair
-    # This is the socket that D2D_0 will write to
-    d2d0_downstream_socket = socket_interface.get_upstream_socket()  # Get sender socket [0]
-    d2d0_infra = ReduceToOneB1.create_d2d0_infrastructure(
-        submesh_device,
-        root_coord,
-        shard_cores,
-        payload_size_bytes,  # Per-worker page size
-        d2d0_downstream_socket,
-    )
+    d2d0_infra_temp["d2d0_downstream_socket"] = socket_interface.get_upstream_socket()
+    d2d0_infra = d2d0_infra_temp
     logger.info(f"Created D2D_0 infrastructure with aggregator at core {d2d0_infra['d2d0_core']}")
 
     logger.info("\n=== Running Reduce-to-One with integrated D2D_0 ===")
