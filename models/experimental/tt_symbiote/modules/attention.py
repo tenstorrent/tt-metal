@@ -681,10 +681,7 @@ class LlamaAttention(TTNNModule):
 
 
 class TTNNGR00TSelfAttention(TTNNModule):
-    """
-    TTNN implementation of GR00T self-attention (Qwen/SigLIP-style).
-    Pads Q/K/V for TTNN SDPA tile alignment; supports optional Q/K RMSNorm and RoPE.
-    """
+    """GR00T self-attention on TTNN: Q/K/V/O proj, optional Q/K RMSNorm and RoPE, SDPA with tile-aligned padding."""
 
     def __init__(self, config=None, torch_layer=None):
         super().__init__()
@@ -725,14 +722,14 @@ class TTNNGR00TSelfAttention(TTNNModule):
 
     @classmethod
     def from_torch(cls, torch_layer, model_config=None):
-        """Construct TTNNGR00TSelfAttention from a PyTorch attention module."""
+        """Build from PyTorch attention module."""
         if isinstance(torch_layer, TTNNGR00TSelfAttention):
             return torch_layer
         config = getattr(torch_layer, "config", None)
         return cls(config=config, torch_layer=torch_layer)
 
     def _map_weights(self, torch_layer):
-        """Map Q/K/V/O projections and optional Q/K RMSNorm from the reference torch layer."""
+        """Map Q/K/V/O and optional Q/K RMSNorm from torch layer."""
         for name, m in torch_layer.named_children():
             lname = name.lower()
             if any(x in lname for x in ["q_proj", "query", "to_q"]) and hasattr(m, "weight"):
@@ -753,10 +750,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
     def _prepare_attention_mask_for_ttnn(
         self, attention_mask, batch_size, q_len, kv_len, q_pad, kv_pad, device, is_causal=False
     ):
-        """
-        Build additive attention mask for TTNN SDPA.
-        Encoder and causal components are built on device via ttnn ops.
-        """
+        """Build additive mask for SDPA on device (encoder + optional causal)."""
         PAD_MASK_VALUE = -10000.0
         tt_additive = None
 
@@ -856,7 +850,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return tt_additive
 
     def _pcc(self, a, b):
-        """Pearson correlation coefficient between two tensors (for optional DIAG_ATTN_PCC)."""
+        """Pearson correlation of two tensors (DIAG_ATTN_PCC)."""
         if not isinstance(a, torch.Tensor):
             a = a.to_torch if hasattr(a, "to_torch") else ttnn.to_torch(a)
         if not isinstance(b, torch.Tensor):
@@ -867,12 +861,12 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
     def _rms_norm_on_device(self, tt_tensor, tt_norm, device):
-        """Apply optional Q/K RMSNorm on device."""
+        """Apply Q/K RMSNorm on device."""
         t = tt_tensor.to_ttnn if hasattr(tt_tensor, "to_ttnn") else tt_tensor
         return tt_norm.forward(t)
 
     def _rope_torch_fallback(self, q_raw, k_raw, cos_torch, sin_torch, device):
-        """Apply RoPE on device when cos/sin are provided as torch tensors."""
+        """RoPE on device with torch cos/sin."""
         q = q_raw.to_ttnn if hasattr(q_raw, "to_ttnn") else q_raw
         k = k_raw.to_ttnn if hasattr(k_raw, "to_ttnn") else k_raw
         cos_tt = ttnn.from_torch(
@@ -884,7 +878,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
         return self.rope(q, k, cos_tt, sin_tt)
 
     def forward(self, hidden_states, *args, **kwargs):
-        """Forward pass: Q/K/V projection, optional norm+RoPE, SDPA, output projection."""
+        """Q/K/V proj, optional norm+RoPE, SDPA, O_proj."""
         if self.tt_q_proj is None:
             return hidden_states, None
 
@@ -907,7 +901,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
                     flush=True,
                 )
 
-        # Q/K/V projections
         q_w = self.tt_q_proj(hidden_states)
         k_w = self.tt_k_proj(kv_src)
         v_w = self.tt_v_proj(kv_src)
@@ -958,7 +951,7 @@ class TTNNGR00TSelfAttention(TTNNModule):
                 print(f"[DIAG_ATTN_PCC] {name} ERROR: {exc}", flush=True)
 
         def prepare_heads_on_device(t, num_heads, apply_pad=True):
-            """Reshape to (B, num_heads, seq, d_head); optionally pad seq/d_head to 32 for SDPA tile alignment."""
+            """(B, seq, H) -> (B, num_heads, seq, d_head); optional pad to 32 for SDPA."""
             raw = t.to_ttnn if hasattr(t, "to_ttnn") else t
             if raw.layout != ttnn.TILE_LAYOUT:
                 raw = ttnn.to_layout(raw, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -980,8 +973,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
             return t_transposed, b, s, h, d_head, pad_s, pad_d
 
         is_self_attn = encoder_hidden_states is None
-
-        # Optional Q/K norm and RoPE (self-attn with position embeddings)
         if is_self_attn and (
             self.tt_q_norm is not None or self.tt_k_norm is not None or kwargs.get("position_embeddings")
         ):
@@ -1067,7 +1058,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
             def _to_ttnn(t):
                 return t.to_ttnn if hasattr(t, "to_ttnn") else t
 
-            # Pad heads for SDPA alignment then convert to TTNN
             if q_pad_s > 0 or q_pad_d > 0:
                 q_t = _to_ttnn(q_4d)
                 q_raw = ttnn.pad(q_t, [[0, 0], [0, 0], [0, q_pad_s], [0, q_pad_d]], value=0.0)
@@ -1080,7 +1070,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
                 k_raw = _to_ttnn(k_4d)
             v_raw, _, _, _, _, _, _ = prepare_heads_on_device(v_w, self.num_kv_heads, apply_pad=True)
         else:
-            # Standard path: reshape and pad Q/K/V for SDPA
             q_raw, b, q_len, h, d_head, q_pad_s, q_pad_d = prepare_heads_on_device(q_w, self.num_heads, apply_pad=True)
             k_raw, _, kv_len, _, _, kv_pad_s, kv_pad_d = prepare_heads_on_device(k_w, self.num_kv_heads, apply_pad=True)
             v_raw, _, _, _, _, _, _ = prepare_heads_on_device(v_w, self.num_kv_heads, apply_pad=True)
@@ -1093,8 +1082,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
                     f"[prepare_heads] {_n} q_len={q_len} kv_len={kv_len} d_head={d_head} q_pad_s={q_pad_s} kv_pad_s={kv_pad_s}",
                     flush=True,
                 )
-
-        # GQA: repeat K/V to match number of Q heads if needed
         if self.num_kv_heads != self.num_heads:
             n_rep = self.num_heads // self.num_kv_heads
             k_t = k_raw.to_ttnn if hasattr(k_raw, "to_ttnn") else k_raw
@@ -1121,15 +1108,11 @@ class TTNNGR00TSelfAttention(TTNNModule):
         q_seq = q_raw.shape[2]
         kv_seq = k_raw.shape[2]
         use_causal = is_self_attn and getattr(self._torch_layer, "is_causal", False)
-
-        # Additive/causal mask; slice to exact q/kv sequence length if needed
         tt_attn_mask = self._prepare_attention_mask_for_ttnn(
             attention_mask, b, q_seq, kv_seq, 0, 0, hw_dev, is_causal=use_causal
         )
         if tt_attn_mask is not None and (tt_attn_mask.shape[2] != q_seq or tt_attn_mask.shape[3] != kv_seq):
             tt_attn_mask = ttnn.slice(tt_attn_mask, [0, 0, 0, 0], [b, 1, q_seq, kv_seq])
-
-        # SDPA chunk sizes for kernel selection
         grid = hw_dev.compute_with_storage_grid_size()
         q_chunk = 32
         k_chunk = 32
@@ -1160,8 +1143,6 @@ class TTNNGR00TSelfAttention(TTNNModule):
 
         if q_pad_s > 0 or q_pad_d > 0:
             attn_out_raw = ttnn.slice(attn_out_raw, [0, 0, 0, 0], [b, self.num_heads, q_len, d_head])
-
-        # Merge heads and output projection
         out_transposed = ttnn.transpose(attn_out_raw, 1, 2)
         merged_dev = ttnn.reshape(out_transposed, (b, q_len, h))
 

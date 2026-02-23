@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""GR00T model integration tests: dispatch, padded view, and inference validation."""
+"""GR00T integration tests: dispatch, padded view, inference."""
 
 import operator
 import os
@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils import groot_utils  # noqa: F401  # patches run_config before other imports
+from utils import groot_utils  # noqa: F401  run_config patched on import
 from utils.groot_utils import (
     TTNNEmbedding,
     TTNNSigLIPPositionEmbedding,
@@ -125,7 +125,7 @@ def _apply_speed_optimizations():
 
 
 def test_view_padded_tensor_via_dispatch():
-    """View on a padded tensor (e.g. after im2col) must succeed via the dispatch path."""
+    """Dispatch view on padded tensor (e.g. post im2col)."""
     padded = torch.randn(2965872, dtype=torch.bfloat16)
     shape = (1, 1152, 196, 4)
     target_numel = reduce(operator.mul, shape, 1)
@@ -144,6 +144,7 @@ def test_view_padded_tensor_via_dispatch():
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
 @pytest.mark.filterwarnings("ignore:Accessing config attribute.*AlternateVLDiT.*:FutureWarning")
 def test_gr00t_inference_validation(device):
+    """Full GR00T inference with TTNN module replacement."""
     torch.manual_seed(42)
     _apply_speed_optimizations()
 
