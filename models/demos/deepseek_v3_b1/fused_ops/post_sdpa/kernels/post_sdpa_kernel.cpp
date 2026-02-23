@@ -357,7 +357,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 0,
-                0>;  // cb_position=0, position_enabled=0 (not used in post_sdpa)
+                0>;  // position_enabled=0, per_device_chunk_size=0 (not used in post_sdpa)
 
             // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
             using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
@@ -419,7 +419,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
                 0,
-                0,   // cb_position=0, position_enabled=0 (not used in post_sdpa)
+                0,   // position_enabled=0, per_device_chunk_size=0 (not used in post_sdpa)
                 1>;  // final_reduction=1 (always normalize in post_sdpa)
 
             // Note: compute_kernel_hw_startup already called at top of TRISC block
