@@ -58,14 +58,14 @@ def compute_forwarder_scratch_size(
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
 @pytest.mark.parametrize(
     "position_vector", [[1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0], [1.0, 1.0, 1.0, 1.0]]
 )
-def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector):
+def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_vector):
     num_devices = 4
     num_cores = 8
     l_width = 512
@@ -79,8 +79,8 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector)
     scale_value = 1.0
 
     topology = ttnn.Topology.Torus
-    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT

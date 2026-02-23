@@ -95,6 +95,7 @@ ALWI void sdpa_tail_streaming(
 
     // Phase 2: Process L chunks as they arrive
     // Each chunk = one block (block_size = tiles_per_chunk)
+    bool acquire_regs = !normalize;
     for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
         // Cumulative wait: ensure at least (chunk+1) * block_size tiles are available
         cb_wait_front(cb_l1, (chunk + 1) * block_size);
@@ -104,11 +105,11 @@ ALWI void sdpa_tail_streaming(
         // Process this chunk (one block)
         uint32_t tile_index = chunk * block_size;
         // For normalize=true, first chunk uses regs still held from MS phase
-        bool acquire_regs = !(normalize && chunk == 0);
         ckernel::sdpa_tail_l_block<block_size, 1, false /*TODO*/, false /*TODO*/, false>(
-            cb_l1, cb_l2, cb_l_out, tile_index, acquire_regs);
+            cb_l1, cb_l2, cb_l_out, tile_index, 0, acquire_regs);
 
         cb_push_back(cb_l_out, block_size);
+        acquire_regs = true;
         // NOTE: No cb_pop_front for cb_l1/cb_l2 - tiles remain for other readers
     }
 
