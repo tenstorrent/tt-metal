@@ -12,8 +12,6 @@ namespace ttnn {
 
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
 
-namespace operations::data_movement {}  // namespace operations::data_movement
-
 Tensor assign(
     const Tensor& input,
     const MemoryConfig& output_mem_config,

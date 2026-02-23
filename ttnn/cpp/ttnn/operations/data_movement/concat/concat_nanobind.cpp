@@ -18,7 +18,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_concat(nb::module_& mod) {
-    const char* doc = R"doc(
+    const auto* doc = R"doc(
 
         Args:
             input_tensor (List of ttnn.Tensor): the input tensors.

@@ -12,8 +12,6 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {}  // namespace ttnn::operations::data_movement
-
 namespace ttnn {
 
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {

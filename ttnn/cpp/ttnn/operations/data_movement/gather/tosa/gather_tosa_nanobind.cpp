@@ -66,7 +66,6 @@ void bind_gather_tosa_operation(nb::module_& mod) {
             # Equivalent to PyTorch: gathered_tensor = torch.gather(input_tensor, dim=1, index=indices.unsqueeze(-1).expand(-1, -1, C))
     )doc";
 
-    // Bind the free function directly - no struct!
     ttnn::bind_function<"tosa_gather">(
         mod,
         doc,
