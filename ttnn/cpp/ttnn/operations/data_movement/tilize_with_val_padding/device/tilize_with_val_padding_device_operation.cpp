@@ -22,11 +22,11 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
             "Sharded tilize does not support sub core grid specification");
         auto memory_layout = input_tensor.memory_config().memory_layout();
         if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED && operation_attributes.use_multicore) {
-            return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory{};
+            return TilizeWithValPaddingMultiCoreShardedFactory{};
         } else if (
             memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             // HEIGHT/BLOCK sharded using ShardedAddrGen addressing method
-            return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreShardedFactory{};
+            return TilizeWithValPaddingSingleCoreShardedFactory{};
         }
         // WIDTH_SHARDED with single-core falls through to existing paths below
     }

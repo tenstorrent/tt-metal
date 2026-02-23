@@ -26,11 +26,11 @@ struct TilizeWithValPaddingDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<
-        tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreShardedFactory>;
+        TilizeWithValPaddingSingleCoreFactory,
+        TilizeWithValPaddingMultiCoreBlockInterleavedFactory,
+        TilizeWithValPaddingMultiCoreInterleavedFactory,
+        TilizeWithValPaddingMultiCoreShardedFactory,
+        TilizeWithValPaddingSingleCoreShardedFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
