@@ -136,6 +136,26 @@ struct MetalDeviceIdToUniqueId {
     uniqueId @1 :UInt64;
 }
 
+# Logical (x, y) coordinate without chip - chip is the map key
+struct LogicalCoord {
+    x @0 :UInt64;
+    y @1 :UInt64;
+}
+
+# Per-chip: block type -> list of logical coordinates
+struct CoresByBlockTypePerChip {
+    tensixCores @0 :List(LogicalCoord);
+    activeEthCores @1 :List(LogicalCoord);
+    idleEthCores @2 :List(LogicalCoord);
+    ethCores @3 :List(LogicalCoord);
+}
+
+# One entry per chip: chipId -> cores by block type
+struct ChipCoresByBlockType {
+    chipId @0 :UInt64;
+    cores @1 :CoresByBlockTypePerChip;
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -167,6 +187,6 @@ interface Inspector {
     # Get runtime IDs for mesh workloads
     getMeshWorkloadsRuntimeIds @8 () -> (runtimeIds :List(MeshWorkloadRuntimeIdEntry));
 
-    # Get core coordinates by block type (active ETH, idle ETH, tensix) for triage - coordinates only
-    getCoresByBlockType @9 () -> (activeEthCores :List(VirtualCore), idleEthCores :List(VirtualCore), tensixCores :List(VirtualCore));
+    # Chip -> block type -> list of logical (x,y). One entry per chip.
+    getCoresByBlockType @9 () -> (chips :List(ChipCoresByBlockType));
 }

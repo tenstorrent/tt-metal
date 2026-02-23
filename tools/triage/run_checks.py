@@ -206,7 +206,7 @@ class BrokenCore:
 
 
 class RunChecks:
-    def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
+    def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping, blocks_by_type):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
         # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
@@ -421,8 +421,10 @@ def run(args, context: Context):
     devices_to_check = args["--dev"]
     inspector_data = get_inspector_data(args, context)
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    block_locations_map = inspector_data.getCoresByBlockType()
+
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
-    return RunChecks(devices, metal_device_id_mapping)
+    return RunChecks(devices, metal_device_id_mapping, block_locations_map)
 
 
 if __name__ == "__main__":

@@ -294,44 +294,46 @@ void Data::rpc_get_cores_by_block_type(rpc::Inspector::GetCoresByBlockTypeResult
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
-    std::vector<tt_cxy_pair> tensix_coords;
-    std::vector<tt_cxy_pair> active_eth_coords;
-    std::vector<tt_cxy_pair> idle_eth_coords;
+    auto chips_builder = results.initChips(device_ids.size());
+    size_t chip_idx = 0;
 
     for (ChipId device_id : device_ids) {
+        auto chip_entry = chips_builder[chip_idx++];
+        chip_entry.setChipId(static_cast<uint64_t>(device_id));
+
         const auto& soc_desc = cluster.get_soc_desc(device_id);
+        std::vector<std::pair<uint32_t, uint32_t>> tensix_xy;
+        std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
+        std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
+        std::vector<std::pair<uint32_t, uint32_t>> eth_xy;
 
         for (const tt::umd::CoreCoord& logical_core :
              soc_desc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL)) {
-            tensix_coords.emplace_back(device_id, logical_core.x, logical_core.y);
+            tensix_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
         for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
-            active_eth_coords.emplace_back(device_id, logical_core.x, logical_core.y);
+            active_eth_xy.emplace_back(logical_core.x, logical_core.y);
+            eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
         for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
-            idle_eth_coords.emplace_back(device_id, logical_core.x, logical_core.y);
+            idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
+            eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
-    }
 
-    auto tensix_list = results.initTensixCores(tensix_coords.size());
-    for (size_t i = 0; i < tensix_coords.size(); ++i) {
-        tensix_list[i].setChip(tensix_coords[i].chip);
-        tensix_list[i].setX(tensix_coords[i].x);
-        tensix_list[i].setY(tensix_coords[i].y);
-    }
-    auto active_list = results.initActiveEthCores(active_eth_coords.size());
-    for (size_t i = 0; i < active_eth_coords.size(); ++i) {
-        active_list[i].setChip(active_eth_coords[i].chip);
-        active_list[i].setX(active_eth_coords[i].x);
-        active_list[i].setY(active_eth_coords[i].y);
-    }
-    auto idle_list = results.initIdleEthCores(idle_eth_coords.size());
-    for (size_t i = 0; i < idle_eth_coords.size(); ++i) {
-        idle_list[i].setChip(idle_eth_coords[i].chip);
-        idle_list[i].setX(idle_eth_coords[i].x);
-        idle_list[i].setY(idle_eth_coords[i].y);
+        auto cores = chip_entry.initCores();
+        auto set_coords = [](auto list_builder, const std::vector<std::pair<uint32_t, uint32_t>>& xy) {
+            auto list = list_builder(xy.size());
+            for (size_t i = 0; i < xy.size(); ++i) {
+                list[i].setX(xy[i].first);
+                list[i].setY(xy[i].second);
+            }
+        };
+        set_coords([&cores](size_t n) { return cores.initTensixCores(n); }, tensix_xy);
+        set_coords([&cores](size_t n) { return cores.initActiveEthCores(n); }, active_eth_xy);
+        set_coords([&cores](size_t n) { return cores.initIdleEthCores(n); }, idle_eth_xy);
+        set_coords([&cores](size_t n) { return cores.initEthCores(n); }, eth_xy);
     }
 }
 
@@ -389,7 +391,7 @@ uint32_t Data::get_event_id_for_core(
 
 // Helper function to populate the core entry
 void Data::populate_core_entry(
-    rpc::CoreEntry::Builder entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id) {
+    rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id) {
     // Populate the key
     auto key = entry.initKey();
     key.setChip(k.chip);
