@@ -27,12 +27,20 @@
 namespace tt::tt_metal {
 
 /**
- * HostTensor is a host data class. It has the semantics of a container, and all host <-> device communications are
- * explicit.
+ * HostTensor represents a Tensor in host memory.
+ * Different from DeviceTensor, HostTensor can be copied.
+ * It has limited transformation operations supported (via tensor_apis.hpp).
+ * It is intended to be used with DeviceTensor for host <-> device communication.
  *
+ * Invariants of HostTensor:
+ * - Default constructed: Acts like a nullptr, any access to any member function outside of assignment and move
+ *   construction will be UB, this is checked by TT_ASSERT (enabled at debug build) in accessors. This is similar to
+ *   DeviceTensor.
+ * - Engaged: The HostTensor has shared ownership of the underlying host side storage.
  */
 class HostTensor {
-    /**
+    /*
+     * Refactoring Notes:
      * To avoid disruption to existing users, HostTensor will deviate very little from the existing (host) Tensor
      * semantics. The only significant changes are:
      * - Eliminating implicit data movement APIs.
@@ -40,6 +48,7 @@ class HostTensor {
      *   functions that operate on a HostTensor than as methods of HostTensor. (Separation of data storage and data
      *   manipulation.) In the existing Tensor, these are already duplicated as both methods and free functions.
      */
+
     using attribute_type = TensorAttributes<HostStorage>;
 
 public:
@@ -48,7 +57,7 @@ public:
     // Special Member functions
 
     /**
-     * Constructs an empty host tensor, acts as a nullptr.
+     * Constructs a host tensor in the default constructed state, acting like a nullptr.
      */
     HostTensor() = default;
     ~HostTensor() = default;
@@ -57,7 +66,7 @@ public:
      * Copy constructor.
      *
      * Semantics:
-     * - Configs are deep copied.
+     * - Tensor Spec and Topology are deep copied.
      * - Underlying data has the copy semantics of the HostBuffer
      */
     HostTensor(const HostTensor& other) : impl(other.impl ? std::make_unique<attribute_type>(*other.impl) : nullptr) {}
@@ -66,7 +75,7 @@ public:
      * Copy assignment operator.
      *
      * Semantics:
-     * - Configs are deep copied.
+     * - Tensor Spec and Topology are deep copied.
      * - Underlying data has the copy semantics of the HostBuffer
      */
     HostTensor& operator=(const HostTensor& other) {
@@ -81,7 +90,7 @@ public:
      * Move constructor.
      *
      * Takes over properties of the other HostTensor.
-     * The other HostTensor has the same state as an default-constructed HostTensor.
+     * The other HostTensor becomes a default-constructed HostTensor.
      */
     HostTensor(HostTensor&& other) noexcept : impl(std::move(other.impl)) {}
 
@@ -89,7 +98,7 @@ public:
      * Move assignment operator.
      *
      * Takes over properties of the other HostTensor.
-     * The other HostTensor has the same state as an default-constructed HostTensor.
+     * The other HostTensor becomes a default-constructed HostTensor.
      */
     HostTensor& operator=(HostTensor&& other) noexcept {
         if (this == &other) {
@@ -148,9 +157,6 @@ public:
      */
     template <typename T>
     std::vector<T> to_vector() const;
-
-    // TODO: we should just specialize std::to_string and omit this.
-    std::string write_to_string() const;
 
     HostBuffer get_host_buffer() const {
         // TODO: figure out if we're doing DistributedHostBuffer, hardcoding (0,0) is horrifying.
