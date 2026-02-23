@@ -806,8 +806,8 @@ void sdpa_inner_loop_step(
 
     exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
 
-    pack_reconfig_data_format(cb_qkt_im);
-    reconfig_data_format(cb_kt_in, cb_q_in);
+    // pack_reconfig_data_format(cb_qkt_im);
+    // reconfig_data_format(cb_kt_in, cb_q_in);
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
 
     cb_wait_front(cb_kt_in, head_dim_t * Sk_chunk_t);
