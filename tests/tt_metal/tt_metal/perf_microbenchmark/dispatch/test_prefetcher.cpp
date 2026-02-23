@@ -3038,4 +3038,22 @@ INSTANTIATE_TEST_SUITE_P(
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
+// PrefetcherThroughputTestFixture test - Runs only with exec buff disabled
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherThroughputTestFixture,
+    ::testing::Values(
+        // With exec buf disabled
+        PagedReadParams{
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
 }  // namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests
