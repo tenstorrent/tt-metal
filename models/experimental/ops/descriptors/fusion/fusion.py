@@ -41,15 +41,17 @@ class FusedOp:
     with a TypeError.
     """
 
-    __slots__ = ("op", "semaphores")
+    __slots__ = ("op", "semaphores", "kernel_labels")
 
     def __init__(
         self,
         op: OpDescriptor,
         semaphores: Tuple[Any, ...] = (),
+        kernel_labels: Tuple[str, ...] = (),
     ):
         self.op = op
         self.semaphores = semaphores
+        self.kernel_labels = kernel_labels
 
     @property
     def descriptor(self):
@@ -110,6 +112,42 @@ class FusedOp:
                 with open(filepath, "w") as f:
                     f.write(source)
 
+    def _apply_kernel_dir(self, kernel_dir: str) -> None:
+        """Switch kernel sources to file-based, writing files only if they don't exist.
+
+        For single-kernel roles, files are named ``reader.cpp``, ``writer.cpp``,
+        ``compute.cpp``.  For multi-kernel roles (parallel branches), filenames
+        include op names and core ranges, e.g.
+        ``reader_rms_norm_matmul_cores_0x0-3x3.cpp``.
+        """
+        os.makedirs(kernel_dir, exist_ok=True)
+
+        # Group kernels by RISC type: name -> [(global_idx, kernel)]
+        by_type: dict[str, list] = {}
+        for idx, kernel in enumerate(self.op.descriptor.kernels):
+            risc = _get_risc_type(kernel)
+            name = {"riscv_0": "reader", "riscv_1": "writer", "compute": "compute"}.get(risc, "unknown")
+            by_type.setdefault(name, []).append((idx, kernel))
+
+        for name, entries in by_type.items():
+            for idx, kernel in entries:
+                if len(entries) == 1:
+                    filename = f"{name}.cpp"
+                else:
+                    label = self.kernel_labels[idx] if idx < len(self.kernel_labels) else ""
+                    core_tag = _core_range_tag(kernel.core_ranges)
+                    tag = f"{label}_{core_tag}" if label else core_tag
+                    filename = f"{name}_{tag}.cpp"
+                filepath = os.path.join(kernel_dir, filename)
+                abspath = os.path.abspath(filepath)
+
+                if not os.path.exists(abspath):
+                    with open(abspath, "w") as f:
+                        f.write(kernel.kernel_source)
+
+                kernel.kernel_source = abspath
+                kernel.source_type = ttnn.KernelDescriptor.SourceType.FILE
+
     def __repr__(self):
         n_kernels = len(self.op.descriptor.kernels) if hasattr(self.op.descriptor, "kernels") else "?"
         return (
@@ -150,15 +188,25 @@ class Sequential:
         self._items.append(item)
         return self
 
-    def build(self, device=None) -> FusedOp:
-        """Build the fused op.  Device is auto-extracted from tensors if not provided."""
-        # Import here to avoid circular imports at module level
+    def build(self, device=None, kernel_dir: str = None) -> FusedOp:
+        """Build the fused op.  Device is auto-extracted from tensors if not provided.
 
+        Args:
+            device: Target device.  Auto-extracted from tensors if None.
+            kernel_dir: Optional directory for file-based kernel sources.
+                When set, kernel sources are written to files and the JIT
+                compiles from disk instead of in-memory strings.  Existing
+                files are NOT overwritten — delete them to force regeneration.
+        """
         r = self._build_internal(device)
-        return FusedOp(
+        fused = FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
             semaphores=r.semaphores,
+            kernel_labels=r.kernel_labels,
         )
+        if kernel_dir is not None:
+            fused._apply_kernel_dir(kernel_dir)
+        return fused
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
@@ -198,13 +246,25 @@ class Parallel:
         self._items.append(item)
         return self
 
-    def build(self, device=None) -> FusedOp:
-        """Build each item independently and merge into one FusedOp."""
+    def build(self, device=None, kernel_dir: str = None) -> FusedOp:
+        """Build each item independently and merge into one FusedOp.
+
+        Args:
+            device: Target device.  Auto-extracted from tensors if None.
+            kernel_dir: Optional directory for file-based kernel sources.
+                When set, kernel sources are written to files and the JIT
+                compiles from disk instead of in-memory strings.  Existing
+                files are NOT overwritten — delete them to force regeneration.
+        """
         r = self._build_internal(device)
-        return FusedOp(
+        fused = FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
             semaphores=r.semaphores,
+            kernel_labels=r.kernel_labels,
         )
+        if kernel_dir is not None:
+            fused._apply_kernel_dir(kernel_dir)
+        return fused
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
@@ -316,6 +376,14 @@ def _build_item(item, device):
     if isinstance(item, (Sequential, Parallel)):
         return item._build_internal(device)
     raise TypeError(f"Unsupported item type: {type(item).__name__}")
+
+
+def _core_range_tag(core_ranges) -> str:
+    """Create a filename-safe tag from a CoreRangeSet, e.g. ``'cores_0x0-3x3'``."""
+    parts = []
+    for cr in core_ranges.ranges():
+        parts.append(f"{cr.start.x}x{cr.start.y}-{cr.end.x}x{cr.end.y}")
+    return "cores_" + "_".join(parts)
 
 
 __all__ = [
