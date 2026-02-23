@@ -93,8 +93,14 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         }
 
     @classmethod
-    @abstractmethod
-    def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_mlp_common(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunPrefillConfig | RunDecodeConfig,
+        moe_forward_fn,
+        shared_expert_forward_fn,
+    ) -> ttnn.Tensor:
+        """Common implementation for forward_mlp_prefill and forward_mlp_decode."""
         # Handle all_gather if input is TP-sharded
         hidden_size = cfg["moe"]["hidden_size"]
         tp_size = cfg["moe"]["mesh_device"].shape[1]
@@ -112,9 +118,9 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             x_gathered = x
 
         # Run both MoE and SharedExpert with the same gathered input
-        mlp_out = MoE.forward_prefill(x_gathered, cfg["moe"])
+        mlp_out = moe_forward_fn(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
-        shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
+        shared_expert_out = shared_expert_forward_fn(x_gathered, cfg["shared_expert"])
 
         # Add outputs first, then reduce_scatter the combined result
         combined_out = ttnn.add(mlp_out, shared_expert_out)
@@ -141,47 +147,10 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     @abstractmethod
+    def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        return cls._forward_mlp_common(x, cfg, MoE.forward_prefill, SharedExpert.forward_prefill)
+
+    @classmethod
+    @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        # Handle all_gather if input is TP-sharded
-        hidden_size = cfg["moe"]["hidden_size"]
-        tp_size = cfg["moe"]["mesh_device"].shape[1]
-        x_dim = x.shape[-1]
-
-        if x_dim == hidden_size // tp_size:
-            # Input is TP-sharded, need to gather
-            # Single all_gather using SharedExpert's all_gather config for both modules
-            ccl_shared = cfg["shared_expert"]["ccl"]
-            x_gathered = ttnn.experimental.all_gather_async(
-                x, **ccl_shared.populate_all_gather_runtime_args(cfg["shared_expert"]["all_gather"])
-            )
-        else:
-            # Already full hidden size
-            x_gathered = x
-
-        # Run both MoE and SharedExpert with the same gathered input
-        mlp_out = MoE.forward_decode(x_gathered, cfg["moe"])
-
-        # SharedExpert now always expects collective ops to be handled by caller
-        shared_expert_out = SharedExpert.forward_decode(x_gathered, cfg["shared_expert"])
-
-        # Add outputs first, then reduce_scatter the combined result
-        combined_out = ttnn.add(mlp_out, shared_expert_out)
-        ttnn.deallocate(mlp_out)
-        ttnn.deallocate(shared_expert_out)
-
-        # Handle reduce_scatter if input was TP-sharded
-        if x_dim == hidden_size // tp_size:
-            # Single reduce_scatter on combined output using shared_expert's config
-            output = ttnn.experimental.reduce_scatter_minimal_async(
-                combined_out,
-                **ccl_shared.populate_reduce_scatter_runtime_args(cfg["shared_expert"]["reduce_scatter_async"]),
-            )
-            ttnn.deallocate(combined_out)
-            # Cleanup gathered tensor
-            if x_gathered is not x:
-                ttnn.deallocate(x_gathered)
-        else:
-            # If not TP-sharded, combined output is the final output
-            output = combined_out
-
-        return output
+        return cls._forward_mlp_common(x, cfg, MoE.forward_decode, SharedExpert.forward_decode)

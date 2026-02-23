@@ -298,8 +298,7 @@ class MoEGate(AbstractModule):
                 # Try to convert to expected memory config
                 x = ttnn.to_memory_config(x, expected_memory_config)
                 # Log warning about the conversion
-                import warnings
-                warnings.warn(
+                logger.warning(
                     f"MoEGate: Input tensor memory config ({actual_memory_config}) did not match "
                     f"expected config ({expected_memory_config}). Tensor has been converted."
                 )

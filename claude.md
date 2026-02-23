@@ -67,6 +67,7 @@ python -m pytest models/demos/deepseek_v3/tests/test_moe.py::test_forward_pass -
 ## Recent Changes
 
 ### 2026-02-23: Investigated Collective Operations in Tests
+<<<<<<< HEAD
 
 **Initial Request**: PR review comment asked to remove TTNN collective operations from test_mlp.py and test_moe.py
 
@@ -135,3 +136,15 @@ The collective operations in tests are **ESSENTIAL and CORRECT**. They are not r
 - Original test implementation is architecturally correct
 
 **Status**: No changes needed - collective operations must remain in tests
+=======
+- **Initial attempt**: Tried to remove collective operations from test_mlp.py and test_moe.py per PR review comment
+- **Finding**: The collective operations in tests are **NOT redundant** - they are necessary because:
+  - MLP and MoE modules have sharded weights for tensor parallelism
+  - The modules themselves don't handle collective operations (by design)
+  - When decoder blocks call these modules, they handle collective ops in `_forward_mlp_common`
+  - When tests call modules directly, the tests MUST handle collective ops
+- **Conclusion**: Reverted changes - the original test implementation with collective operations is correct
+- **Architecture**:
+  - Modules (MLP, MoE) work with sharded weights and expect appropriate tensor distribution
+  - Collective ops are handled by the caller (decoder blocks in production, tests when testing directly)
+>>>>>>> cac372d1d9 (Revert removal of collective operations from DeepSeek-V3 tests)
