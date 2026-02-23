@@ -12,24 +12,26 @@ on:
           - all
           - falcon7b
           - falcon40b
-          - llama3
+          - llama3.1-8b
           - llama3_vision
           - llama3_90b_vision
-          - llama3_70b
+          - llama3.3-70b
+          - llama3.3-70b-DP
           - resnet50
           - sentence_bert
           - sd35_large
           - flux1-dev
           - motif
           - qwenimage
-          - mistral
-          - mixtral
+          - mistral-7b
+          - mixtral-8x7b
           - whisper
-          - qwen3
+          - qwen3-32b
           - qwen25
+          - qwen25-coder-32b
           - qwen25_vl
           - qwen3_vl
-          - gemma3
+          - gemma3-27b
           - wan22
           - mochi
           - gpt-oss

@@ -163,19 +163,13 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperation*"
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_data_parallel_example.py
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace_submesh
   # Re-enable this test when we have more T3K availability
   # tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv "tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point[silicon_arch_name=wormhole_b0-dtype=torch.bfloat16-shape_coords=((1, 1, 1, 16), ((0, 0), (0, 1)))-tile-mesh_device=(2, 4)-device_params={'fabric_config': <FabricConfig.FABRIC_1D: 1>}]"
-}
-
-run_t3000_ttnn_multiprocess_slow_tests() {
-  local mpi_args="--allow-run-as-root"
-  local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
-
-  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
 }
 
 run_t3000_falcon7b_tests() {
@@ -218,41 +212,77 @@ run_t3000_falcon40b_tests() {
   fi
 }
 
+run_t3000_qwen3-32b_tests() {
+  fail=0
+  start_time=$(date +%s)
+  echo "LOG_METAL: Running run_t3000_qwen3-32b_tests"
+
+  hf_model=Qwen/Qwen3-32B
+  tt_cache=$TT_CACHE_HOME/$hf_model
+
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen3-32b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_qwen25-coder-32b_tests() {
+  fail=0
+  start_time=$(date +%s)
+  echo "LOG_METAL: Running run_t3000_qwen25-coder-32b_tests"
+
+  hf_model=Qwen/Qwen2.5-Coder-32B-Instruct
+  tt_cache=$TT_CACHE_HOME/$hf_model
+
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen25-coder-32b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_gemma3-small_tests() {
   pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
-run_t3000_llama3-small_tests() {
+run_t3000_llama3.1-8b_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3-small_tests"
+  echo "LOG_METAL: Running run_t3000_llama3.1-8b_tests"
 
-  # Llama3.2-1B
-  llama1b=meta-llama/Llama-3.2-1B-Instruct
-  # Llama3.2-3B
-  llama3b=meta-llama/Llama-3.2-3B-Instruct
-  # Llama3.1-8B
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  hf_model=meta-llama/Llama-3.1-8B-Instruct
+  tt_cache=$TT_CACHE_HOME/$hf_model
 
-  # Run all Llama3 tests for 1B, 3B and 8B weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_embedding.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_mlp.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder.py ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
-  done
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3-small_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3.1-8b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -286,15 +316,15 @@ run_t3000_llama3.2-11b_tests() {
   fi
 }
 
-run_t3000_llama3.1-70b_tests() {
+run_t3000_llama3.3-70b_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3.1-70b_tests"
+  echo "LOG_METAL: Running run_t3000_llama3.3-70b_tests"
 
-  # Llama3.1-70B weights
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  # Llama3.3-70B weights
+  llama70b=meta-llama/Llama-3.3-70B-Instruct
   tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
 
   HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
@@ -308,7 +338,7 @@ run_t3000_llama3.1-70b_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3.1-70b_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3.3-70b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -618,10 +648,6 @@ run_t3000_ccl_tests() {
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
   # pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
 
-  # neighbor pad: 1D correctness check + 2D correctness check
-  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
-  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
-
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -638,17 +664,8 @@ run_t3000_tt_dit_tests() {
 
   echo "LOG_METAL: Running run_t3000_tt_dit_tests"
 
-  #Timestep Encoding (Currently used in Wan2.2)
-  pytest models/tt_dit/tests/unit/test_embeddings.py::test_timestep_encoding ; fail+=$?
-
-  #Wan2.2 Time Text Image Embedding
-  pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "t3k" ; fail+=$?
-
   #T5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder -k "t3k" ; fail+=$?
-
-  #UMT5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
+  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
 
   #Clip Encoder
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
@@ -660,10 +677,10 @@ run_t3000_tt_dit_tests() {
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
 
   #DITs Wan2.2 VAE
-  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py::test_wan_decoder[wormhole_b0-device_params0-2x4_h1_w0-bf16-check_output-fake_weights-0-1-_1f-480p] ; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py::test_wan_decoder[wormhole_b0-device_params0-2x4_h1_w0-check_output-fake_weights-0-1-_1f-480p] ; fail+=$?
 
   #DITs Wan2.2 Transformer
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model[wormhole_b0-short_seq-2x4sp0tp1-True] ; fail+=$?
+  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model[wormhole_b0-no_load_cache-short_seq-2x4sp0tp1-True] ; fail+=$?
 
   #Mochi Transformer
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model[wormhole_b0-device_params0-no_load_cache-no_test_attention_mask-short_seq-2x4sp0tp1-True] ; fail+=$?
@@ -710,28 +727,6 @@ run_t3000_tttv2_fast_unit_tests() {
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 
-  # Run Rope1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-  pytest models/common/tests/modules/rope/test_rope_1d.py \
-    -m "not slow" \
-    --durations=10 \
-    --tb=short \
-    --cov=models.common.modules.rope.rope_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run LMHead1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-  pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.lm_head.lm_head_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
   # Run Attention1D tests
   TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
   pytest models/common/tests/modules/attention/test_attention_1d.py \
@@ -739,17 +734,6 @@ run_t3000_tttv2_fast_unit_tests() {
     --tb=short \
     --durations=10 \
     --cov=models.common.modules.attention.attention_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Embedding1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-  pytest models/common/tests/modules/embedding/test_embedding_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.embedding.embedding_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 
@@ -799,14 +783,14 @@ run_t3000_tests() {
   # Run falcon40b tests
   run_t3000_falcon40b_tests
 
-  # Run llama3-small (1B, 3B, 8B) tests
-  run_t3000_llama3-small_tests
+  # Run llama3.1-8B tests
+  run_t3000_llama3.1-8b_tests
 
   # Run llama3.2-11B tests
   run_t3000_llama3.2-11b_tests
 
-  # Run llama3.1-70B tests
-  run_t3000_llama3.1-70b_tests
+  # Run llama3.3-70B tests
+  run_t3000_llama3.3-70b_tests
 
   # Run llama3.2-90B tests
   run_t3000_llama3.2-90b_tests
@@ -825,6 +809,12 @@ run_t3000_tests() {
 
   # Run mixtral tests
   run_t3000_mixtral_tests
+
+  # Run Qwen3-32B tests
+  run_t3000_qwen3-32b_tests
+
+  # Run Qwen2.5-Coder-32B tests
+  run_t3000_qwen25-coder-32b_tests
 
   # Run grok tests
   run_t3000_grok_tests

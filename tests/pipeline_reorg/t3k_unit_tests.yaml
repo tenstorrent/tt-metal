@@ -62,14 +62,14 @@
   team: models
   model-name: falcon40b
 
-- name: t3k_llama3-small_tests
-  cmd: run_t3000_llama3-small_tests
+- name: t3k_llama3.1-8b_tests
+  cmd: run_t3000_llama3.1-8b_tests
   skus:
     wh_llmbox:
       timeout: 30
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-  model-name: llama3-small
+  model-name: llama3.1-8b
 
 - name: t3k_llama3.2-11b_tests
   cmd: run_t3000_llama3.2-11b_tests
@@ -115,6 +115,15 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   model-name: llama3.2-90b
+
+- name: t3k_llama3.3-70b_tests
+  cmd: run_t3000_llama3.3-70b_tests
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: llama3.3-70b
 
 - name: t3k_mixtral_tests
   cmd: run_t3000_mixtral_tests
@@ -170,6 +179,24 @@
   team: models
   model-name: qwen3_vl
 
+- name: t3k_qwen3-32b_tests
+  cmd: run_t3000_qwen3-32b_tests
+  skus:
+    wh_llmbox:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: qwen3-32b
+
+- name: t3k_qwen25-coder-32b_tests
+  cmd: run_t3000_qwen25-coder-32b_tests
+  skus:
+    wh_llmbox:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: qwen25-coder-32b
+
 - name: t3k_gemma3-small_tests
   cmd: run_t3000_gemma3-small_tests
   skus:
@@ -192,7 +219,7 @@
   cmd: run_t3000_gpt_oss_unit_tests
   skus:
     wh_llmbox:
-      timeout: 35
+      timeout: 30
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss
@@ -210,15 +237,7 @@
   cmd: run_t3000_tttv2_fast_unit_tests
   skus:
     wh_llmbox:
-      timeout: 21
+      timeout: 15
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  model-name: tttv2 modules
-
-- name: t3k_ttnn_multiprocess_slow_tests
-  cmd: run_t3000_ttnn_multiprocess_slow_tests
-  skus:
-    wh_llmbox:
-      timeout: 5
-  owner_id: U09BZ5Q33LK # Piotr Stankiewicz
-  team: scaleout
+  model-name: tttv2-modules

@@ -60,7 +60,7 @@
 
 - name: Falcon-7B e2e tests
   cmd: |
-    pytest --timeout 420 models/demos/wormhole/falcon7b/demo_wormhole.py -k "default_mode_1024_stochastic"
+    pytest --timeout 420 --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!" models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
   model: falcon-7b
   skus:
     wh_n150:
@@ -133,11 +133,11 @@
 
 - name: Falcon-40B e2e tests
   cmd: |
-    pytest --timeout 600 models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py
+    pytest --timeout 720 models/demos/t3000/falcon40b/tests/test_demo.py
   model: falcon-40b
   skus:
     wh_llmbox_perf:
-      timeout: 5
+      timeout: 20
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
