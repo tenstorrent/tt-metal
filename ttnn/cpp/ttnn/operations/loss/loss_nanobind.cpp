@@ -24,7 +24,7 @@ namespace {
 void bind_loss_type(nb::module_& mod) { export_enum<LossReductionMode>(mod, "LossReductionMode"); }
 
 void bind_mse_loss_function(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
             Returns mean squared error loss function for `input_reference` and `input_prediction`
 
             Args:
@@ -44,18 +44,17 @@ void bind_mse_loss_function(nb::module_& mod) {
     ttnn::bind_function<"mse_loss">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::mse_loss,
-            nb::arg("input_reference"),
-            nb::arg("input_prediction"),
-            nb::kw_only(),
-            nb::arg("reduction") = LossReductionMode::NONE,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::mse_loss,
+        nb::arg("input_reference"),
+        nb::arg("input_prediction"),
+        nb::kw_only(),
+        nb::arg("reduction") = LossReductionMode::NONE,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 void bind_mae_loss_function(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
             Returns mean absolute error loss function for `input_reference` and `input_prediction`
 
             Args:
@@ -75,14 +74,13 @@ void bind_mae_loss_function(nb::module_& mod) {
     ttnn::bind_function<"l1_loss">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::l1_loss,
-            nb::arg("input_reference"),
-            nb::arg("input_prediction"),
-            nb::kw_only(),
-            nb::arg("reduction") = LossReductionMode::NONE,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::l1_loss,
+        nb::arg("input_reference"),
+        nb::arg("input_prediction"),
+        nb::kw_only(),
+        nb::arg("reduction") = LossReductionMode::NONE,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace

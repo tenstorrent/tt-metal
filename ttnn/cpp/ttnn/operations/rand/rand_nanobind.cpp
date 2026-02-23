@@ -45,16 +45,15 @@ void bind_rand_operation(nb::module_& mod) {
     ttnn::bind_function<"rand">(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::rand,
-            nb::arg("shape"),
-            nb::arg("device"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("layout") = nb::cast(Layout::TILE),
-            nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
-            nb::arg("low") = 0.0f,
-            nb::arg("high") = 1.0f,
-            nb::arg("seed") = 0));
+        &ttnn::rand,
+        nb::arg("shape"),
+        nb::arg("device"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("layout") = nb::cast(Layout::TILE),
+        nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
+        nb::arg("low") = 0.0f,
+        nb::arg("high") = 1.0f,
+        nb::arg("seed") = 0);
 }
 }  // namespace ttnn::operations::rand

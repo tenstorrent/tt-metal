@@ -34,13 +34,12 @@ void bind_full_like_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_full_like">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moreh_full_like,
-            nb::arg("input"),
-            nb::arg("fill_value"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::moreh_full_like,
+        nb::arg("input"),
+        nb::arg("fill_value"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::full_like

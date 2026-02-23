@@ -18,7 +18,7 @@
 
 namespace ttnn::operations::full {
 void bind_full_operation(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Creates a tensor of the specified shape and fills it with the specified scalar value.
 
         Args:
@@ -43,15 +43,14 @@ void bind_full_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_full">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moreh_full,
-            nb::arg("shape"),
-            nb::arg("fill_value"),
-            nb::arg("device"),
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = ttnn::TILE_LAYOUT,
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG));
+        &ttnn::moreh_full,
+        nb::arg("shape"),
+        nb::arg("fill_value"),
+        nb::arg("device"),
+        nb::kw_only(),
+        nb::arg("dtype") = DataType::BFLOAT16,
+        nb::arg("layout") = ttnn::TILE_LAYOUT,
+        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG);
 }
 
 }  // namespace ttnn::operations::full

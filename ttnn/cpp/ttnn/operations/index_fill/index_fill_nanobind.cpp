@@ -66,14 +66,13 @@ void bind_index_fill_operation(nb::module_& mod) {
     ttnn::bind_function<"index_fill">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::index_fill,
-            nb::arg("input"),
-            nb::arg("dim"),
-            nb::arg("index"),
-            nb::arg("value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::index_fill,
+        nb::arg("input"),
+        nb::arg("dim"),
+        nb::arg("index"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::index_fill

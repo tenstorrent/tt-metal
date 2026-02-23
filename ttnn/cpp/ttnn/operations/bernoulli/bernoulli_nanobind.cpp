@@ -55,14 +55,13 @@ void bind_bernoulli_operation(nb::module_& mod) {
     ttnn::bind_function<"bernoulli">(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::bernoulli,
-            nb::arg("input"),
-            nb::arg("seed") = 0,
-            nb::kw_only(),
-            nb::arg("output") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::bernoulli,
+        nb::arg("input"),
+        nb::arg("seed") = 0,
+        nb::kw_only(),
+        nb::arg("output") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::bernoulli

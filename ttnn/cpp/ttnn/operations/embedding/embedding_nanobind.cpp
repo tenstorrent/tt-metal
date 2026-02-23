@@ -40,17 +40,16 @@ void py_module(nb::module_& mod) {
     ttnn::bind_function<"embedding">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::embedding,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("weight").noconvert(),
-            nb::kw_only(),
-            nb::arg("padding_idx") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("embeddings_type").noconvert() = nb::cast(ttnn::prim::EmbeddingsType::GENERIC),
-            nb::arg("dtype").noconvert() = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor").noconvert() = nb::none()));
+        &ttnn::embedding,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("weight").noconvert(),
+        nb::kw_only(),
+        nb::arg("padding_idx") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("embeddings_type").noconvert() = nb::cast(ttnn::prim::EmbeddingsType::GENERIC),
+        nb::arg("dtype").noconvert() = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::embedding

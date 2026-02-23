@@ -22,7 +22,7 @@ namespace ttnn::operations::kv_cache {
 namespace {
 
 void bind_fill_cache_for_user_(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Populates the :attr:`cache` tensor in-place with values sourced from :attr:`input` at :attr:`batch_index`.
 
 
@@ -39,17 +39,11 @@ void bind_fill_cache_for_user_(nb::module_& mod) {
         )doc";
 
     ttnn::bind_function<"fill_cache_for_user_">(
-        mod,
-        doc,
-        ttnn::overload_t(
-            &ttnn::fill_cache_for_user_,
-            nb::arg("cache"),
-            nb::arg("input"),
-            nb::arg("batch_index")));
+        mod, doc, &ttnn::fill_cache_for_user_, nb::arg("cache"), nb::arg("input"), nb::arg("batch_index"));
 }
 
 void bind_update_cache_for_token_(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Updates the :attr:`cache` tensor in-place with values from :attr:`input` at :attr:`update_index` and :attr:`batch_offset`.
 
 
@@ -69,17 +63,16 @@ void bind_update_cache_for_token_(nb::module_& mod) {
     ttnn::bind_function<"update_cache_for_token_">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::update_cache_for_token_,
-            nb::arg("cache"),
-            nb::arg("input"),
-            nb::arg("update_index"),
-            nb::arg("batch_offset") = 0,
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::update_cache_for_token_,
+        nb::arg("cache"),
+        nb::arg("input"),
+        nb::arg("update_index"),
+        nb::arg("batch_offset") = 0,
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 void bind_update_cache(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Updates the cache tensor in place with the values from input at the specified update_idx. When cache has batch less than 32, input is assumed to have batch padded to 32 and [batch_offset:batch_offset+batch] from dim[-2] of input is used to update the cache.
 
         Args:
@@ -101,18 +94,17 @@ void bind_update_cache(nb::module_& mod) {
     ttnn::bind_function<"update_cache">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::update_cache,
-            nb::arg("cache"),
-            nb::arg("input"),
-            nb::arg("update_idx"),
-            nb::kw_only(),
-            nb::arg("batch_offset") = 0,
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::update_cache,
+        nb::arg("cache"),
+        nb::arg("input"),
+        nb::arg("update_idx"),
+        nb::kw_only(),
+        nb::arg("batch_offset") = 0,
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 void bind_fill_cache(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Fills the cache tensor in place with the values from input at the specified batch_idx.
 
         Args:
@@ -128,13 +120,7 @@ void bind_fill_cache(nb::module_& mod) {
     )doc";
 
     ttnn::bind_function<"fill_cache">(
-        mod,
-        doc,
-        ttnn::overload_t(
-            &ttnn::fill_cache,
-            nb::arg("cache_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg("batch_idx")));
+        mod, doc, &ttnn::fill_cache, nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"));
 }
 
 }  // namespace

@@ -54,14 +54,13 @@ void bind_uniform_operation(nb::module_& mod) {
     ttnn::bind_function<"uniform">(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::uniform,
-            nb::arg("input"),
-            nb::arg("from") = 0,
-            nb::arg("to") = 1,
-            nb::arg("seed") = 0,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::uniform,
+        nb::arg("input"),
+        nb::arg("from") = 0,
+        nb::arg("to") = 1,
+        nb::arg("seed") = 0,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::uniform
