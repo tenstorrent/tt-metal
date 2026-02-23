@@ -649,3 +649,12 @@ def test_dispatcher_data_missing_build_env_includes_last_error_and_env_hint(monk
     assert "unique_id=99" in message
     assert "Last getAllBuildEnvs failure: RuntimeError: rpc timeout" in message
     assert "TT_METAL_INSPECTOR_RPC is not set to 1" in message
+
+
+def test_extract_assert_code_handles_none_gracefully():
+    """Ensure extract_assert_code never passes None to path/stat (graceful during timeout/corrupted device triage)."""
+    from dump_lightweight_asserts import extract_assert_code
+
+    assert extract_assert_code(None, None, None) == "?"
+    assert extract_assert_code(None, 1, 0) == "?"
+    assert extract_assert_code("/nonexistent", None, 0) == "?"

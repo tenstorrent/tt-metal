@@ -9,6 +9,7 @@
 #include <future>
 #include <vector>
 #include <unordered_set>
+#include <sys/wait.h>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -2064,22 +2065,41 @@ void MetalContext::on_dispatch_timeout_detected() {
     if (!dispatch_timeout_detection_processed_) {
         dispatch_timeout_detection_processed_ = true;
         log_error(tt::LogMetal, "Timeout detected");
-        // Serialize Inspector RPC data if enabled
+        // Serialize Inspector RPC data if enabled (non-fatal; allow triage command to run on failure)
         if (rtoptions_.get_serialize_inspector_on_dispatch_timeout()) {
-            log_info(tt::LogMetal, "Serializing Inspector RPC data");
-            Inspector::serialize_rpc();
+            try {
+                log_info(tt::LogMetal, "Serializing Inspector RPC data");
+                Inspector::serialize_rpc();
+            } catch (const std::exception& e) {
+                log_warning(tt::LogMetal, "Serializing Inspector RPC data failed: {}", e.what());
+            } catch (...) {
+                log_warning(tt::LogMetal, "Serializing Inspector RPC data failed with unknown exception");
+            }
         }
 
         // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
         std::string command = rtoptions_.get_dispatch_timeout_command_to_execute();
         if (!command.empty()) {
-            log_info(tt::LogMetal, "Executing command: {}", command);
-
-            int result = std::system(command.c_str());
-
-            if (result != 0) {
-                log_warning(
-                    tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
+            try {
+                log_info(tt::LogMetal, "Executing command: {}", command);
+                int result = std::system(command.c_str());
+                if (result == -1) {
+                    log_warning(tt::LogMetal, "Timeout command '{}' failed to execute (system error)", command);
+                } else if (result != 0) {
+                    if (WIFEXITED(result)) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Timeout command '{}' returned non-zero exit code: {}",
+                            command,
+                            WEXITSTATUS(result));
+                    } else {
+                        log_warning(tt::LogMetal, "Timeout command '{}' terminated by signal", command);
+                    }
+                }
+            } catch (const std::exception& e) {
+                log_warning(tt::LogMetal, "Timeout command execution threw: {}", e.what());
+            } catch (...) {
+                log_warning(tt::LogMetal, "Timeout command execution threw unknown exception");
             }
         }
     }

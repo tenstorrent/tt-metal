@@ -828,11 +828,9 @@ void FDMeshCommandQueue::read_completion_queue() {
             if (num_outstanding_reads_ == 0) {
                 reads_processed_cv_.notify_one();
             }
-        } catch (const std::runtime_error& e) {
-            // Just to clarify, this is a weird case and it is an unrecoverable error.
-            // If we are here, its likely the device is hung, meaning that the whole program is stuck.
-            // We don't have a recovery mechanism for this, so we just need to clean up the state and let the main
-            // thread handle it.
+        } catch (...) {
+            // Unrecoverable error (device hung, timeout, or other exception). Clean up state and let the main
+            // thread handle it. Catch all exception types so we always clean up and avoid std::terminate.
             {
                 std::lock_guard<std::mutex> exception_lock(exception_mutex_);
                 thread_exception_ptr_ = std::current_exception();
