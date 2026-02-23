@@ -70,7 +70,7 @@ def load_weights_from_cache(
     """Load weights from cache: routed experts in fast-dispatch phase, then all layers on their submesh."""
     # Phase 1: Fast dispatch -- load routed experts for MoE layers (each on its submesh)
     preloaded_experts: dict[int, MoERoutedExpertWeights] = {}
-    with enable_fast_dispatch_mode(mesh_device):
+    with ttnn.device.setup_fast_dispatch(mesh_device):
         for layer_idx in range(FIRST_K_DENSE_REPLACE, num_layers):
             preloaded_experts[layer_idx] = load_moe_routed_experts_from_cache(
                 cache_path, submeshes[layer_idx], layer_idx

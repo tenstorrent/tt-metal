@@ -939,9 +939,21 @@ def load_moe_routed_experts_from_cache(
         if e > 0 and e % 64 == 0:
             logger.debug("  loaded experts 0..{}", e - 1)
         expert_dir = experts_dir / f"e_{e:03d}"
+        t_load_gate_t0 = time.perf_counter()
         routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
+        t_load_gate = time.perf_counter() - t_load_gate_t0
+
+        t_load_up_t0 = time.perf_counter()
         routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
+        t_load_up = time.perf_counter() - t_load_up_t0
+
+        t_load_down_t0 = time.perf_counter()
         routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
+        t_load_down = time.perf_counter() - t_load_down_t0
+
+        logger.debug(
+            f"    Loaded expert {e}: gate_proj.tensorbin in {t_load_gate:.3f}s, up_proj.tensorbin in {t_load_up:.3f}s, down_proj.tensorbin in {t_load_down:.3f}s"
+        )
     logger.info("  routed experts for layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return MoERoutedExpertWeights(
         routed_gate_proj=routed_gate_proj,
