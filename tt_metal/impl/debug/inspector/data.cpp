@@ -11,8 +11,11 @@
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
+#include "impl/debug/debug_helpers.hpp"
 #include <tt_stl/reflection.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "impl/dispatch/dispatch_core_common.hpp"
 
 namespace tt::tt_metal::inspector {
 
@@ -39,6 +42,8 @@ Data::Data()
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
             get_rpc_server().setGetAllDispatchCoreInfosCallback(
                 [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
+            get_rpc_server().setGetCoresByBlockTypeCallback(
+                [this](auto result) { this->rpc_get_cores_by_block_type(result); });
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
         } catch (const std::exception& e) {
@@ -284,6 +289,52 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
     }
 }
 
+void Data::rpc_get_cores_by_block_type(rpc::Inspector::GetCoresByBlockTypeResults::Builder results) {
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
+
+    std::vector<tt_cxy_pair> tensix_coords;
+    std::vector<tt_cxy_pair> active_eth_coords;
+    std::vector<tt_cxy_pair> idle_eth_coords;
+
+    for (ChipId device_id : device_ids) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+
+        for (const tt::umd::CoreCoord& logical_core :
+             soc_desc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL)) {
+            tensix_coords.emplace_back(device_id, logical_core.x, logical_core.y);
+        }
+
+        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+            active_eth_coords.emplace_back(device_id, logical_core.x, logical_core.y);
+        }
+
+        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+            idle_eth_coords.emplace_back(device_id, logical_core.x, logical_core.y);
+        }
+    }
+
+    auto tensix_list = results.initTensixCores(tensix_coords.size());
+    for (size_t i = 0; i < tensix_coords.size(); ++i) {
+        tensix_list[i].setChip(tensix_coords[i].chip);
+        tensix_list[i].setX(tensix_coords[i].x);
+        tensix_list[i].setY(tensix_coords[i].y);
+    }
+    auto active_list = results.initActiveEthCores(active_eth_coords.size());
+    for (size_t i = 0; i < active_eth_coords.size(); ++i) {
+        active_list[i].setChip(active_eth_coords[i].chip);
+        active_list[i].setX(active_eth_coords[i].x);
+        active_list[i].setY(active_eth_coords[i].y);
+    }
+    auto idle_list = results.initIdleEthCores(idle_eth_coords.size());
+    for (size_t i = 0; i < idle_eth_coords.size(); ++i) {
+        idle_list[i].setChip(idle_eth_coords[i].chip);
+        idle_list[i].setX(idle_eth_coords[i].x);
+        idle_list[i].setY(idle_eth_coords[i].y);
+    }
+}
+
 void Data::rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results) {
     // Get cluster descriptor from MetalContext
     auto& cluster = MetalContext::instance().get_cluster();
@@ -322,6 +373,7 @@ void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info,
     out.setWorkType(worker_type_str);
     out.setEventID(event_id);
     out.setCqId(info.cq_id);
+    out.setBlockType(std::string(tt::tt_metal::get_core_type_name(info.core_type)));
 }
 
 // Helper function to get the event id for a core
@@ -337,7 +389,7 @@ uint32_t Data::get_event_id_for_core(
 
 // Helper function to populate the core entry
 void Data::populate_core_entry(
-    rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id) {
+    rpc::CoreEntry::Builder entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id) {
     // Populate the key
     auto key = entry.initKey();
     key.setChip(k.chip);

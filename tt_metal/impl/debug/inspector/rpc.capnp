@@ -96,6 +96,7 @@ struct CoreInfo {
     servicingMetalDeviceId @2: Int32;
     eventID @3: UInt32;
     cqId @4: UInt8;
+    blockType @5: Text;
 }
 
 # Virtual core coordinates are used as a unique key to fetch dispatch/prefetch core information
@@ -165,4 +166,7 @@ interface Inspector {
 
     # Get runtime IDs for mesh workloads
     getMeshWorkloadsRuntimeIds @8 () -> (runtimeIds :List(MeshWorkloadRuntimeIdEntry));
+
+    # Get core coordinates by block type (active ETH, idle ETH, tensix) for triage - coordinates only
+    getCoresByBlockType @9 () -> (activeEthCores :List(VirtualCore), idleEthCores :List(VirtualCore), tensixCores :List(VirtualCore));
 }

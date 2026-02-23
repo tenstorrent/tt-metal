@@ -390,6 +390,7 @@ void Inspector::mesh_workload_set_runtime_id(
 void Inspector::set_dispatch_core_info(
     const tt_cxy_pair& virtual_core,
     const tt::tt_metal::DispatchWorkerType& type,
+    tt::CoreType core_type,
     const uint8_t cq_id,
     const ChipId device_id,
     const ChipId servicing_device_id) {
@@ -403,7 +404,7 @@ void Inspector::set_dispatch_core_info(
     }
     try {
         std::lock_guard<std::mutex> lock(data->dispatch_core_info_mutex);
-        data->dispatch_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+        data->dispatch_core_info[virtual_core] = {type, core_type, device_id, servicing_device_id, cq_id};
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log dispatch core info: {}", e.what());
     }
@@ -413,6 +414,7 @@ void Inspector::set_dispatch_core_info(
 void Inspector::set_dispatch_s_core_info(
     const tt_cxy_pair& virtual_core,
     const tt::tt_metal::DispatchWorkerType& type,
+    tt::CoreType core_type,
     const uint8_t cq_id,
     const ChipId device_id,
     const ChipId servicing_device_id) {
@@ -426,7 +428,7 @@ void Inspector::set_dispatch_s_core_info(
     }
     try {
         std::lock_guard<std::mutex> lock(data->dispatch_s_core_info_mutex);
-        data->dispatch_s_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+        data->dispatch_s_core_info[virtual_core] = {type, core_type, device_id, servicing_device_id, cq_id};
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log dispatch_s core info: {}", e.what());
     }
@@ -436,6 +438,7 @@ void Inspector::set_dispatch_s_core_info(
 void Inspector::set_prefetcher_core_info(
     const tt_cxy_pair& virtual_core,
     const tt::tt_metal::DispatchWorkerType& type,
+    tt::CoreType core_type,
     const uint8_t cq_id,
     const ChipId device_id,
     const ChipId servicing_device_id) {
@@ -449,7 +452,7 @@ void Inspector::set_prefetcher_core_info(
     }
     try {
         std::lock_guard<std::mutex> lock(data->prefetcher_core_info_mutex);
-        data->prefetcher_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+        data->prefetcher_core_info[virtual_core] = {type, core_type, device_id, servicing_device_id, cq_id};
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log prefetcher core info: {}", e.what());
     }

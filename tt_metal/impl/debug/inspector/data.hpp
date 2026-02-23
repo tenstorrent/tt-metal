@@ -29,12 +29,13 @@ private:
         rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
     void rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results);
     void rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results);
+    void rpc_get_cores_by_block_type(rpc::Inspector::GetCoresByBlockTypeResults::Builder results);
     void rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
     static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
     static void populate_core_entry(
-        rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id);
+        rpc::CoreEntry::Builder entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id);
     static uint32_t get_event_id_for_core(
         const CoreInfo& info, const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
     static void populate_core_entries_by_category(
