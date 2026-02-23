@@ -5,18 +5,92 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import sys
+from pathlib import Path
 from typing import TextIO
 
 from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
+from conftest import bh_2d_mesh_device_context
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.runner import GenerationResult, run_generation
 from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    MoERoutedExpertWeights,
+    load_layer,
+    load_moe_routed_experts_from_cache,
+)
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
+FIRST_K_DENSE_REPLACE = 3
+
+# Each layer is loaded onto a separate (4, 2) submesh; full mesh is (4, 2*num_layers).
+SUBMESH_SHAPE = (4, 2)
+
+
+@contextlib.contextmanager
+def open_mesh_device():
+    """Open mesh device using bh_2d_mesh_device_context."""
+    if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
+        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
+        logger.info("Set TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=30000 (fabric init may be slow)")
+    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+    logger.info("Opening mesh device...")
+    with bh_2d_mesh_device_context(device_params) as mesh_device:
+        logger.info(f"Mesh device opened (id={mesh_device.get_system_mesh_id()}, shape={mesh_device.shape})")
+        yield mesh_device
+
+
+def decoder_layer_id_from_mesh_id(mesh_id: int) -> int:
+    """
+    Layer ID is the index of the layer in the original model (i.e. layer 0-3 are dense layers, layer 4-60 are MoE layers)
+    The mesh ID is the pipeline stage index (0 is embedding, 1-3 are dense layers, 4-61 are MoE, and 62 is LM head + sampling)
+    """
+    assert mesh_id > 0 and mesh_id < 61, "Cannot get layer ID from mesh ID: {mesh_id}"
+    return mesh_id - 1
+
+
+SYSTEM_MESH_ID_EMBEDDING = 0
+SYSTEM_MESH_ID_LM_HEAD = 62
+
+
+def load_weights_from_cache(
+    cache_path: Path,
+    mesh_device: ttnn.MeshDevice,
+) -> DeepSeekV3LayerWeights:
+    """Load weights from cache: routed experts in fast-dispatch phase, then all layers on their submesh."""
+    mesh_id = mesh_device.get_system_mesh_id()
+    assert (
+        mesh_id >= SYSTEM_MESH_ID_EMBEDDING and mesh_id <= SYSTEM_MESH_ID_LM_HEAD
+    ), f"Mesh ID must be between {SYSTEM_MESH_ID_EMBEDDING} and {SYSTEM_MESH_ID_LM_HEAD}, got {mesh_id}"
+    if mesh_id == SYSTEM_MESH_ID_EMBEDDING:
+        # Load embedding weights
+        assert False, "Embedding weights are not supported yet"
+    elif mesh_id == SYSTEM_MESH_ID_LM_HEAD:
+        # Load LM head weights
+        assert False, "LM head weights are not supported yet"
+    else:
+        # Get the correct layer ID given the mesh ID
+        layer_id = decoder_layer_id_from_mesh_id(mesh_device.get_system_mesh_id())
+
+        # Phase 1: Fast dispatch -- load routed experts for MoE layers (each on its submesh)
+        preloaded_experts: MoERoutedExpertWeights | None = None
+        with ttnn.device.setup_fast_dispatch(mesh_device):
+            preloaded_experts = load_moe_routed_experts_from_cache(cache_path, mesh_device, layer_id)
+
+        # Phase 2: Slow dispatch -- load each layer onto its (4, 2) submesh
+        layer = load_layer(
+            cache_path,
+            mesh_device,
+            layer_id,
+            preloaded_routed_experts=preloaded_experts,
+        )
+
+        return layer
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -35,8 +109,18 @@ def create_parser() -> argparse.ArgumentParser:
         default=True,
         help="Use HostInterface loopback path (recommended for current B1 bring-up)",
     )
-    parser.add_argument("--mesh-height", type=int, default=1, help="Mesh height for open_mesh_device")
-    parser.add_argument("--mesh-width", type=int, default=1, help="Mesh width for open_mesh_device")
+    parser.add_argument(
+        "--cache-path",
+        type=Path,
+        required=True,
+        help="Path to the weight cache directory (contains layer_NNN/ subdirs)",
+    )
+    parser.add_argument(
+        "--num-layers",
+        type=int,
+        default=1,
+        help="Number of decoder layers to load from cache",
+    )
     return parser
 
 
@@ -50,16 +134,15 @@ def run_demo(
     max_new_tokens: int,
     tokenizer_name_or_path: str,
     loopback_mode: bool,
-    mesh_height: int,
-    mesh_width: int,
+    cache_path: Path,
+    num_layers: int,
     output_stream: TextIO,
 ) -> GenerationResult:
     logger.info(
-        "Starting DeepSeek V3 B1 demo (max_new_tokens={}, loopback_mode={}, mesh_shape={}x{})",
+        "Starting DeepSeek V3 B1 demo (max_new_tokens={}, loopback_mode={}, num_layers={})",
         max_new_tokens,
         loopback_mode,
-        mesh_height,
-        mesh_width,
+        num_layers,
     )
     if not is_slow_dispatch():
         raise RuntimeError(
@@ -80,10 +163,10 @@ def run_demo(
         output_stream.write(text)
         output_stream.flush()
 
-    mesh_device: ttnn.MeshDevice | None = None
-    try:
-        logger.info("Opening mesh device")
-        mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_height, mesh_width))
+    with open_mesh_device() as mesh_device:
+        weights = load_weights_from_cache(cache_path, mesh_device)
+        breakpoint()
+
         logger.info("Creating DeepSeekV3 model")
         model = create_model(mesh_device=mesh_device, batch_size=1, loopback_mode=loopback_mode)
         logger.info("Running prefill + decode")
@@ -102,10 +185,6 @@ def run_demo(
             len(result.generated_token_ids),
         )
         return result
-    finally:
-        if mesh_device is not None:
-            logger.info("Closing mesh device")
-            ttnn.close_mesh_device(mesh_device)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,8 +196,8 @@ def main(argv: list[str] | None = None) -> int:
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
         loopback_mode=args.loopback_mode,
-        mesh_height=args.mesh_height,
-        mesh_width=args.mesh_width,
+        cache_path=args.cache_path,
+        num_layers=args.num_layers,
         output_stream=sys.stdout,
     )
     print(file=sys.stdout, flush=True)
