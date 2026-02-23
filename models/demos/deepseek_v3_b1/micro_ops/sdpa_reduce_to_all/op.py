@@ -394,19 +394,21 @@ class SdpaReduceToAll:
                     ("fwd_r2_buffer_offset", r2_buffer_offset),
                 ]
 
+                tile_desc = ttnn.TileDescriptor(tile_height, tile_width)
+                input_dtype = input_l_device.dtype
+
                 # CB descriptors
                 cb_local_l_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_local_l, input_l_device)
                 cb_local_ms_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_local_ms, input_ms_device)
                 cb_l_out_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_l_out, output_l_device)
+                cb_l_out_desc.format_descriptors[0].tile = tile_desc
+                cb_l_out_desc.format_descriptors[0].page_size = aligned_page_size
 
                 cb_r1_neighbor_l_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_r1_neighbor_l, r1_recv_device)
                 cb_r1_neighbor_l_desc.total_size = out_tiles * aligned_page_size
 
                 cb_r2_neighbor_l_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_r2_neighbor_l, r2_recv_device)
                 cb_r2_neighbor_l_desc.total_size = out_tiles * aligned_page_size
-
-                tile_desc = ttnn.TileDescriptor(tile_height, tile_width)
-                input_dtype = input_l_device.dtype
 
                 cb_r1_neighbor_ms_desc = ttnn.CBDescriptor(
                     total_size=aligned_page_size,
