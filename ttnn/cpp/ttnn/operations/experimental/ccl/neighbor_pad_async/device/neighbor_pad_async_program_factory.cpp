@@ -105,10 +105,15 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
         // W fabric workers (Phase 2, for 2D padding)
         for (size_t i = 0; i < shared_vars.w_reader_kernel_ids.size(); ++i) {
             CoreCoord core = shared_vars.w_fabric_core_coords[i];
-            auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.w_writer_kernel_ids[i]);
+
+            // W reader: update output tensor address (runtime arg index 5)
+            auto& reader_runtime_args = GetRuntimeArgs(program, shared_vars.w_reader_kernel_ids[i]);
+            auto& w_reader_args = reader_runtime_args[core.x][core.y];
+            w_reader_args[5] = output.buffer()->address();
 
             // W reader/writer semaphores are program-local (CreateSemaphore) — no update needed.
             // W writer: update tensor addresses only
+            auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.w_writer_kernel_ids[i]);
             auto& w_writer_args = writer_runtime_args[core.x][core.y];
             w_writer_args[0] = output.buffer()->address();
             w_writer_args[1] = output.buffer()->address();
@@ -123,21 +128,15 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 //
 // Phase 1 — Interior copy + H halo exchange (all ~120 cores active):
 //   Local copy cores: read input sticks → write to output DRAM at (h+pH, w+pW) offset.
-//     Additionally write W boundary sticks (leftmost/rightmost pW of interior) to W reader L1.
 //   H fabric writer (BRISC): self-pad zeros/replicate to output DRAM for H pad rows.
-//     Additionally write W boundary sticks of those rows to W reader L1.
 //   H fabric reader (NCRISC): receive H halo from fabric → L1 → output DRAM.
-//     Additionally write W boundary sticks of received rows to W reader L1.
 //   All Phase 1 cores signal Phase 2 barrier on completion.
 //
 // Phase 2 — W halo exchange (2-4 W fabric cores only):
-//   W reader: reads W boundary sticks from LOCAL L1 boundary buffer (NOT output DRAM),
-//     sends to neighbor via fabric or self-pads. Receives from neighbor → L1 → output DRAM.
+//   W reader: reads W boundary sticks from output DRAM (safe because Phase 1 calls
+//     noc_async_write_barrier() before signaling the barrier semaphore).
+//     Sends to neighbor via fabric or self-pads. Receives from neighbor → L1 → output DRAM.
 //   W writer: writes self-pad to output DRAM, sends W boundary data via fabric.
-//
-// Key design: Phase 2 W reader reads from L1 instead of DRAM, eliminating the cross-phase
-// DRAM visibility issue (Phase 1 BRISC/NOC0 writes may not be immediately visible to
-// Phase 2 NCRISC/NOC1 DRAM reads despite semaphore barriers).
 NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorkloadFactory::create_at(
     const NeighborPadAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
@@ -294,9 +293,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::optional<MeshCoordinate> w_backward_coord;
     uint32_t w_outer_dim_size = 0;
     uint32_t max_w_padding = 0;
-    uint32_t boundary_sticks_per_row = 0;
-    uint32_t w_boundary_buf_addr = 0;
-    std::shared_ptr<Buffer> boundary_l1_buffer;  // Keeps L1 allocation alive for boundary buffer
 
     if (is_2d) {
         // W-axis device topology
@@ -335,60 +331,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         w_outer_dim_size = outer_dim_size * output_halo_dim_size;
         max_w_padding = std::max(operation_attributes.pad2_left, operation_attributes.pad2_right);
 
-        // Boundary sticks buffer on W fabric cores: Phase 1 cores write the leftmost
-        // and rightmost W boundary sticks of each output row here, so Phase 2 W reader
-        // can read from local L1 instead of output DRAM. This avoids cross-phase DRAM
-        // visibility issues (Phase 1 BRISC/NOC0 writes may not be visible to Phase 2
-        // NCRISC/NOC1 reads without explicit cross-NOC synchronization).
-        // Layout per row: [left_0..left_{p-1}, right_0..right_{p-1}] (2*pW sticks)
-        //
-        // IMPORTANT: This buffer+CB must be created FIRST on W fabric cores (before
-        // sender_cb and recv_cb) so that the program's CB allocator sees the reserved
-        // address range before allocating other CBs on these cores.
-        boundary_sticks_per_row = 2 * max_w_padding;
-        uint32_t boundary_total_sticks = w_outer_dim_size * boundary_sticks_per_row;
-        uint32_t boundary_buf_size = boundary_total_sticks * page_size;
-        // Phase 1→Phase 2 barrier and final semaphores: allocated as program-local
-        // semaphores via CreateSemaphore. This avoids L1 address collisions with the
-        // boundary buffer (GlobalSemaphore allocates via MeshBuffer which doesn't
-        // register with per-device L1 allocators, causing overlapping addresses).
-        if (boundary_buf_size > 0) {
-            // Pre-allocate a HEIGHT_SHARDED L1 buffer so the address is known immediately
-            // (CB addresses are only assigned during program compilation, too late for
-            // runtime args that Phase 1 kernels on OTHER cores need).
-            // Then register it as a program CB via set_globally_allocated_address so the
-            // program's CB allocator knows about this L1 region and won't allocate other
-            // CBs at overlapping addresses on the W fabric cores.
-            IDevice* device = output_buffer->device();
-            ShardSpecBuffer boundary_shard_spec(
-                w_fabric_core_range,
-                {boundary_total_sticks, 1},
-                ShardOrientation::ROW_MAJOR,
-                {1, 1},
-                {boundary_total_sticks * num_w_fabric_cores, 1});
-            boundary_l1_buffer = CreateBuffer(ShardedBufferConfig{
-                device,
-                static_cast<DeviceAddr>(boundary_buf_size * num_w_fabric_cores),
-                static_cast<DeviceAddr>(page_size),
-                BufferType::L1,
-                TensorMemoryLayout::HEIGHT_SHARDED,
-                boundary_shard_spec});
-            w_boundary_buf_addr = boundary_l1_buffer->address();
-
-            // Register boundary buffer with the program so CB allocator avoids this region.
-            // Use aligned_size_per_bank() (not boundary_buf_size) so the CB reserves the
-            // full aligned region — the device allocator may round up pages, creating a gap
-            // that other CBs could be placed in if we only reserve boundary_buf_size.
-            uint32_t boundary_cb_index = tt::CB::c_in2;
-            uint32_t boundary_cb_size = static_cast<uint32_t>(boundary_l1_buffer->aligned_size_per_bank());
-            CircularBufferConfig boundary_cb_config = CircularBufferConfig(boundary_cb_size, {{boundary_cb_index, df}})
-                                                          .set_page_size(boundary_cb_index, page_size)
-                                                          .set_globally_allocated_address(*boundary_l1_buffer);
-            CreateCircularBuffer(program, w_fabric_core_range, boundary_cb_config);
-        }
-
         // CB and recv buffer on W fabric cores
-        // (created AFTER boundary CB so allocator knows about the reserved region)
         CreateCircularBuffer(program, w_fabric_core_range, cb_sender_config);
 
         // L1 recv buffer on W fabric cores: fabric-delivered W padding data arrives here
@@ -474,7 +417,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
             writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);              // use_l1_intermediate
             writer_kernel_config.compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
-            writer_kernel_config.compile_args.push_back(is_2d ? max_w_padding : 0);  // w_padding
             writer_kernel_config.compile_args.push_back(
                 is_2d ? 1 : 0);  // handle_incoming_writes (H writer: yes for 2D)
             writer_kernel_config.compile_args.push_back(
@@ -530,7 +472,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     writer_rt_args.push_back(0);
                 }
             }
-            writer_rt_args.push_back(is_2d ? w_boundary_buf_addr : 0);  // boundary buffer L1 addr on W cores
             if (direction) {
                 writer_rt_args.push_back(false);
                 writer_rt_args.push_back(backward_coord.has_value());
@@ -628,8 +569,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 auto local_writer_cfg = WriterDataMovementConfig{};
                 local_writer_cfg.compile_args = {sender_cb_index, page_size};
                 TensorAccessorArgs(*output_buffer).append_to(local_writer_cfg.compile_args);
-                local_writer_cfg.compile_args.push_back(is_2d ? 1 : 0);              // use_boundary_buf
-                local_writer_cfg.compile_args.push_back(is_2d ? max_w_padding : 0);  // w_padding
                 auto local_writer_kernel_id = CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_writer.cpp",
@@ -665,7 +604,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                         local_writer_rt_args.push_back(0);
                     }
                 }
-                local_writer_rt_args.push_back(is_2d ? w_boundary_buf_addr : 0);  // boundary buf addr
                 SetRuntimeArgs(program, local_writer_kernel_id, {logical_core}, local_writer_rt_args);
 
                 unit_offset += units_for_core;
@@ -678,7 +616,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::vector<KernelHandle> w_writer_kernel_ids;
     if (is_2d) {
         // Count !is_first_chip H fabric writers that send an extra Phase 2 signal
-        // from handle_incoming_writes (after writing received H halo data to DRAM + W boundary L1).
+        // from handle_incoming_writes (after writing received H halo data to DRAM).
         // Each H writer signals once after its main loop, and !is_first_chip writers signal
         // a second time after handle_incoming_writes completes.
         uint32_t extra_writer_signal_count = 0;
@@ -700,8 +638,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 CoreCoord w_virtual_core = w_fabric_virtual_cores[w_core_idx];
                 CoreCoord w_opposite_virtual_core = w_fabric_virtual_cores[w_link * 2 + (1 - w_direction)];
 
-                // Phase 2 W reader kernel — only reads, no DRAM writes.
-                // Simpler compile-time args (no TensorAccessor needed).
+                // Phase 2 W reader kernel — reads boundary sticks from output DRAM.
                 auto w_reader_kernel_config = ReaderDataMovementConfig{};
                 w_reader_kernel_config.compile_args = {
                     w_direction ? is_last_w_device : is_first_w_device,  // is_first_chip
@@ -709,9 +646,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     sender_cb_index,                                     // cb_output_id
                     w_direction,                                         // direction
                     is_padding_zeros,
-                    page_size,                // stick_size
-                    boundary_sticks_per_row,  // boundary_sticks_per_row
-                    recv_cb_index};           // recv_cb_id
+                    page_size};  // stick_size
+                TensorAccessorArgs(*output_buffer).append_to(w_reader_kernel_config.compile_args);
+                w_reader_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
                 auto w_reader_kernel_id = CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -723,10 +660,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 std::vector<uint32_t> w_reader_rt_args = {
                     w_outer_dim_size,                                                                // outer_dim_size
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
-                    w_barrier_sem_addr,  // barrier_sem_addr (program-local)
+                    w_barrier_sem_addr,                                                              // barrier_sem_id
                     barrier_count,
-                    w_final_sem_addr,      // final_sem_addr
-                    w_boundary_buf_addr};  // boundary L1 buffer address
+                    w_final_sem_addr,                         // final_sem_id
+                    tensor_return_value.buffer()->address(),  // output_tensor_address
+                    output_num_sticks_per_halo_dim,           // output_row_width (W + 2*pW)
+                    operation_attributes.pad2_left,           // pad2_left
+                    num_sticks_per_halo_dim};                 // num_interior_sticks (W)
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                 // Phase 2 W writer kernel (reuses minimal_default_writer)
@@ -741,7 +681,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 TensorAccessorArgs(*output_buffer).append_to(w_writer_kernel_config.compile_args);
                 w_writer_kernel_config.compile_args.push_back(1);              // use_l1_intermediate
                 w_writer_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
-                w_writer_kernel_config.compile_args.push_back(0);              // w_padding (no boundary writes)
                 w_writer_kernel_config.compile_args.push_back(1);              // handle_incoming_writes (W writer: yes)
                 w_writer_kernel_config.compile_args.push_back(
                     1);  // sems_are_program_local (W writer: CreateSemaphore IDs)
@@ -779,7 +718,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 for (uint32_t s = 0; s < 6; s++) {
                     w_writer_rt_args.push_back(0);
                 }
-                w_writer_rt_args.push_back(0);  // w_boundary_buf_addr (unused by W writer)
                 // Fabric connection args
                 if (w_direction) {
                     w_writer_rt_args.push_back(false);
@@ -818,8 +756,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             .w_reader_kernel_ids = std::move(w_reader_kernel_ids),
             .w_writer_kernel_ids = std::move(w_writer_kernel_ids),
             .w_fabric_core_coords = std::move(w_fabric_logical_cores),
-            .num_w_links = is_2d ? operation_attributes.pad2_num_links : 0,
-            .boundary_l1_buffer = std::move(boundary_l1_buffer)});
+            .num_w_links = is_2d ? operation_attributes.pad2_num_links : 0});
 }
 
 }  // namespace ttnn::experimental::prim

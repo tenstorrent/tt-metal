@@ -31,42 +31,8 @@ constexpr auto dst_ct_args = TensorAccessorArgs<6>();
 constexpr uint32_t ct_after_dst = dst_ct_args.next_compile_time_args_offset();
 constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_dst);
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_dst + 1);
-constexpr uint32_t w_padding = get_compile_time_arg_val(ct_after_dst + 2);
-constexpr bool handle_incoming_writes = get_compile_time_arg_val(ct_after_dst + 3);
-constexpr bool sems_are_program_local = get_compile_time_arg_val(ct_after_dst + 4);
-constexpr uint32_t boundary_sticks_per_row = 2 * w_padding;
-
-// Write a stick to the W boundary buffer on all W reader cores if the column iter
-// is in the left or right W boundary region.
-template <uint32_t wp>
-inline void maybe_write_boundary(
-    uint32_t l1_addr,
-    uint32_t iter,
-    uint32_t num_sticks,
-    uint32_t boundary_row,
-    uint32_t w_boundary_buf_addr,
-    uint32_t num_targets,
-    const uint8_t* noc_x,
-    const uint8_t* noc_y) {
-    if constexpr (wp > 0) {
-        constexpr uint32_t bspr = 2 * wp;
-        if (iter < wp) {
-            uint32_t buf_offset = boundary_row * bspr * stick_size + iter * stick_size;
-            for (uint32_t wt = 0; wt < num_targets; wt++) {
-                uint64_t addr = get_noc_addr(noc_x[wt], noc_y[wt], w_boundary_buf_addr + buf_offset);
-                noc_async_write(l1_addr, addr, stick_size);
-            }
-        }
-        if (iter >= num_sticks - wp) {
-            uint32_t right_idx = iter - (num_sticks - wp);
-            uint32_t buf_offset = boundary_row * bspr * stick_size + (wp + right_idx) * stick_size;
-            for (uint32_t wt = 0; wt < num_targets; wt++) {
-                uint64_t addr = get_noc_addr(noc_x[wt], noc_y[wt], w_boundary_buf_addr + buf_offset);
-                noc_async_write(l1_addr, addr, stick_size);
-            }
-        }
-    }
-}
+constexpr bool handle_incoming_writes = get_compile_time_arg_val(ct_after_dst + 2);
+constexpr bool sems_are_program_local = get_compile_time_arg_val(ct_after_dst + 3);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -110,7 +76,6 @@ void kernel_main() {
         signal_noc_y[st] = get_arg_val<uint32_t>(arg_idx++);
         signal_sem_addr[st] = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     }
-    const uint32_t w_boundary_buf_addr = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
@@ -186,21 +151,6 @@ void kernel_main() {
                         uint64_t dst_noc_addr =
                             get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-
-                        // Write W boundary sticks to Phase 2 W reader cores' L1
-                        if constexpr (w_padding > 0) {
-                            uint32_t row_in_frame = direction ? (output_halo_dim_size - padding + pad_id) : pad_id;
-                            uint32_t boundary_row = outer_dim * output_halo_dim_size + row_in_frame;
-                            maybe_write_boundary<w_padding>(
-                                l1_read_addr,
-                                iter,
-                                num_sticks_to_read,
-                                boundary_row,
-                                w_boundary_buf_addr,
-                                num_phase2_signal_targets,
-                                signal_noc_x,
-                                signal_noc_y);
-                        }
                     }
                     dst_stick_id++;
 
@@ -222,21 +172,6 @@ void kernel_main() {
                         uint64_t dst_noc_addr =
                             get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-
-                        // Write W boundary sticks to Phase 2 W reader cores' L1
-                        if constexpr (w_padding > 0) {
-                            uint32_t row_in_frame = direction ? (output_halo_dim_size - padding + pad_id) : pad_id;
-                            uint32_t boundary_row = outer_dim * output_halo_dim_size + row_in_frame;
-                            maybe_write_boundary<w_padding>(
-                                l1_read_addr,
-                                iter,
-                                num_sticks_to_read,
-                                boundary_row,
-                                w_boundary_buf_addr,
-                                num_phase2_signal_targets,
-                                signal_noc_x,
-                                signal_noc_y);
-                        }
                     }
                     dst_stick_id++;
 
@@ -322,7 +257,7 @@ void kernel_main() {
 
     fabric_connection.close();
 
-    // Ensure all DRAM + boundary L1 writes are complete before signaling Phase 2.
+    // Ensure all DRAM writes are complete before signaling Phase 2.
     noc_async_write_barrier();
 
     // Signal Phase 2 W fabric reader cores that Phase 1 writes are complete
@@ -334,7 +269,7 @@ void kernel_main() {
     noc_async_write_barrier();
 
     // Incoming writes: pop sticks that the paired reader pushed from its L1 recv buffer
-    // (fabric-delivered padding from neighbor) and write to output DRAM + W boundary L1.
+    // (fabric-delivered padding from neighbor) and write to output DRAM.
     // Used by both H fabric writers (incoming H halo) and W fabric writers (incoming W padding).
     if constexpr (handle_incoming_writes) {
         if (!is_first_chip) {
@@ -349,27 +284,11 @@ void kernel_main() {
                     }
                     uint32_t dst_stick_id = inc_offset + row_offset + stick_start_id;
 
-                    uint32_t boundary_row = 0;
-                    if constexpr (w_padding > 0) {
-                        uint32_t row_in_frame = direction ? (output_halo_dim_size - padding + pad_id) : pad_id;
-                        boundary_row = od * output_halo_dim_size + row_in_frame;
-                    }
-
                     for (uint32_t iter = 0; iter < num_sticks_to_read; iter++) {
                         cb_wait_front(cb_output_id, 1);
                         uint32_t l1_read_addr = get_read_ptr(cb_output_id);
                         uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-
-                        maybe_write_boundary<w_padding>(
-                            l1_read_addr,
-                            iter,
-                            num_sticks_to_read,
-                            boundary_row,
-                            w_boundary_buf_addr,
-                            num_phase2_signal_targets,
-                            signal_noc_x,
-                            signal_noc_y);
 
                         noc_async_write_barrier();
                         cb_pop_front(cb_output_id, 1);

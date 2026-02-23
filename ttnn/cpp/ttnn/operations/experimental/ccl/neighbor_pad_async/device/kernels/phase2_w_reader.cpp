@@ -3,17 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Phase 2 W fabric reader for fused 2D neighbor pad.
-// Reads W boundary sticks from a local L1 buffer (populated by Phase 1 cores via NOC
-// writes) instead of from DRAM. This avoids cross-NOC DRAM visibility issues between
-// Phase 1 (BRISC/NOC0 writes) and Phase 2 (NCRISC/NOC1 reads).
-//
-// Boundary buffer layout per row: [left_0..left_{p-1}, right_0..right_{p-1}]
-// where left = leftmost p interior sticks, right = rightmost p interior sticks.
+// Reads W boundary sticks directly from the output DRAM tensor (written by Phase 1)
+// instead of from an L1 boundary buffer. Phase 1 cores call noc_async_write_barrier()
+// before signaling the Phase 2 barrier semaphore, guaranteeing DRAM writes are committed.
 //
 // DRAM writes are handled by the paired writer (minimal_default_writer).
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 
@@ -25,8 +21,10 @@ constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
 constexpr bool direction = get_compile_time_arg_val(3);
 constexpr bool is_padding_zeros = get_compile_time_arg_val(4);
 constexpr uint32_t stick_size = get_compile_time_arg_val(5);
-constexpr uint32_t boundary_sticks_per_row = get_compile_time_arg_val(6);
-constexpr uint32_t recv_cb_id = get_compile_time_arg_val(7);
+// Output TensorAccessorArgs start at index 6 (variable length)
+constexpr auto dst_args = TensorAccessorArgs<6>();
+constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
+constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_dst);
 
 template <uint32_t stick_size_bytes>
 inline void zeroPad(uint32_t cb_id) {
@@ -51,9 +49,12 @@ void kernel_main() {
     const uint32_t barrier_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t boundary_buf_addr = get_arg_val<uint32_t>(arg_idx++);
+    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
+    const uint32_t output_row_width = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t pad2_left = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_interior_sticks = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint32_t row_stride = boundary_sticks_per_row * stick_size;
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
     // barrier_sem is a CreateSemaphore (initialized to 0 at program dispatch). No kernel-side init needed.
     // Wait for Phase 1 to complete.
@@ -62,23 +63,23 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
     }
 
-    // Main loop: read boundary sticks from local L1 → CB for the paired writer.
+    // Main loop: read boundary sticks from output DRAM → CB for the paired writer.
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
-        uint32_t boundary_row_base = boundary_buf_addr + outer_dim * row_stride;
+        uint32_t row_base = outer_dim * output_row_width;
 
         if (is_first_chip) {
             if (!is_padding_zeros) {
-                // Read one boundary stick from L1; writer replicates it to all padding columns.
-                // direction=0: left[0] (leftmost interior), direction=1: right[p-1] (rightmost interior)
-                uint32_t stick_offset;
+                // Read one boundary stick from output DRAM; writer replicates it to all padding columns.
+                // direction=0: leftmost interior, direction=1: rightmost interior
+                uint32_t col;
                 if (direction) {
-                    stick_offset = (2 * padding - 1) * stick_size;  // right[p-1]
+                    col = pad2_left + num_interior_sticks - 1;
                 } else {
-                    stick_offset = 0;  // left[0]
+                    col = pad2_left;
                 }
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                noc_async_read(get_noc_addr(boundary_row_base + stick_offset), dst_l1_addr, stick_size);
+                noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             } else {
@@ -90,19 +91,19 @@ void kernel_main() {
         }
 
         if (!is_last_chip) {
-            // Read boundary sticks from L1 to send to neighbor
+            // Read boundary sticks from output DRAM to send to neighbor
             for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
-                uint32_t stick_offset;
+                uint32_t col;
                 if (direction) {
-                    // Send leftmost boundary: left[padding - pad_id]
-                    stick_offset = (padding - pad_id) * stick_size;
+                    // Send leftmost boundary: interior column (padding - pad_id)
+                    col = pad2_left + (padding - pad_id);
                 } else {
-                    // Send rightmost boundary: right[padding - pad_id]
-                    stick_offset = (padding + (padding - pad_id)) * stick_size;
+                    // Send rightmost boundary: interior column (W - pad_id)
+                    col = pad2_left + num_interior_sticks - pad_id;
                 }
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                noc_async_read(get_noc_addr(boundary_row_base + stick_offset), dst_l1_addr, stick_size);
+                noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             }

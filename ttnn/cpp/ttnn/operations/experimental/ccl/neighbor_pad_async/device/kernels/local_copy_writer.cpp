@@ -5,7 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
-#include <utility>
 //
 using address_t = uint32_t;
 //
@@ -13,10 +12,6 @@ constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr uint32_t stick_size = get_compile_time_arg_val(1);
 // TensorAccessorArgs at index 2 (variable length)
 constexpr auto dst_args = TensorAccessorArgs<2>();
-constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
-constexpr bool use_boundary_buf = get_compile_time_arg_val(ct_after_dst);
-constexpr uint32_t w_padding = get_compile_time_arg_val(ct_after_dst + 1);
-constexpr uint32_t boundary_sticks_per_row = 2 * w_padding;
 //
 void kernel_main() {
     DeviceZoneScopedN("NPAD-WRITER");
@@ -42,7 +37,6 @@ void kernel_main() {
         signal_noc_y[t] = get_arg_val<uint32_t>(arg_idx++);
         signal_sem_addr[t] = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     }
-    const uint32_t w_boundary_buf_addr = get_arg_val<uint32_t>(arg_idx++);
     //
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
@@ -53,13 +47,6 @@ void kernel_main() {
         const uint32_t t = linear_row % input_halo_dim_size;
         const uint32_t outer_dim_offset = outer_idx * (num_sticks_per_halo_dim * output_halo_dim_size);
 
-        // Boundary buffer row index: global output row = outer_idx * output_halo_dim_size + (t + padding_left)
-        uint32_t boundary_buf_base = 0;
-        if constexpr (use_boundary_buf && w_padding > 0) {
-            uint32_t boundary_row = outer_idx * output_halo_dim_size + (t + padding_left);
-            boundary_buf_base = boundary_row * boundary_sticks_per_row * stick_size;
-        }
-
         uint32_t dst_stick_id = (t + padding_left) * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset;
         { DeviceZoneScopedN("NPAD-WR-STICKS");
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
@@ -67,29 +54,6 @@ void kernel_main() {
             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-
-            // Write W boundary sticks to Phase 2 W reader cores' L1 boundary buffer
-            if constexpr (use_boundary_buf && w_padding > 0) {
-                if (iter < w_padding) {
-                    // Left boundary: slot left[iter]
-                    uint32_t buf_offset = boundary_buf_base + iter * stick_size;
-                    for (uint32_t wt = 0; wt < num_phase2_signal_targets; wt++) {
-                        uint64_t addr =
-                            get_noc_addr(signal_noc_x[wt], signal_noc_y[wt], w_boundary_buf_addr + buf_offset);
-                        noc_async_write(l1_read_addr, addr, stick_size);
-                    }
-                }
-                if (iter >= num_sticks_to_read - w_padding) {
-                    // Right boundary: slot right[iter - (num_sticks_to_read - w_padding)]
-                    uint32_t right_idx = iter - (num_sticks_to_read - w_padding);
-                    uint32_t buf_offset = boundary_buf_base + (w_padding + right_idx) * stick_size;
-                    for (uint32_t wt = 0; wt < num_phase2_signal_targets; wt++) {
-                        uint64_t addr =
-                            get_noc_addr(signal_noc_x[wt], signal_noc_y[wt], w_boundary_buf_addr + buf_offset);
-                        noc_async_write(l1_read_addr, addr, stick_size);
-                    }
-                }
-            }
 
             dst_stick_id++;
             noc_async_write_barrier();

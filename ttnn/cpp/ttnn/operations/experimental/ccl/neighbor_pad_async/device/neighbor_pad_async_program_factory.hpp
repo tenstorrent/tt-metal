@@ -24,8 +24,6 @@ struct NeighborPadAsyncSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> w_writer_kernel_ids;
     std::vector<tt::tt_metal::CoreCoord> w_fabric_core_coords;
     uint32_t num_w_links = 0;
-    // L1 buffer backing the boundary CB on W fabric cores (keeps allocation alive)
-    std::shared_ptr<tt::tt_metal::Buffer> boundary_l1_buffer;
 };
 
 struct NeighborPadAsyncMeshWorkloadFactory {
