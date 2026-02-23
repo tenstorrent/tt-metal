@@ -503,7 +503,8 @@ void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
     init_done_.erase(DispatchKernelInitializer::key);
     if (force_recreate_topology) {
         reset_dispatch_topology();
-        // Recreate the initializer after reset (it was erased so that topology can be recreated for FD).
+        // Create the initializer from scratch if this is the first time FD is being dynamically initialized.
+        // Or recreate the initializer after reset (it was erased so that topology can be recreated for FD).
         auto dispatch_kernel_initializer = std::make_unique<DispatchKernelInitializer>(
             descriptor_,
             MetalContext::instance().get_dispatch_core_manager(),
