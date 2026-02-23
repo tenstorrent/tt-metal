@@ -29,24 +29,6 @@ namespace ttnn::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(sizeof float_num == sizeof uint32_data, "sizeof data types not equal");
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
 bool CB_can_fit_in_L1(
@@ -406,7 +388,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
         reader_compile_time_args.push_back(beta_stick_size);
     } else {
-        reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
+        reader_compile_time_args.push_back(W);
     }
 
     // Build compile time args for writer kernel
@@ -509,8 +491,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // Build per-core runtime args
     uint32_t curr_row = 0;
-    auto bfloat_one_value = bfloat16(1);
-    uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
 
     KernelDescriptor::RuntimeArgs reader_runtime_args;
     KernelDescriptor::RuntimeArgs writer_runtime_args;
@@ -547,16 +527,12 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             num_tile_rows_per_core,
             Wt,
             reader_start,
-            packed_one_value,
             std::bit_cast<uint32_t>(eps),
             gamma_dram_addr,
             beta_dram_addr,
             b_dram_addr};
-        if (!(use_welford && large_tensor_needed)) {
-            reader_args.push_back(W);
-        }
         if (input_is_row_major) {
-            reader_args.push_back(H_logical);  // arg[10]
+            reader_args.push_back(H_logical);  // arg[8]
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
@@ -774,13 +750,13 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
             runtime_args[0] = src_a_dram_buffer->address();
             if (src_b_dram_buffer != nullptr) {
-                runtime_args[8] = src_b_dram_buffer->address();
+                runtime_args[7] = src_b_dram_buffer->address();
             }
             if (gamma_dram_buffer != nullptr) {
-                runtime_args[6] = gamma_dram_buffer->address();
+                runtime_args[5] = gamma_dram_buffer->address();
             }
             if (beta_dram_buffer != nullptr) {
-                runtime_args[7] = beta_dram_buffer->address();
+                runtime_args[6] = beta_dram_buffer->address();
             }
         }
 

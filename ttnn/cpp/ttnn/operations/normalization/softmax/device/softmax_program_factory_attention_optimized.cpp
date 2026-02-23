@@ -289,9 +289,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             if (attributes.is_causal_mask) {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
             } else {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
             }
 
             SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0, 0});
@@ -330,10 +330,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                  mask_addr,
                  curr_ht,
                  mask_id,
-                 0x3f803f80,
                  in0_t,
                  mask_curr_ht,
-                 mask_offset});  // [10]=1.0f is scaler
+                 mask_offset});
         } else {
             SetRuntimeArgs(
                 program,
@@ -349,8 +348,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                  mask_addr,
                  curr_ht,
                  mask_id,
-                 0x3f803f80,
-                 in0_t});  // [10]=1.0f is scaler
+                 in0_t});
         }
 
         SetRuntimeArgs(
@@ -555,11 +553,10 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         reader_kernel_args[7] = mask_buffer_address;
         reader_kernel_args[8] = curr_ht;
         reader_kernel_args[9] = mask_id;
-        // reader_kernel_args[10] = 0x3f803f80; // Hardcoded value doesn't need to be updated
 
         if (attributes.is_causal_mask) {
-            reader_kernel_args[11] = mask_curr_ht;
-            reader_kernel_args[12] = mask_offset;
+            reader_kernel_args[10] = mask_curr_ht;
+            reader_kernel_args[11] = mask_offset;
         }
 
         softmax_kernel_args[0] = num_tile_rows_per_core;

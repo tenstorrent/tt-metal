@@ -161,14 +161,7 @@ void kernel_main() {
 
             // cb_intermed1 comes from reader; untilized row-major tile
             // tilize CB::intermed1 and write to CBIndex::c_16 with reconfiguration
-            compute_kernel_lib::tilize<
-                cb_intermed1,
-                out_cb_id,
-                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
-                out_num_tiles,
-                1);
+            compute_kernel_lib::tilize<cb_intermed1, out_cb_id>(out_num_tiles, 1);
 
             cb_in0_obj.pop_front(in0_block_num_tiles);
         } // Mt loop

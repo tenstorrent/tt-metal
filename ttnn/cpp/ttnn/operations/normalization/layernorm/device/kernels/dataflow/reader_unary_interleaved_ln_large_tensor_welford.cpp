@@ -16,9 +16,9 @@ void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
-    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    uint32_t b_addr = get_arg_val<uint32_t>(8);
+    uint32_t gamma_addr = get_arg_val<uint32_t>(5);
+    uint32_t beta_addr = get_arg_val<uint32_t>(6);
+    uint32_t b_addr = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
     constexpr uint32_t cb_id_gamma = 5;
@@ -60,7 +60,7 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t eps_cb_id = 3;
-    const uint32_t eps = get_arg_val<uint32_t>(5);
+    const uint32_t eps = get_arg_val<uint32_t>(4);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

@@ -73,7 +73,13 @@ inline void reblock_and_untilize(
         cb_push_back(reblock_cb_id, out_block_w);
 
         // Untilize
-        compute_kernel_lib::untilize<out_block_w, reblock_cb_id, out_cb_id>(1);
+        compute_kernel_lib::untilize<
+            out_block_w,
+            reblock_cb_id,
+            out_cb_id,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
         within_block_index += out_subblock_w;
     }

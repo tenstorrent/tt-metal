@@ -116,7 +116,9 @@ auto [num_cores, all_cores, core_group_1, core_group_2,
 
 ### Bfloat16 Packing Pattern
 
-When you need to pass bfloat16 scalar values as compile-time args (e.g., for scalers, epsilon):
+When you need to pass bfloat16 scalar values as compile-time args (e.g., for epsilon, or custom scalers that are pre-computed in the factory and passed to kernels):
+
+**Note**: For standard reduce scalers, use `dataflow_kernel_lib::calculate_and_prepare_reduce_scaler` or `dataflow_kernel_lib::prepare_reduce_scaler` in the dataflow kernel directly - no factory-side packing needed. Bfloat16 packing is only needed when the factory computes a custom scalar that cannot be expressed via the kernel helper (e.g., partial-tile reduce factor or epsilon for normalization).
 
 ```cpp
 #include <tt-metalium/bfloat16.hpp>

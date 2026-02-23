@@ -80,13 +80,7 @@ void kernel_main() {
 
                 // cb_intermed2 comes from reader; untilized row-major tile
                 // tilize CB::intermed2 and write to CBIndex::c_16 with reconfiguration
-                compute_kernel_lib::tilize<
-                    cb_intermed2,
-                    out_cb_id,
-                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
-                    onetile, 1);
+                compute_kernel_lib::tilize<cb_intermed2, out_cb_id>(onetile, 1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_block_init_short_with_both_dt(cb_in0, cb_in1, cb_intermed2, cb_intermed2, transpose_hw);

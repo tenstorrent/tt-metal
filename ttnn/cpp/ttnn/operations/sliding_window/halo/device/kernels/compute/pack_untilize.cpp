@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/untilize.h"
+#include "ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/compute/pack_untilize.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
@@ -32,13 +33,17 @@ void kernel_main() {
                 tiles_per_row,
                 src_cb_id,
                 out_cb_id0,
-                compute_kernel_lib::untilize_config::InitUninitMode::Neither>(block_size);
+                compute_kernel_lib::untilize_config::InitUninitMode::Neither,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
         } else {
             compute_kernel_lib::untilize<
                 tiles_per_row,
                 src_cb_id,
                 out_cb_id1,
-                compute_kernel_lib::untilize_config::InitUninitMode::Neither>(block_size);
+                compute_kernel_lib::untilize_config::InitUninitMode::Neither,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
         }
     }
 

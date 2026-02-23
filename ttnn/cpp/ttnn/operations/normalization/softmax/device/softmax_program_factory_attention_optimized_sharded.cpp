@@ -11,7 +11,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include <bit>
 #include <utility>
 
 namespace ttnn::prim {
@@ -269,8 +268,11 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
     // Runtime Args
     uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask->buffer()->address() : 0;
-    uint32_t scale_value =
-        std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
+    union {
+        float f;
+        uint32_t u;
+    } s{};
+    s.f = attributes.scale.value_or(1.0f);  // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
 
     uint32_t num_tiles_in_attn_mask = 0;
@@ -289,8 +291,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(scale_value);
+                reader_args.push_back(s.u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
@@ -329,8 +330,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(scale_value);
+                reader_args.push_back(s.u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
@@ -395,7 +395,7 @@ void SoftmaxShardedProgramFactoryAttentionOptimized::override_runtime_arguments(
                 i % cached_program.shared_variables.grid_size.x, i / cached_program.shared_variables.grid_size.x};
             auto& runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernels_id, core);
-            runtime_args[2] = mask_tensor->buffer()->address();
+            runtime_args[1] = mask_tensor->buffer()->address();
         }
     }
 }
