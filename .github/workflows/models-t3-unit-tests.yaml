@@ -103,5 +103,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
-      mlperf-read-only: false
+      mlperf-read-only: ${{ inputs.mlperf-read-only == '' && true || inputs.mlperf-read-only }}
       tier: "3"
