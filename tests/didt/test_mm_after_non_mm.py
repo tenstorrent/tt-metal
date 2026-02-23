@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter, get_mesh_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -18,7 +18,7 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 # This test was created to perform temperature readings on BH chip
 # The workload starts with loops of a non-matmul OP to bring the chip to
 # steady state, followed by sharded matmul which draws max power
-class FF1Test(OpTestBaseMulti):
+class FF1Test(OpTestBase):
     def __init__(self, *args, non_mm_loops=1000, mm_loops=10, **kwargs):
         super().__init__(*args, **kwargs)
         self.non_mm_loops = (non_mm_loops,)
