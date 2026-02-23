@@ -1,0 +1,423 @@
+[
+    {
+        "Id": "357adb4cc30ee3e17b10255491bf693dc0f12c15def27b53d7fc0331425443a2",
+        "Created": "2026-01-23T14:16:21.255888808Z",
+        "Path": "/usr/local/bin/entrypoint.sh",
+        "Args": [
+            "bash",
+            "-c",
+            "echo $(( $(date +%s) + P_TIMEOUT )) > /wait_until && while [ $(date +%s) -lt $(cat /wait_until) ]; do sleep 60; done"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 487154,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-01-23T14:16:21.328453108Z",
+            "FinishedAt": "0001-01-01T00:00:00Z"
+        },
+        "Image": "sha256:e065770a4c08482fefdf40994b99d20eec7351db20b48c4e58674afc794da33e",
+        "ResolvConfPath": "/localdev/docker/containers/357adb4cc30ee3e17b10255491bf693dc0f12c15def27b53d7fc0331425443a2/resolv.conf",
+        "HostnamePath": "/localdev/docker/containers/357adb4cc30ee3e17b10255491bf693dc0f12c15def27b53d7fc0331425443a2/hostname",
+        "HostsPath": "/localdev/docker/containers/357adb4cc30ee3e17b10255491bf693dc0f12c15def27b53d7fc0331425443a2/hosts",
+        "LogPath": "",
+        "Name": "/wh-qb-03-special-dmadic-for-reservation-17872",
+        "RestartCount": 0,
+        "Driver": "overlay2",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "docker-default",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "/proj_sw:/proj_sw",
+                "/home/software/syseng:/home/software/syseng",
+                "/dev/hugepages:/dev/hugepages",
+                "/localdev/dmadic:/localdev/dmadic",
+                "/etc/udev/rules.d:/etc/udev/rules.d",
+                "/lib/modules:/lib/modules",
+                "/var/run/docker.sock:/var/run/docker.sock",
+                "/proj_devops:/proj_devops",
+                "/dev/hugepages-1G:/dev/hugepages-1G",
+                "/var/run/tenstorrent:/var/run/tenstorrent",
+                "/home/dmadic:/home/dmadic",
+                "/localdev:/localdev"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "syslog",
+                "Config": {
+                    "syslog-address": "udp://localhost:514"
+                }
+            },
+            "NetworkMode": "bridge",
+            "PortBindings": {
+                "22/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "49908"
+                    }
+                ],
+                "5555/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "54908"
+                    }
+                ],
+                "8000/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "8032"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "on-failure",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": [
+                "ALL"
+            ],
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": [],
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": null,
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": [
+                "seccomp=unconfined"
+            ],
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 4294967296,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 540572385280,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": [],
+            "BlkioDeviceReadBps": [],
+            "BlkioDeviceWriteBps": [],
+            "BlkioDeviceReadIOps": [],
+            "BlkioDeviceWriteIOps": [],
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "0-7,8-15,16-23,24-31",
+            "CpusetMems": "",
+            "Devices": [
+                {
+                    "PathOnHost": "/dev/tenstorrent/0",
+                    "PathInContainer": "/dev/tenstorrent/0",
+                    "CgroupPermissions": "rwm"
+                },
+                {
+                    "PathOnHost": "/dev/tenstorrent/1",
+                    "PathInContainer": "/dev/tenstorrent/1",
+                    "CgroupPermissions": "rwm"
+                },
+                {
+                    "PathOnHost": "/dev/tenstorrent/2",
+                    "PathInContainer": "/dev/tenstorrent/2",
+                    "CgroupPermissions": "rwm"
+                },
+                {
+                    "PathOnHost": "/dev/tenstorrent/3",
+                    "PathInContainer": "/dev/tenstorrent/3",
+                    "CgroupPermissions": "rwm"
+                },
+                {
+                    "PathOnHost": "/dev/ipmi0",
+                    "PathInContainer": "/dev/ipmi0",
+                    "CgroupPermissions": "rwm"
+                }
+            ],
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 1081144770560,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": [
+                {
+                    "Name": "nofile",
+                    "Hard": 65536,
+                    "Soft": 65536
+                },
+                {
+                    "Name": "nproc",
+                    "Hard": 65536,
+                    "Soft": 65536
+                }
+            ],
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/asound",
+                "/proc/acpi",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/sys/firmware",
+                "/sys/devices/virtual/powercap"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "GraphDriver": {
+            "Data": {
+                "ID": "357adb4cc30ee3e17b10255491bf693dc0f12c15def27b53d7fc0331425443a2",
+                "LowerDir": "/localdev/docker/overlay2/051e5c0a096cf34e841dbd1833b596ef7d22c1ed3ec3334edd64df7160c88285-init/diff:/localdev/docker/overlay2/ec5ee11aa296d37625941c4a23052bc236d0a51f4412c08336a5386d9fd7bb7e/diff:/localdev/docker/overlay2/fbb0171daf0fafbe88f6cd168dc52118b0f543c38d0d5b0243d6603d614cf685/diff:/localdev/docker/overlay2/c8612672cfd7e106184bfa49d7f37682ecb6cd9c755ec3a59ebc574f2d8d2f53/diff:/localdev/docker/overlay2/76b1e551402c749263ae2d08f75279b2b288429a4b505c859dab489faecea452/diff:/localdev/docker/overlay2/79899ad74e1dd22d814915fbd793aa63f3a0d7871a324e57ba423328e90af841/diff:/localdev/docker/overlay2/f8fd3349efad1b0c48a625c457623b16000a39a20937cb99e01c85e7e7bdcc9f/diff:/localdev/docker/overlay2/dc5ba6d9ac6cadc8233f15e64ecdc9aa0d34ffd62c8c9edaa2bf4a9ff62fc714/diff:/localdev/docker/overlay2/ce217c258d88166bb69be27fe5493d6455fbaadd37d07263c44e5ec6062298c9/diff:/localdev/docker/overlay2/d647b608a7e0671ace6f7f01ccc0b67b5cd7fc78ad7bc37491193bd89b0c8410/diff:/localdev/docker/overlay2/74fa6e61998cdba8046e7600e1951ede7ea0e6f6dd850f1c90bef895610eef9a/diff:/localdev/docker/overlay2/7a2ebc60d30b0455013608d4f8302139bddcae53314818edc91da8260a9876bc/diff:/localdev/docker/overlay2/50b282a4564ba960581a4c7cfbb577dfafb570bb3dfcf17ef5e037add33e881c/diff:/localdev/docker/overlay2/ad9ef35236cb4f2f1872fc2543ebeac934caff9a197483de1f50966273a97145/diff:/localdev/docker/overlay2/fccb4df8c37cf541eba94861fb84ef43996830678f2e68f85ef640e00b69efcf/diff:/localdev/docker/overlay2/5404fffbe0ffb1a6ce25734332cf623680261cb1ebdd2b8109709144e81f6db4/diff:/localdev/docker/overlay2/b692bf5a819206f0b598609cb8b729482cb63ca56981112bf4d06ffa27a0fcce/diff:/localdev/docker/overlay2/9685971d946c938c09d138835db7aeb26e2c1485bdf00183745523185621cfc4/diff:/localdev/docker/overlay2/f16f728266aab887abc788cb5942b095dde091e143661c44232c685d5f247711/diff:/localdev/docker/overlay2/86253bce6a34acc9529e013a206110774a50479e3747247300c6a29b96d16662/diff:/localdev/docker/overlay2/ba82bb9ce4d05d0be366401b70d6e815af642dcbad6f26bfbf537726f93d0795/diff:/localdev/docker/overlay2/a0335d664d35b30ca68582e892bc02bff28afa2d761a7a02d635681d35fe61bb/diff:/localdev/docker/overlay2/9f35b3f55643a4bfad906b186b62d7692051545a296c28e3ac97381db824b7b2/diff:/localdev/docker/overlay2/7bcd1d49f1afb79eb5af36c55b20e3c7b0f68958e609cc3872e3f97c688979e3/diff:/localdev/docker/overlay2/283d3feef88025dad2111479da1cb52c28b00d91578ce00beabce2719575997c/diff:/localdev/docker/overlay2/906ca63db3fa7304ea98eb1546eb043c836388d382c20e7bada91a7f160d61d9/diff:/localdev/docker/overlay2/dad83c91e668e94b93f886ee37d2be40fdbefe175768c91f945349f12c57fee3/diff:/localdev/docker/overlay2/c9744db9df561d9163c16bac4e301680d561b0abc2a18a0eeb3e3190a4724645/diff:/localdev/docker/overlay2/f80c0576da76dedffeccdffa0388c4e41827599949c3cf18513d3b2c9c6a4f5c/diff:/localdev/docker/overlay2/df4e27649248ae07df91366654d7a7c6c9e9457c00312e261e9d073ac6ffe538/diff:/localdev/docker/overlay2/f31b1ed20db8288430264ea383643573e63da3b168351d0e2196b1d906451758/diff:/localdev/docker/overlay2/73773b81bef8d64cd6e64cb1a7eca82fcbc02fb8e265d96c0261e4c3e9a172fa/diff:/localdev/docker/overlay2/142ccd7b2f5657afba68a4c0b0b14f1fcf7610ed25aaf08fed3070b52a562d2c/diff",
+                "MergedDir": "/localdev/docker/overlay2/051e5c0a096cf34e841dbd1833b596ef7d22c1ed3ec3334edd64df7160c88285/merged",
+                "UpperDir": "/localdev/docker/overlay2/051e5c0a096cf34e841dbd1833b596ef7d22c1ed3ec3334edd64df7160c88285/diff",
+                "WorkDir": "/localdev/docker/overlay2/051e5c0a096cf34e841dbd1833b596ef7d22c1ed3ec3334edd64df7160c88285/work"
+            },
+            "Name": "overlay2"
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/proj_sw",
+                "Destination": "/proj_sw",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/dev/hugepages",
+                "Destination": "/dev/hugepages",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/var/run/docker.sock",
+                "Destination": "/var/run/docker.sock",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/dev/hugepages-1G",
+                "Destination": "/dev/hugepages-1G",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/dmadic",
+                "Destination": "/home/dmadic",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/localdev",
+                "Destination": "/localdev",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rslave"
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/software/syseng",
+                "Destination": "/home/software/syseng",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/localdev/dmadic",
+                "Destination": "/localdev/dmadic",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/etc/udev/rules.d",
+                "Destination": "/etc/udev/rules.d",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/lib/modules",
+                "Destination": "/lib/modules",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/proj_devops",
+                "Destination": "/proj_devops",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/var/run/tenstorrent",
+                "Destination": "/var/run/tenstorrent",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            }
+        ],
+        "Config": {
+            "Hostname": "wh-qb-03-special-dmadic-for-reservation-17872",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": false,
+            "AttachStderr": false,
+            "ExposedPorts": {
+                "22/tcp": {},
+                "5555/tcp": {},
+                "8000/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "P_TIMEOUT=36000",
+                "PATH=/usr/local/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "DEBIAN_FRONTEND=noninteractive",
+                "PYTHON_ENV_DIR=/opt/venv",
+                "VIRTUAL_ENV=/opt/venv",
+                "CCACHE_TEMPDIR=/tmp/ccache"
+            ],
+            "Cmd": [
+                "bash",
+                "-c",
+                "echo $(( $(date +%s) + P_TIMEOUT )) > /wait_until && while [ $(date +%s) -lt $(cat /wait_until) ]; do sleep 60; done"
+            ],
+            "Image": "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest",
+            "Volumes": null,
+            "WorkingDir": "",
+            "Entrypoint": [
+                "/usr/local/bin/entrypoint.sh"
+            ],
+            "OnBuild": null,
+            "Labels": {
+                "org.opencontainers.image.ref.name": "ubuntu",
+                "org.opencontainers.image.version": "22.04"
+            }
+        },
+        "NetworkSettings": {
+            "Bridge": "",
+            "SandboxID": "bf25b122a6554d896602b6b3ec11f8a03afbfb86aa86b8aaea5d69267f65a0f3",
+            "SandboxKey": "/var/run/docker/netns/bf25b122a655",
+            "Ports": {
+                "22/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "49908"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "49908"
+                    }
+                ],
+                "5555/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "54908"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "54908"
+                    }
+                ],
+                "8000/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "8032"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "8032"
+                    }
+                ]
+            },
+            "HairpinMode": false,
+            "LinkLocalIPv6Address": "",
+            "LinkLocalIPv6PrefixLen": 0,
+            "SecondaryIPAddresses": null,
+            "SecondaryIPv6Addresses": null,
+            "EndpointID": "4a22525ea8fe8fde7dfd045993bdbeb0844c233d19cfbd04d0b4bdf9078dafdd",
+            "Gateway": "172.17.0.1",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "IPAddress": "172.17.0.2",
+            "IPPrefixLen": 16,
+            "IPv6Gateway": "",
+            "MacAddress": "2a:71:2c:30:d1:53",
+            "Networks": {
+                "bridge": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": null,
+                    "MacAddress": "2a:71:2c:30:d1:53",
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "c7c9a3ceee0e6379a093f41d97b1614aee403ca76a359c9efb3f905b3adb2716",
+                    "EndpointID": "4a22525ea8fe8fde7dfd045993bdbeb0844c233d19cfbd04d0b4bdf9078dafdd",
+                    "Gateway": "172.17.0.1",
+                    "IPAddress": "172.17.0.2",
+                    "IPPrefixLen": 16,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": null
+                }
+            }
+        }
+    }
+]

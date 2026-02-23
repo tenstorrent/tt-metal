@@ -1,0 +1,12 @@
+rank_bindings:
+- rank: 0
+  mesh_id: 0
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,4,8,11,15,17,18,31,1,6,16,19,20,23,24,30
+- rank: 1
+  mesh_id: 1
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,5,10,21,22,25,28,29,2,7,9,12,13,14,26,27
+mesh_graph_desc_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x4_z_mesh_graph_descriptor.textproto

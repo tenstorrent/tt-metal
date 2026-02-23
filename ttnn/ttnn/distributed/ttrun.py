@@ -783,11 +783,13 @@ def main(
     if not program:
         raise click.ClickException("No program specified. Please provide a program to run.")
 
-    # Validate program executable exists
     if not skip_executable_check:
         program_path = Path(program[0])
         if not program_path.exists() and not shutil.which(program[0]):
             raise click.ClickException(f"Program not found: {program[0]}")
+
+    if str(program[0]).endswith(".py"):
+        program = [sys.executable, program[0], *program[1:]]
 
     # Apply default multihost MPI args unless --bare
     if tcp_interface and not bare:
