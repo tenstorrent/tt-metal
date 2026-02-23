@@ -15,11 +15,13 @@ Owner:
     adjordjevic-TT
 """
 
-import os
 import errno
+import logging
+import os
 import shutil
 import tempfile
 import threading
+import time
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
@@ -28,6 +30,8 @@ from ttexalens.tt_exalens_lib import parse_elf
 script_config = ScriptConfig(
     data_provider=True,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ElfsCache:
@@ -57,18 +61,39 @@ class ElfsCache:
         return "stale file handle" in str(exc).lower()
 
     def _parse_elf_with_estale_retry(self, elf_path: str) -> ParsedElfFile | None:
-        """Parse ELF, retrying only once when ESTALE is encountered."""
+        """Parse ELF, retrying with backoff (up to 10s) when ESTALE is encountered."""
+        last_exc = None
+        max_retries = 4
+        backoff_delays = [1.0, 2.0, 3.0, 4.0]
+
         try:
             return parse_elf(elf_path, self.context)
         except Exception as exc:
             if not self._is_estale_error(exc):
                 raise
+            last_exc = exc
 
-        # Retry once by reopening through a fresh local copy.
-        with tempfile.TemporaryDirectory(prefix="tt-triage-elf-") as tmp_dir:
-            local_elf_path = os.path.join(tmp_dir, os.path.basename(elf_path))
-            shutil.copy2(elf_path, local_elf_path)
-            return parse_elf(local_elf_path, self.context)
+        for attempt in range(max_retries):
+            delay = backoff_delays[attempt]
+            logger.info(
+                "Retrying ELF parse due to stale file handle (refreshing file handle), "
+                "attempt %d/%d, waiting %.1fs...",
+                attempt + 1,
+                max_retries,
+                delay,
+            )
+            time.sleep(delay)
+            try:
+                with tempfile.TemporaryDirectory(prefix="tt-triage-elf-") as tmp_dir:
+                    local_elf_path = os.path.join(tmp_dir, os.path.basename(elf_path))
+                    shutil.copy2(elf_path, local_elf_path)
+                    return parse_elf(local_elf_path, self.context)
+            except Exception as exc:
+                if not self._is_estale_error(exc):
+                    raise
+                last_exc = exc
+
+        raise last_exc
 
     def __getitem__(self, elf_path: str) -> ParsedElfFile:
         """
