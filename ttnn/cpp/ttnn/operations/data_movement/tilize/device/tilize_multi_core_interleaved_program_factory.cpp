@@ -63,8 +63,8 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         num_sticks_in_row = tt::div_up(
             a.padded_shape()[-1],
             a.nd_shard_spec().value().shard_shape[-1]);  // Compute number of sticks in one tensor row.
-        uint32_t padding_size =
-            num_sticks_in_row * stick_size - block_size_nbytes;  // Compute padding size for the last stick in the row.
+        uint32_t padding_size = (num_sticks_in_row * stick_size) -
+                                block_size_nbytes;  // Compute padding size for the last stick in the row.
         stick_size_of_last_stick_in_row = stick_size - padding_size;
     }
     std::vector<uint32_t> reader_ct_args = {stick_size, num_sticks_in_row, stick_size_of_last_stick_in_row};
@@ -155,9 +155,9 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core_cliff * TILE_HEIGHT,
-            block_size_nbytes,
+            stick_size,
             ntiles_per_block,
-            block_size_nbytes,
+            stick_size,
             std::uint32_t{1},  // full blocks in row
             std::uint32_t{0},  // num leftover tiles
             std::uint32_t{0},  // leftover width in row

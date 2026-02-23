@@ -88,6 +88,7 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
         ([4, 128, 128], [2, 64, 64]),
         ([3, 160, 160], [2, 64, 64]),
         ([5, 4, 160, 160], [2, 3, 64, 96]),
+        ([23, 96, 160], [4, 64, 96]),  # Test with uneven sharding and cliff core
     ],
 )
 @pytest.mark.parametrize(
@@ -96,7 +97,7 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
 )
 @pytest.mark.parametrize("input_is_nd_sharded", [True, False])
 @pytest.mark.parametrize("output_is_nd_sharded", [True, False])
-@pytest.mark.parametrize("use_multicore", [False, True])
+@pytest.mark.parametrize("use_multicore", [True, False])
 def test_tilize_nd_sharded(
     device, dtype, tensor_shape, shard_shape, shard_core_grid, input_is_nd_sharded, output_is_nd_sharded, use_multicore
 ):
