@@ -13,7 +13,7 @@ from transformers import AutoProcessor
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 
 import ttnn
-from models.common.sampling.sampling_params import SamplingParams
+from models.common.sampling import SamplingParams
 from models.demos.qwen3_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,

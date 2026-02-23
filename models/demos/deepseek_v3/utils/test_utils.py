@@ -283,6 +283,7 @@ def run_reference_with_attention(
     hf_config: PretrainedConfig,
     mode: str,
     zeroed_cache: bool,
+    collect_output: bool = True,
 ) -> tuple[torch.Tensor, DynamicCache, DynamicCache]:
     """
     Run reference model with attention, using memory optimizations for large sequences.
@@ -390,7 +391,7 @@ def run_reference_with_attention(
         device = activation.device
         num_chunks = (max_position_id_or_seq_len + chunk_size - 1) // chunk_size
 
-        output_chunks = []
+        output_chunks: list[torch.Tensor] = [] if collect_output else []
         current_cache = deepcopy(deepcopied_cache)
 
         with torch.no_grad():
@@ -446,19 +447,21 @@ def run_reference_with_attention(
                 )
 
                 chunk_out, current_cache = extract_output_and_cache(chunk_output)
-
-                output_chunks.append(chunk_out)
+                if collect_output:
+                    output_chunks.append(chunk_out)
 
                 # Free intermediate tensors to reduce memory usage
                 del activation_chunk, position_ids_chunk, mask_chunk, chunk_output
 
-            # Concatenate all chunk outputs
-            model_output_tensor = torch.cat(output_chunks, dim=1)
-
-            # Clean up chunk list
-            del output_chunks
-
-            out = model_output_tensor
+            if collect_output:
+                # Concatenate all chunk outputs
+                model_output_tensor = torch.cat(output_chunks, dim=1)
+                # Clean up chunk list
+                del output_chunks
+                out = model_output_tensor
+            else:
+                # Some callers only need the cache and can skip storing large outputs.
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
             output_cache = current_cache
     else:
         # Standard processing for shorter sequences or decode mode
@@ -478,6 +481,8 @@ def run_reference_with_attention(
             )
 
             out, output_cache = extract_output_and_cache(model_output_raw)
+            if not collect_output:
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
 
     return out, input_cache, output_cache
 

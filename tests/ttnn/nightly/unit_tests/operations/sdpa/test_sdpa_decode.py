@@ -9,8 +9,12 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_multi_pos,
     run_test_sdpa_decode_single_iter,
     run_test_sdpa_decode_paged_attention,
+    run_test_sdpa_decode_paged_attention_single_iter,
     run_test_sdpa_decode_ndpcc,
     num_to_corerange,
+    nearest_n,
+    nearest_pow_2,
+    get_chunk_size,
 )
 
 
@@ -187,6 +191,82 @@ def test_sdpa_decode_paged_attention(
     )
 
     assert device.num_program_cache_entries() == 4
+
+
+@pytest.mark.parametrize(
+    "kv_dtype, q_dtype",
+    [
+        [ttnn.bfloat16, ttnn.bfloat16],
+    ],
+    ids=[
+        "all_bfp16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, sliding_window_size",
+    (
+        [1, 32, 8, 32 * 16, 128, (8, 1), True, None],  # Bug #37927: block_size=16 repro, s=512
+        [1, 64, 8, 64 * 64, 64, (8, 1), True, None],  # Bug #37927: nh=64 d=64, q_chunk_size==head_size repro, s=4096
+    ),
+    ids=["paged-block16-regr", "paged-qchunk-eq-d-regr"],
+)
+@pytest.mark.parametrize("block_size", (16, 32, 64, 128), ids=["paged_16", "paged_32", "paged_64", "paged_128"])
+def test_sdpa_decode_paged_attention_regressions(
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window_size, block_size, reset_seeds
+):
+    """Regression tests for paged SDPA decode bug fixes (issue #37927).
+
+    Bug 1: block_size=16 with multi-block sequences.
+        b=1, nh=32, nkv=8, s=512, d=128, block_size=16 (bfloat16).
+        With s=512 and block_size=16, this creates 32 blocks (512/16).
+        The multi-block path had a bug that didn't manifest with larger
+        block sizes (32, 64, 128) where fewer blocks are needed.
+
+    Bug 2: q_chunk_size == head_size produces garbage output.
+        b=1, nh=64, nkv=8, s=4096, d=64, block_size=64 (bfloat16).
+        When d=64, the internal chunking logic had an edge case where
+        q_chunk_size == head_size led to incorrect buffer handling.
+    """
+    TILE_HEIGHT = 32
+    if block_size < TILE_HEIGHT:
+        # Sub-tile block sizes only support causal path; test a single causal iteration
+        padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+        cur_pos = s // 2
+        k_chunk_size = get_chunk_size(cur_pos + 1, s)
+        run_test_sdpa_decode_paged_attention_single_iter(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            kv_dtype,
+            grid_size,
+            q_dtype,
+            cur_pos=cur_pos,
+            block_size=block_size,
+            q_chunk_size=padded_num_heads,
+            k_chunk_size=k_chunk_size,
+            sharded_in=True,
+            sharded_out=False,
+        )
+    else:
+        run_test_sdpa_decode_paged_attention(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            kv_dtype,
+            grid_size,
+            q_dtype,
+            cur_pos_tensor,
+            block_size=block_size,
+            sharded_in=True,
+            sharded_out=False,
+            sliding_window_size=sliding_window_size,
+        )
 
 
 @pytest.mark.parametrize(
