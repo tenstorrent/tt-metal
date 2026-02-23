@@ -641,7 +641,8 @@ void pytensor_module(nb::module_& mod) {
                const std::optional<Tile>& tile,
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
-               const distributed::TensorToMesh* mesh_mapper) {
+               const distributed::TensorToMesh* mesh_mapper,
+               bool col_tilize) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -672,7 +673,8 @@ void pytensor_module(nb::module_& mod) {
                     device,
                     cq_id,
                     mesh_mapper,
-                    pad_value));
+                    pad_value,
+                    col_tilize));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -683,6 +685,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("cq_id") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
+            nb::arg("col_tilize") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
@@ -706,6 +709,8 @@ void pytensor_module(nb::module_& mod) {
                 | pad_value    | Padding value (optional)       |
                 +--------------+--------------------------------+
                 | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
+                +--------------+--------------------------------+
+                | col_tilize   | Column-wise BFP tilize (false)  |
                 +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:
