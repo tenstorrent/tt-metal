@@ -43,8 +43,8 @@ void kernel_main() {
             get_named_compile_time_arg_val("l_chunk_size_bytes"),
             get_named_compile_time_arg_val("num_l_chunks"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
-            get_named_compile_time_arg_val("cb_position"),
-            get_named_compile_time_arg_val("position_enabled")>;
+            get_named_compile_time_arg_val("position_enabled"),
+            get_named_compile_time_arg_val("per_device_chunk_size")>;
 
         // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
         using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
@@ -136,8 +136,8 @@ void kernel_main() {
             get_named_compile_time_arg_val("scale_fp32"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("num_l_chunks"),
-            get_named_compile_time_arg_val("cb_position"),
             get_named_compile_time_arg_val("position_enabled"),
+            get_named_compile_time_arg_val("per_device_chunk_size"),
             get_named_compile_time_arg_val("final_reduction")>;
 
         // Initialize compute engine for unified kernel
