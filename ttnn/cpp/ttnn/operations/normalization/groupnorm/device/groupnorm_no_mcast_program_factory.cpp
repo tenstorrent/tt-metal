@@ -609,16 +609,19 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
             .compile_args = writer_mcast_sender_compile_time_args_group_1,
             .defines = writer_defines,
             .named_compile_args = writer_named_compile_time_args_group_1});
-    auto writer_kernels_id_group_2 = CreateKernel(
-        program,
-        writer_kernel,
-        all_cores_group_2,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = writer_noc,
-            .compile_args = writer_mcast_sender_compile_time_args_group_2,
-            .defines = writer_defines,
-            .named_compile_args = writer_named_compile_time_args_group_2});
+    KernelHandle writer_kernels_id_group_2 = 0;
+    if (!all_cores_group_2.ranges().empty()) {
+        writer_kernels_id_group_2 = CreateKernel(
+            program,
+            writer_kernel,
+            all_cores_group_2,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = writer_noc,
+                .compile_args = writer_mcast_sender_compile_time_args_group_2,
+                .defines = writer_defines,
+                .named_compile_args = writer_named_compile_time_args_group_2});
+    }
 
     std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
