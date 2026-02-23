@@ -37,29 +37,28 @@ void kernel_main() {
 
     // Untilize input (single block, init only - no uninit needed)
     if (!is_input1) {
-        compute_kernel_lib::
-            untilize<Wt, in2_cb, untilized_in_cb, compute_kernel_lib::untilize_config::InitUninitMode::InitOnly>(1);
+        compute_kernel_lib::untilize<
+            Wt,
+            in2_cb,
+            untilized_in_cb,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
     } else {
-        compute_kernel_lib::
-            untilize<Wt, in1_cb, untilized_in_cb, compute_kernel_lib::untilize_config::InitUninitMode::InitOnly>(1);
+        compute_kernel_lib::untilize<
+            Wt,
+            in1_cb,
+            untilized_in_cb,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
     }
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration from previous iteration
-        compute_kernel_lib::untilize<
-            Wt,
-            cache_cb,
-            untilized_cache_cb,
-            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(1);
+        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
-        compute_kernel_lib::tilize<
-            untilized_cache2_cb,
-            out_cb,
-            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Wt, 1);
+        compute_kernel_lib::tilize<untilized_cache2_cb, out_cb>(Wt, 1);
     }
 }

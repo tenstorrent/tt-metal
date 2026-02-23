@@ -143,7 +143,7 @@ void kernel_main() {
 #ifndef RMSNORM
     // E[x],
     compute_kernel_lib::reduce<
-        PoolType::SUM,
+        PoolType::AVG,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -156,7 +156,7 @@ void kernel_main() {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex);
+        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex);
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -164,7 +164,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
                     cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
             }
@@ -253,7 +253,7 @@ void kernel_main() {
 
 // Var(x)
     compute_kernel_lib::reduce<
-        PoolType::SUM,
+        PoolType::AVG,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -266,7 +266,7 @@ void kernel_main() {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external2, cb_scaler_global, cb_ex2);
+        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external2, cb_scaler_global, cb_ex2);
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -275,7 +275,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external2, 1);
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
                     cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external2, 1);
             }

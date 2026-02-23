@@ -9,7 +9,7 @@
 // HW-bcast scale for fused scale-attn-softmax
 FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
-    uint32_t u = get_arg_val<uint32_t>(1);
+    uint32_t u = get_arg_val<uint32_t>(0);
     cb_reserve_back(cb_fused_scale, 1);
     auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_fused_scale));
     ptr[0] = u >> 16;
@@ -18,13 +18,12 @@ FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
 
 void kernel_main() {
     constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_1;
-    const uint32_t reduce_scaler = get_arg_val<uint32_t>(0);
 
 #if FUSED_SCALE_MASK
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
     constexpr auto mask_args = TensorAccessorArgs<1>();
-    const uint32_t mask_addr = get_arg_val<uint32_t>(2);
-    const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(3);
+    const uint32_t mask_addr = get_arg_val<uint32_t>(1);
+    const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_attn = tt::CBIndex::c_3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
@@ -33,7 +32,7 @@ void kernel_main() {
     const auto addr_mask = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
-    const uint32_t pre_scale = get_arg_val<uint32_t>(1);
+    const uint32_t pre_scale = get_arg_val<uint32_t>(0);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
 #if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
@@ -56,12 +55,16 @@ void kernel_main() {
             cb_push_back(cb_attn, block_wt);
 
             if (f == 0 && h == 0) {
-                dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                    cb_reduce_scaler,
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW>();
             }
         }
     }
 #elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
-    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #else
     cb_reserve_back(cb_attn, block_wt);
     uint32_t l1_write_addr = get_write_ptr(cb_attn);
@@ -73,10 +76,12 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_attn, block_wt);
 
-    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #endif
 
 #else
-    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #endif
 }

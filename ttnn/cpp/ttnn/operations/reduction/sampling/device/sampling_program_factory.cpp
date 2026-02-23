@@ -236,9 +236,6 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             input_indices_buffer->address(),
         });
 
-    bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
-    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
-
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
 
@@ -259,7 +256,6 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
                 output_cb_index,
                 topk_mask_cb_index,
                 scale_cb_index,
-                packed_identity_scalar,
                 final_indices_rm_cb_index,
                 cb_local_vals_index,
                 output_ind_cb_index,

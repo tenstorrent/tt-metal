@@ -13,5 +13,10 @@ void kernel_main() {
     constexpr uint32_t src1_cb_index = get_compile_time_arg_val(1);
 
     compute_kernel_hw_startup(src0_cb_index, src1_cb_index);
-    compute_kernel_lib::tilize<src0_cb_index, src1_cb_index>(1, responsibility);
+    compute_kernel_lib::tilize<
+        src0_cb_index,
+        src1_cb_index,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1, responsibility);
 }
