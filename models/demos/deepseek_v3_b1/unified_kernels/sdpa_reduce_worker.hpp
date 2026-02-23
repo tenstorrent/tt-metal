@@ -247,7 +247,7 @@ ALWI void sdpa_tail_streaming(
     // TODO: Unit test perf seemed better if we operated on all chunks
     // Retest in streaming context since unit test doesn't need to wait for input
     if constexpr (untilize) {
-        pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out);
+        pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
         cb_wait_front(cb_l1, total_size);
         cb_wait_front(cb_l2, total_size);
         cb_reserve_back(cb_l_out, total_size);
