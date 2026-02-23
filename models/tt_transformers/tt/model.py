@@ -327,11 +327,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        # Create user_id tensor for batched prefill KV cache filling
-        # For batched prefill: always use scalar [0] because each device reads its local
-        # page table row 0 (which contains that device's users' pages due to sharding)
         if batch_size > 1:
-            # Scalar user_id = 0 - each device reads row 0 of its sharded page table
             tt_user_id = ttnn.from_torch(
                 torch.tensor([0], dtype=torch.int32),
                 device=device,
@@ -339,25 +335,22 @@ class Transformer(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
-            # Single user - create tensor with single user ID
-            user_id_val = user_id if isinstance(user_id, int) else user_id[0]
-            tt_user_id = ttnn.from_torch(
-                torch.tensor([user_id_val], dtype=torch.int32),
-                device=device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            return (
+                tokens if trace_enabled else tokens_embd,
+                tt_rot_mats_prefill_global,
+                tt_rot_mats_prefill_local,
+                tt_page_table,
+                tt_chunk_page_table,
+                tt_user_id,
             )
-
-        return (
-            tokens if trace_enabled else tokens_embd,
-            tt_rot_mats_prefill_global,
-            tt_rot_mats_prefill_local,
-            tt_page_table,
-            tt_chunk_page_table,
-            tt_user_id,
-        )
+        else:
+            return (
+                tokens if trace_enabled else tokens_embd,
+                tt_rot_mats_prefill_global,
+                tt_rot_mats_prefill_local,
+                tt_page_table,
+                tt_chunk_page_table,
+            )
 
     def prepare_inputs_decode(self, *inputs):
         """
