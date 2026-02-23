@@ -62,6 +62,7 @@ void kernel_main() {
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
+    constexpr uint32_t K_blocks_per_device = K_num_blocks / num_devices;
 
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
@@ -105,6 +106,8 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
+
+            bool k_block_iter_odd = false;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -129,14 +132,19 @@ void kernel_main() {
                 if constexpr (is_injector_core) {
                     uint32_t k_block_left_tile = 0;
                     uint32_t k_block_right_tile = 0;
+                    uint32_t k_left_tiles =
+                        k_block_iter_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                    uint32_t k_right_tiles = k_block_iter_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+                    k_block_iter_odd = !k_block_iter_odd;
                     compute_actual_k_block(
                         k_block_iter,
                         K_num_blocks,
                         my_rank,
-                        K_num_blocks / num_devices,
+                        K_blocks_per_device,
                         K_block_tiles,
                         num_devices,
                         k_forward,
+                        k_left_tiles,
                         k_block_left_tile,
                         k_block_right_tile);
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
@@ -145,9 +153,9 @@ void kernel_main() {
                         in1_start_address,
                         in1_tile_size,
                         k_block_left_tile,
-                        k_block_left_tile + K_block_tiles / 2,
+                        k_block_left_tile + k_left_tiles,
                         k_block_right_tile,
-                        k_block_right_tile + K_block_tiles / 2,
+                        k_block_right_tile + k_right_tiles,
                         n_tile,
                         n_tile_end);
                 } else {

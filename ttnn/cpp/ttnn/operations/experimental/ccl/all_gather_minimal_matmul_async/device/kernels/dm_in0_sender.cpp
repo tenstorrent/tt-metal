@@ -148,6 +148,8 @@ void kernel_main() {
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
+    constexpr uint32_t K_blocks_per_device = K_num_blocks / num_devices;
+    constexpr uint32_t padded_K_tiles_per_device = padded_K_tiles / num_devices;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
@@ -231,6 +233,7 @@ void kernel_main() {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
+            bool k_block_iter_odd = false;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -259,14 +262,17 @@ void kernel_main() {
 
                 uint32_t k_block = 0;
                 uint32_t device_iter = (k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter)) /
-                                       (K_num_blocks / num_devices);  // which device this k_block is coming from
+                                       (K_blocks_per_device);  // which device this k_block is coming from
                 uint32_t k_block_left_tile = 0;
                 uint32_t k_block_right_tile = 0;
+                uint32_t k_left_tiles = k_block_iter_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                uint32_t k_right_tiles = k_block_iter_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+                k_block_iter_odd = !k_block_iter_odd;
                 compute_actual_k_block(
                     k_block_iter,
                     K_num_blocks,
                     my_rank,
-                    K_num_blocks / num_devices,
+                    K_blocks_per_device,
                     K_block_tiles,
                     num_devices,
                     k_forward,
@@ -277,6 +283,7 @@ void kernel_main() {
                     sem_target_backward,
                     is_injector_core,
                     1,
+                    k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
                 if (is_injector_core) {
@@ -287,16 +294,18 @@ void kernel_main() {
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,
-                        my_rank * (padded_K_tiles / num_devices),
-                        (my_rank + 1) * (padded_K_tiles / num_devices) - 1,
-                        padded_K_tiles / num_devices,
+                        my_rank * padded_K_tiles_per_device,
+                        ((my_rank + 1) * padded_K_tiles_per_device) - 1,
+                        padded_K_tiles_per_device,
 #endif
                         m_tile,
                         m_tile_end,
                         k_block_left_tile,
-                        k_block_left_tile + K_block_tiles / 2,
+                        k_block_left_tile + k_left_tiles,
+                        k_left_tiles,
                         k_block_right_tile,
-                        k_block_right_tile + K_block_tiles / 2);
+                        k_block_right_tile + k_right_tiles,
+                        k_right_tiles);
                 } else {
                     // Get from previous device
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
@@ -327,6 +336,7 @@ void kernel_main() {
                 }
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
+                    DeviceZoneScopedN("send");
                     bool forward_slice = false;
                     if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                         forward_slice = true;
@@ -338,7 +348,8 @@ void kernel_main() {
                                 m_tile,
                                 k_block_left_tile,
                                 current_M_block_tiles,
-                                K_block_tiles,
+                                k_left_tiles,
+                                k_right_tiles,
                                 num_tiles_to_write_per_packet,
                                 in0_start_address,
                                 padded_K_tiles,
@@ -348,14 +359,16 @@ void kernel_main() {
                                 in0_tile_size,
                                 out_ready_sem_injector_noc_addr_forward_in_pkt,
                                 true,
-                                M_tiles);
+                                M_tiles,
+                                true);
                         } else if (in0_core_order_index >= backward_in0_core_order_index) {
                             // If backward, send forward
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
                                 k_block_right_tile,
                                 current_M_block_tiles,
-                                K_block_tiles,
+                                k_left_tiles,
+                                k_right_tiles,
                                 num_tiles_to_write_per_packet,
                                 in0_start_address,
                                 padded_K_tiles,
@@ -365,7 +378,8 @@ void kernel_main() {
                                 in0_tile_size,
                                 out_ready_sem_injector_noc_addr_backward_in_pkt,
                                 false,
-                                M_tiles);
+                                M_tiles,
+                                true);
                         }
                     }
                 }

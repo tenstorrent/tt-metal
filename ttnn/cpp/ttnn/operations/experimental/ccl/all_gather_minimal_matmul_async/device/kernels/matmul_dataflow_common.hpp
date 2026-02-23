@@ -38,6 +38,7 @@ void compute_actual_k_block(
     uint32_t& sem_target_backward,
     bool is_injector_core,
     uint32_t in0_core_order_size,
+    uint32_t k_left_tiles,
     uint32_t& k_left_start_tile,
     uint32_t& k_right_start_tile) {
 #else
@@ -49,6 +50,7 @@ void compute_actual_k_block(
     uint32_t k_tiles_per_block,
     uint32_t num_devices,
     bool is_forward,
+    uint32_t k_left_tiles,
     uint32_t& k_left_start_tile,
     uint32_t& k_right_start_tile) {
 #endif
@@ -61,7 +63,7 @@ void compute_actual_k_block(
     if (device_iter == 0) {
         // Local
         k_left_start_tile = (my_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
-        k_right_start_tile = k_left_start_tile + k_tiles_per_block / 2;
+        k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
         // Remote
         // Forward rank (origin of left half)
@@ -76,8 +78,8 @@ void compute_actual_k_block(
         if (actual_device_rank < 0) {
             actual_device_rank = num_devices + actual_device_rank;
         }
-        k_right_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block +
-                             k_tiles_per_block / 2;
+        k_right_start_tile =
+            (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block + k_left_tiles;
     }
 #ifdef IS_IN0
     if (device_iter > 0 && is_first_n_block) {
@@ -104,7 +106,8 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
     uint32_t m_tile_start,
     uint32_t k_tile_start,  // this is the k_tile_index in the output
     uint32_t m_block_tiles,
-    uint32_t k_block_tiles,
+    uint32_t k_left_tiles,
+    uint32_t k_right_tiles,
     uint32_t num_tiles_to_write_per_packet,
     uint32_t in0_start_address,
     uint32_t output_tensor_Wt,
@@ -114,18 +117,20 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
     uint16_t page_size,
     uint64_t out_ready_sem_noc_addr_in_pkt,
     bool write_left_half,
-    uint32_t m_tile_end) {
+    uint32_t m_tile_end,
+    bool do_write) {
     auto* pkt_scatter_hdr = pkt_hdrs.scatter_hdr;
     auto* pkt_unicast_hdr = pkt_hdrs.unicast_hdr;
     auto* pkt_hdr_sem_inc = pkt_hdrs.sem_inc_hdr;
 
-    uint32_t half_k_block_tiles = k_block_tiles / 2;
+    uint32_t half_k_block_tiles = write_left_half ? k_left_tiles : k_right_tiles;
+    uint32_t other_half_k_block_tiles = write_left_half ? k_right_tiles : k_left_tiles;
     uint32_t tiles_to_read = m_block_tiles * half_k_block_tiles;
     uint32_t tiles_read = 0;
     uint32_t tile_id_start = m_tile_start * output_tensor_Wt + k_tile_start;
     uint32_t row_offset = 0;
     uint32_t pages_read_in_row = 0;
-    size_t l1_read_addr = in0_start_address + (write_left_half ? 0 : (half_k_block_tiles * page_size));
+    size_t l1_read_addr = in0_start_address + (write_left_half ? 0 : (k_left_tiles * page_size));
     while (tiles_read < tiles_to_read) {
         if (m_tile_start >= m_tile_end) {
             break;
@@ -148,25 +153,27 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
             }
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
-        if (tiles_to_put_in_current_packet > 1) {
-            fabric_unicast_noc_scatter_write_with_state<
-                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                UnicastScatterWriteUpdateMask::PayloadSize>(
-                mux_connection_handle,
-                pkt_scatter_hdr,
-                l1_read_addr,
-                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                page_size * tiles_to_put_in_current_packet);
-        } else {
-            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
-        }
+        if (do_write) {
+            if (tiles_to_put_in_current_packet > 1) {
+                fabric_unicast_noc_scatter_write_with_state<
+                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                    UnicastScatterWriteUpdateMask::PayloadSize>(
+                    mux_connection_handle,
+                    pkt_scatter_hdr,
+                    l1_read_addr,
+                    NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                    page_size * tiles_to_put_in_current_packet);
+            } else {
+                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
+            }
 
-        noc_async_writes_flushed();
-        tiles_read += tiles_to_put_in_current_packet;
-        l1_read_addr += (tiles_to_put_in_current_packet * page_size);
-        if (reached_half_block_end) {
-            l1_read_addr += (half_k_block_tiles * page_size);
+            noc_async_writes_flushed();
+            tiles_read += tiles_to_put_in_current_packet;
+            l1_read_addr += (tiles_to_put_in_current_packet * page_size);
+            if (reached_half_block_end) {
+                l1_read_addr += (other_half_k_block_tiles * page_size);
+            }
         }
     }
 
@@ -246,8 +253,10 @@ void read_in0_block_sync(
     uint32_t d0_end,
     uint32_t d1_start_left,
     uint32_t d1_end_left,
+    uint32_t d1_tiles_left,
     uint32_t d1_start_right,
-    uint32_t d1_end_right) {
+    uint32_t d1_end_right,
+    uint32_t d1_tiles_right) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end_left > d1_start_left);
     ASSERT(d1_end_right > d1_start_right);
@@ -276,7 +285,7 @@ void read_in0_block_sync(
             write_ptr += tile_size_bytes;
         }
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
-        write_ptr += (K_block_tiles / 2 - (d1_end_left - d1_start_left)) * tile_size_bytes;
+        write_ptr += (d1_tiles_left - (d1_end_left - d1_start_left)) * tile_size_bytes;
         for (uint32_t j = d1_start_right; j < d1_end_right; j++) {
             if (j < shape.logical_d1) {
 #ifdef READ_FROM_LOCAL_INPUT
@@ -297,7 +306,7 @@ void read_in0_block_sync(
             write_ptr += tile_size_bytes;
         }
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
-        write_ptr += (K_block_tiles / 2 - (d1_end_right - d1_start_right)) * tile_size_bytes;
+        write_ptr += (d1_tiles_right - (d1_end_right - d1_start_right)) * tile_size_bytes;
     }
     noc_async_read_barrier();
 }
