@@ -68,6 +68,9 @@ python -m pytest models/demos/deepseek_v3/tests/test_moe.py::test_forward_pass -
 
 ### 2026-02-23: Investigated Collective Operations in Tests
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 96c3addc40 (Document investigation: collective ops in MLP/MoE tests are essential, not redundant)
 
 **Initial Request**: PR review comment asked to remove TTNN collective operations from test_mlp.py and test_moe.py
 
@@ -98,6 +101,7 @@ python -m pytest models/demos/deepseek_v3/tests/test_moe.py::test_forward_pass -
 3. **Memory config experiments**: Tried matching all_gather output format
    - Failed: Tightly coupled memory configurations between weights and expected inputs
 
+<<<<<<< HEAD
 **Final Conclusion**: Collective operations are mathematically required for tensor parallelism with sharded weights.
 
 ### Final Solution (2026-02-24)
@@ -129,6 +133,9 @@ python -m pytest models/demos/deepseek_v3/tests/test_moe.py::test_forward_pass -
 - MoE test: PASSED with PCC=0.9909
 
 **Key Insight**:
+=======
+**Final Conclusion**:
+>>>>>>> 96c3addc40 (Document investigation: collective ops in MLP/MoE tests are essential, not redundant)
 The collective operations in tests are **ESSENTIAL and CORRECT**. They are not redundant test overhead but integral to tensor parallelism:
 - When decoder blocks call MLP/MoE, they handle collective ops in `_forward_mlp_common`
 - When tests call modules directly, tests MUST handle collective ops
@@ -136,6 +143,7 @@ The collective operations in tests are **ESSENTIAL and CORRECT**. They are not r
 - Original test implementation is architecturally correct
 
 **Status**: No changes needed - collective operations must remain in tests
+<<<<<<< HEAD
 =======
 - **Initial attempt**: Tried to remove collective operations from test_mlp.py and test_moe.py per PR review comment
 - **Finding**: The collective operations in tests are **NOT redundant** - they are necessary because:
@@ -148,3 +156,5 @@ The collective operations in tests are **ESSENTIAL and CORRECT**. They are not r
   - Modules (MLP, MoE) work with sharded weights and expect appropriate tensor distribution
   - Collective ops are handled by the caller (decoder blocks in production, tests when testing directly)
 >>>>>>> cac372d1d9 (Revert removal of collective operations from DeepSeek-V3 tests)
+=======
+>>>>>>> 96c3addc40 (Document investigation: collective ops in MLP/MoE tests are essential, not redundant)
