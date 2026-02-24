@@ -15,8 +15,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
-from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
+from models.demos.deepseek_v3_b1.prepare_rope import get_cos_sin_torch, get_rot_transformation_mat
 
 
 @pytest.mark.parametrize(
@@ -50,15 +50,10 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
     # Create position IDs [batch] - use fixed position for reproducibility
     position_ids = torch.tensor([position_id])  # positions 0, 1, 2, ...
 
-    # Create cos/sin matrices in Meta-style format
-    base = 10000.0
-    inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    t = torch.arange(max_seq_len, dtype=torch.float32)
-    freqs = torch.outer(t, inv_freq)
-
-    # Meta-style: stack [cos(t), cos(t)] interleaved
-    cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)  # [max_seq_len, head_dim]
-    sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)  # [max_seq_len, head_dim]
+    # Cos/sin in Meta-style format [max_seq_len, head_dim] (from prepare_rope)
+    cos_4d, sin_4d = get_cos_sin_torch(max_seq_len, head_dim=head_dim)
+    cos = cos_4d.squeeze(0).squeeze(0)
+    sin = sin_4d.squeeze(0).squeeze(0)
 
     # Reference output (original shape for comparison)
     position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]

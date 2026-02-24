@@ -16,10 +16,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import shuffle_weights_for_interleaved_qnope_qrope
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.prepare_rope import (
+    create_rope_cos_sin_ttnn,
+    create_rope_trans_mat_tensor,
+    get_cos_sin_torch,
+)
 
 
 def create_fabric_router_config(max_payload_size):
@@ -296,18 +300,8 @@ def test_pre_sdpa(
     max_seq_len = 8192
     position_ids = torch.tensor([position_id])  # [batch]
 
-    # Create cos/sin matrices in Meta-style format
-    base = 10000.0
-    inv_freq = 1.0 / (base ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
-    t = torch.arange(max_seq_len, dtype=torch.float32)
-    freqs = torch.outer(t, inv_freq)
-
-    # Meta-style: stack [cos(t), cos(t)] interleaved
-    torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)  # [max_seq_len, qrope_head_dim]
-    torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)  # [max_seq_len, qrope_head_dim]
-
-    # Transformation matrix for RoPE
-    torch_trans_mat = get_rot_transformation_mat()  # [1, 1, 32, 32]
+    # Cos/sin in Meta-style format [1, 1, max_seq_len, 64] (used for golden and ttnn)
+    torch_cos, torch_sin = get_cos_sin_torch(max_seq_len)
 
     # ========================================================================
     # Create TTNN tensors
@@ -504,62 +498,9 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # RoPE tensors
-    qrope_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
-    )
-
-    # QRoPE cos/sin: DRAM INTERLEAVED (all qrope cores read full head_dim)
-    # Shape: [1, 1, max_seq_len, qrope_head_dim]
-    qrope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
-    qrope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
-
-    qrope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-
-    ttnn_qrope_cos = ttnn.from_torch(
-        qrope_cos_full,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    ttnn_qrope_sin = ttnn.from_torch(
-        qrope_sin_full,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # Trans_mat: [1, 1, 32, 32] - repeat for all qrope cores
-    # Each core gets full [32, 32] transformation matrix (reused for all heads)
-    trans_mat_replicated = torch_trans_mat.repeat(
-        1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1
-    )  # [1, 1, 32, 32]
-    trans_mat_crs = kv_cache_branch_rope_crs.merge(ttnn.CoreRangeSet({qrope_grid}))
-    trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
-    trans_shard_shape = (ttnn.TILE_SIZE, ttnn.TILE_SIZE)  # [32, 32] per core
-    trans_shard_spec = ttnn.ShardSpec(
-        trans_mat_crs,
-        trans_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    trans_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
-
-    ttnn_trans_mat = ttnn.from_torch(
-        trans_mat_replicated,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=trans_mem_config,
-        tile=trans_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
+    # RoPE tensors (commonized with prepare_rope)
+    ttnn_qrope_cos, ttnn_qrope_sin = create_rope_cos_sin_ttnn(submesh, max_seq_len, tile=tile)
+    ttnn_trans_mat = create_rope_trans_mat_tensor(submesh)
 
     # KV Cache Branch
     torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
@@ -611,31 +552,8 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
-    krope_num_cores = kv_cache_branch_rope_crs.num_cores()
-    krope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
-    krope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
-
-    krope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-
-    ttnn_krope_cos = ttnn.from_torch(
-        krope_cos_full,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=krope_dram_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    ttnn_krope_sin = ttnn.from_torch(
-        krope_sin_full,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=krope_dram_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
+    # KRoPE uses same cos/sin as QRoPE (same layout, replicated)
+    ttnn_krope_cos, ttnn_krope_sin = ttnn_qrope_cos, ttnn_qrope_sin
 
     position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
     pos_core_grid = ttnn.CoreRangeSet(
@@ -754,6 +672,9 @@ def test_pre_sdpa(
 
     # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE).
     # Full tensor with num_tp * 64 heads; output is split per-TP for comparison.
+    # Golden expects cos/sin [max_seq_len, head_dim]
+    torch_cos_2d = torch_cos.squeeze(0).squeeze(0)
+    torch_sin_2d = torch_sin.squeeze(0).squeeze(0)
     _, _, torch_sdpa_expected_full, torch_kv_cache_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
@@ -761,8 +682,8 @@ def test_pre_sdpa(
         torch_rmsnorm2_gamma,
         torch_matmul2_weights_full_unshuffled,
         torch_matmul3_weights,
-        torch_sin,
-        torch_cos,
+        torch_sin_2d,
+        torch_cos_2d,
         position_ids,
         torch_dkv_matmul_weights,
         torch_dkv_rmsnorm_gamma,
