@@ -66,7 +66,7 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
 
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
-            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id)));
+            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id, icb)));
         }
 
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
