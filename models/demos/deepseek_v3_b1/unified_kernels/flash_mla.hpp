@@ -229,6 +229,7 @@ struct FlashMLADecode {
                     noc_semaphore_inc_multicast(q_input_mcast_sem_noc_addr, 1, args.full_grid_mcast_num_dests);
                     // 7 is number of cores per block - 1, since multicast is only sent to other cores in the block
                     noc_semaphore_wait_min(q_input_mcast_semaphore_ptr, 7);
+                    noc_async_atomic_barrier();
                 } else {
                     // wait for 8 q heads
                     noc_semaphore_wait_min(q_input_mcast_semaphore_ptr, 8);
@@ -290,10 +291,10 @@ struct FlashMLADecode {
 
             // Wait for KV cache cur pos ready
             // TODO: add this back
-            if (IsKVCacheUpdateCore) {
-                //     noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value - 1);
+            if constexpr (IsKVCacheUpdateCore) {
+                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value - 1);
             } else {
-                //      noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
+                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
             }
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
@@ -304,6 +305,8 @@ struct FlashMLADecode {
 
                     if (is_mcast_sender) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
+                        // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
+                        reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
                         const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
 
@@ -561,8 +564,10 @@ struct FlashMLADecode {
             MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
             PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
+            reconfig_data_format<false, true>(cb_k_in, cb_compute_in);
+            pack_reconfig_data_format<true>(cb_out_o);
             PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
-            sdpa_custom_mm_block_init<transpose_k>(cb_compute_in, cb_k_in, cb_out_o, Sk_chunk_t);
+            sdpa_custom_mm_block_init_short<transpose_k>(cb_compute_in, cb_k_in, cb_out_o, Sk_chunk_t);
 
             volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
             uint32_t cur_pos = pos_ptr[0];

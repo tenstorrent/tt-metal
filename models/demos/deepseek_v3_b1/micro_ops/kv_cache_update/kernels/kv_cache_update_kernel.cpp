@@ -52,7 +52,7 @@ void kernel_main() {
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
     };
 
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     deepseek_b1_ops::KVCacheUpdate::Op<Core::is_nope_core, Core::is_rope_core> op;
