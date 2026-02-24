@@ -2,7 +2,7 @@ name: "Fabric Test on a BH Quad"
 
 on:
   schedule:
-    - cron: "0 */4 * * *" # Runs every 4 hours
+    - cron: "0 */2 * * *" # Runs every 2 hours
   workflow_dispatch:
 
 run-name: Fabric Test on a BH Quad
@@ -138,12 +138,13 @@ jobs:
         timeout-minutes: 15
         run: |
           PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+          PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
+          mkdir -p $PIPELINE_DIR
           python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
-            --physical-discovery-test-path /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery \
             --mpi-user user \
-            --skip-mpi-net-filter \
             --hostfile /ci/ttrun/hostfile \
             --worker-tt-metal-home /home/user/tt-metal \
+            --output-dir $PIPELINE_DIR \
             models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
           tt-run --skip-executable-check \
             --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
