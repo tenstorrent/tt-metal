@@ -23,7 +23,11 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.prefetcher import (
+    Prefetcher,
+    VERIFIED_MODEL_CONFIGS,
+    is_prefetcher_supported,
+)
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -31,22 +35,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 def round_up(n, multiple):
     """Round up n to the nearest multiple."""
     return ((n + multiple - 1) // multiple) * multiple
-
-
-@pytest.fixture
-def model_dims():
-    """
-    Model dimensions for testing.
-    These are based on Llama-3.1-8B dimensions.
-    """
-    # Llama-3.1-8B dimensions
-    return {
-        "dim": 4096,  # Model dimension
-        "hidden_dim": 14336,  # MLP hidden dimension
-        "n_heads": 32,  # Number of attention heads
-        "n_kv_heads": 8,  # Number of KV heads
-        "head_dim": 128,  # Head dimension (dim // n_heads)
-    }
 
 
 def create_weight_tensors(
@@ -62,19 +50,21 @@ def create_weight_tensors(
     - FF1, FF3: TP on hidden_dim dimension (N-sharded)
     - FF2: TP on hidden_dim dimension (K-sharded)
 
+    Dimensions are padded to be divisible by ring_size (total receiver cores).
+
     Returns the weight tensors and their PyTorch equivalents for verification.
     """
+
+    num_devices = mesh_device.get_num_devices()
+    mesh_shape = tuple(mesh_device.shape)
+    ring_size = prefetcher.ring_size
     dim = model_dims["dim"]
     hidden_dim = model_dims["hidden_dim"]
     n_heads = model_dims["n_heads"]
     n_kv_heads = model_dims["n_kv_heads"]
-    head_dim = model_dims["head_dim"]
-
-    num_devices = mesh_device.get_num_devices()
-    mesh_shape = tuple(mesh_device.shape)
-
-    # Calculate QKV size: Q heads + K heads + V heads
+    head_dim = dim // n_heads
     qkv_size = head_dim * (n_heads + 2 * n_kv_heads)
+    dram_cores = len(prefetcher.dram_banks())
 
     # Verify dimensions are divisible by num_devices for TP
     assert n_heads % num_devices == 0, f"n_heads {n_heads} must be divisible by num_devices {num_devices}"
@@ -83,19 +73,24 @@ def create_weight_tensors(
     assert dim % num_devices == 0, f"dim {dim} must be divisible by num_devices {num_devices}"
     assert hidden_dim % num_devices == 0, f"hidden_dim {hidden_dim} must be divisible by num_devices {num_devices}"
 
-    # Number of receiver cores
-    dram_cores = mesh_device.dram_grid_size().x
+    # Helper to pad N dimension to be divisible by ring_size
+    # Only N (width) needs explicit padding - K (height) is handled internally by the prefetcher
+    def pad_n_to_ring_size(n_size):
+        """Pad N dimension to be divisible by ring_size * TILE_SIZE."""
+        per_core = round_up(math.ceil(n_size / ring_size), ttnn.TILE_SIZE)
+        return per_core * ring_size
 
     # Create DRAM sharded memory configs for weights
-    def create_dram_sharded_mem_config(k, n):
-        padded_n = math.ceil(n / (32 * dram_cores)) * (32 * dram_cores)
+    # K uses original dimension (prefetcher handles internal rounding)
+    # N must be padded to be divisible by ring_size for equal distribution across matmul cores
+    def create_dram_sharded_mem_config(k, n_padded):
+        """Create DRAM sharded memory config with original K and pre-padded N dimension."""
         dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))})
-        shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_n // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(dram_grid, (k, n_padded // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
     # Weight configs: (name, K, N, dtype, shard_dims, shard_type)
     # shard_dims: (dim_for_mesh_dim_0, dim_for_mesh_dim_1)
-    # For 1x2 mesh: mesh dim 0 has size 1 (no sharding), mesh dim 1 has size 2 (actual sharding)
     # dims=(2, 3) -> shard tensor dim 3 across mesh dim 1 (N-sharded)
     # dims=(3, 2) -> shard tensor dim 2 across mesh dim 1 (K-sharded)
     # shard_type: 'N' for N-sharded (column), 'K' for K-sharded (row)
@@ -119,26 +114,24 @@ def create_weight_tensors(
     for layer_idx in range(num_layers):
         for name, k, n, dtype, shard_dims, shard_type in weight_configs:
             key = f"layer_{layer_idx}_{name}"
-
-            # Create full weight tensor (2D for PT computation)
-            pt_weight_2d = torch.randn(k, n)
+            # N-sharded: [K, N/num_devices], K-sharded: [K/num_devices, N]
+            is_n_shard = shard_type == "N"
+            k_per_device = k if is_n_shard else k // num_devices
+            n_padded = pad_n_to_ring_size(n // num_devices if is_n_shard else n)
+            mem_config = create_dram_sharded_mem_config(k_per_device, n_padded)
+            pt_weight_2d = torch.randn(k, n_padded * num_devices if is_n_shard else n_padded)
             pt_weights[key] = pt_weight_2d
-
             # Convert to 4D for TT tensor: [1, 1, K, N]
             pt_weight_4d = pt_weight_2d.unsqueeze(0).unsqueeze(0)
-
-            # Determine sharded dimension size for memory config
-            if shard_type == "N":
-                # N-sharded: each device has [K, N/num_devices]
-                sharded_n = n // num_devices
-                mem_config = create_dram_sharded_mem_config(k, sharded_n)
-            else:  # K-sharded
-                # K-sharded: each device has [K/num_devices, N]
-                sharded_k = k // num_devices
-                mem_config = create_dram_sharded_mem_config(sharded_k, n)
-
-            weight_metadata[key] = {"shard_type": shard_type, "k": k, "n": n}
-
+            if name not in weight_metadata:
+                weight_metadata[name] = {
+                    "shard_type": shard_type,
+                    "k": k,
+                    "n": n,
+                    "k_per_device": k_per_device,
+                    "n_per_device": n_padded,
+                }
+            logger.info(f"Weight {name}: original ({k}, {n}) -> per device ({k_per_device}, {n_padded})")
             tt_weight = ttnn.as_tensor(
                 pt_weight_4d,
                 device=mesh_device,
@@ -159,45 +152,37 @@ def create_weight_tensors(
     return pt_weights, tt_weights, weight_metadata
 
 
-def create_matmul_program_configs(model_dims, prefetcher, mesh_device):
+def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_metadata):
     """
     Create matmul program configs for the prefetcher ring matmuls.
-    These are based on the configs in model_config.py.
-    Account for tensor parallelism in weight dimensions.
+    Uses original K dimension and padded N dimension.
     """
-    dim = model_dims["dim"]
-    hidden_dim = model_dims["hidden_dim"]
-    n_heads = model_dims["n_heads"]
-    n_kv_heads = model_dims["n_kv_heads"]
-    head_dim = model_dims["head_dim"]
-
-    num_devices = mesh_device.get_num_devices()
-
-    qkv_size = head_dim * (n_heads + 2 * n_kv_heads)
     ring_size = prefetcher.ring_size
     num_receiver_cores = prefetcher.num_receiver_cores
+    num_dram_banks = len(prefetcher.dram_banks())
+    assert (
+        ring_size % num_dram_banks == 0
+    ), f"ring_size {ring_size} must be divisible by num_dram_banks {num_dram_banks}"
 
-    def create_ring_config(M, K, N, num_cores, num_global_cb_receivers, untilize_out=False):
-        """Create ring matmul config similar to matmul_1d_ring_config in model_config.py"""
+    def create_ring_config(M, K, N_padded, num_cores, num_global_cb_receivers, num_dram_banks, untilize_out=False):
+        """Create ring matmul config
+        K: original weight K dimension
+        N_padded: padded output N dimension
+        """
+        # in0_block_w uses original K
         in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        while in0_block_w > 0 and (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+            in0_block_w -= 1
+        if in0_block_w == 0:
+            in0_block_w = 1
         out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
-
+        out_block_w = N_padded // num_cores // ttnn.TILE_SIZE
         out_subblock_h = 1
         out_subblock_w = 8
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
-
         # Calculate grid size from num_cores
-        if num_cores % 8 == 0:
-            grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
-        elif num_cores == 12:
-            grid = ttnn.CoreGrid(y=2, x=6)
-        elif num_cores == 20:
-            grid = ttnn.CoreGrid(y=4, x=5)
-        else:
-            grid = ttnn.CoreGrid(y=1, x=num_cores)
-
+        grid = ttnn.CoreGrid(y=num_cores // num_dram_banks, x=num_dram_banks)
         hop_grid = []
         hop_core_range_set = ttnn.CoreRangeSet(
             {
@@ -226,33 +211,27 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device):
 
     M = 32  # Batch size for decode
 
-    # TP dimensions per device:
-    # QKV: K=dim, N=qkv_size/num_devices (N-sharded)
-    # WO: K=n_heads*head_dim/num_devices, N=dim (K-sharded)
-    # FF1/FF3: K=dim, N=hidden_dim/num_devices (N-sharded)
-    # FF2: K=hidden_dim/num_devices, N=dim (K-sharded)
-
-    configs = {
-        "qkv": create_ring_config(M, dim, qkv_size // num_devices, ring_size, num_receiver_cores, untilize_out=True),
-        "wo": create_ring_config(M, (n_heads * head_dim) // num_devices, dim, ring_size, num_receiver_cores),
-        "ff1": create_ring_config(M, dim, hidden_dim // num_devices, ring_size, num_receiver_cores),
-        "ff3": create_ring_config(M, dim, hidden_dim // num_devices, ring_size, num_receiver_cores),
-        "ff2": create_ring_config(M, hidden_dim // num_devices, dim, ring_size, num_receiver_cores),
-    }
+    # Create configs using original K (for block width) and padded N (for output)
+    configs = {}
+    for name in ["qkv", "wo", "ff1", "ff3", "ff2"]:
+        meta = weight_metadata[name]
+        k_original = meta["k_per_device"]  # Original K per device
+        n_padded = meta["n_per_device"]  # Already padded N per device
+        untilize = name == "qkv"
+        configs[name] = create_ring_config(
+            M, k_original, n_padded, ring_size, num_receiver_cores, num_dram_banks, untilize_out=untilize
+        )
+        logger.info(f"Config {name}: K={k_original}, N_pad={n_padded}, ring_size={ring_size}")
 
     return configs
 
 
-def create_input_tensors(mesh_device, model_dims, prefetcher):
+def create_input_tensors(mesh_device, model_dims, prefetcher, weight_metadata):
     """
     Create input tensors for the matmuls.
     For K-sharded matmuls (WO, FF2), inputs need to be sharded across devices.
     For N-sharded matmuls (QKV, FF1, FF3), inputs are replicated.
     """
-    dim = model_dims["dim"]
-    hidden_dim = model_dims["hidden_dim"]
-    n_heads = model_dims["n_heads"]
-    head_dim = model_dims["head_dim"]
     ring_size = prefetcher.ring_size
     num_devices = mesh_device.get_num_devices()
     mesh_shape = tuple(mesh_device.shape)
@@ -262,50 +241,71 @@ def create_input_tensors(mesh_device, model_dims, prefetcher):
         prefetcher.receiver_cores(sender_active=True, receiver_active=True)
     )
 
-    def create_input_mem_config(dim_size):
-        dim_size_rounded = round_up(dim_size, ttnn.TILE_SIZE * ring_size)
+    def create_input_mem_config(k_per_shard):
+        """Create input memory config with K_per_shard (padded per core)."""
         return ttnn.create_sharded_memory_config(
-            shape=(32, dim_size_rounded // ring_size),
+            shape=(32, k_per_shard),
             core_grid=receiver_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
-    # Create input tensors
-    # For attn_input and mlp_input: replicated across devices (used by N-sharded QKV, FF1, FF3)
-    # For wo_input: K-sharded across devices (n_heads*head_dim is sharded)
-    # For ff2_input: K-sharded across devices (hidden_dim is sharded)
+    qkv_k = weight_metadata["qkv"]["k_per_device"]  # dim (original)
+    wo_k = weight_metadata["wo"]["k_per_device"]  # n_heads*head_dim/num_devices (original)
+    ff1_k = weight_metadata["ff1"]["k_per_device"]  # dim (original)
+    ff2_k = weight_metadata["ff2"]["k_per_device"]  # hidden_dim/num_devices (original)
+
+    # Calculate K_per_shard for memory config (padded to tile size per core)
+    def calc_k_per_shard(k):
+        return round_up(math.ceil(k / ring_size), ttnn.TILE_SIZE)
+
+    qkv_k_per_shard = calc_k_per_shard(qkv_k)
+    wo_k_per_shard = calc_k_per_shard(wo_k)
+    ff1_k_per_shard = calc_k_per_shard(ff1_k)
+    ff2_k_per_shard = calc_k_per_shard(ff2_k)
+
+    logger.info(
+        f"Input K dimensions: QKV {qkv_k} (shard={qkv_k_per_shard}), WO {wo_k} (shard={wo_k_per_shard}), FF1 {ff1_k} (shard={ff1_k_per_shard}), FF2 {ff2_k} (shard={ff2_k_per_shard})"
+    )
+
     pt_inputs = {
-        "attn_input": torch.randn(1, 1, 32, dim),
-        "mlp_input": torch.randn(1, 1, 32, dim),
-        # WO input: shape [1, 1, 32, n_heads*head_dim] -> each device gets [1, 1, 32, n_heads*head_dim/num_devices]
-        "wo_input": torch.randn(1, 1, 32, n_heads * head_dim),
-        # FF2 input: shape [1, 1, 32, hidden_dim] -> each device gets [1, 1, 32, hidden_dim/num_devices]
-        "ff2_input": torch.randn(1, 1, 32, hidden_dim),
+        "attn_input": torch.randn(1, 1, 32, qkv_k),  # Used for QKV (replicated)
+        "mlp_input": torch.randn(1, 1, 32, ff1_k),  # Used for FF1, FF3 (replicated)
+        # WO input: K-sharded across devices, each device gets [1, 1, 32, wo_k]
+        "wo_input": torch.randn(1, 1, 32, wo_k * num_devices),
+        # FF2 input: K-sharded across devices, each device gets [1, 1, 32, ff2_k]
+        "ff2_input": torch.randn(1, 1, 32, ff2_k * num_devices),
     }
 
     tt_inputs = {}
 
     # Replicated inputs (for N-sharded matmuls)
-    for name in ["attn_input", "mlp_input"]:
-        pt_tensor = pt_inputs[name]
-        input_dim = pt_tensor.shape[-1]
-        mem_config = create_input_mem_config(input_dim)
-        tt_tensor = ttnn.from_torch(
-            pt_tensor,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        tt_inputs[name] = tt_tensor
+    # attn_input for QKV
+    attn_mem_config = create_input_mem_config(qkv_k_per_shard)
+    tt_inputs["attn_input"] = ttnn.from_torch(
+        pt_inputs["attn_input"],
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=attn_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # mlp_input for FF1, FF3
+    mlp_mem_config = create_input_mem_config(ff1_k_per_shard)
+    tt_inputs["mlp_input"] = ttnn.from_torch(
+        pt_inputs["mlp_input"],
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=mlp_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
     # K-sharded inputs (for K-sharded matmuls: WO, FF2)
     # WO input: shard on dim 3 (n_heads*head_dim dimension)
-    wo_input_sharded_dim = (n_heads * head_dim) // num_devices
-    wo_mem_config = create_input_mem_config(wo_input_sharded_dim)
+    wo_mem_config = create_input_mem_config(wo_k_per_shard)
     tt_inputs["wo_input"] = ttnn.from_torch(
         pt_inputs["wo_input"],
         device=mesh_device,
@@ -316,8 +316,7 @@ def create_input_tensors(mesh_device, model_dims, prefetcher):
     )
 
     # FF2 input: shard on dim 3 (hidden_dim dimension)
-    ff2_input_sharded_dim = hidden_dim // num_devices
-    ff2_mem_config = create_input_mem_config(ff2_input_sharded_dim)
+    ff2_mem_config = create_input_mem_config(ff2_k_per_shard)
     tt_inputs["ff2_input"] = ttnn.from_torch(
         pt_inputs["ff2_input"],
         device=mesh_device,
@@ -330,47 +329,38 @@ def create_input_tensors(mesh_device, model_dims, prefetcher):
     return pt_inputs, tt_inputs
 
 
-def create_output_mem_configs(model_dims, prefetcher, mesh_device):
+def create_output_mem_configs(prefetcher, weight_metadata):
     """
     Create output memory configs for the matmuls.
-    Account for tensor parallelism in output dimensions.
+    Uses padded N dimensions from weight_metadata.
     """
-    dim = model_dims["dim"]
-    hidden_dim = model_dims["hidden_dim"]
-    n_heads = model_dims["n_heads"]
-    n_kv_heads = model_dims["n_kv_heads"]
-    head_dim = model_dims["head_dim"]
-
-    num_devices = mesh_device.get_num_devices()
-
-    qkv_size = head_dim * (n_heads + 2 * n_kv_heads)
     ring_size = prefetcher.ring_size
 
     receiver_core_range_set = prefetcher.to_core_range_set(
         prefetcher.receiver_cores(sender_active=True, receiver_active=True)
     )
 
-    def create_output_mem_config(n_size):
-        n_size_rounded = round_up(n_size, ttnn.TILE_SIZE * ring_size)
+    def create_output_mem_config(n_padded):
+        """Create output memory config with pre-padded N dimension."""
         return ttnn.create_sharded_memory_config(
-            shape=(32, n_size_rounded // ring_size),
+            shape=(32, n_padded // ring_size),
             core_grid=receiver_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
-    # Output sizes per device:
-    # QKV: N-sharded -> output [32, qkv_size/num_devices] per device
-    # WO: K-sharded -> output [32, dim] per device (partial, needs all-reduce)
-    # FF1/FF3: N-sharded -> output [32, hidden_dim/num_devices] per device
-    # FF2: K-sharded -> output [32, dim] per device (partial, needs all-reduce)
+    # Output sizes per device (use padded N from weight_metadata)
+    # QKV: N-sharded -> output [32, n_per_device] per device
+    # WO: K-sharded -> output [32, n_per_device] per device (partial, needs all-reduce)
+    # FF1/FF3: N-sharded -> output [32, n_per_device] per device
+    # FF2: K-sharded -> output [32, n_per_device] per device (partial, needs all-reduce)
     return {
-        "qkv": create_output_mem_config(qkv_size // num_devices),
-        "wo": create_output_mem_config(dim),
-        "ff1": create_output_mem_config(hidden_dim // num_devices),
-        "ff3": create_output_mem_config(hidden_dim // num_devices),
-        "ff2": create_output_mem_config(dim),
+        "qkv": create_output_mem_config(weight_metadata["qkv"]["n_per_device"]),
+        "wo": create_output_mem_config(weight_metadata["wo"]["n_per_device"]),
+        "ff1": create_output_mem_config(weight_metadata["ff1"]["n_per_device"]),
+        "ff3": create_output_mem_config(weight_metadata["ff3"]["n_per_device"]),
+        "ff2": create_output_mem_config(weight_metadata["ff2"]["n_per_device"]),
     }
 
 
@@ -379,10 +369,16 @@ def run_prefetcher_all_matmuls(
     num_layers,
     model_dims,
     enable_trace=True,
+    receiver_mapping_override=None,
+    num_receiver_cores=None,
 ):
     """
     Run the prefetcher with all 5 matmuls (QKV, WO, FF1, FF3, FF2) for num_layers.
     Weights are tensor-parallelized across devices.
+
+    Args:
+        receiver_mapping_override: Optional dict mapping sender cores to receiver cores.
+            If provided, keys become sender cores and values become their receivers.
     """
     logger.info(f"Running prefetcher test with {num_layers} layers on Blackhole with tensor parallelism")
 
@@ -398,6 +394,7 @@ def run_prefetcher_all_matmuls(
         mesh_device=mesh_device,
         num_tensors=num_tensors_per_layer,
         num_layers=num_layers,
+        num_receiver_cores=num_receiver_cores,
     )
 
     # Initialize prefetcher for decode mode
@@ -409,12 +406,12 @@ def run_prefetcher_all_matmuls(
     # Create weight tensors (this also inserts them into prefetcher)
     pt_weights, tt_weights, weight_metadata = create_weight_tensors(mesh_device, model_dims, num_layers, prefetcher)
 
-    # Create program configs
-    program_configs = create_matmul_program_configs(model_dims, prefetcher, mesh_device)
+    # Create program configs using padded dimensions from weight_metadata
+    program_configs = create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_metadata)
 
-    # Create input and output memory configs
-    pt_inputs, tt_inputs = create_input_tensors(mesh_device, model_dims, prefetcher)
-    output_mem_configs = create_output_mem_configs(model_dims, prefetcher, mesh_device)
+    # Create input and output memory configs using padded dimensions
+    pt_inputs, tt_inputs = create_input_tensors(mesh_device, model_dims, prefetcher, weight_metadata)
+    output_mem_configs = create_output_mem_configs(prefetcher, weight_metadata)
 
     # Compute kernel config
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -531,7 +528,7 @@ def run_prefetcher_all_matmuls(
 
     for layer_idx in range(num_layers):
         for matmul_name in ["qkv", "wo", "ff1", "ff3", "ff2"]:
-            shard_type = weight_metadata[f"layer_{layer_idx}_{matmul_name}"]["shard_type"]
+            shard_type = weight_metadata[matmul_name]["shard_type"]
 
             # Get the appropriate TT input tensor
             if matmul_name == "qkv":
@@ -543,11 +540,8 @@ def run_prefetcher_all_matmuls(
             else:  # ff2
                 tt_input = tt_inputs["ff2_input"]
 
-            # Set PCC threshold based on dtype
-            if matmul_name in ["ff1", "ff3"]:  # bfloat4_b
-                pcc_threshold = 0.98
-            else:  # bfloat8_b
-                pcc_threshold = 0.99
+            # Set PCC threshold (all weights use bfloat8_b)
+            pcc_threshold = 0.99
 
             # Per-device verification
             # This verifies each device's matmul independently
@@ -569,6 +563,15 @@ def run_prefetcher_all_matmuls(
     # Cleanup
     prefetcher.stop()
 
+    # Deallocate all tensors
+    for tt_input in tt_inputs.values():
+        ttnn.deallocate(tt_input)
+    for tt_weight in tt_weights.values():
+        ttnn.deallocate(tt_weight)
+    for layer_outputs in outputs:
+        for out in layer_outputs.values():
+            ttnn.deallocate(out)
+
     # Clean up sub device manager
     mesh_device.clear_loaded_sub_device_manager()
 
@@ -578,18 +581,8 @@ def run_prefetcher_all_matmuls(
 # =============================================================================
 # Test Cases
 # =============================================================================
-
-# Mapping from mesh shape to model dimensions
-# Each mesh shape has corresponding dimensions that work with the prefetcher
-MESH_SHAPE_TO_MODEL_DIMS = {
-    (1, 1): {"dim": 2048, "hidden_dim": 3584, "n_heads": 32, "n_kv_heads": 8},
-    (1, 2): {"dim": 4096, "hidden_dim": 7168, "n_heads": 32, "n_kv_heads": 8},
-    (1, 4): {"dim": 4096, "hidden_dim": 14336, "n_heads": 32, "n_kv_heads": 8},
-    (1, 8): {"dim": 4096, "hidden_dim": 14336, "n_heads": 32, "n_kv_heads": 8},
-}
-
-
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
+@pytest.mark.parametrize("enable_trace", [True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -607,43 +600,60 @@ MESH_SHAPE_TO_MODEL_DIMS = {
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
     indirect=True,
 )
-def test_prefetcher_ring_matmul_BH(
+@pytest.mark.parametrize(
+    "num_receiver_cores",
+    [1, 2, 3, 8, 10],
+)
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "Llama-3.2-1B",
+        "Llama-3.2-3B",
+        "Llama-3.1-8B",
+        "Llama-3.3-70B",
+        "Qwen3-32B",
+        "Qwen3-VL-7B",
+        "Qwen3-VL-14B",
+        "Qwen3-VL-72B",
+        "Gemma3-4B",
+        "Gemma3-27B",
+    ],
+)
+def test_prefetcher_BH(
     mesh_device,
     function_level_defaults,
     silicon_arch_name,
     silicon_arch_blackhole,
+    num_receiver_cores,
+    model_name,
+    enable_trace,
 ):
     """
     Test prefetcher with tensor-parallelized weights on Blackhole.
-
     Automatically detects the mesh shape and uses corresponding model dimensions.
     Supported mesh shapes: 1x1 (P150), 1x2 (P300), 1x4 (P150x4 or P300x2), 1x8 (P150x8)
-
+    Parameters:
+        use_custom_mapping: If False, uses default prefetcher (column 0/7 senders, 2 receivers each).
+                           If True, uses custom 64 or 80-core mapping (8 senders, 8 or 10 receivers each).
     Tensor parallelism:
     - QKV: TP on qkv_size dimension (N-sharded)
     - WO: TP on n_heads*head_dim dimension (K-sharded)
     - FF1, FF3: TP on hidden_dim dimension (N-sharded)
     - FF2: TP on hidden_dim dimension (K-sharded)
     """
-    # Get mesh shape from device
     mesh_shape = tuple(mesh_device.shape)
-
-    # Skip if mesh shape is not supported
-    if mesh_shape not in MESH_SHAPE_TO_MODEL_DIMS:
+    if not is_prefetcher_supported(model_name, mesh_device.get_num_devices(), num_receiver_cores * 8):
         pytest.skip(
-            f"Mesh shape {mesh_shape} is not supported. " f"Supported shapes: {list(MESH_SHAPE_TO_MODEL_DIMS.keys())}"
+            f"Model {model_name} does not fit in global CB with {mesh_device.get_num_devices()} devices and num_receiver_cores={num_receiver_cores}"
         )
-
-    # Get model dimensions for this mesh shape
-    model_dims = MESH_SHAPE_TO_MODEL_DIMS[mesh_shape].copy()
-    model_dims["head_dim"] = model_dims["dim"] // model_dims["n_heads"]
-
-    logger.info(f"Running prefetcher test with mesh shape {mesh_shape}")
-    logger.info(f"Model dimensions: {model_dims}")
-
+    logger.info(
+        f"Testing DRAM Prefetcher + Ring Matmul for model {model_name} with dimensions: {VERIFIED_MODEL_CONFIGS[model_name]}"
+    )
+    os.environ["HF_MODEL"] = model_name
     run_prefetcher_all_matmuls(
         mesh_device=mesh_device,
         num_layers=1,
-        model_dims=model_dims,
-        enable_trace=False,
+        model_dims=VERIFIED_MODEL_CONFIGS[model_name],
+        enable_trace=enable_trace,
+        num_receiver_cores=num_receiver_cores,
     )

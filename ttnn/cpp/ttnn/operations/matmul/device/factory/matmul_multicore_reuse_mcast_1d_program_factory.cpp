@@ -1908,8 +1908,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     }
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        if (!intersection.empty()) {
-            non_idle_cores_vec.push_back(intersection.bounding_box());
+        for (const auto& ir : intersection.ranges()) {
+            non_idle_cores_vec.push_back(ir);
         }
     }
     all_cores = CoreRangeSet(non_idle_cores_vec);
