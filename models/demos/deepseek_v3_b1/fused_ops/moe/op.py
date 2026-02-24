@@ -259,6 +259,11 @@ class _MoeRoutedExpertContext:
     reduce_packet_cb_descriptor: Any = None
     reduce_packet_header_cb_descriptor: Any = None
 
+    # Broadcast
+    enable_bcast: bool = False
+    bcast_pkt_cb: int = 0
+    bcast_params: dict = None
+
 
 @dataclass
 class _MoeSharedExpertContext:
@@ -1298,6 +1303,41 @@ class MoeRoutedExpertOp:
             }
 
         # ==================================================================
+        # Broadcast (CCL broadcast into CB 25)
+        # ==================================================================
+        enable_bcast = (
+            bcast_input_tensor is not None
+            and bcast_intermediate_tensor is not None
+            and bcast_semaphores is not None
+            and bcast_sender_coord is not None
+        )
+
+        bcast_params = None
+        if enable_bcast:
+            from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+
+            bcast_out_ready_sem_addr = ttnn.get_global_semaphore_address(bcast_semaphores[0])
+            bcast_barrier_sem_addr = ttnn.get_global_semaphore_address(bcast_semaphores[1])
+            bcast_secondary_sync_sem_addr = ttnn.get_global_semaphore_address(bcast_semaphores[2])
+
+            bcast_input_sample = ttnn.get_device_tensors(bcast_input_tensor)[0]
+            bcast_input_shape = bcast_input_sample.shape
+            bcast_element_size = dtype_size(bcast_input_sample.dtype)
+            bcast_payload_size_bytes = bcast_input_shape[0] * bcast_input_shape[1] * bcast_element_size
+            bcast_page_size_bytes = 32 * 32 * bcast_element_size  # interpret as 32x32 tile
+            assert bcast_payload_size_bytes % bcast_page_size_bytes == 0
+            bcast_input_num_pages = bcast_payload_size_bytes // bcast_page_size_bytes
+
+            bcast_params = {
+                "out_ready_sem_addr": bcast_out_ready_sem_addr,
+                "barrier_sem_addr": bcast_barrier_sem_addr,
+                "secondary_sync_sem_addr": bcast_secondary_sync_sem_addr,
+                "sender_coord": bcast_sender_coord,
+                "page_size_bytes": bcast_page_size_bytes,
+                "input_num_pages": bcast_input_num_pages,
+            }
+
+        # ==================================================================
         # Per-core bank_id, vc, sender_idx
         # ==================================================================
         gate_proj_optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
@@ -1438,6 +1478,10 @@ class MoeRoutedExpertOp:
             reduce_packet_cb=reduce_packet_cb,
             reduce_packet_header_cb=reduce_packet_header_cb,
             reduce_params=reduce_params if enable_reduce_to_one else None,
+            # Broadcast
+            enable_bcast=enable_bcast,
+            bcast_pkt_cb=bcast_pkt_cb,
+            bcast_params=bcast_params,
         )
 
     @staticmethod
@@ -1566,6 +1610,9 @@ class MoeRoutedExpertOp:
             ("reduce_received_cb_r2", ctx.reduce_received_cb_r2),
             ("reduce_received_cb_r3", ctx.reduce_received_cb_r3),
             ("reduce_ncrisc_common_rt_arg_base", 0),
+            # Broadcast (base CT args, always present)
+            ("bcast_pkt_cb", ctx.bcast_pkt_cb),
+            ("bcast_ncrisc_common_rt_arg_base", 0),
         ]
 
         brisc_named_compile_time_args = [
@@ -1663,6 +1710,8 @@ class MoeRoutedExpertOp:
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
             ("reduce_brisc_rt_arg_base", 0),
             ("reduce_brisc_fabric_rt_arg_base", 0),
+            # Broadcast (base CT args, always present)
+            ("bcast_pkt_cb", ctx.bcast_pkt_cb),
         ]
 
         trisc_named_compile_time_args = [
