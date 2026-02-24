@@ -70,7 +70,7 @@ python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py add-stage '{
 
 ### `test [stage_name] [--op-path PATH]`
 
-Run the test for the current stage (or a named stage) via `dev-test.sh`.
+Run the test for the current stage (or a named stage) via `tt-test.sh --dev`.
 
 - Captures output and classifies failures automatically
 - Creates/removes `.tdd_gate_passed` marker based on result
@@ -151,7 +151,7 @@ Output the last failure as structured JSON to stdout.
 ## Architecture
 
 ```
-Orchestrator Agent                   tdd_orchestrator.py              dev-test.sh
+Orchestrator Agent                   tdd_orchestrator.py              tt-test.sh --dev
     |                                      |                              |
     |-- init <spec> ---------------------->| Create .tdd_state.json       |
     |                                      |                              |
@@ -160,7 +160,7 @@ Orchestrator Agent                   tdd_orchestrator.py              dev-test.s
     |                                      |                              |
     |-- [kernel-writer implements] --------|------------------------------|
     |                                      |                              |
-    |-- test <stage_name> --------------->|---- dev-test.sh ------------>|
+    |-- test <stage_name> --------------->|---- tt-test.sh --dev ------------>|
     |                                      |<--- exit code + output -----|
     |                                      |                              |
     |<-- PASS / structured failure --------|                              |
@@ -246,7 +246,7 @@ The `.tdd_gate_passed` marker is created by `test` on pass and removed by `advan
 If stage 0 fails, there's no commit to rollback to. The orchestrator prints a warning and only marks the stage as `failed_permanent`.
 
 ### Test timeout
-The `test` subcommand has a 5-minute overall timeout (on top of dev-test.sh's per-operation timeout). If hit, the process is killed and classified as a hang.
+The `test` subcommand has a 5-minute overall timeout (on top of tt-test.sh --dev's per-operation timeout). If hit, the process is killed and classified as a hang.
 
 ### Template rendering without Jinja2
 If `jinja2` is not installed, the orchestrator falls back to simple string replacement. The output is functionally identical.
