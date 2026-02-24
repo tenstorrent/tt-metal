@@ -41,6 +41,9 @@ using address_t = uint32_t;
 
 namespace deepseek_b1_ops {
 
+// Atomic semaphore decrement by 1
+inline void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) { __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED); }
+
 // Unified kernel for CCL Broadcast operation
 struct Broadcast {
     // ========================================================================
@@ -169,6 +172,9 @@ struct Broadcast {
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
                 constexpr uint32_t secondary_connection_idx = num_primary_connections;
+
+                // Reset pool so broadcast can be called across loop iterations
+                PacketHeaderPool::reset();
 
                 // Reset pool so broadcast can be called across loop iterations
                 PacketHeaderPool::reset();
