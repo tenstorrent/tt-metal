@@ -885,6 +885,31 @@ class TtModelArgs:
 
             self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = prefill_ff1_ff3_minimal_matmul_config
 
+            self.model_config["USE_FUSED_MM_RS_PREFILL"] = os.environ.get("USE_FUSED_MM_RS_PREFILL", "0") == "1"
+            self.model_config["CONSTRAIN_FF1_CORES"] = os.environ.get("CONSTRAIN_FF1_CORES", "0") == "1"
+            self.model_config["FUSED_CHUNK_WIDTH"] = int(os.environ.get("FUSED_CHUNK_WIDTH", "2"))
+            self.model_config["FUSED_NUM_WORKERS"] = int(os.environ.get("FUSED_NUM_WORKERS", "3"))
+
+            def prefill_ff1_ff3_fused_mm_rs_config(seq_len):
+                """
+                MinimalMatmulConfig for the fused MM+RS op.
+                grid_x=4 required: slice_Wt=N_tiles/(num_devices/2)=28 must be
+                divisible by mm_N_block_wt=N_tiles/grid_x. 112/4=28, 28%28=0.
+                grid_y=8 leaves rows 8-9 for RS cores.
+                """
+                grid_x = int(os.environ.get("FUSED_GRID_X", "4"))
+                grid_y = int(os.environ.get("FUSED_GRID_Y", "8"))
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+                )
+
+            self.model_config["PREFILL_FF1_FF3_FUSED_MM_RS_CONFIG"] = prefill_ff1_ff3_fused_mm_rs_config
+
             #  Only used when seq_len >= 4096
             def prefill_ff2_minimal_matmul_config(seq_len):
                 """

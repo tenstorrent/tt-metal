@@ -102,6 +102,17 @@ class TtLlamaMLP(LightweightModule):
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
 
+        self.use_fused_mm_rs_prefill = model_config.get("USE_FUSED_MM_RS_PREFILL", False)
+        self.fused_mm_rs_semaphores = None
+        self.fused_mm_rs_barrier = None
+        if self.use_fused_mm_rs_prefill:
+            compute_grid_size = mesh_device.compute_with_storage_grid_size()
+            all_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+            )
+            self.fused_mm_rs_semaphores = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(3)]
+            self.fused_mm_rs_barrier = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
 
@@ -212,39 +223,77 @@ class TtLlamaMLP(LightweightModule):
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
-            w1_out = ttnn.linear(
-                x,
-                self.w1_interleaved if use_w1_w3_interleaved else self.w1,
-                compute_kernel_config=(
-                    self.args.compute_kernel_config_lofi
-                    if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi2_fp16
-                ),
-                dtype=ttnn.bfloat8_b,
-                program_config=short_lens_pc_1_3,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            w1_out = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
-                config=minimal_pc_1_3,
-                compute_kernel_config=self.args.compute_kernel_config_lofi,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        if (
+            self.use_fused_mm_rs_prefill
+            and self.fused_mm_rs_semaphores is not None
+            and seq_len >= 4096
+            and batch_size == 1
+        ):
+            fused_config = self.model_config["PREFILL_FF1_FF3_FUSED_MM_RS_CONFIG"](seq_len)
+            mm_grid_y = fused_config.compute_with_storage_grid_size.y
+            rs_core_grid_offset = ttnn.CoreCoord(0, mm_grid_y)
 
-        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w1_out,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=w1_out.memory_config(),
-            buffer_key="FF1",
-            dim=3,
-            batch_size=batch_size,
-        )
-        ttnn.deallocate(w1_out)
+            B = x.shape[1]
+            x_for_fused = ttnn.reshape(x, (1, 1, B * x.shape[-2], x.shape[-1]))
+
+            w1_mm_out, w1_rs_inter, w1_out_reduced = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                x_for_fused,
+                self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                3,
+                self.fused_mm_rs_semaphores,
+                rs_core_grid_offset,
+                num_links=1,
+                memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.model_config["CCL_TOPOLOGY"],
+                cluster_axis=1,
+                config=fused_config,
+                compute_kernel_config=self.args.compute_kernel_config_lofi,
+                barrier_semaphore=self.fused_mm_rs_barrier,
+                num_workers_per_link=self.model_config.get("FUSED_NUM_WORKERS", 3),
+                chunk_width_in_mm_blocks=self.model_config.get("FUSED_CHUNK_WIDTH", 2),
+            )
+            ttnn.deallocate(w1_mm_out)
+            ttnn.deallocate(w1_rs_inter)
+            w1_out_reduced = ttnn.reshape(w1_out_reduced, (1, B, B * x.shape[-2] // B, w1_out_reduced.shape[-1]))
+        else:
+            if seq_len < 4096 or batch_size > 1:
+                w1_out = ttnn.linear(
+                    x,
+                    self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                    compute_kernel_config=(
+                        self.args.compute_kernel_config_lofi
+                        if self.four_bit_mlp
+                        else self.args.compute_kernel_config_hifi2_fp16
+                    ),
+                    dtype=ttnn.bfloat8_b,
+                    program_config=short_lens_pc_1_3,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                ff1_config = (
+                    self.model_config["PREFILL_FF1_FF3_FUSED_MM_RS_CONFIG"](seq_len)
+                    if self.model_config.get("CONSTRAIN_FF1_CORES", False)
+                    else minimal_pc_1_3
+                )
+                w1_out = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                    config=ff1_config,
+                    compute_kernel_config=self.args.compute_kernel_config_lofi,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out,
+                cluster_axis=1,
+                num_links=3,
+                memory_config=w1_out.memory_config(),
+                buffer_key="FF1",
+                dim=3,
+                batch_size=batch_size,
+            )
+            ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:
@@ -279,12 +328,20 @@ class TtLlamaMLP(LightweightModule):
             batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
+        mul_mem_config = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if self.use_fused_mm_rs_prefill
+            and self.fused_mm_rs_semaphores is not None
+            and seq_len >= 4096
+            and batch_size == 1
+            else w1_out.memory_config()
+        )
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
+            memory_config=mul_mem_config,
         )
         w2_in_gathered = self.tt_ccl.line_all_gather(
             w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3

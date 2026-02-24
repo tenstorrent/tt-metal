@@ -38,8 +38,9 @@ MinimalMatmulStridedReduceScatterAsync::spec_return_value_t
 MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Output tensor[0]: MM output spec (= RS input)
-    ttnn::TensorSpec mm_output_spec = matmul_device_operation_t::compute_output_specs(
+    auto mm_output_specs = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
+    ttnn::TensorSpec mm_output_spec = mm_output_specs.at(0);
 
     // Derive RS intermediate and output specs from the MM output shape
     auto mm_output_shape = mm_output_spec.logical_shape();
