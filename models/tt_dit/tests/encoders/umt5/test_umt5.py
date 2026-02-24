@@ -252,7 +252,6 @@ def test_umt5_encoder(
 
     tt_mask = ttnn.from_torch(
         mask,
-        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=encoder_submesh,
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
@@ -285,12 +284,12 @@ def test_umt5_encoder(
 
     # time TT model inference only
     # with warmup
-    tt_output = tt_encoder(tt_prompt)
+    tt_output = tt_encoder(tt_prompt, attention_mask=tt_mask)
     benchmark_profiler = BenchmarkProfiler()
     num_runs = 10
     for i in range(num_runs):
         with benchmark_profiler("tt_umt5_encoder", i):
-            tt_output = tt_encoder(tt_prompt)[-1]
+            tt_output = tt_encoder(tt_prompt, attention_mask=tt_mask)[-1]
 
     # get HF reference outputs
     with torch.no_grad():
