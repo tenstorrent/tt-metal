@@ -8,7 +8,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -20,58 +20,27 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 class ResnetConvTest(OpTestBase):
     def __init__(
         self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        program_config,
-        compute_config,
-        input_channels,
-        out_channels,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        dilation,
-        batch_size,
-        input_height,
-        input_width,
-        groups,
-        weights_block_h,
-        weights_block_w,
-        weights_df_on_device,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
+        *args,
         compute_with_storage_grid_size=(8, 8),
+        input_channels=None,
+        out_channels=None,
+        filter_height=None,
+        filter_width=None,
+        stride_h=None,
+        stride_w=None,
+        pad_h=None,
+        pad_w=None,
+        dilation=None,
+        batch_size=None,
+        input_height=None,
+        input_width=None,
+        groups=None,
+        weights_block_h=None,
+        weights_block_w=None,
+        weights_df_on_device=None,
+        **kwargs,
     ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+        super().__init__(*args, **kwargs)
         self.compute_with_storage_grid_size = compute_with_storage_grid_size
         self.input_channels = input_channels
         self.out_channels = out_channels
@@ -90,30 +59,16 @@ class ResnetConvTest(OpTestBase):
         self.weights_block_w = weights_block_w
         self.weights_df_on_device = weights_df_on_device
         self.reader_patterns_cache = {}
-        self.out_dtype = out_dtype
-
-    # Remove weights shape
-    def generate_torch_weights(self, shape):
-        return torch.randn(self.in1_shape, dtype=torch.bfloat16).float()
 
     # Remove weights shape
     def generate_torch_activations(self, shape):
-        torch_input_tensor_nchw = torch.randn(self.in0_shape, dtype=torch.bfloat16).float()
+        torch_input_tensor_nchw = torch.randn(shape, dtype=torch.bfloat16).float()
         torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
         return torch_input_tensor
 
-    def generate_tt_activations_from_torch(self, torch_tensor):
-        return ttnn.from_torch(
-            torch_tensor,
-            dtype=self.in0_dtype,
-            layout=self.in0_layout,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=self.mesh_device,
-            mesh_mapper=self.from_torch_mesh_mapper,
-        )
-
-    def convert_activations_to_memory_config(self, activations):
-        return ttnn.to_memory_config(activations, self.in0_mem_config)
+    # Remove weights shape
+    def generate_torch_input(self, shape):
+        return torch.randn(shape, dtype=torch.bfloat16)
 
     def deallocate_activations(self):
         # Do nothing in conv case as activations are on device
@@ -122,7 +77,7 @@ class ResnetConvTest(OpTestBase):
     def run_device_operation(self):
         tt_output_tensor_on_device = ttnn.conv2d(
             input_tensor=self.activations,
-            weight_tensor=self.weights,
+            weight_tensor=self.inputs[0],
             in_channels=self.input_channels,
             out_channels=self.out_channels,
             device=self.mesh_device,
@@ -167,10 +122,9 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     filter_width = 4
     input_height = 35
     input_width = 83
-    compute_with_storage_grid_size = (8, 8)
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-        compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+
+    compute_grid = get_mesh_grid_size(mesh_device)
+    compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
     # scale batch_size with num cores to keep sub_block dims
     batch_size = compute_with_storage_grid_size[0] * compute_with_storage_grid_size[1]
@@ -213,40 +167,38 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         packer_l1_acc=True,
     )
 
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
     resnetConvTest = ResnetConvTest(
         mesh_device,
-        in0_shape,
-        in1_shape,
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),  # see what this does
-        in0_dtype,
-        in1_dtype,
-        activations_dtype,  # out_dtype
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ROW_MAJOR_LAYOUT,
-        conv_config,  # program config
-        compute_kernel_config,  # compute config
-        input_channels,
-        output_channels,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        dilation,
-        batch_size,
-        input_height,
-        input_width,
-        groups,
-        weights_block_h,
-        weights_block_w,
-        weights_dtype,
+        OpParameter(in0_shape, in0_dtype, ttnn.ROW_MAJOR_LAYOUT, mem_config),  # activations
+        [
+            OpParameter(in1_shape, in1_dtype, ttnn.ROW_MAJOR_LAYOUT, mem_config),  # inputs
+        ],
+        out_mem_config=mem_config,
+        out_dtype=activations_dtype,
+        program_config=conv_config,
+        compute_config=compute_kernel_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
         compute_with_storage_grid_size=compute_with_storage_grid_size,
+        input_channels=input_channels,
+        out_channels=output_channels,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        dilation=dilation,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        groups=groups,
+        weights_block_h=weights_block_h,
+        weights_block_w=weights_block_w,
+        weights_df_on_device=weights_dtype,
     )
 
     resnetConvTest.run_op_test()

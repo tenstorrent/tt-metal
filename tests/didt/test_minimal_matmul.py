@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -16,54 +16,19 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 class MinimalMatmulWorstCaseTest(OpTestBase):
-    def __init__(
-        self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        program_config,
-        compute_config,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
-    ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     def generate_torch_activations(self, shape):
         return torch.randn(shape, dtype=torch.bfloat16).float()
 
-    def generate_torch_weights(self, shape):
+    def generate_torch_input(self, shape):
         return torch.randn(shape, dtype=torch.bfloat16).float()
 
     def run_device_operation(self):
         return ttnn.experimental.minimal_matmul(
             input_tensor=self.activations,
-            weight_tensor=self.weights,
+            weight_tensor=self.inputs[0],
             bias_tensor=None,
             compute_kernel_config=self.compute_config,
             config=self.program_config,
@@ -106,10 +71,8 @@ def test_minimal_matmul(
 ):
     M, K, N = 16384, 16384, 16384
 
-    compute_with_storage_grid_size = (8, 8)
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-        compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+    compute_grid = get_mesh_grid_size(mesh_device)
+    compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
 
     in0_shape = [M, K]
@@ -147,20 +110,16 @@ def test_minimal_matmul(
 
     minimalMatmulTest = MinimalMatmulWorstCaseTest(
         mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
+        OpParameter(in0_shape, in0_dtype, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
+        [
+            OpParameter(in1_shape, in1_dtype, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
+        ],
         out_mem_config,
-        in0_dtype,
-        in1_dtype,
         out_dtype,
-        ttnn.TILE_LAYOUT,
-        ttnn.TILE_LAYOUT,
         matmul_config,  # program_config
         compute_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
 

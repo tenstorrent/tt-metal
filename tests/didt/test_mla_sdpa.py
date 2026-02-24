@@ -7,7 +7,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -17,79 +17,15 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 class MLA_SDPATest(OpTestBase):
-    def __init__(
-        self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in2_shape,
-        in0_mem_config,
-        in1_mem_config,
-        in2_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        in2_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        in2_layout,
-        scale,
-        program_config,
-        compute_config,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
-    ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
-        self.in2_shape = in2_shape
-        self.in2_mem_config = in2_mem_config
-        self.in2_dtype = in2_dtype
-        self.in2_layout = in2_layout
+    def __init__(self, *args, scale=None, **kwargs):
+        super().__init__(*args, **kwargs)
         self.scale = scale
-
-    def generate_tt_weights_from_torch(self, torch_tensor):
-        tt_weights = ttnn.from_torch(
-            torch_tensor,
-            dtype=self.in1_dtype,
-            layout=self.in1_layout,
-            memory_config=self.in1_mem_config,
-            device=self.mesh_device,
-            mesh_mapper=self.from_torch_mesh_mapper,
-        )
-        torch_v = torch.randn(self.in2_shape, dtype=torch.bfloat16).float()
-        self.tt_v = ttnn.from_torch(
-            torch_v,
-            dtype=self.in2_dtype,
-            layout=self.in2_layout,
-            memory_config=self.in2_mem_config,
-            device=self.mesh_device,
-            mesh_mapper=self.from_torch_mesh_mapper,
-        )
-        return tt_weights
 
     def run_device_operation(self):
         out = ttnn.transformer.flash_mla_prefill(
             self.activations,
-            self.weights,
-            self.tt_v,
+            self.inputs[0],
+            self.inputs[1],
             scale=self.scale,
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
@@ -120,13 +56,9 @@ def test_mla_sdpa(
     mesh_device,
     didt_workload_iterations,
     determinism_check_interval,
-    grid_size=(8, 8),
 ):
     # Initialize input configurations
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-    else:
-        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    compute_grid = get_mesh_grid_size(mesh_device)
     logger.info(f"Running on {compute_grid} cores")
 
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
@@ -162,25 +94,18 @@ def test_mla_sdpa(
 
     mla_sdpa_test = MLA_SDPATest(
         mesh_device,
-        in0_shape=q_shape,
-        in1_shape=k_shape,
-        in2_shape=v_shape,
-        in0_mem_config=in0_mem_config,
-        in1_mem_config=in1_mem_config,
-        in2_mem_config=in2_mem_config,
+        OpParameter(q_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
+        [
+            OpParameter(k_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
+            OpParameter(v_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in2_mem_config),
+        ],
         out_mem_config=out_mem_config,
-        in0_dtype=ttnn.DataType.BFLOAT16,
-        in1_dtype=ttnn.DataType.BFLOAT8_B,
-        in2_dtype=ttnn.DataType.BFLOAT8_B,
-        in0_layout=ttnn.TILE_LAYOUT,
-        in1_layout=ttnn.TILE_LAYOUT,
-        in2_layout=ttnn.TILE_LAYOUT,
         out_dtype=ttnn.DataType.BFLOAT16,
+        program_config=sdpa_program_config,
         compute_config=compute_config,
         scale=scale,
-        program_config=sdpa_program_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
 
