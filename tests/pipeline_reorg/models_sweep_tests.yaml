@@ -1,0 +1,29 @@
+# This file defines the test matrix for the Models Sweep Tests pipelines.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined).
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes.
+#     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: Llama 3.1-8B sweep tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-batch-32"
+  model: llama3.1-8b
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 1
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
