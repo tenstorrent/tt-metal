@@ -364,6 +364,10 @@ void MeshGraph::initialize_from_mgd(
 
         MeshId mesh_id(mesh_instance.local_id);
 
+        // Ensure vector is large enough for this mesh_id (handles non-sequential mesh_ids)
+        mesh_edge_ports_to_chip_id_.resize(
+            std::max(mesh_edge_ports_to_chip_id_.size(), static_cast<size_t>(*mesh_id + 1)));
+
         // Set intra-mesh relaxed policy based on channels policy from MGD
         bool is_relaxed = (mesh_desc->channels().policy() == proto::Policy::RELAXED);
         this->intra_mesh_relaxed_policy_[mesh_id] = is_relaxed;
@@ -636,14 +640,54 @@ void MeshGraph::initialize_from_mgd(
 }
 
 void MeshGraph::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
+    log_debug(
+        tt::LogFabric,
+        "load_intermesh_connections: processing {} connections, mesh_edge_ports_to_chip_id_.size()={}",
+        intermesh_connections.size(),
+        mesh_edge_ports_to_chip_id_.size());
     for (const auto& connection : intermesh_connections) {
         auto src_mesh = std::get<0>(connection).first;
         auto dst_mesh = std::get<1>(connection).first;
         auto src_port = std::get<0>(connection).second;
         auto dst_port = std::get<1>(connection).second;
         auto src_port_dir = src_port.first;
-        auto src_chip = mesh_edge_ports_to_chip_id_[src_mesh].at(src_port);
-        auto dst_chip = mesh_edge_ports_to_chip_id_[dst_mesh].at(dst_port);
+
+        if (src_mesh >= mesh_edge_ports_to_chip_id_.size()) {
+            TT_THROW(
+                "load_intermesh_connections: src_mesh {} is out of range (mesh_edge_ports_to_chip_id_.size()={}). "
+                "Check that the mesh graph descriptor defines all meshes referenced by intermesh connections.",
+                src_mesh,
+                mesh_edge_ports_to_chip_id_.size());
+        }
+        if (dst_mesh >= mesh_edge_ports_to_chip_id_.size()) {
+            TT_THROW(
+                "load_intermesh_connections: dst_mesh {} is out of range (mesh_edge_ports_to_chip_id_.size()={}). "
+                "Check that the mesh graph descriptor defines all meshes referenced by intermesh connections.",
+                dst_mesh,
+                mesh_edge_ports_to_chip_id_.size());
+        }
+        auto src_it = mesh_edge_ports_to_chip_id_[src_mesh].find(src_port);
+        if (src_it == mesh_edge_ports_to_chip_id_[src_mesh].end()) {
+            TT_THROW(
+                "load_intermesh_connections: src_port (direction={}, chan_id={}) not found for src_mesh {}. "
+                "Edge ports are populated from the mesh descriptor; ensure the intermesh connection references a valid "
+                "edge port for this mesh.",
+                enchantum::to_string(src_port.first),
+                src_port.second,
+                src_mesh);
+        }
+        auto dst_it = mesh_edge_ports_to_chip_id_[dst_mesh].find(dst_port);
+        if (dst_it == mesh_edge_ports_to_chip_id_[dst_mesh].end()) {
+            TT_THROW(
+                "load_intermesh_connections: dst_port (direction={}, chan_id={}) not found for dst_mesh {}. "
+                "Edge ports are populated from the mesh descriptor; ensure the intermesh connection references a valid "
+                "edge port for this mesh.",
+                enchantum::to_string(dst_port.first),
+                dst_port.second,
+                dst_mesh);
+        }
+        auto src_chip = src_it->second;
+        auto dst_chip = dst_it->second;
 
         this->add_to_connectivity(MeshId{src_mesh}, src_chip, MeshId{dst_mesh}, dst_chip, src_port_dir);
     }

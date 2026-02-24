@@ -2619,6 +2619,18 @@ void ControlPlane::generate_intermesh_connectivity() {
                                                         : requested_intermesh_ports.size();
     };
 
+    const auto& requested_intermesh_connections = this->mesh_graph_->get_requested_intermesh_connections();
+    const auto& requested_intermesh_ports = this->mesh_graph_->get_requested_intermesh_ports();
+    const bool using_port_based_requests = !requested_intermesh_ports.empty();
+    log_debug(
+        tt::LogFabric,
+        "generate_intermesh_connectivity: generate_mapping_locally={}, distributed_size={}, "
+        "using_port_based_requests={}, num_requested={}",
+        generate_mapping_locally_,
+        *(this->distributed_context_.get().size()),
+        using_port_based_requests,
+        get_num_requested_intermesh_connections());
+
     if (!generate_mapping_locally_ && *(this->distributed_context_.get().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
@@ -3112,9 +3124,23 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                         requested_intermesh_ports)) {
                     continue;
                 }
+                // Use the same map that was validated by check_connection_requested() above. That function
+                // returns true only for one of the two maps (either requested_intermesh_ports or
+                // requested_intermesh_connections). Accessing the other map would cause
+                // std::out_of_range (unordered_map::at). So we branch here and only read from the
+                // map that is in use for this descriptor.
+                uint32_t requested_count = 0;
+                if (!requested_intermesh_ports.empty()) {
+                    const auto& ports = requested_intermesh_ports.at(*local_mesh_id).at(*neighbor_node.mesh_id);
+                    for (const auto& port : ports) {
+                        requested_count += std::get<2>(port);
+                    }
+                } else {
+                    requested_count = requested_intermesh_connections.at(*local_mesh_id).at(*neighbor_node.mesh_id);
+                }
                 if (!strict_binding and
                     num_connections[compute_mesh_connectivity_hash(local_mesh_id, neighbor_node.mesh_id)] >=
-                        requested_intermesh_connections.at(*local_mesh_id).at(*neighbor_node.mesh_id)) {
+                        requested_count) {
                     continue;
                 }
 
@@ -3124,7 +3150,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                 std::unordered_map<FabricNodeId, uint32_t> num_ports_requested_at_exit_node;
                 std::unordered_map<FabricNodeId, uint32_t> num_ports_assigned_at_exit_node;
 
-                if (strict_binding) {
+                if (strict_binding && !requested_intermesh_ports.empty()) {
                     for (const auto& port : requested_intermesh_ports.at(*local_mesh_id).at(*neighbor_node.mesh_id)) {
                         num_ports_requested_at_exit_node[node] += std::get<2>(port);
                         num_ports_assigned_at_exit_node[node] = 0;
