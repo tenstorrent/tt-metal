@@ -283,9 +283,8 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
-    get_optimal_dram_bank_to_logical_worker_assignment,
-    enable_asynchronous_slow_dispatch,
-    disable_asynchronous_slow_dispatch,
+    get_dram_alignment,
+    get_l1_alignment,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -332,8 +331,14 @@ from ttnn.core import (
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
     split_work_to_cores,
+    round_up,
+    div_up,
+    find_max_divisor,
+    grid_to_cores,
     get_current_command_queue_id_for_thread,
 )
+
+tile_size = ttnn._ttnn.tensor.tile_size
 
 import ttnn.reflection
 import ttnn.database
@@ -410,25 +415,12 @@ from ttnn.operations.normalization import (
     SoftmaxProgramConfig,
     SoftmaxDefaultProgramConfig,
     SoftmaxShardedMultiCoreProgramConfig,
-    LayerNormDefaultProgramConfig,
-    LayerNormShardedMultiCoreProgramConfig,
-    LayerNormType,
-    DistributedLayerNormStage,
-    LayerNormParams,
-    LayerNormInputs,
-    LayerNormDeviceOperation,
-    LayerNormMultiCoreProgramFactory,
-    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
-    create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
-    layernorm_default_compute_config,
-    rmsnorm_default_compute_config,
-    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (
