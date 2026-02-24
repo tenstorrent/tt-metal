@@ -22,6 +22,7 @@ on:
           - openai/gpt-oss-120b
           - models/vllm_test_utils/t3000_multiproc_test
           - models/vllm_test_utils/no_op_test
+          - models/vllm_test_utils/dual_glx_ccl_test
       platform:
         required: false
         type: choice

@@ -262,7 +262,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(2, 4)",
-              "override-tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
+              "override-tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
               "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "multimodal": false,
@@ -281,6 +281,20 @@ jobs:
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "multimodal": false,
               "owner_id": "U08CEGF78ET"
+            },
+            {
+              "name": "[WH-2xGLX][v1] Dual Galaxy reduce scatter test model",
+              "model": "models/vllm_test_utils/dual_glx_ccl_test",
+              "server-timeout": 5,
+              "benchmark-timeout": 5,
+              "runner-label": "multi-host-galaxy",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "(8,8)",
+              "override-tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml\", \"extra_ttrun_args\": \"--tcp-interface cnx1\", \"mpi_args\": \"--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --allow-run-as-root\", \"config_pkl_dir\": \"vllm\", \"fabric_config\": \"FABRIC_1D\", \"fabric_reliability_mode\": \"RELAXED_INIT\", \"register_test_models\": true}",
+              "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
+              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
+              "multimodal": false,
+              "co-owner-1-id": "U08CEGF78ET"
             }
           ]'
 
@@ -303,8 +317,11 @@ jobs:
     runs-on:
       - ${{ matrix.test-group.runner-label }}
       - ${{ matrix.test-group.arch }}
+      # Multi-host Galaxy runners require bare-metal label to schedule.
+      # For non-multi-host runners this evaluates to "in-service" (duplicated, but harmless).
+      - ${{ (matrix.test-group.runner-label == 'multi-host-galaxy' && 'bare-metal') || 'in-service' }}
       - in-service
-      - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && 'pipeline-perf') || 'pipeline-functional' }}
+      - ${{ (matrix.test-group.runner-label == 'multi-host-galaxy' && 'in-service') || (matrix.test-group.runner-label == 'BH-QB-GE' && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -326,7 +343,9 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:ro') || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
-      options: "--device /dev/tenstorrent"
+      options: >-
+        --device /dev/tenstorrent
+        ${{ (matrix.test-group.runner-label == 'multi-host-galaxy' && '--net=host --pid=host --hostname=mpirun-host -v /etc/mpirun:/etc/mpirun:ro -v /home:/host_home:ro') || '' }}
     defaults:
       run:
         shell: bash
@@ -366,6 +385,25 @@ jobs:
       - name: 📂 Create output directory
         run: |
           mkdir -p output
+
+      - name: 🔑 Setup multi-host SSH
+        if: ${{ matrix.test-group.runner-label == 'multi-host-galaxy' }}
+        run: |
+          set -euo pipefail
+
+          # Strict: copy runner user's ~/.ssh (by UID match) or fail.
+          [ -d /host_home ] || { echo "❌ /host_home not mounted"; exit 1; }
+          [ -d "${HOME}/.ssh" ] && exit 0
+
+          ws_uid="$(stat -c %u /work)"
+          matches=($(for d in /host_home/*; do [ -d "${d}" ] && [ "$(stat -c %u "${d}")" = "${ws_uid}" ] && echo "${d}"; done))
+          [ "${#matches[@]}" -eq 1 ] || { echo "❌ Expected exactly 1 /host_home match for UID=${ws_uid}, got ${#matches[@]}: ${matches[*]}"; exit 1; }
+
+          runner_home="${matches[0]}"
+          [ -d "${runner_home}/.ssh" ] || { echo "❌ Missing ${runner_home}/.ssh"; exit 1; }
+
+          mkdir -p "${HOME}/.ssh" && chmod 700 "${HOME}/.ssh"
+          cp -a "${runner_home}/.ssh/." "${HOME}/.ssh/" && chmod -R go-rwx "${HOME}/.ssh"
 
       - name: 🚀 Run server
         timeout-minutes: 1
