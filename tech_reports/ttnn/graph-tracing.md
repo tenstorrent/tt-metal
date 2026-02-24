@@ -64,6 +64,7 @@ The trace records:
 - **Memory events**: Buffer allocations/deallocations, circular buffers
 - **Timing**: Operation durations (wall-clock time)
 - **Call hierarchy**: Nested operations (e.g., `ttnn::add` → `ttnn::prim::binary`)
+- **Stack traces**: C++ call stacks for each operation (enabled by default)
 
 ### Run Modes
 
@@ -170,13 +171,44 @@ python -m ttnn.graph_report --svg my_report.json ./visualizer_db/
 ```
 
 The importer creates these database tables:
-- `operations`: Operations with names and durations
+- `operations`: Operations with names and durations (IDs start at 1)
 - `operation_arguments`: Arguments as `arg_0`, `arg_1`, etc.
 - `tensors`: Shape, dtype, layout, memory_config, device_id, address
 - `device_tensors`: Per-device addresses for multi-device tensors
-- `buffers`, `buffer_pages`: Memory allocation details
-- `stack_traces`: Call stacks (when enabled)
+- `input_tensors`, `output_tensors`: Tensor-to-operation relationships
+- `buffers`, `buffer_pages`: Cumulative memory allocation snapshots per operation
+- `captured_graph`: Per-operation subgraph JSON for the visualizer
+- `stack_traces`: C++ call stacks (captured by default)
 - `errors`: Error information
+
+#### Compatible vs Detailed Mode
+
+By default, the importer runs in **compatible mode** which produces output matching the legacy Python-based visualizer flow:
+- Only device tensors are imported (host-only tensors are filtered)
+- Tensors are deduplicated by address
+- Nested internal operations (e.g., `create_device_tensor`) are filtered out
+
+Use `--detailed` for the full C++ capture including host tensors and internal operations:
+
+```bash
+# Compatible mode (default) — matches legacy visualizer format
+python -m ttnn.graph_report my_report.json ./visualizer_db/
+
+# Detailed mode — includes host tensors and nested operations
+python -m ttnn.graph_report --detailed my_report.json ./visualizer_db/
+```
+
+Or from Python:
+
+```python
+from ttnn.graph_report import import_report
+
+# Compatible mode (default)
+db_path = import_report("my_report.json", "./output/")
+
+# Detailed mode
+db_path = import_report("my_report.json", "./output/", detailed=True)
+```
 
 ---
 
@@ -184,38 +216,36 @@ The importer creates these database tables:
 
 ### Stack Trace Capture
 
-Capture C++ call stacks to see where operations are invoked:
-
-```python
-# Enable before capture
-ttnn.graph.enable_stack_traces()
-
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-# ... your operations ...
-graph = ttnn.graph.end_graph_capture()
-
-# Disable when done (removes overhead)
-ttnn.graph.disable_stack_traces()
-
-# Check status
-if ttnn.graph.is_stack_trace_enabled():
-    print("Stack traces enabled")
-```
-
-When enabled, `function_start` nodes include a `stack_trace` array:
+Stack traces are **enabled by default**. Each `function_start` node in the captured graph includes a `stack_trace` array with demangled C++ call frames:
 
 ```json
 {
     "node_type": "function_start",
     "params": { "name": "ttnn::add" },
     "stack_trace": [
-        "/path/to/lib.so(ttnn::add+0x123) [0x7f...]",
-        "/path/to/lib.so(some_function+0x456) [0x7f...]"
+        "/path/to/lib.so(ttnn::add(...)+0x123) [0x7f...]",
+        "/path/to/lib.so(some_caller_function+0x456) [0x7f...]"
     ]
 }
 ```
 
-**Note**: Stack traces add overhead. Only enable when debugging.
+Stack traces are imported into the `stack_traces` table in the visualizer database (one row per operation).
+
+To disable stack traces for reduced overhead:
+
+```python
+ttnn.graph.disable_stack_traces()
+
+ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+# ... your operations ...
+graph = ttnn.graph.end_graph_capture()
+
+# Re-enable when needed
+ttnn.graph.enable_stack_traces()
+
+# Check status
+print(ttnn.graph.is_stack_trace_enabled())  # True by default
+```
 
 ### Buffer Page Capture
 
@@ -346,6 +376,10 @@ Operation boundaries.
 **function_start params:**
 - `name`: Operation name (e.g., `"ttnn::add"`)
 - `inputs`: Number of input parameters
+
+**function_start fields:**
+- `stack_trace`: Array of demangled C++ call frames (present by default, disable with `ttnn.graph.disable_stack_traces()`)
+- `arguments`: Serialized operation arguments
 
 **function_end params:**
 - `name`: Operation name
