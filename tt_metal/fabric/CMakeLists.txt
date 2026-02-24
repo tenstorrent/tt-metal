@@ -77,7 +77,9 @@ target_sources(
         topology_mapper.cpp
         topology_mapper_utils.cpp
         topology_solver.cpp
-        physical_grouping_descriptor.cpp
+        physical_grouping_descriptor_core.cpp
+        physical_grouping_descriptor_graph_building.cpp
+        physical_grouping_descriptor_matching.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
