@@ -15,8 +15,19 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
+// forward declarations
 namespace tt::tt_metal {
 class IDevice;
+class GlobalSemaphore;
+
+namespace experimental {
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address);
+}  // namespace experimental
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -45,13 +56,29 @@ public:
     auto attribute_values() const { return std::make_tuple(this->cores_, this->buffer_.get_buffer()->buffer_type()); }
 
 private:
-    void setup_buffer(uint32_t initial_value, BufferType buffer_type);
+    // private constructor used by experimental API
+    GlobalSemaphore(
+        IDevice* device,
+        const CoreRangeSet& cores,
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        uint64_t address);
+
+    void setup_buffer(
+        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address = std::nullopt);
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
     distributed::AnyBuffer buffer_;
     IDevice* device_;
     CoreRangeSet cores_;
+
+    friend GlobalSemaphore experimental::CreateGlobalSemaphore(
+        IDevice* device,
+        const CoreRangeSet& cores,
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        uint64_t address);
 };
 
 }  // namespace tt::tt_metal
