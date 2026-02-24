@@ -3,11 +3,17 @@
 
 #pragma once
 
+#include <optional>
+
+#include "tt-metalium/circular_buffer_constants.h"
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/cb_api.h"
+#include "internal/circular_buffer_interface.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
+// This is the go-to helper for all untilize usage in compute kernels.
+// Prefer this over raw untilize_init/untilize_block/untilize_uninit and pack_untilize calls.
 namespace compute_kernel_lib {
 
 namespace untilize_config {
@@ -63,11 +69,11 @@ ALWI void untilize_uninit();
  * Automatically selects the best implementation at compile time based on
  * block_width_tiles vs DEST capacity, data format, and wait mode.
  *
- * NOTE: Unlike tilize, block_width_tiles is a compile-time template parameter
- * and there is no asymmetric (total_input_pages) mode.
+ * NOTE: Unlike tilize, block_width_tiles is a compile-time template parameter.
  *
  * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
- * start of your kernel before using this function. The two-argument overload
+ * start of your kernel before using this function, unless another init or
+ * compute_kernel_hw_startup has already been called. The two-argument overload
  * sets srcA=srcB=input_cb. Use the three-argument form
  * compute_kernel_hw_startup(icb0, icb1, ocb) when srcA and srcB differ.
  *
@@ -80,15 +86,29 @@ ALWI void untilize_uninit();
  *   wait_mode         — How to synchronize on input data (default: WaitBlock).
  *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
  *
+ * ── Block Geometry ─────────────────────────────────────────────────────────
+ *
+ *   This helper wraps the pack_untilize LLK. Each of the num_blocks
+ *   iterations calls the LLK once on a 1×block_width_tiles tile-row
+ *   (1 tile tall, block_width_tiles tiles wide).
+ *
+ *   Total input: block_width_tiles (W) × num_blocks (H) tiles.
+ *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
- *   num_blocks — Number of rows/blocks to process.
+ *   num_blocks          — Number of tile-rows to process (height in tiles).
+ *   total_output_pages  — Total output CB pages across all blocks (default: std::nullopt).
+ *       omitted (symmetric): Input and output CBs both have tile-sized pages.
+ *                             Each block reserves and pushes block_width_tiles pages.
+ *       provided (asymmetric): Output CB has non-tile pages (e.g., one page per row).
+ *                               Must be > 0. Each block reserves and pushes min(32, remaining_pages)
+ *                               output pages. Use when the writer consumes row-sized pages.
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
  *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
  *
- *   // Hardware init — must come first, pass the input and output CBs
+ *   // Hardware init — only if no other init or compute_kernel_hw_startup was called before
  *   compute_kernel_hw_startup(cb_in, cb_out);
  *
  *   // 1. Basic untilize (most common)
@@ -115,6 +135,9 @@ ALWI void untilize_uninit();
  *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::InitOnly>(blocks);   // first
  *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::Neither>(blocks);    // middle
  *   compute_kernel_lib::untilize<w, cb_in, cb_out, untilize_config::InitUninitMode::UninitOnly>(blocks); // last
+ *
+ *   // 6. Asymmetric — input CB has tile-sized pages, output CB has row-sized pages
+ *   compute_kernel_lib::untilize<4, cb_in, cb_out>(num_blocks, total_rows);
  */
 template <
     uint32_t block_width_tiles,
@@ -124,7 +147,7 @@ template <
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
-ALWI void untilize(uint32_t num_blocks);
+ALWI void untilize(uint32_t num_blocks, std::optional<uint32_t> total_output_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib
 

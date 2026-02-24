@@ -39,6 +39,21 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
 }
 
 // =============================================================================
+// CB Validation Helpers (must be called from PACK/UNPACK guards)
+// =============================================================================
+
+template <uint32_t input_cb, uint32_t output_cb>
+ALWI void assert_untilize_cb_page_sizes(bool asymmetric_cb_pages) {
+    const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
+    const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
+    if (asymmetric_cb_pages) {
+        ASSERT(in_page_size != out_page_size);
+    } else {
+        ASSERT(in_page_size == out_page_size);
+    }
+}
+
+// =============================================================================
 // Standalone Init/Uninit Wrapper Functions Implementations
 // =============================================================================
 
@@ -72,7 +87,7 @@ template <
     untilize_config::InitUninitMode init_uninit_mode,
     untilize_config::WaitMode wait_mode,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
-ALWI void untilize(uint32_t num_blocks) {
+ALWI void untilize(uint32_t num_blocks, std::optional<uint32_t> total_output_pages) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -87,9 +102,20 @@ ALWI void untilize(uint32_t num_blocks) {
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
 
-    // Validate CB page sizes match expected tile sizes
+    const bool asymmetric_cb_pages = total_output_pages.has_value();
+    if (asymmetric_cb_pages) {
+        ASSERT(*total_output_pages > (num_blocks - 1) * 32);  // at least one row in the last block
+        ASSERT(*total_output_pages <= num_blocks * 32);        // rows fit within num_blocks tile-rows
+    }
+
+    // Sanity checks: verify CB page sizes match the usage pattern.
+    // Guarded because get_local_cb_interface() references cb_interface, which is
+    // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
+    PACK((assert_untilize_cb_page_sizes<input_cb, output_cb>(asymmetric_cb_pages)));
     UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
-    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
+    PACK(if (!asymmetric_cb_pages) {
+        ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb]));
+    })
 
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
 
@@ -123,7 +149,13 @@ ALWI void untilize(uint32_t num_blocks) {
     // Validate CB capacity.
     // Guarded because get_local_cb_interface() references cb_interface, which is
     // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
-    PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
+    if (asymmetric_cb_pages) {
+        // Output CB has row-sized pages — must hold at least min(32, total) pages per block
+        uint32_t max_out = (*total_output_pages < 32) ? *total_output_pages : 32;
+        PACK(ASSERT(get_cb_num_pages(output_cb) >= max_out));
+    } else {
+        PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
+    }
     if constexpr (use_block_based_pack) {
         UNPACK(ASSERT(get_cb_num_pages(input_cb) >= sub_block_width));
     } else {
@@ -158,6 +190,9 @@ ALWI void untilize(uint32_t num_blocks) {
     // MAIN PROCESSING LOOP
     // =================================================================
 
+    uint32_t output_pages_left = total_output_pages.value_or(0);
+    uint32_t output_pages = block_width_tiles;
+
     if constexpr (use_block_based_pack) {
         // =============================================================
         // BLOCK-BASED PACK UNTILIZE PATH
@@ -166,7 +201,11 @@ ALWI void untilize(uint32_t num_blocks) {
         // =============================================================
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
-            cb_reserve_back(output_cb, block_width_tiles);
+            if (asymmetric_cb_pages) {
+                output_pages = (output_pages_left < 32) ? output_pages_left : 32;
+            }
+
+            cb_reserve_back(output_cb, output_pages);
             for (uint32_t b = 0; b < num_sub_blocks; ++b) {
                 if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
                     cb_wait_front(input_cb, sub_block_width);
@@ -174,7 +213,11 @@ ALWI void untilize(uint32_t num_blocks) {
                 pack_untilize_block<sub_block_width, block_width_tiles>(input_cb, 1, output_cb, b);
                 cb_pop_front(input_cb, sub_block_width);
             }
-            cb_push_back(output_cb, block_width_tiles);
+            cb_push_back(output_cb, output_pages);
+
+            if (asymmetric_cb_pages) {
+                output_pages_left -= output_pages;
+            }
         }
 
     } else {
@@ -184,13 +227,21 @@ ALWI void untilize(uint32_t num_blocks) {
         // =============================================================
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
+            if (asymmetric_cb_pages) {
+                output_pages = (output_pages_left < 32) ? output_pages_left : 32;
+            }
+
             if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
                 cb_wait_front(input_cb, block_width_tiles);
             }
-            cb_reserve_back(output_cb, block_width_tiles);
+            cb_reserve_back(output_cb, output_pages);
             pack_untilize_block<block_width_tiles, block_width_tiles>(input_cb, 1, output_cb, 0);
             cb_pop_front(input_cb, block_width_tiles);
-            cb_push_back(output_cb, block_width_tiles);
+            cb_push_back(output_cb, output_pages);
+
+            if (asymmetric_cb_pages) {
+                output_pages_left -= output_pages;
+            }
         }
     }
 

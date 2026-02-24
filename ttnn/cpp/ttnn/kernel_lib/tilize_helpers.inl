@@ -120,7 +120,10 @@ ALWI void tilize(
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
 
     const bool asymmetric_cb_pages = total_input_pages.has_value();
-    ASSERT(!asymmetric_cb_pages || *total_input_pages > 0);  // total_input_pages must be > 0 when provided
+    if (asymmetric_cb_pages) {
+        ASSERT(*total_input_pages > (num_blocks - 1) * 32);  // at least one row in the last block
+        ASSERT(*total_input_pages <= num_blocks * 32);        // rows fit within num_blocks tile-rows
+    }
 
     // Sanity checks: verify CB page sizes match the usage pattern.
     // Guarded because get_local_cb_interface() references cb_interface, which is
@@ -159,7 +162,13 @@ ALWI void tilize(
         }
     }
 
-    // Validate CB capacity: output CB must hold at least block_width_tiles
+    // Validate CB capacity
+    if (asymmetric_cb_pages) {
+        uint32_t max_in = (*total_input_pages < 32) ? *total_input_pages : 32;
+        UNPACK(ASSERT(get_cb_num_pages(input_cb) >= max_in));
+    } else {
+        UNPACK(ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles));
+    }
     PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
 
     // Upfront wait (when requested)

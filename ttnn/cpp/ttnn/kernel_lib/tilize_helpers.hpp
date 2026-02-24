@@ -11,6 +11,8 @@
 #include "internal/circular_buffer_interface.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
+// This is the go-to helper for all tilize usage in compute kernels.
+// Prefer this over raw tilize_init/tilize_block/tilize_uninit calls.
 namespace compute_kernel_lib {
 
 namespace tilize_config {
@@ -53,7 +55,8 @@ enum class WaitMode : uint8_t {
  * (32x32 tiles, Float32/Float16_b format, half-sync dest mode).
  *
  * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
- * start of your kernel before using this function. The two-argument overload
+ * start of your kernel before using this function, unless another init or
+ * compute_kernel_hw_startup has already been called. The two-argument overload
  * sets srcA=srcB=input_cb. Use the three-argument form
  * compute_kernel_hw_startup(icb0, icb1, ocb) when srcA and srcB differ.
  *
@@ -65,10 +68,18 @@ enum class WaitMode : uint8_t {
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
  *   reconfig_mode    — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
  *
+ * ── Block Geometry ─────────────────────────────────────────────────────────
+ *
+ *   This helper wraps the tilize LLK. Each of the num_blocks iterations
+ *   calls the LLK once on a 1×block_width_tiles tile-row (1 tile tall,
+ *   block_width_tiles tiles wide).
+ *
+ *   Total output: block_width_tiles (W) × num_blocks (H) tiles.
+ *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
- *   block_width_tiles  — Number of output tiles per block.
- *   num_blocks         — Number of blocks to process.
+ *   block_width_tiles  — Number of output tiles per block (width in tiles).
+ *   num_blocks         — Number of tile-rows to process (height in tiles).
  *   total_input_pages  — Total input CB pages across all blocks (default: std::nullopt).
  *       omitted (symmetric): Input and output CBs both have tile-sized pages.
  *                             Each block waits for and pops block_width_tiles pages.
