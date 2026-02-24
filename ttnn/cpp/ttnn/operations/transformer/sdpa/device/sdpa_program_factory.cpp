@@ -320,6 +320,23 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
+    // Streaming compute: use row-by-row streaming SDPA for non-causal cases.
+    // Constraints:
+    // - subblock_h * vDHt <= dst_size (SALAD output correction must fit in DST)
+    // - subblock_h <= 8 (for qkt_subblock_w = 8/sbh to be well-defined)
+    // - Sk_chunk_t % (8/subblock_h) == 0 (K tiles divide evenly into DST batches)
+    // - vDHt <= 8 (normalize_row_streaming requires head_dim in single DST batch)
+    // - Row buffers must fit in L1 (2 * subblock_h * Sk_chunk_t * im_tile_size)
+    const uint32_t streaming_row_buffer_l1 =
+        2 * qk_out_subblock_h * Sk_chunk_t * tt::tile_size(tt::DataFormat::Float16_b);
+    constexpr uint32_t streaming_l1_budget = 32 * 1024;  // 32 KB max for row buffers
+    const bool use_streaming_compute =
+        !is_causal && !use_provided_mask && !use_attention_sink && sliding_window_size.value_or(0) == 0 &&
+        !is_chunked && qk_out_subblock_h * vDHt <= dst_size &&
+        qk_out_subblock_h == 1 &&  // TODO: debug subblock_h > 1 correctness issue
+        Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && vDHt <= 8 && streaming_row_buffer_l1 <= streaming_l1_budget;
+    log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
     log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
@@ -494,6 +511,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         scale_union.u,
         sliding_window_size.value_or(0),
         (std::uint32_t)use_attention_sink,
+        (std::uint32_t)use_streaming_compute,  // arg 30
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -607,6 +625,23 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         auto c_in4_config = CircularBufferConfig(attention_sink_tiles * sink_tile_size, {{tt::CBIndex::c_4, sink_df}})
                                 .set_page_size(tt::CBIndex::c_4, sink_tile_size);
         CreateCircularBuffer(program, core_grid, c_in4_config);
+    }
+
+    // Streaming compute: allocate row buffer CBs (c_4 and c_6)
+    // Safe: gating excludes use_attention_sink (c_4) and is_chunked (c_6)
+    if (use_streaming_compute) {
+        uint32_t row_buffer_tiles = qk_out_subblock_h * Sk_chunk_t;
+        log_debug(tt::LogOp, "streaming row_buffer_tiles: {}", row_buffer_tiles);
+
+        // cb_qkt_row_A (CBIndex::c_4) — also reused as recip scratch in Phase 2
+        auto c_row_A_config = CircularBufferConfig(row_buffer_tiles * im_tile_size, {{tt::CBIndex::c_4, im_df}})
+                                  .set_page_size(tt::CBIndex::c_4, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_row_A_config);
+
+        // cb_qkt_row_B (CBIndex::c_6)
+        auto c_row_B_config = CircularBufferConfig(row_buffer_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+                                  .set_page_size(tt::CBIndex::c_6, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_row_B_config);
     }
 
     // cb_qk_im
