@@ -100,9 +100,9 @@ TEST(BigMeshDualRankTest, LocalRankBinding) {
 TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) { EXPECT_EQ(mesh_device_->shape(), GetParam()); }
 
 TEST_F(BigMeshDualRankTest2x4, SystemMeshValidation) {
-    ASSERT_NO_THROW({ SystemMesh::instance(); });
+    ASSERT_NO_THROW({ MetalContext::instance().get_system_mesh(); });
 
-    const auto& system_mesh = SystemMesh::instance();
+    const auto& system_mesh = MetalContext::instance().get_system_mesh();
     EXPECT_EQ(system_mesh.local_shape(), MeshShape(2, 2));
 
     auto mapped_devices = system_mesh.get_mapped_devices(MeshShape(2, 4));

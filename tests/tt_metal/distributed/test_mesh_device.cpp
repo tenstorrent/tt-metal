@@ -21,6 +21,7 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/device.hpp>
@@ -47,7 +48,7 @@ using MeshDevice2x4Test = MeshDevice2x4Fixture;
 using MeshDeviceTest = GenericMeshDeviceFixture;
 
 TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
-    auto& sys = SystemMesh::instance();
+    auto& sys = MetalContext::instance().get_system_mesh();
 
     const auto system_shape = sys.shape();
     ASSERT_EQ(system_shape.dims(), 2);

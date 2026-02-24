@@ -113,8 +113,7 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
 #endif
 
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 
 #endif
 

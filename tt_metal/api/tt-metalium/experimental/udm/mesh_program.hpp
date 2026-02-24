@@ -5,8 +5,8 @@
 #pragma once
 
 #include <memory>
-#include "tt_metal/experimental/udm/types.hpp"
-#include "tt_metal/api/tt-metalium/program.hpp"
+#include <tt-metalium/experimental/udm/types.hpp>
+#include <tt-metalium/program.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 
