@@ -13,7 +13,7 @@ on:
           - llama3.1-8b
           - llama3.3-70b-galaxy
       sku:
-        description: "Select SKU to test"
+        description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
         default: "all"
         type: choice
