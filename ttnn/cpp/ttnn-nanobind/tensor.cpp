@@ -179,6 +179,11 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                     static_cast<std::size_t>(core_coord.get<0>()), static_cast<std::size_t>(core_coord.get<1>()));
             })
         .def("__repr__", [](const CoreCoord& self) -> std::string { return self.str(); })
+        .def(
+            "__eq__", [](const CoreCoord& a, const CoreCoord& b) { return a == b; }, nb::arg("other"))
+        .def(
+            "__ne__", [](const CoreCoord& a, const CoreCoord& b) { return a != b; }, nb::arg("other"))
+        .def("__hash__", [](const CoreCoord& self) { return std::hash<CoreCoord>{}(self); })
         .def_ro("x", &CoreCoord::x)
         .def_ro("y", &CoreCoord::y);
     nb::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
@@ -472,7 +477,24 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("end"))
         .def_ro("start", &CoreRange::start_coord)
         .def_ro("end", &CoreRange::end_coord)
-        .def("grid_size", &CoreRange::grid_size);
+        .def("grid_size", &CoreRange::grid_size)
+        .def(
+            "contains",
+            nb::overload_cast<const CoreCoord&>(&CoreRange::contains, nb::const_),
+            nb::arg("core"),
+            "Check if a core coordinate is contained in this CoreRange")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRange&>(&CoreRange::contains, nb::const_),
+            nb::arg("core_range"),
+            "Check if a core range is contained in this CoreRange")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRangeSet&>(&CoreRange::contains, nb::const_),
+            nb::arg("core_range_set"),
+            "Check if a core range set is contained in this CoreRange")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     auto pyCoreRangeSet = static_cast<nb::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet
@@ -500,6 +522,16 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::overload_cast<const CoreCoord&>(&CoreRangeSet::contains, nb::const_),
             nb::arg("core"),
             "Check if a core coordinate is contained in this CoreRangeSet")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRange&>(&CoreRangeSet::contains, nb::const_),
+            nb::arg("core_range"),
+            "Check if a core range is contained in this CoreRangeSet")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRangeSet&>(&CoreRangeSet::contains, nb::const_),
+            nb::arg("core_range_set"),
+            "Check if a core range set is contained in this CoreRangeSet")
         .def(
             "merge",
             &CoreRangeSet::merge<CoreRangeSet>,

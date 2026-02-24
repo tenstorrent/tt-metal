@@ -4,16 +4,17 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/softplus.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
 
 constexpr uint32_t onetile = 1U;
 
@@ -82,8 +83,8 @@ void update_cur_row_max_value(
         copy_tile(cb_prev_max, /* tile_idx */ 0, /* register idx */ prev_max_dst_idx);
 
         // find max value between current max and previous max
-        max_tile_init();
-        max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        binary_max_tile_init();
+        binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, static_cast<int>(VectorMode::C));
     }
     tile_regs_commit();
 

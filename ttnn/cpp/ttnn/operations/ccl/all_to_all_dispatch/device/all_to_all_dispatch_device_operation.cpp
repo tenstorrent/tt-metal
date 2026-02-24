@@ -14,11 +14,6 @@
 
 namespace ttnn::operations::ccl {
 
-AllToAllDispatchDeviceOperation::program_factory_t AllToAllDispatchDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AllToAllDispatchSparse{};
-}
-
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
@@ -28,7 +23,7 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
 
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
-    TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
+    TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint16");
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);

@@ -19,9 +19,9 @@ This document provides advanced users and developers with comprehensive instruct
 #### Option 1: **TT-Installer** Script (recommended)
 - For a quick setup, download and run the **TT-Installer** installation script:
 ```
-curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
+curl -fsSL https://github.com/tenstorrent/tt-installer/releases/download/v2.1.0/install.sh -O
 chmod +x install.sh
-./install.sh --no-install-podman --no-install-metalium-container
+./install.sh --install-container-runtime=no
 ```
 
 > [!WARNING]
@@ -41,8 +41,7 @@ chmod +x install.sh
   --smi-version=v3.0.38 \
   --fw-version=19.2.0 \
   --kmd-version=2.5.0 \
-  --no-install-podman \
-  --no-install-metalium-container
+  --install-container-runtime=no
 ```
 
 - For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).

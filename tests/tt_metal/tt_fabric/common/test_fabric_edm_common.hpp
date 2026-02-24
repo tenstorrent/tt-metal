@@ -71,7 +71,7 @@ public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
     // Gets the appropriate mesh shape based on device configuration
-    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().shape(); }
+    MeshShape GetDeterminedMeshShape() const { return MetalContext::instance().get_system_mesh().shape(); }
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
@@ -119,16 +119,6 @@ public:
         TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
-};
-
-class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
-public:
-    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
-};
-
-class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
-public:
-    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
 };
 
 template <typename ProgramContainer>

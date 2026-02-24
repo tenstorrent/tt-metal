@@ -17,17 +17,11 @@ void core_agnostic_main();
 
 #ifdef COMPILE_FOR_BRISC
 #include "api/dataflow/dataflow_api.h"
-
-void kernel_main() { core_agnostic_main(); }
-#else
-#include "compute_kernel_api/common.h"
-
 #include "experimental/circular_buffer.h"
-
+#else
+#include "api/compute/common.h"
+#include "experimental/circular_buffer.h"
 // We are in compute kernel land
-namespace NAMESPACE {
-void MAIN { core_agnostic_main(); }
-}  // namespace NAMESPACE
 #endif
 
 using namespace tt;
@@ -56,3 +50,5 @@ void core_agnostic_main() {
     }
 #endif
 }
+
+void kernel_main() { core_agnostic_main(); }

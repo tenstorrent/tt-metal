@@ -12,6 +12,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 #include "internal/debug/fw_debug.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "internal/debug/stack_usage.h"
@@ -20,6 +21,7 @@
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
 #endif
+#include "internal/dataflow_buffer_init.h"
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
 
@@ -40,9 +42,10 @@ uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
+
 namespace ckernel {
 
-enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
 // Transition shim
 #if defined(__PTR_CONST)
 #define PTR_CONST const
@@ -81,7 +84,8 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 void init_sync_registers() {
-    // this are WH/BH specific, keeping the method if we'll need something similar in the future
+    // TODO: check if this is needed with tranistion to DFBs
+    // https://github.com/tenstorrent/tt-metal/issues/36889
     // volatile tt_reg_ptr uint* tiles_received_ptr;
     // volatile tt_reg_ptr uint* tiles_acked_ptr;
     // for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
@@ -94,12 +98,10 @@ void init_sync_registers() {
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    std::uint64_t hartid;
-    std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
-    std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    hartid = 8 + 4 * neo_id + trisc_id;  // after 8 DM cores
-    volatile tt_l1_ptr uint8_t* const trisc_run =
-        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hartid];
+    uint32_t hartid = internal_::get_hw_thread_idx();
+    DPRINT << "hartid: " << hartid << ENDL();
+    volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
+                                                       ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
 
     extern uint32_t __ldm_data_start[];
@@ -111,18 +113,12 @@ extern "C" uint32_t _start1() {
     for (int i = 0; i < 64; i++) {
         regfile[i] = 0;
     }
-
-    // #31901: initialize PRNG seed to 0 to avoid nondeterministic behavior
-    // volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-    // cfg[PRNG_SEED_Seed_Val_ADDR32] = 0;
-    // riscv_wait(600);
-
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
 
     DeviceProfilerInit();
-
+    DPRINT << "TRISC-FW: initialized" << ENDL();
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -132,12 +128,6 @@ extern "C" uint32_t _start1() {
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
-#if defined(ARCH_WORMHOLE)
-            // Avoid hammering L1 while other cores are trying to work. Seems not to
-            // be needed on Blackhole, probably because invalidate_l1_cache takes
-            // time.
-            asm volatile("nop; nop; nop; nop; nop");
-#endif
             invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
@@ -159,6 +149,11 @@ extern "C" uint32_t _start1() {
         // experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
 #endif
 
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+
         rta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].rta_offset);
         crta_l1_base =
@@ -170,14 +165,15 @@ extern "C" uint32_t _start1() {
         uint32_t kernel_lma =
             (kernel_config_base +
              launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
-        // TODO: TRISCs need cache invalidation through register
-        // asm("FENCE.i");
+        asm("FENCE.i");
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
 
         // Signal completion
+        DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
+        DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
     }
 }

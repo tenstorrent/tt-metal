@@ -41,7 +41,6 @@ struct Conv2dDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(

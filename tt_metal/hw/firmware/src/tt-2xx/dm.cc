@@ -6,10 +6,14 @@
 // #include "risc_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
+#include "internal/dataflow_buffer_interface.h"
+#include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
@@ -18,11 +22,12 @@
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 
-constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x0;
-constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x1;
-constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x2;
-constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x4;
-constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
+constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x1;
+constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x2;
+constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
+constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x8;
+constexpr uint32_t RISCV_IC_TRISC_ALL_MASK =
+    RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK | RISCV_IC_TRISC3_MASK;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -37,6 +42,7 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
+// temporary for things to build
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
@@ -44,6 +50,11 @@ thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 volatile tile_counter_u* const tile_counters __attribute__((used)) =
     (volatile tile_counter_u* const)LOCAL_TILE_COUNTERS_BASE;
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+thread_local uint32_t rta_count __attribute__((used));
+thread_local uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -87,13 +98,15 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
-    // subordinate_sync->allDMs = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
-    subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
+// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
+RemapperAPI g_remapper_configurator __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -109,14 +122,17 @@ void device_setup() {
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    while (subordinate_sync->neo0_trisc0 != RUN_SYNC_MSG_DONE) {
+    DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
+    while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
@@ -139,12 +155,11 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
-    while (
-        subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
-        (subordinate_sync->allNeo0 != 0x40000000 && subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) ||
-        subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
-        subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
-        subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
+           subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("NTD");
 }
 
@@ -152,8 +167,7 @@ inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_S
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
@@ -178,6 +192,7 @@ extern "C" uint32_t _start1() {
         // Reset tile counters
         tile_counters_reset();
         deassert_trisc();
+        DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -242,7 +257,6 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-
                 // Invalidate the i$ now the kernels have loaded and before running
                 // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
@@ -273,6 +287,9 @@ extern "C" uint32_t _start1() {
 
                 uint32_t tt_l1_ptr* cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                uint32_t tt_l1_ptr* dfb_l1_base =
+                    (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                          launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -289,9 +306,12 @@ extern "C" uint32_t _start1() {
                     // experimental::setup_remote_cb_interfaces<true>(
                     //     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                     // barrier_remote_cb_interface_setup(noc_index, end_cb_index);
-                    uintptr_t kernel_lma =
+                    uintptr_t kernel_lma = uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                    experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+                    uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");
+                    uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
                 } else {
@@ -342,6 +362,11 @@ extern "C" uint32_t _start1() {
                     noc_local_state_init(noc_index);
                 }
 #endif
+                // Need to ensure that Remapper state is cleared for next kernel launch
+                if (g_remapper_configurator.is_remapper_enabled()) {
+                    g_remapper_configurator.clear_all_pairs();
+                    g_remapper_configurator.disable_remapper();
+                }
 
                 uint32_t go_message_index = mailboxes->go_message_index;
                 mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
@@ -383,15 +408,11 @@ extern "C" uint32_t _start1() {
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* cb_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
-        // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
-        // uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
-        // NOC argument is unused
-        // experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 

@@ -176,7 +176,7 @@ void TransposeWHShardedProgramFactory::override_runtime_arguments(
             num_tiles_per_shard * shared_variables.dst_single_tile_size);
     }
 
-    auto padded_shape = output_tensor.padded_shape();
+    auto padded_shape = src_tensor.padded_shape();
     auto shard_shape = shard_spec.shape;
 
     uint32_t H = padded_shape[2];

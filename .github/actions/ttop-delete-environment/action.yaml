@@ -1,0 +1,15 @@
+name: 'Delete Environment'
+description: 'A composable action to delete an environment'
+
+inputs:
+  environmentName:
+    description: 'Environment name'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Delete Environment
+      shell: bash
+      run: |
+        kubectl -nttop delete helmrelease/${{ inputs.environmentName }} --ignore-not-found

@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/tilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/pack_untilize.h"
 #include "internal/circular_buffer_interface.h"
 
 // Push 1 stick or partial stick to a cb (a (partial) stick consists of num_pages pages, in our case, size of a page is
@@ -54,8 +54,7 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
     PACK(llk_push_pages_bilinear(out_cb_id, tiles_per_reduction));
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Runtime argument - work count for this core
     uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(0);
 
@@ -101,5 +100,4 @@ void MAIN {
         reduce_h_fused<partial_iter_output_tiles, window_size_hw>(cb_id, scalar_cb_id, out_cb_id);
         cb_pop_front(scalar_cb_id, 1);
     }
-}  // MAIN
-}  // namespace NAMESPACE
+}  // void kernel_main()

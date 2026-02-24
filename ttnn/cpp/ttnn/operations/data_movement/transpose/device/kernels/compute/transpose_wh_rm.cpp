@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out) {
@@ -107,8 +107,7 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
     pack_untilize_uninit(cb_out);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
@@ -188,4 +187,3 @@ void MAIN {
         cb_pop_front(cb_tilize, HtWt);
     }
 }
-}  // namespace NAMESPACE

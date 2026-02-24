@@ -10,6 +10,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
 
 namespace tt::tt_metal {
 
@@ -103,6 +104,39 @@ inline uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t
 
 template uint32_t get_cq_completion_rd_ptr<true>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 template uint32_t get_cq_completion_rd_ptr<false>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+
+uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
+    uint32_t progress = 0;
+
+    // Get the dispatcher core for this command queue
+    // For remote chips: read from DISPATCH_D (on the remote chip where work actually happens)
+    // For local chips: read from DISPATCH_HD (combined dispatcher on local chip)
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
+
+    const tt_cxy_pair& dispatcher_core_logical =
+        dispatch_core_manager.is_dispatcher_d_core_allocated(chip_id, channel, cq_id)
+            ? dispatch_core_manager.dispatcher_d_core(chip_id, channel, cq_id)
+            : dispatch_core_manager.dispatcher_core(chip_id, channel, cq_id);
+
+    // Get the L1 address where dispatch progress counter is stored
+    CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
+    uint32_t dev_dispatch_progress_ptr =
+        MetalContext::instance()
+            .dispatch_mem_map(dispatch_core_type)
+            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
+
+    // read_core expects TRANSLATED (virtual) coordinates
+    // dispatcher_core_manager stores logical coordinates, so convert LOGICAL -> TRANSLATED (virtual)
+    tt_cxy_pair dispatcher_core_virtual =
+        MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            dispatcher_core_logical, dispatch_core_type);
+
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        &progress, sizeof(uint32_t), dispatcher_core_virtual, dev_dispatch_progress_ptr);
+
+    return progress;
+}
 
 uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type) {
     // Sub Device manager state must be correct (from device init)

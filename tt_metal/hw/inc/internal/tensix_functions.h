@@ -616,11 +616,11 @@ inline void thcon_write_descriptor_to_l1(
 #define BKPT_CMD_PAYLOAD(thread, cmd, data) ((thread << 31) | (cmd << 28) | data)
 #define BKPT_CMD_ID_PAYLOAD(thread, cmd, id, data) ((thread << 31) | (cmd << 28) | (id << 26) | data)
 
-// inline void breakpoint_set(uint thread, uint bkpt_index, bool pc_valid, uint pc = 0) {
-//     memory_write(
-//         RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET, bkpt_index, (pc_valid << 21 |
-//         pc)));
-// }
+#ifndef ARCH_QUASAR
+inline void breakpoint_set(uint thread, uint bkpt_index, bool pc_valid, uint pc = 0) {
+    memory_write(
+        RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET, bkpt_index, (pc_valid << 21 | pc)));
+}
 
 // inline void breakpoint_clear(uint thread, uint bkpt_index) {
 //     memory_write(RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR, bkpt_index, 0));
@@ -679,11 +679,12 @@ inline void thcon_write_descriptor_to_l1(
 //     return status;
 // }
 
-// inline uint breakpoint_data() {
-//     volatile uint* ptr = reinterpret_cast<volatile uint*>(RISCV_DEBUG_REG_BREAKPOINT_DATA);
-//     *ptr = 0;  // Ensure ordering with any previous control writes
-//     return *ptr;
-// }
+inline uint breakpoint_data() {
+    volatile uint* ptr = reinterpret_cast<volatile uint*>(RISCV_DEBUG_REG_BREAKPOINT_DATA);
+    *ptr = 0;  // Ensure ordering with any previous control writes
+    return *ptr;
+}
+#endif
 
 // Read debug array functions
 #define SRCA_ARRAY_ID 0x0
@@ -692,7 +693,8 @@ inline void thcon_write_descriptor_to_l1(
 #define MAX_EXP_ARRAY_ID 0x3
 #define DBG_RD_CMD_PAYLOAD(thread, array_id, addr) ((thread << 19) | (array_id << 16) | addr)
 
-// inline void dbg_dump_array_enable() { memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 1); }
+#ifndef ARCH_QUASAR
+inline void dbg_dump_array_enable() { memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 1); }
 
 // inline void dbg_dump_array_disable() {
 //     // Invalidate array_id to invalid to set logic rd_en to 0
@@ -734,10 +736,11 @@ inline void thcon_write_descriptor_to_l1(
 //     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x07);
 // }
 
-// inline void dbg_instrn_buf_clear_override_en() {
-//     // Set override enable
-//     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x0);
-// }
+inline void dbg_instrn_buf_clear_override_en() {
+    // Set override enable
+    memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x0);
+}
+#endif
 
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 inline void wzeromem(uintptr_t start, uint32_t len) { wzerorange((uint32_t*)start, (uint32_t*)(start + len)); }

@@ -24,9 +24,9 @@ math is in Fp32 format
 * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]
 * Output is a matrix block of dimension [rt_dim, ct_dim]
 */
-template <std::uint32_t NUM_FIDELITY_PHASES>
+template <ckernel::MathFidelity math_fidelity>
 inline void llk_math_matmul_init(const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
-    _llk_math_matmul_init_<static_cast<ckernel::MathFidelity>(NUM_FIDELITY_PHASES)>(ct_dim, rt_dim);
+    _llk_math_matmul_init_<math_fidelity>(ct_dim, rt_dim);
 }
 
 /**

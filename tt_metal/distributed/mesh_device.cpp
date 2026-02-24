@@ -60,7 +60,6 @@
 #include "mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
-class CommandQueue;
 class SystemMemoryManager;
 
 namespace program_cache::detail {
@@ -120,7 +119,7 @@ decltype(auto) validate_and_get_reference_value(
 // Returns offset of the mesh device view in the system mesh.
 MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
     const auto origin_fabric_node_id = view.get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
-    const auto system_mesh_shape = SystemMesh::instance().shape();
+    const auto system_mesh_shape = MetalContext::instance().get_system_mesh().shape();
     for (const auto& coord : MeshCoordinateRange(system_mesh_shape)) {
         if (coord.to_linear_index(system_mesh_shape) == origin_fabric_node_id.chip_id) {
             return coord;
@@ -169,7 +168,18 @@ MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
+        // Catch any exceptions during device close - destructors must not throw.
+        // This can happen when a device is hung and times out during close.
+        try {
+            tt_metal::MetalContext::instance().device_manager()->close_devices(
+                devices_to_close, /*skip_synchronize=*/true);
+        } catch (const std::exception& e) {
+            log_warning(
+                LogMetal,
+                "Exception during device close in ScopedDevices destructor: {}. "
+                "The device may be in an unrecoverable state and require a reset.",
+                e.what());
+        }
     }
 }
 
@@ -262,7 +272,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
-            auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            auto mapped_devices =
+                MetalContext::instance().get_system_mesh().get_mapped_devices(config.mesh_shape(), config.offset());
             // Validate that none of the fabric node IDs are on switch meshes
             for (const auto& fabric_node_id : mapped_devices.fabric_node_ids) {
                 TT_FATAL(
@@ -274,7 +285,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
             }
             auto mapped_devices_full_system_device_ids =
                 (*MetalContext::instance().global_distributed_context().size() > 1)
-                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                    ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
                     : mapped_devices.device_ids;
             return std::make_tuple(
                 std::make_shared<MeshDeviceImpl::ScopedDevices>(
@@ -305,7 +316,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         }
         auto mapped_devices_full_system_device_ids =
             (*MetalContext::instance().global_distributed_context().size() > 1)
-                ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
                 : wrap_to_maybe_remote(supplied_ids);
         return std::make_tuple(
             std::make_shared<ScopedDevices>(
@@ -339,8 +350,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     // Wait for all ranks to finish initializing the mesh device before proceeding.
     mesh_device->pimpl_->distributed_context_->barrier();
 
-    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
@@ -375,6 +385,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    TT_FATAL(
+        !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
+
     // Validate all devices are on compute meshes (not switches) before creating any resources
     const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
@@ -394,7 +407,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     // Now create ScopedDevices after validation passes
     auto mapped_devices_full_system_device_ids =
         (*MetalContext::instance().global_distributed_context().size() > 1)
-            ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+            ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
             : wrap_to_maybe_remote(device_ids);
     auto scoped_devices = std::make_shared<MeshDeviceImpl::ScopedDevices>(
         mapped_devices_full_system_device_ids,
@@ -428,8 +441,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     // Wait for all ranks to finish initializing the mesh device before proceeding.
     mesh_device->pimpl_->distributed_context_->barrier();
 
-    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return result;
 }
@@ -690,8 +702,8 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     } else {
         // Do our best at requesting a new set of mapped devices from system mesh, starting at the offset of the first
         // device in the original mesh.
-        auto new_mapped_devices =
-            SystemMesh::instance().get_mapped_devices(new_shape, compute_system_mesh_offset(*view_));
+        auto new_mapped_devices = MetalContext::instance().get_system_mesh().get_mapped_devices(
+            new_shape, compute_system_mesh_offset(*view_));
         for (int i = 0; i < new_mapped_devices.device_ids.size(); i++) {
             TT_FATAL(
                 current_fabric_nodes.contains(new_mapped_devices.fabric_node_ids[i]),
@@ -719,10 +731,11 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
-
-    if (this->is_initialized()) {
-        ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+    if (not is_initialized()) {
+        return true;
     }
+
+    ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
 
     if (distributed_context_) {
         // Wait for all ranks to be ready to close the mesh device before proceeding.
@@ -973,6 +986,8 @@ uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, Sub
 // Bank and memory management methods
 int MeshDeviceImpl::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
+int MeshDeviceImpl::get_clock_rate_mhz() const { return reference_device()->get_clock_rate_mhz(); }
+
 CoreCoord MeshDeviceImpl::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
         return device->logical_core_from_dram_channel(dram_channel);
@@ -1016,11 +1031,6 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
     return reference_device()->sysmem_manager();
 }
 
-CommandQueue& MeshDeviceImpl::command_queue(std::optional<uint8_t> cq_id) {
-    TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->command_queue(cq_id);
-}
-
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
@@ -1050,6 +1060,13 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         (uint32_t)cq_id,
         *trace_id);
     this->mark_allocations_safe();
+
+    // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
+    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
+    if (trace_region_size == 0) {
+        this->allocator_impl()->begin_dram_high_water_mark_tracking();
+    }
+
     // Create an empty trace buffer here. This will get initialized in end_trace
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     TT_FATAL(
@@ -1079,7 +1096,18 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         active_sub_device_manager->id());
     this->mesh_command_queues_[cq_id]->record_end();
 
-    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
+    // End DRAM high water mark tracking if trace_region_size is 0 (dynamic allocation mode)
+    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
+    DeviceAddr dram_allocation_high_water_mark = 0;
+    DeviceAddr dram_deletion_high_water_mark = 0;
+    if (trace_region_size == 0) {
+        this->allocator_impl()->end_dram_high_water_mark_tracking();
+        dram_allocation_high_water_mark = this->allocator_impl()->get_dram_allocation_high_water_mark();
+        dram_deletion_high_water_mark = this->allocator_impl()->get_dram_deletion_high_water_mark();
+    }
+
+    MeshTrace::populate_mesh_buffer(
+        *(mesh_command_queues_[cq_id]), trace_buffer, dram_allocation_high_water_mark, dram_deletion_high_water_mark);
     this->mark_allocations_unsafe();
 }
 
@@ -1181,10 +1209,6 @@ bool MeshDeviceImpl::compile_fabric() {
 void MeshDeviceImpl::configure_fabric() {
     TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
     reference_device()->configure_fabric();
-}
-void MeshDeviceImpl::init_fabric() {
-    TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_fabric();
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
@@ -1317,6 +1341,7 @@ bool MeshDevice::is_initialized() const { return pimpl_->is_initialized(); }
 int MeshDevice::num_dram_channels() const { return pimpl_->num_dram_channels(); }
 uint32_t MeshDevice::l1_size_per_core() const { return pimpl_->l1_size_per_core(); }
 uint32_t MeshDevice::dram_size_per_channel() const { return pimpl_->dram_size_per_channel(); }
+int MeshDevice::get_clock_rate_mhz() const { return pimpl_->get_clock_rate_mhz(); }
 CoreCoord MeshDevice::grid_size() const { return pimpl_->grid_size(); }
 CoreCoord MeshDevice::logical_grid_size() const { return pimpl_->logical_grid_size(); }
 CoreCoord MeshDevice::dram_grid_size() const { return pimpl_->dram_grid_size(); }
@@ -1406,7 +1431,6 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
-CommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) { return pimpl_->command_queue(cq_id); }
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);
@@ -1435,7 +1459,6 @@ void MeshDevice::init_command_queue_host() { pimpl_->init_command_queue_host(); 
 void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device(); }
 bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
-void MeshDevice::init_fabric() { pimpl_->init_fabric(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }

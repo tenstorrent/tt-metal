@@ -27,6 +27,7 @@ from callstack_provider import run as get_callstack_provider, CallstackProvider,
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "callstack_provider"],
@@ -45,7 +46,9 @@ def dump_callstacks(
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
                 return None
-        return callstack_provider.get_callstacks(location, risc_name)
+        return callstack_provider.get_cached_callstacks(location, risc_name)
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         log_check_risc(
             risc_name,

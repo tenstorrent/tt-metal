@@ -729,7 +729,9 @@ def test_qwen_demo_text(
             # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
             # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
-        # Save prefill token
+        # Save prefill token (unpack tuple when device sampling returns logprobs)
+        if isinstance(toks, tuple):
+            toks = toks[0]
         prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -794,7 +796,7 @@ def test_qwen_demo_text(
             try:
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
-                tt_out_tok, read_event = generator.decode_forward_text(
+                tt_out_tok, read_event = generator.decode_forward(
                     out_tok,
                     current_pos,
                     enable_trace=is_enable_trace,
@@ -833,7 +835,9 @@ def test_qwen_demo_text(
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
-
+                if isinstance(out_tok, tuple):
+                    # Skip logprobs
+                    out_tok = out_tok[0]
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
                     out_tok = out_tok.repeat(32, 1)
                 # Check if iteration == 1, because that's when we compare outputs from iteration 0

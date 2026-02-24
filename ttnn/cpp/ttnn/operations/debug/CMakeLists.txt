@@ -1,7 +1,7 @@
 add_library(ttnn_op_debug ${LIB_TYPE})
 add_library(TTNN::Ops::Debug ALIAS ttnn_op_debug)
 
-target_precompile_headers(ttnn_op_debug REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_debug REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_debug)
 
 set_target_properties(

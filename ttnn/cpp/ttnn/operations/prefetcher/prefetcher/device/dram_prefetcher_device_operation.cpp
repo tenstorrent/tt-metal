@@ -10,11 +10,6 @@
 
 namespace ttnn::prim {
 
-DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return DramPrefetcherProgramFactory{};
-}
-
 void DramPrefetcherOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.input_tensors;
@@ -35,6 +30,9 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
             "Global circular buffer must have same number of receivers for each sender core");
     }
     uint32_t num_receivers_per_sender = sender_receiver_core_mapping[0].second.num_cores();
+
+    TT_FATAL(num_readers > 0, "Number of reader cores must be greater than zero");
+    TT_FATAL(num_receivers_per_sender > 0, "Number of receiver cores per sender must be greater than zero");
 
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {
         const auto& tensor = input_tensors[i];
@@ -72,11 +70,6 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
 
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
-}
-
-void DramPrefetcherOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 TensorSpec DramPrefetcherOperation::compute_output_specs(

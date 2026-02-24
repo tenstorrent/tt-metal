@@ -1,12 +1,10 @@
 # CodeChecker skip list - exclude third-party and generated code
 # See: https://codechecker.readthedocs.io/en/latest/analyzer/user_guide/#skip
 
-# External third-party dependencies (not Tenstorrent code)
+# External third-party dependencies
 -*/.cpmcache/*
 -*/third_party/tracy/*
-
-# NOTE: tt_metal/third_party/umd IS scanned - it's Tenstorrent code
-# UMD simulation is disabled via TT_UMD_BUILD_SIMULATION=FALSE in the preset
+-*/third_party/umd/*
 
 # Build directories
 -*/.build/*

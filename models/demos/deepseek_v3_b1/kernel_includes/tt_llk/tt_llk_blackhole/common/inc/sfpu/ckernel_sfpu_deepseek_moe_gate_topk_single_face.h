@@ -9,7 +9,6 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "sfpu/ckernel_sfpu_topk.h"
 #include "lltt.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
@@ -138,7 +137,7 @@ inline void bitonic_topk_store8_even_cols_single_face() {
 
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_store8_even_cols_split_indices_single_face() {
-    static_assert(!is_fp32_dest_acc_en, "is_fp32_dest_acc_en must be true");
+    static_assert(!is_fp32_dest_acc_en, "is_fp32_dest_acc_en must be false");
     // Store 8 consecutive numbers
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, bias_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, bias_offset + 4);
@@ -334,6 +333,7 @@ inline void _deepseek_moe_gate_sum_top2() {
     constexpr int phase_replay_offset = store_replay_offset + load_store_replay_count;
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPCONFIG(0x4, 0xF, 1);
 
     // Phase 0-3 Even Columns
     bitonic_topk_load16_concat_indices_single_face<is_fp32_dest_acc_en, 0>();
@@ -423,13 +423,12 @@ inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     // There is a hardware bug that affects operations on LREG4-7 while this is enabled
-    // Note this overwrites LREG0
-    _sfpu_load_config32_(0xF, 0x0, 0x0);
+    TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
 
     // Re-enable index tracking
-    _sfpu_load_config32_(0xF, 0x0, 0x4);
+    TTI_SFPCONFIG(0x4, 0xF, 1);
     reverse_sort_order();
     bitonic_topk_load8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
 
@@ -451,6 +450,10 @@ inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 
     // Calculate 1 / (sum + eps) * scale
+    // Note: This is done for safety since registers used by recip are chosen by the compiler
+    // For BH, it was safe to skip this since recip didn't use the registers affected by the bug requiring us to disable
+    TTI_SFPCONFIG(0, 0xF, 1);
+
     sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value = Converter::as_float(eps);
     l0 = l0 + eps_value;
@@ -472,7 +475,6 @@ inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _init_deepseek_moe_gate_topk() {
-    _sfpu_load_config32_(0xF, 0x0, 0x4);  // Set bit [2] of the SFPU_CONTROL_REG to enable index tracking mode
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 

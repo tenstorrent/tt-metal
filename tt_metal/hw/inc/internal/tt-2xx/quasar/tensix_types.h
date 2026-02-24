@@ -21,25 +21,25 @@
 /////////////
 // Global enums and defines
 ////////////
-typedef enum {
+enum class xmov_direction_t {
     XMOV_L0_TO_L1 = 0,
     XMOV_L1_TO_L0 = 1,
     XMOV_L0_TO_L0 = 2,
     XMOV_L1_TO_L1 = 3,
-} xmov_direction_t;
+};
 
-typedef enum { TDMA_MOVER0 = 0, TDMA_MOVER1 = 1 } tdma_mover_id_t;
+enum class tdma_mover_id_t { TDMA_MOVER0 = 0, TDMA_MOVER1 = 1 };
 
-typedef enum { MATH_HF = 1, MATH_AUTO = 2, MATH_LF = 4 } math_fidelity_t;
+enum class math_fidelity_t { MATH_HF = 1, MATH_AUTO = 2, MATH_LF = 4 };
 
-typedef enum { RELU_NONE = 0, RELU_PLAIN = 1, RELU_THRESH = 2, RELU_MAX = 3 } relu_mode_t;
+enum class relu_mode_t { RELU_NONE = 0, RELU_PLAIN = 1, RELU_THRESH = 2, RELU_MAX = 3 };
 
-typedef enum {
+enum class stochastic_round_settings_t {
     STOCH_RND_NONE = 0,
     STOCH_RND_FPU = 1,
     STOCH_RND_GASKET = 2,
     STOCH_RND_PACKER = 4
-} stochastic_round_settings_t;
+};
 
 /////////////
 // TDMA Registers
@@ -266,12 +266,6 @@ enum class DataFormat : std::uint8_t {
     Int8_2x = 26,
     Uint8_2x = 28,
 
-    Bfp8 = 2,
-    Bfp4 = 3,
-    Bfp2 = 11,
-    Bfp8_b = 6,
-    Bfp4_b = 7,
-    Bfp2_b = 15,
     Lf8 = 10,
     UInt8 = 30,
     UInt16 = 9,

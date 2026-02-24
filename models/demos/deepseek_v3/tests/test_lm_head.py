@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -39,6 +40,10 @@ class DeepseekV3LMHead(nn.Module):
         return self.lm_head(hidden_states)
 
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -50,9 +55,10 @@ class DeepseekV3LMHead(nn.Module):
     "mode,seq_len",
     [
         ("decode", 32),
-    ]
-    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
+        ("prefill", _prefill_seq_len),
+    ],
 )
+@pytest.mark.requires_device(["TG"])
 def test_forward_pass(
     mode: str,
     seq_len: int,
@@ -62,11 +68,6 @@ def test_forward_pass(
     cache_path: Path,
     set_deterministic_env: Any,
 ):
-    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
 
     reference_model = DeepseekV3LMHead(hf_config).eval()

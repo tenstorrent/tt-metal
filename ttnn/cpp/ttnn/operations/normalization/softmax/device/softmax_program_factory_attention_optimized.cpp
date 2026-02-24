@@ -290,9 +290,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             if (attributes.is_causal_mask) {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0, 0});
             } else {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0});
             }
 
             SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0});
@@ -369,11 +369,12 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         curr_row += num_tile_rows_per_core;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, softmax_kernels_id, grid_size,
-                                 fp32_dest_acc_en,  scalar_tile_size,  in0_tile_size,      im_tile_size,
-                                 out0_tile_size,    mask_tile_size,    cb_in0_id,          cb_out0_id,
-                                 cb_intermed1_id,   cb_in2_id,         cb_intermed0_id,    cb_intermed3_id,
-                                 cb_in3_id,         cb_in4_id,         cb_intermed2_id,    cb_intermed4_id}};
+    return {
+        std::move(program),
+        {reader_kernels_id, writer_kernels_id, softmax_kernels_id, grid_size,       fp32_dest_acc_en, scalar_tile_size,
+         in0_tile_size,     im_tile_size,      out0_tile_size,     mask_tile_size,  cb_in0_id,        cb_out0_id,
+         cb_intermed1_id,   cb_in2_id,         cb_intermed0_id,    cb_intermed3_id, cb_in3_id,        cb_in4_id,
+         cb_intermed2_id,   cb_intermed4_id,   use_large_kernel,   cb_length}};
 }
 
 void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
@@ -405,25 +406,41 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     uint32_t block_size = cached_program.shared_variables.fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4)
                                                                            : tt::tt_metal::find_max_divisor(Wt, 8);
 
+    bool use_large_kernel = cached_program.shared_variables.use_large_kernel;
+    uint32_t cb_length = cached_program.shared_variables.cb_length;
+
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
-    uint32_t out0_t = block_size * 2;
+    uint32_t in0_t, out0_t, im0_t, im3_t, im4_t;
     uint32_t im1_t = 1;  // 1/sum(exp(x))
     uint32_t in2_t = 1;  // scaler for reduce coming from reader
     uint32_t in3_t = 1;  // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
+    uint32_t im2_t = 1;
+
+    if (use_large_kernel) {
+        // Use fixed sizes matching create() for large kernel
+        in0_t = 80;
+        out0_t = block_size * 2;
+        im0_t = 80;
+        im3_t = 80;
+        im4_t = 80;
+    } else {
+        // Standard calculation for regular kernel
+        in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
+        out0_t = block_size * 2;
+        im4_t = tt::div_up(Wt, block_size) * block_size;
+
+        // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
+        im0_t = block_size * tt::div_up(Wt, block_size);
+        TT_FATAL(im0_t == Wt, "Intermediate buffer size (im0_t={}) must match width (Wt={})", im0_t, Wt);
+
+        // used for buffering scale-mask
+        // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
+        im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
+        TT_FATAL(im3_t == Wt + block_size, "im3_t {} == Wt {}+ block_size {}", im3_t, Wt, block_size);
+    }
+
     uint32_t in4_t =
         tt::div_up(Wt, block_size) * block_size;  // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
-    uint32_t im2_t = 1;
-    uint32_t im4_t = tt::div_up(Wt, block_size) * block_size;
-
-    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
-    uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-    TT_FATAL(im0_t == Wt, "Intermediate buffer size (im0_t={}) must match width (Wt={})", im0_t, Wt);
-
-    // used for buffering scale-mask
-    // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
-    uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
-    TT_FATAL(im3_t == Wt + block_size, "im3_t {} == Wt {}+ block_size {}", im3_t, Wt, block_size);
 
     TT_FATAL(Wt % block_size == 0, "Wt {} must be divisible by block size {}", Wt, block_size);
     TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
@@ -554,7 +571,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         softmax_kernel_args[3] = block_size;
         softmax_kernel_args[4] = curr_ht;
         softmax_kernel_args[5] = mask_padded_data;
-        softmax_kernel_args[6] = cached_program.shared_variables.fp32_dest_acc_en ? 1 : 0;
+        softmax_kernel_args[6] = cb_length;
 
         writer_kernel_args[0] = dst_buffer_address;
         writer_kernel_args[1] = num_tile_rows_per_core * Wt;

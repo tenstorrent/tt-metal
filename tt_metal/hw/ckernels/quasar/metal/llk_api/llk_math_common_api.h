@@ -113,7 +113,9 @@ inline void llk_math_wait_for_dest_available() {
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
  */
-inline void llk_math_dest_section_done() { _llk_math_dest_section_done_<DST_SYNC_MODE>(); }
+inline void llk_math_dest_section_done() {
+    _llk_math_dest_section_done_<DST_SYNC_MODE>();
+}
 
 /**
  * @brief Initializes math–pack synchronization for the destination register.

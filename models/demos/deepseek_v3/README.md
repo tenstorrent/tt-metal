@@ -82,8 +82,6 @@ MESH_DEVICE=TG python models/demos/deepseek_v3/demo/demo.py \
 
 This is useful for development and testing when multi-host resources are not available.
 
-The pipeline parallel model supports all 61 layers on single galaxy.
-
 ## Demo
 
 Running the demo on Galaxy (2x or 4x):
@@ -124,8 +122,8 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--cache-dir PATH`: Directory for converted TTNN weights/cache. Defaults to `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32).
 - `--early_print_first_user`: Stream tokens for the first prompt as they are produced.
-- `--generator {bp,pp}`: Choose between batch-parallel (`bp`, default) and pipeline-parallel (`pp`) generator implementations.
-- `--enable-trace`: Enable tracing for the batch-parallel generator decode path (unsupported with `--generator pp`).
+- `--generator {bp}`: Select batch-parallel generator implementation (default: `bp`).
+- `--enable-trace`: Enable tracing for the batch-parallel generator decode path.
 - `--random-weights`: Use randomly initialized weights (single dense layer only). Does not require tokenizer or safetensors.
 - `--single-layer {mlp,moe}`: When combined with `--random-weights`, request a single-layer run (`mlp` only).
 - `--token-accuracy`: Enable teacher-forcing decode and report accuracy (requires full-model mode plus tokenizer and reference file).
@@ -303,11 +301,9 @@ Launch the server with long-lived RPC settings and TT mesh sizing:
 ```bash
 VLLM_RPC_TIMEOUT=1000000 \
 MESH_DEVICE="(4,8)" \
-VLLM_USE_V1=1 \
 python examples/server_example_tt.py \
   --model "deepseek-ai/DeepSeek-R1-0528" \
   --max_model_len 1024 \
-  --num_scheduler_steps 1 \
   --block_size 32 \
   --override_tt_config '{"trace_mode": false}'
 ```

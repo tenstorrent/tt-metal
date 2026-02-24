@@ -34,6 +34,8 @@ set(SOURCES
     datasets/dataloader_test.cpp
     optimizers/adamw_test.cpp
     optimizers/sgd_fused_test.cpp
+    optimizers/adamw_fused_test.cpp
+    optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
@@ -44,6 +46,7 @@ set(SOURCES
     ops/positional_embedding_test.cpp
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
+    ops/distributed/ring_shift_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
@@ -67,6 +70,19 @@ target_link_libraries(
     GTest::gmock_main
     ttml
 )
+
+# Reuse the ttml precompiled header for test compilation.
+# Force -fPIC to match ttml's compile flags (executables default to -fPIE,
+# which is incompatible with library PCH in Clang).
+set_target_properties(
+    ttml_tests
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            TRUE
+)
+target_compile_options(ttml_tests PRIVATE -fPIC)
+target_precompile_headers(ttml_tests REUSE_FROM ttml)
+
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # Define the target file location
@@ -115,15 +131,21 @@ gtest_discover_tests(ttml_tests)
 ############################################################################################################################
 
 if(TARGET benchmark::benchmark)
-    set(BENCHMARK_SOURCES benchmark/matmuls_benchmark.cpp)
-
-    add_executable(ttml_benchmarks ${BENCHMARK_SOURCES})
-    target_link_libraries(
-        ttml_benchmarks
-        PUBLIC
-            ttml
-            TTNN::TTNN
-            benchmark::benchmark
+    set(BENCHMARK_SOURCES
+        benchmark/matmuls_benchmark.cpp
+        benchmark/from_vector_benchmark.cpp
     )
-    target_include_directories(ttml_benchmarks PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+
+    foreach(BENCH_SRC ${BENCHMARK_SOURCES})
+        get_filename_component(BENCH_TARGET ${BENCH_SRC} NAME_WE)
+        add_executable(${BENCH_TARGET} ${BENCH_SRC})
+        target_link_libraries(
+            ${BENCH_TARGET}
+            PUBLIC
+                ttml
+                TTNN::TTNN
+                benchmark::benchmark
+        )
+        target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+    endforeach()
 endif()

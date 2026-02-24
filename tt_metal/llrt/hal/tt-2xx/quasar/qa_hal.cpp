@@ -146,7 +146,7 @@ public:
                     case 8:
                     case 12:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC0_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC0_KERNEL_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC0_GLOBAL_BASE +
@@ -158,7 +158,7 @@ public:
                     case 9:
                     case 13:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC1_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC1_KERNEL_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
@@ -169,7 +169,7 @@ public:
                     case 10:
                     case 14:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC2_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC2_KERNEL_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
@@ -180,7 +180,7 @@ public:
                     case 11:
                     case 15:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC3_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC3_KERNEL_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
@@ -224,13 +224,13 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
-        includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
 
         switch (params.core_type) {
@@ -278,7 +278,6 @@ public:
         // TODO: Use correct tt-qsr cpu options #32893
         std::string cflags =
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensixbh ";
-        cflags += "-mno-tt-tensix-optimize-replay ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
@@ -459,6 +458,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
+    this->has_stream_registers_ = false;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
@@ -479,11 +479,6 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_y_id_translate_table_ = {};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
-
-    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
-        // No checks
-        return true;
-    };
 }
 
 }  // namespace tt::tt_metal
