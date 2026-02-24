@@ -84,11 +84,6 @@ class TrainingConfig:
         else:
             raise ValueError(f"Unknown tokenizer_type: {tokenizer_type}")
 
-        self.lr = float(tc.get("learning_rate", 3e-4))
-        self.beta1 = float(tc.get("beta1", 0.9))
-        self.beta2 = float(tc.get("beta2", 0.999))
-        self.eps = float(tc.get("eps", 1e-8))
-        self.weight_decay = float(tc.get("weight_decay", 0.01))
         self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
 

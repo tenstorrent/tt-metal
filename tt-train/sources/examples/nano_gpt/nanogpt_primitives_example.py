@@ -22,7 +22,7 @@ import ml_dtypes
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter, RunMode
-from ttml.common.utils import round_up_to_tile, get_tt_metal_home
+from ttml.common.utils import round_up_to_tile, get_tt_metal_home, create_optimizer
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 
@@ -51,8 +51,6 @@ class TrainingConfig(BaseTrainingConfig):
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
         self.use_no_op = tc.get("use_no_op", False)
-        self.use_moreh_adamw = tc.get("use_moreh_adamw", False)
-        self.use_kahan_summation = tc.get("use_kahan_summation", False)
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
@@ -60,7 +58,6 @@ class TrainingConfig(BaseTrainingConfig):
         self.max_steps = self.steps
         self.num_epochs = self.epochs
         self.model_save_interval = self.save_every
-        self.learning_rate = self.lr
 
 
 @dataclass
@@ -1006,8 +1003,6 @@ def main():
         training_config.max_steps = args.max_steps
     if args.num_epochs is not None:
         training_config.num_epochs = args.num_epochs
-    if args.learning_rate is not None:
-        training_config.learning_rate = args.learning_rate
     if args.clip_grad_norm is not None:
         training_config.use_clip_grad_norm = True
         training_config.clip_grad_norm_max_norm = args.clip_grad_norm
@@ -1164,40 +1159,11 @@ def main():
             print("   WARNING: Using NoOp optimizer - parameters will NOT be updated.")
             optimizer = None
         else:
-            beta1 = 0.9
-            beta2 = 0.999
-            epsilon = 1e-8
-
-            parameters = model.parameters()
-
-            if training_config.use_moreh_adamw:
-                adamw_config = ttml.optimizers.AdamWCompositeConfig.make(
-                    training_config.learning_rate,
-                    beta1,
-                    beta2,
-                    epsilon,
-                    training_config.weight_decay,
-                )
-                optimizer = ttml.optimizers.MorehAdamW(parameters, adamw_config)
-                print("   - Optimizer: MorehAdamW")
-            else:
-                adamw_config = ttml.optimizers.AdamWConfig.make(
-                    training_config.learning_rate,
-                    beta1,
-                    beta2,
-                    epsilon,
-                    training_config.weight_decay,
-                )
-                optimizer = ttml.optimizers.AdamW(parameters, adamw_config)
-                print("   - Optimizer: AdamW")
-
-            print(f"   - Learning rate: {training_config.learning_rate}")
-            print(f"   - Weight decay: {training_config.weight_decay}")
-            print(f"   - Beta1: {beta1}, Beta2: {beta2}, Epsilon: {epsilon}")
-            if training_config.use_kahan_summation:
-                print(
-                    "   - Note: Kahan summation requested but not available in Python API"
-                )
+            optimizer = create_optimizer(model, yaml_config)
+            if args.learning_rate is not None:
+                optimizer.set_lr(args.learning_rate)
+            print(f"   - Optimizer: {optimizer.get_name()}")
+            print(f"   - Learning rate: {optimizer.get_lr()}")
 
         print("\n4. Setting up learning rate scheduler...")
         scheduler_fn = None
