@@ -44,8 +44,9 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "data_types.hpp"
+#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_core_common.hpp"
+#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -54,7 +55,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
@@ -65,7 +65,6 @@
 #include "sub_device_types.hpp"
 #include "tile.hpp"
 #include "tt_memory.h"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -164,23 +163,20 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
-    // Also account for watcher/dprint enabled in hash because they enable additional code to
-    // be compiled into the kernel.
-    std::string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
-        build_key,
-        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+    // watcher/dprint enabled are accounted for in the build key.
+    tt::FNV1a hasher;
+    hasher.update(build_key);
+    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
+    hasher.update(kernel->compute_hash());
+    size_t compile_hash = static_cast<size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -190,7 +186,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
 
 namespace experimental {
 
-void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+void ClearKernelCache() { jit_build_cache_clear(); }
 
 }  // namespace experimental
 
@@ -1487,7 +1483,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
                                    tt::TargetDevice::Mock;
 
-                    if (detail::HashLookup::inst().add(kernel_hash)) {
+                    jit_build_once(kernel_hash, [&] {
                         if (!is_mock) {
                             GenerateBinaries(device, build_options, kernel);
                         } else {
@@ -1495,9 +1491,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
                             kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
-                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                    }
-                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
+                    });
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },

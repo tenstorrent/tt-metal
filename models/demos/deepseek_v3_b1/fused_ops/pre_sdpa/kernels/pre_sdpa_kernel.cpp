@@ -36,6 +36,8 @@
 #include "../../../unified_kernels/create_q_heads.hpp"
 #include "../../../unified_kernels/rope.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
+#include "../../../unified_kernels/kv_cache_update.hpp"
+#include "../../../unified_kernels/flash_mla.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -57,6 +59,9 @@ struct Core {
     static constexpr bool is_knope_core = get_named_compile_time_arg_val("is_knope_core") == 1;
     static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 1;
     static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
+
+    // MLA
+    static constexpr bool is_mla_core = get_named_compile_time_arg_val("is_mla_core") == 1;
 };
 
 void kernel_main() {
@@ -68,22 +73,41 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
         get_named_compile_time_arg_val("bcast_is_sender"),
         get_named_compile_time_arg_val("bcast_core_noc_x"),
         get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender")>;
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_has_secondary_target"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+        get_named_compile_time_arg_val("bcast_range_hops_forward"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+
     if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_common_arg_val<uint32_t>(0),  // tensor_address0
-            get_common_arg_val<uint32_t>(1),  // tile_id_start
-            get_common_arg_val<uint32_t>(2),  // tile_id_end
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_common_arg_val<uint32_t>(0),   // tensor_address0
+            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(7),   // barrier_sem
+            get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(10),  // ring_index
+            get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
+            get_common_arg_val<uint32_t>(13),  // per core fabric args start index
         };
     }
 
@@ -144,11 +168,22 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
 
     // Qrope CTArgs type alias (NCRISC uses ReaderCTArgs)
-    using QRopeCTArgs = deepseek_b1_ops::Rope::
-        ReaderCTArgs<get_named_compile_time_arg_val("qrope_Wt"), get_named_compile_time_arg_val("qrope_Ht")>;
+    using QRopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("qrope_Wt"),
+        get_named_compile_time_arg_val("qrope_Ht"),
+        get_named_compile_time_arg_val("qrope_cos_sin_page_size"),
+        get_named_compile_time_arg_val("qrope_total_Wt"),
+        get_named_compile_time_arg_val("qrope_start_tile_offset")>;
 
-    // Qrope reader args (NCRISC is no-op)
-    deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
+    deepseek_b1_ops::Rope::ReaderArgs qrope_args{
+        .in_cb = get_named_compile_time_arg_val("qrope_in_cb"),
+        .cos_cb = get_named_compile_time_arg_val("qrope_cos_cb"),
+        .sin_cb = get_named_compile_time_arg_val("qrope_sin_cb"),
+        .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
+        .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
+        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb"),
+    };
 
     // NCRISC: Sender args for QNOPE/QROPE cores
     // Senders write to intermediate CB, then compute tilizes to output CB
@@ -208,20 +243,70 @@ void kernel_main() {
     // kv cache rmsnorm reader args
     deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::
-        ReaderCTArgs<get_named_compile_time_arg_val("krope_Wt"), get_named_compile_time_arg_val("krope_Ht")>;
-    constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
-    constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-    constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
-    constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("krope_Wt"),
+        get_named_compile_time_arg_val("krope_Ht"),
+        get_named_compile_time_arg_val("krope_cos_sin_page_size"),
+        get_named_compile_time_arg_val("krope_total_Wt"),
+        get_named_compile_time_arg_val("krope_start_tile_offset")>;
 
-    // Reader args: CB indices for sharded input signaling
     deepseek_b1_ops::Rope::ReaderArgs krope_args{
-        .in_cb = krope_input_cb,
-        .cos_cb = krope_cos_cb,
-        .sin_cb = krope_sin_cb,
-        .trans_mat_cb = krope_trans_mat_cb,
+        .in_cb = get_named_compile_time_arg_val("krope_in_cb"),
+        .cos_cb = get_named_compile_time_arg_val("krope_cos_cb"),
+        .sin_cb = get_named_compile_time_arg_val("krope_sin_cb"),
+        .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
+        .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
+        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
+        .trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb"),
     };
+
+    deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
+
+    uint32_t per_core_rta_arg_idx = 0;
+    deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
+    if constexpr (Core::is_mla_core) {
+        flash_mla_args = {
+            .k_addr = get_common_arg_val<uint32_t>(14),
+            .pos_addr = get_common_arg_val<uint32_t>(15),
+            .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .is_output_core = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .output_core_noc_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .output_core_noc_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .St = get_named_compile_time_arg_val("St"),
+            .DHt = get_named_compile_time_arg_val("DHt"),
+            .Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t"),
+            .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+            .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+            .num_mcast_dests = get_named_compile_time_arg_val("num_mcast_dests"),
+            .mcast_semaphore_id = get_named_compile_time_arg_val("mla_mcast_semaphore_id"),
+            .k_page_size = get_named_compile_time_arg_val("k_page_size"),
+            .k_num_pages = get_named_compile_time_arg_val("k_num_pages"),
+            .q_chunk_size_bytes = get_named_compile_time_arg_val("q_chunk_size_bytes"),
+            .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
+            .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
+            .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
+            .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
+            .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
+            .q_input_mcast_semaphore_id = get_named_compile_time_arg_val("mla_q_input_mcast_semaphore_id"),
+            .ncrisc_brisc_sync_semaphore_id = get_named_compile_time_arg_val("mla_ncrisc_brisc_sync_semaphore_id"),
+            .receiver_ready_semaphore_id = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_id"),
+            .kv_cache_cur_pos_ready_semaphore_id =
+                get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_semaphore_id"),
+            .kv_cache_cur_pos_ready_value = get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_value"),
+            .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
+            .cb_q_in = get_named_compile_time_arg_val("mla_q_in_cb"),
+            .cb_compute_in = get_named_compile_time_arg_val("mla_compute_in_cb"),
+        };
+    }
+
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
 
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
@@ -230,42 +315,16 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
 
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
-        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
-        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_core_noc_x"),
-        get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
-        get_named_compile_time_arg_val("bcast_range_hops_forward"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_is_sender")>;
 
-    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+
     if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
-            get_common_arg_val<uint32_t>(0),   // tensor_address0
-            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(2),   // tile_id_start
-            get_common_arg_val<uint32_t>(3),   // tile_id_end
-            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
-            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
-            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(9),   // barrier_sem
-            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(12),  // ring_index
-            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
-        };
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
     }
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
@@ -386,6 +445,72 @@ void kernel_main() {
 
     // Writer args (empty - no-op)
     deepseek_b1_ops::Rope::WriterArgs krope_args{};
+
+    deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
+        .pos_addr = get_common_arg_val<uint32_t>(1),
+        .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
+        .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
+        .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
+        .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
+        .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
+        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
+        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
+        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
+        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
+        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
+        .kv_cache_cur_pos_ready_semaphore_id = get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_id"),
+    };
+
+    uint32_t per_core_rta_arg_idx = 0;
+    deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
+    if constexpr (Core::is_mla_core) {
+        constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
+        uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_end_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(per_core_rta_arg_idx));
+        per_core_rta_arg_idx += num_tree_reduction_steps * 4;
+
+        flash_mla_args = {
+            .pos_addr = get_common_arg_val<uint32_t>(1),
+            .cur_batch = cur_batch,
+            .core_num_in_reduce = core_num_in_reduce,
+            .is_mcast_sender = is_mcast_sender,
+            .mcast_start_x = mcast_start_x,
+            .mcast_start_y = mcast_start_y,
+            .mcast_end_x = mcast_end_x,
+            .mcast_end_y = mcast_end_y,
+            .tree_reduction_info = tree_reduction_info,
+            .Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t"),
+            .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+            .reducer_semaphore_id = get_named_compile_time_arg_val("mla_reducer_semaphore_id"),
+            .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+            .q_tile_height = get_named_compile_time_arg_val("q_tile_height"),
+            .DHt = get_named_compile_time_arg_val("DHt"),
+            .num_mcast_dests = get_named_compile_time_arg_val("num_mcast_dests"),
+            .mcast_semaphore_id = get_named_compile_time_arg_val("mla_mcast_semaphore_id"),
+            .ncrisc_brisc_sync_semaphore_id = get_named_compile_time_arg_val("mla_ncrisc_brisc_sync_semaphore_id"),
+            .k_num_pages = get_named_compile_time_arg_val("k_num_pages"),
+            .num_tree_reduction_steps = num_tree_reduction_steps,
+            .receiver_ready_semaphore_id = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_id"),
+            .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
+            .cb_out_in = get_named_compile_time_arg_val("mla_out_in_cb"),
+            .cb_ms_in = get_named_compile_time_arg_val("mla_ms_in_cb"),
+            .cb_out_ms = get_named_compile_time_arg_val("mla_out_ms_cb"),
+        };
+    }
+
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::WriterCTArgs<
+        get_named_compile_time_arg_val("k_page_size"),
+        get_named_compile_time_arg_val("vDHt"),
+        get_named_compile_time_arg_val("mla_out_o_cb")>;
+
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
 // Named compile-time args: rmsnorm compute, matmul compute
@@ -400,18 +525,21 @@ void kernel_main() {
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm2_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm2_output_cb")>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-        get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb"),
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
     };
@@ -451,11 +579,8 @@ void kernel_main() {
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
-        get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
-        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
-        get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
-        get_common_arg_val<uint32_t>(0),                       // epsilon (same as rmsnorm1)
-        get_common_arg_val<float>(2),                          // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),     // scalar (1/sqrt(1536))
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -528,13 +653,13 @@ void kernel_main() {
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_output_cb")>;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
-        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
     };
@@ -563,11 +688,60 @@ void kernel_main() {
         .sin_interm_cb = krope_sin_interm_cb,
         .out_cb = krope_output_cb,
     };
+
+    deepseek_b1_ops::KVCacheUpdate::ComputeArgs kv_cache_update_args{
+        .kv_cache_input_cb = get_common_arg_val<uint32_t>(4),
+        .kv_cache_output_cb = get_common_arg_val<uint32_t>(5),
+        .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(6),
+    };
+    uint32_t per_core_rta_arg_idx = 0;
+    deepseek_b1_ops::FlashMLADecode::ComputeArgs flash_mla_args;
+    if constexpr (Core::is_mla_core) {
+        constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
+        uint32_t do_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t do_output = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t cur_head = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t core_num_in_output = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t is_sender_after_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(per_core_rta_arg_idx));
+        per_core_rta_arg_idx += num_tree_reduction_steps * 2;
+
+        flash_mla_args = {
+            .pos_addr = get_common_arg_val<uint32_t>(7),
+            .do_reduce = do_reduce,
+            .do_output = do_output,
+            .cur_head = cur_head,
+            .cur_batch = cur_batch,
+            .core_num_in_reduce = core_num_in_reduce,
+            .core_num_in_output = core_num_in_output,
+            .is_sender_after_reduce = is_sender_after_reduce,
+            .tree_reduction_info = tree_reduction_info,
+            .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+            .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+            .num_tree_reduction_steps = num_tree_reduction_steps,
+        };
+    }
+
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ComputeCTArgs<
+        get_named_compile_time_arg_val("mla_q_in_cb"),
+        get_named_compile_time_arg_val("mla_compute_in_cb"),
+        get_named_compile_time_arg_val("mla_k_in_cb"),
+        get_named_compile_time_arg_val("mla_interm_out_cb"),
+        get_named_compile_time_arg_val("mla_interm_ms_cb"),
+        get_named_compile_time_arg_val("mla_out_in_cb"),
+        get_named_compile_time_arg_val("mla_ms_in_cb"),
+        get_named_compile_time_arg_val("mla_out_o_cb"),
+        get_named_compile_time_arg_val("mla_out_ms_cb"),
+        get_named_compile_time_arg_val("mla_out_final_cb")>;
+
+    deepseek_compute_kernel_init();
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
-    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+    if constexpr (Core::is_input_core) {
         // Multi-device mode: NCRISC sets up gamma buffers while BRISC handles CCL
         // RMSNorm gamma buffer
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
@@ -607,19 +781,8 @@ void kernel_main() {
     }
 
     if constexpr (Core::is_qrope_core) {
-        // Qrope CB indices and parameters from named compile-time args
-        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("qrope_cos_cb");
-        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("qrope_sin_cb");
         constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("qrope_Wt");
-
-        // NOTE: Do NOT setup qrope input CB (matmul2_output_cb) as sharded buffer!
-        // The input to RoPE comes from matmul2 compute output, NOT from a sharded tensor.
-        // Calling setup_sharded_buffer on it would fill the CB and block matmul2's cb_reserve_back.
-        // Only setup the actual sharded tensor CBs (cos, sin, trans_mat).
-        unified_kernels::setup_sharded_buffer(qrope_cos_cb, Wt);
-        unified_kernels::setup_sharded_buffer(qrope_sin_cb, Wt);
-        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);  // trans_mat is 1 tile (32x32)
+        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
     }
 
     if constexpr (Core::is_dkv_matmul_core) {
@@ -638,12 +801,7 @@ void kernel_main() {
     }
 
     if constexpr (Core::is_krope_core) {
-        constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-        constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
         constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
-        constexpr uint32_t krope_Wt = get_named_compile_time_arg_val("krope_Wt");
-        unified_kernels::setup_sharded_buffer(krope_cos_cb, krope_Wt);
-        unified_kernels::setup_sharded_buffer(krope_sin_cb, krope_Wt);
         unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
     }
 #endif
@@ -660,24 +818,7 @@ void kernel_main() {
     }
 
 #if defined(COMPILE_FOR_NCRISC)
-    if constexpr (Core::is_input_core && Core::skip_ccl) {
-        // Single-device mode: NCRISC sets up ALL sharded buffers (input + gamma + gamma2)
-        // This matches the reference kernel behavior
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
-        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
-        constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
-
-        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
-        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
-        unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
-    }
-#endif
-
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_input_core && !Core::skip_ccl) {
-        // Multi-device mode only: BRISC sets up intermediate (broadcast output) buffer
+    if constexpr (Core::is_input_core) {
         // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
@@ -825,7 +966,7 @@ void kernel_main() {
         }
     }
     {
-        // ========================================================================o
+        // ========================================================================
         // KV Cache Branch - Matmul
         // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
         // ========================================================================
@@ -860,6 +1001,26 @@ void kernel_main() {
             DeviceZoneScopedN("K_ROPE");
             deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
             krope(krope_args);
+        }
+        // ========================================================================
+        // KV Cache Update: Write results to DRAM interleaved tensor
+        // BRISC handles writing from output CBs to DRAM
+        // ========================================================================
+        {
+            DeviceZoneScopedN("KV_CACHE_UPDATE");
+            deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
+            kv_cache_update(kv_cache_update_args);
+        }
+
+        // ========================================================================
+        // Flash MLA: Compute
+        // ========================================================================
+        {
+            DeviceZoneScopedN("FLASH_MLA");
+            deepseek_b1_ops::FlashMLADecode::
+                Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>
+                    flash_mla;
+            flash_mla(flash_mla_args);
         }
     }
 }

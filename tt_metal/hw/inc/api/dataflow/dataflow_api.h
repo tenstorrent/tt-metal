@@ -5,10 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#if __has_include("chlkc_unpack_data_format.h")
-#include "chlkc_pack_data_format.h"
-#include "chlkc_unpack_data_format.h"
-#include "chlkc_unpack_tile_dims.h"
+#if __has_include("chlkc_descriptors.h")
+#include "chlkc_descriptors.h"
 #define DATA_FORMATS_DEFINED
 #endif
 
@@ -942,7 +940,8 @@ inline void noc_async_write_multicast(
         noc);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet<false>(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
+        noc_async_write_multicast_one_packet<false>(
+            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, noc);
     } else {
         WAYPOINT("NMWW");
         NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
@@ -2231,7 +2230,8 @@ FORCE_INLINE void noc_semaphore_inc_multicast(
         false /*linked*/,
         num_dests,
         /*multicast_path_reserve=*/true,
-        posted);
+        posted,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
     WAYPOINT("NIMD");
 }
 

@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
@@ -140,6 +141,17 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
     }
 
+    // Look up channel trimming overrides for this router (if a profile is loaded)
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides_for_router;
+    const auto& trimming_overrides = builder_context.get_channel_trimming_overrides();
+    if (trimming_overrides.has_value()) {
+        auto key = make_override_key(device->id(), location.eth_chan);
+        auto it = trimming_overrides->find(key);
+        if (it != trimming_overrides->end()) {
+            channel_trimming_overrides_for_router = it->second;
+        }
+    }
+
     // NOW create erisc builder with computed injection flags and actual channel counts
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
         device,
@@ -153,7 +165,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         eth_direction,
         downstream_is_tensix_builder,
         actual_sender_channels_per_vc,
-        actual_receiver_channels_per_vc));
+        actual_receiver_channels_per_vc,
+        channel_trimming_overrides_for_router));
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
@@ -646,8 +659,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto num_enabled_risc_cores = get_configured_risc_count();
 
     for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
-        // Get compile-time args and append cluster-wide coordination info
-        std::vector<uint32_t> ct_args = erisc_builder_->get_compile_time_args(risc_id);
+        // Get compile-time args (positional + named) and append cluster-wide coordination info
+        auto [ct_args, named_ct_args] = erisc_builder_->get_compile_time_args(risc_id);
 
         const auto is_master_risc_core = (eth_chan == ctx.master_router_chan) && (risc_id == 0);
         ct_args.push_back(is_master_risc_core);
@@ -679,6 +692,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .processor = proc,
                 .compile_args = ct_args,
                 .defines = defines,
+                .named_compile_args = named_ct_args,
                 .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);

@@ -2772,3 +2772,212 @@ def test_matmul_activation_with_sharded_input(device):
         assert_with_pcc(torch_output_tensor, output_tensor)
     except Exception as e:
         pytest.fail(f"Got unexpected exception {e}")
+
+
+# ============================================================================
+# Sub-device tests: verify ttnn.matmul works on a sub-device whose start core
+# is NOT (0, 0).  This exercises the sub_device_start_core offset that was
+# added to the 2-D and 1-D multicast program factories.
+# ============================================================================
+
+
+def _setup_subdevice(device, skip_rows=1):
+    """Create two sub-devices: row(s) 0..skip_rows-1 as a 'dummy' sub-device
+    and the remaining rows as the 'worker' sub-device.  Returns a tuple of
+    (sub_device_manager, worker_sub_device_id, worker_core_grid) that the
+    caller must tear down via _teardown_subdevice().
+    """
+    grid = device.compute_with_storage_grid_size()
+    cols, rows = grid.x, grid.y
+    assert rows > skip_rows, f"Device grid has only {rows} rows; need >{skip_rows} for this sub-device test"
+
+    dummy_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, skip_rows - 1))})
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, skip_rows), ttnn.CoreCoord(cols - 1, rows - 1))})
+
+    dummy_sub_device = ttnn.SubDevice([dummy_crs])
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+
+    dummy_sub_device_id = ttnn.SubDeviceId(0)
+    worker_sub_device_id = ttnn.SubDeviceId(1)
+
+    sub_device_manager = device.create_sub_device_manager([dummy_sub_device, worker_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
+
+    worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
+    return sub_device_manager, worker_sub_device_id, worker_core_grid
+
+
+def _teardown_subdevice(device, sub_device_manager):
+    """Clean up the sub-device manager."""
+    device.reset_sub_device_stall_group()
+    device.clear_loaded_sub_device_manager()
+    device.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "m_size, k_size, n_size",
+    [
+        (32, 1024, 1024),  # narrow M → auto-selects 1D mcast_in0 (wide output)
+        (1024, 1024, 32),  # narrow N → auto-selects 1D mcast_in1 (tall output)
+    ],
+)
+def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
+    """Run ttnn.matmul on a sub-device with narrow shapes that trigger the
+    1-D multicast program config auto-selection.
+
+    This exercises the sub_device_start_core fix in the 1-D multicast
+    program factory (both mcast_in0 and mcast_in1 paths).
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("Need at least 2 rows for sub-device test")
+
+    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    try:
+        torch.manual_seed(0)
+        torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
+        torch_input_b = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
+        torch_output = torch_input_a @ torch_input_b
+
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        output = ttnn.matmul(
+            input_a,
+            input_b,
+            core_grid=worker_core_grid,
+            sub_device_id=worker_sub_device_id,
+        )
+        output = ttnn.to_torch(output)
+        assert_with_pcc(torch_output, output, 0.999)
+    finally:
+        _teardown_subdevice(device, sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "weight_dtype, pcc_threshold",
+    [
+        (ttnn.bfloat8_b, 0.99),
+        (ttnn.bfloat4_b, 0.98),
+    ],
+)
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (32, 64, 32),
+        (128, 256, 128),
+        (64, 512, 256),
+    ],
+)
+def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc_threshold, M, K, N):
+    torch.manual_seed(0)
+    torch_A = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_W = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+    # Golden in float32
+    golden = torch.matmul(torch_A.float(), torch_W.float())
+
+    # Conventional path: row-wise BFP grouping (along N)
+    tt_A_conv = ttnn.from_torch(torch_A, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_W_conv = ttnn.from_torch(torch_W, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    result_conv = ttnn.to_torch(ttnn.matmul(tt_A_conv, tt_W_conv))
+
+    # Column-tilize path: use col_tilize=True instead of manual torch transpose
+    tt_A_col = ttnn.from_torch(torch_A, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_W_col = ttnn.from_torch(torch_W, dtype=weight_dtype, device=device, col_tilize=True)
+    result_col = ttnn.to_torch(ttnn.matmul(tt_A_col, tt_W_col, transpose_b=True))
+
+    # Both paths should match golden
+    assert_with_pcc(golden, result_conv, pcc=pcc_threshold)
+    assert_with_pcc(golden, result_col, pcc=pcc_threshold)
+
+    # The two paths should match each other
+    assert_with_pcc(result_conv, result_col, pcc=pcc_threshold)
+
+
+def test_from_torch_col_tilize_validation():
+    torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
+    torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
+
+    # col_tilize requires BFP dtype
+    with pytest.raises(RuntimeError, match="col_tilize=True requires BFP dtype"):
+        ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat16, col_tilize=True)
+
+    # col_tilize requires ndim >= 2
+    with pytest.raises(RuntimeError, match="col_tilize=True requires tensor.ndim >= 2"):
+        ttnn.from_torch(torch_tensor_1d, dtype=ttnn.bfloat8_b, col_tilize=True)
+
+    # col_tilize not supported with spec
+    spec = ttnn.TensorSpec((32, 64), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
+    with pytest.raises(RuntimeError, match="col_tilize=True is not supported with spec"):
+        ttnn.from_torch(torch_tensor_2d, spec=spec, col_tilize=True)
+
+    # col_tilize requires tile layout
+    with pytest.raises(RuntimeError, match="col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT"):
+        ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat8_b, layout=ttnn.ROW_MAJOR_LAYOUT, col_tilize=True)
+
+
+@pytest.mark.parametrize(
+    "weight_dtype, pcc_threshold",
+    [
+        (ttnn.bfloat8_b, 0.99),
+        (ttnn.bfloat4_b, 0.98),
+    ],
+)
+@pytest.mark.parametrize(
+    "K, N",
+    [
+        (32, 64),
+        (128, 256),
+        (64, 512),
+    ],
+)
+def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_threshold, K, N):
+    """Verify that from_torch(..., col_tilize=True) produces the same tensor as
+    manually transposing in torch and then calling from_torch on W^T."""
+    torch.manual_seed(0)
+    torch_W = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+    # col_tilize path
+    tt_col = ttnn.from_torch(torch_W, dtype=weight_dtype, col_tilize=True)
+    result_col = ttnn.to_torch(tt_col)
+
+    # Manual transpose path: torch transpose then from_torch
+    torch_W_T = torch_W.transpose(-1, -2).contiguous()
+    tt_manual = ttnn.from_torch(torch_W_T, dtype=weight_dtype)
+    result_manual = ttnn.to_torch(tt_manual)
+
+    assert (
+        result_col.shape == result_manual.shape
+    ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
+    assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+
+
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (64, 32),  # 2D, tile-aligned
+        (2, 64, 32),  # 3D with batch
+        (2, 3, 64, 32),  # 4D with batch
+        (48, 80),  # 2D, non-tile-aligned
+        (1, 1, 50, 70),  # 4D, non-tile-aligned K and N
+        (3, 33, 65),  # 3D, odd non-tile-aligned dims
+    ],
+)
+def test_from_torch_col_tilize_batched(weight_dtype, shape):
+    """Verify col_tilize works correctly for tensors of various ranks and shapes,
+    including non-tile-aligned dimensions that exercise the padding path."""
+    torch.manual_seed(0)
+    torch_W = torch.randn(shape, dtype=torch.bfloat16)
+
+    tt_col = ttnn.from_torch(torch_W, dtype=weight_dtype, col_tilize=True)
+    result_col = ttnn.to_torch(tt_col)
+
+    torch_W_T = torch_W.transpose(-1, -2).contiguous()
+    tt_manual = ttnn.from_torch(torch_W_T, dtype=weight_dtype)
+    result_manual = ttnn.to_torch(tt_manual)
+
+    assert result_col.shape == result_manual.shape
+    assert_with_pcc(result_manual, result_col, pcc=0.98)

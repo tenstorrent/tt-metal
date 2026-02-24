@@ -4,6 +4,7 @@
 
 #include "batch_norm_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -54,11 +55,6 @@ void BatchNormOperation::validate_tensors(
     if (bias.has_value()) {
         check_tensor_BN(bias.value(), "bias_shape", C);
     }
-}
-
-BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return BatchNormFactory();
 }
 
 void BatchNormOperation::validate_on_program_cache_miss(
@@ -126,10 +122,7 @@ tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
-    TT_FATAL(
-        std::holds_alternative<DeviceStorage>(input.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input.storage()));
+    TT_FATAL(is_device_tensor(input), "Unexpected type {}", input.storage_type());
 
     // For input tensor
     auto base_tuple = std::make_tuple(attributes, input.dtype(), input.memory_config());

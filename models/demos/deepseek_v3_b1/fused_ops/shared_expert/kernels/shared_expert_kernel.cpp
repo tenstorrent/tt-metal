@@ -322,6 +322,7 @@ void kernel_main() {
 
     // Output gather compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs og_args{};
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

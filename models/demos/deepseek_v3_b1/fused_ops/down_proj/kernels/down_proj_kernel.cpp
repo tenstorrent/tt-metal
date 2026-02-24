@@ -173,6 +173,8 @@ void kernel_main() {
 
     // Gather compute args (no-op for TRISC)
     deepseek_b1_ops::Gather::ComputeArgs gather_args{};
+
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

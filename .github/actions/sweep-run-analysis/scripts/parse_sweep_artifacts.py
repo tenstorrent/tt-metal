@@ -70,10 +70,12 @@ def parse_artifacts(artifacts_dir: str) -> dict:
         for model, count in sorted(failures_by_model.items(), key=lambda x: -x[1])
     ]
 
-    # Get card_type and git info from environment or first test
+    # Get card_type and source git info from workflow inputs.
+    # SOURCE_* vars are used because default GITHUB_* vars point to the notifier workflow run.
     card_type = os.environ.get("ARCH_NAME", "unknown")
-    git_sha = os.environ.get("GITHUB_SHA", "")[:8] if os.environ.get("GITHUB_SHA") else ""
-    git_branch = os.environ.get("GITHUB_REF_NAME", "")
+    source_git_sha = os.environ.get("SOURCE_GIT_SHA", "")
+    git_sha = source_git_sha[:8] if source_git_sha else ""
+    git_branch = os.environ.get("SOURCE_GIT_BRANCH", "")
 
     results = {
         "run_id": None,  # No run_id when parsing artifacts
@@ -109,8 +111,8 @@ def create_empty_results() -> dict:
             "pass_pct": 0,
             "prev_pass_pct": None,
             "card_type": os.environ.get("ARCH_NAME", "unknown"),
-            "git_sha": os.environ.get("GITHUB_SHA", "")[:8] if os.environ.get("GITHUB_SHA") else "",
-            "git_branch": os.environ.get("GITHUB_REF_NAME", ""),
+            "git_sha": os.environ.get("SOURCE_GIT_SHA", "")[:8] if os.environ.get("SOURCE_GIT_SHA") else "",
+            "git_branch": os.environ.get("SOURCE_GIT_BRANCH", ""),
         },
         "pass_rate_regressions": [],
         "perf_regressions_by_op": [],
