@@ -23,6 +23,10 @@ def test_vit_device_ops(
     device,
     batch_size,
 ):
+    num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
+    if num_cores < 120:
+        pytest.skip(f"ViT requires at least 120 cores but device has {num_cores}")
+
     torch.manual_seed(0)
 
     test_infra = create_test_infra(device, batch_size, use_random_input_tensor=True)
@@ -51,6 +55,9 @@ def test_vit_device_ops(
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_vit_perf_device(batch_size, expected_kernel_samples_per_sec):
+    # TODO: This test requires 120 cores but P150 has only 110.
+    # The inner test (test_vit_device_ops) will skip on P150.
+    # Consider removing vit from P150 device perf tests or creating a P150-specific config.
     command = f"pytest models/demos/vision/classification/vit/blackhole/tests/test_vit_device_perf.py::test_vit_device_ops[{batch_size}-device_params0]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
