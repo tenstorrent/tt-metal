@@ -78,8 +78,10 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
     uint32_t size_of_valid_data_in_last_stick_in_row =
         unpadded_row_size_bytes;  // a.padded_shape()[-1] % tile_width * a.element_size();
     if (a.is_sharded()) {
-        num_sticks_in_row = tt::div_up(a.logical_shape()[-1], a.nd_shard_spec().value().shard_shape[-1]);
-        stick_size = a.element_size() * a.nd_shard_spec().value().shard_shape[-1];
+        uint32_t shard_width =
+            a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
+        num_sticks_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
+        stick_size = a.element_size() * shard_width;
         std::cout << "AAAA unpadded_row_size_bytes: " << unpadded_row_size_bytes << "\n";
         std::cout << "AAAA stick_size: " << stick_size << "\n";
         std::cout << "AAAA num_sticks_in_row: " << num_sticks_in_row << "\n";

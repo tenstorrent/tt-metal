@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
@@ -17,7 +17,18 @@ namespace ttnn::prim {
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        if (!input_tensor.nd_shard_spec().has_value()) {
+        bool use_optimized_sharding_program =
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+        use_optimized_sharding_program &=
+            operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout();
+        const auto& padded_shape = input_tensor.padded_shape();
+
+        for (uint32_t i = 0; i < padded_shape.rank(); i++) {
+            if (i != padded_shape.rank() - 2) {
+                use_optimized_sharding_program &= padded_shape[i] == operation_attributes.output_padded_shape[i];
+            }
+        }
+        if (use_optimized_sharding_program) {
             TT_FATAL(
                 !operation_attributes.sub_core_grids.has_value(),
                 "Sharded tilize does not support sub core grid specification");
@@ -106,30 +117,50 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_HEIGHT);
 
     if (input_tensor.memory_config().is_sharded()) {
-        if (input_tensor.shard_spec().has_value() && !input_tensor.nd_shard_spec().has_value()) {
-            std::cout << "Huh????\n";
+        uint32_t element_size_in_bytes = input_tensor.element_size();
+        uint32_t shard_width = input_tensor.shard_spec().has_value()
+                                   ? input_tensor.shard_spec().value().shape[1]
+                                   : input_tensor.nd_shard_spec().value().shard_shape[-1];
+        if (shard_width < input_tensor.logical_shape()[-1]) {
+            const uint32_t page_size_bytes = shard_width * element_size_in_bytes;
+            const uint32_t alignment_requirement = hal::get_l1_alignment();
             TT_FATAL(
-                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-                "Input tensor must be width sharded");
-            TT_FATAL(
-                operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
-                "Output tensor must have the same memory layout as input tensor");
-            const auto& padded_shape = input_tensor.padded_shape();
-
-            for (uint32_t i = 0; i < padded_shape.rank(); i++) {
-                if (i != padded_shape.rank() - 2) {
-                    TT_FATAL(
-                        padded_shape[i] == operation_attributes.output_padded_shape[i],
-                        "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
-                        i,
-                        padded_shape[i],
-                        i,
-                        operation_attributes.output_padded_shape[i]);
-                }
-            }
-        } else {
-            // TODO: check for ND shard width alignment wityh L1 requirements.
+                page_size_bytes % alignment_requirement == 0,
+                "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
+                "buffer alignment "
+                "requirement",
+                shard_width,
+                page_size_bytes,
+                alignment_requirement);  // If multiple shard widths cut across a tensor row, the shard_width must be an
+                                         // aligned size, or we will face alignment issues when the reader tries to
+                                         // write multiple sticks to the CB which may be at unaligned addresses.
         }
+
+        // if (input_tensor.shard_spec().has_value() && !input_tensor.nd_shard_spec().has_value()) {
+        //     std::cout << "Huh????\n";
+        //     TT_FATAL(
+        //         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+        //         "Input tensor must be width sharded");
+        //     TT_FATAL(
+        //         operation_attributes.output_mem_config.memory_layout() ==
+        //         input_tensor.memory_config().memory_layout(), "Output tensor must have the same memory layout as
+        //         input tensor");
+        //     const auto& padded_shape = input_tensor.padded_shape();
+
+        //     for (uint32_t i = 0; i < padded_shape.rank(); i++) {
+        //         if (i != padded_shape.rank() - 2) {
+        //             TT_FATAL(
+        //                 padded_shape[i] == operation_attributes.output_padded_shape[i],
+        //                 "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+        //                 i,
+        //                 padded_shape[i],
+        //                 i,
+        //                 operation_attributes.output_padded_shape[i]);
+        //         }
+        //     }
+        // } else {
+        //     // TODO: check for ND shard width alignment wityh L1 requirements.
+        // }
     }
 }
 
@@ -137,7 +168,9 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    if (input_tensor.memory_config().is_sharded() && input_tensor.shard_spec().has_value()) {
+    if (input_tensor.memory_config().is_sharded() && input_tensor.shard_spec().has_value() &&
+        operation_attributes.output_mem_config.shard_spec().has_value()) {
+        // This case only applies where the expectation is that the input and output are both legacy sharded.
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
