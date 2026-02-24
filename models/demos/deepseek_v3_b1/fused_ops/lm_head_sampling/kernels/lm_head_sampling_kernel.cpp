@@ -47,14 +47,20 @@ struct Core {
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
     static constexpr bool enable_argmax = get_named_compile_time_arg_val("enable_argmax") == 1;
+    static constexpr uint32_t input_socket_mode = get_named_compile_time_arg_val("input_socket_mode");
+    static constexpr uint32_t input_socket_mode_none = 0;
+    static constexpr uint32_t input_socket_mode_d2d = 2;
+    static constexpr bool bcast_use_socket_input = input_socket_mode == input_socket_mode_d2d;
     static constexpr bool is_argmax_core = is_matmul_core;
     static constexpr bool is_argmax_final_core = get_named_compile_time_arg_val("is_argmax_final_core") == 1;
     static constexpr bool is_argmax_mesh_sender_core =
         get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
+    static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
 };
 
 void kernel_main() {
+    DPRINT << "Starting lm_head_sampling kernel" << ENDL();
 // ============================================================================
 // Per-RISC compile-time arg setup
 // Each RISC receives different named compile-time args from op.py and
@@ -146,14 +152,20 @@ void kernel_main() {
     }
 #elif defined(COMPILE_FOR_BRISC)
     uint32_t brisc_rt_arg_idx = 0;
-    // --- BRISC: CCL broadcast reader + mcast sender ---
+    // --- BRISC: CCL broadcast reader + optional socket-reader path + mcast sender ---
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender")>;
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        (get_named_compile_time_arg_val("input_socket_mode") == 2 ? 1 : 0)>;
 
-    // CCL Broadcast reader runtime args (empty payload by design)
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    // BRISC common args layout:
+    // [0..3] argmax writer args, [4..6] optional socket-input reader args.
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
+        get_common_arg_val<uint32_t>(4),  // socket_config_addr
+        get_common_arg_val<uint32_t>(5),  // socket_page_size
+        get_common_arg_val<uint32_t>(6),  // socket_num_pages
+    };
 
     // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
     // loopback=false because sender does not consume its own multicast data
@@ -231,13 +243,11 @@ void kernel_main() {
 #endif
 
     // ========================================================================
-    // Phase 0 (multi-device only): CCL Broadcast — replicate input from sender
-    // device to all devices in the mesh via the fabric interconnect.
-    // Only the input core participates (writer on NCRISC, reader on BRISC).
-    // After this phase, every device has the input in its intermediate tensor
-    // (which backs CB 0 / mcast_src).
+    // Phase 0: broadcast_rms-style combined path.
+    // - CCL mode (!skip_ccl): CCL broadcast path.
+    // - Socket mode (input_socket_mode==d2d): BRISC socket reader path.
     // ========================================================================
-    if constexpr (!Core::skip_ccl) {
+    if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
         deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
         {
             DeviceZoneScopedN("CCL_BROADCAST");
@@ -252,7 +262,10 @@ void kernel_main() {
     if constexpr (Core::is_input_core) {
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        // In skip_ccl + socket mode BRISC owns CB push for rmsnorm_input_cb.
+        if constexpr (!(Core::skip_ccl && Core::bcast_use_socket_input)) {
+            unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        }
         constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
     }

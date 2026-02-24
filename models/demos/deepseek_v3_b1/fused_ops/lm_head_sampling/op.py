@@ -137,6 +137,7 @@ class LMHeadSampling:
         epsilon=1e-6,
         rsqrt_fast_approx=False,
         skip_ccl=None,
+        socket_input=None,
         socket_output=None,
     ):
         """
@@ -163,6 +164,7 @@ class LMHeadSampling:
             num_links: Number of fabric links for CCL
             fp32_dest_acc_en: Whether to enable FP32 accumulation
             skip_ccl: Whether to skip CCL broadcast. If None, defaults to True for single-device meshes.
+            socket_input: Optional socket input endpoint. Supports ttnn.MeshSocket receiver endpoint (D2D input).
             socket_output: Optional socket output endpoint. Supports ttnn.D2HSocket (host output) and
                 ttnn.MeshSocket sender endpoint (D2D output).
         Returns:
@@ -174,6 +176,20 @@ class LMHeadSampling:
         socket_mode_d2h = 1
         socket_mode_d2d = 2
         socket_page_size_bytes = 64
+        input_socket_mode_none = 0
+        input_socket_mode_d2d = 2
+        if socket_input is None:
+            input_socket_mode_selected = input_socket_mode_none
+        elif isinstance(socket_input, ttnn.MeshSocket):
+            input_socket_mode_selected = input_socket_mode_d2d
+        else:
+            raise TypeError(
+                f"Unsupported socket_input type for lm_head_sampling: {type(socket_input)}. "
+                "Expected ttnn.MeshSocket."
+            )
+        if input_socket_mode_selected == 1:
+            raise AssertionError("lm_head_sampling input socket mode=1 is invalid (reserved for output d2h mode)")
+        enable_socket_input = socket_input is not None
         if socket_output is None:
             socket_mode_selected = socket_mode_none
         elif isinstance(socket_output, ttnn.D2HSocket):
@@ -196,6 +212,11 @@ class LMHeadSampling:
         mesh_cols = mesh_shape[1]
         if skip_ccl is None:
             skip_ccl = mesh_rows * mesh_cols == 1
+        if enable_socket_input:
+            active_input_socket_cores = socket_input.get_active_cores()
+            if len(active_input_socket_cores) != 1:
+                raise ValueError("socket input for lm_head_sampling must have exactly one active core")
+            input_socket_core = active_input_socket_cores[0]
         if enable_socket_output:
             # only for d2h sockets
             if isinstance(socket_output, ttnn.D2HSocket):
@@ -334,13 +355,12 @@ class LMHeadSampling:
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                # CCL role calculation (only matters if not skipping CCL)
+                # Sender identity is fixed by sender_coord even when skip_ccl=True.
+                is_sender = (row == sender_row) and (col == sender_col)
                 if skip_ccl:
-                    is_sender = False
                     is_secondary_sender = False
                     is_receiver = False
                 else:
-                    is_sender = (row == sender_row) and (col == sender_col)
                     is_secondary_sender = (
                         secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
                     )
@@ -395,6 +415,23 @@ class LMHeadSampling:
                 mcast_sender_core_grid = input_tensor_device.memory_config().shard_spec.grid
                 assert mcast_sender_core_grid.num_cores() == 1, "input_tensor must be sharded on a single sender core"
                 mcast_sender_core = list(mcast_sender_core_grid.ranges())[0].start
+                recv_socket_on_this_device = False
+                if enable_socket_input:
+                    recv_socket_on_this_device = (
+                        input_socket_core.device_coord == ttnn.MeshCoordinate(row, col)
+                        and input_socket_core.core_coord.x == mcast_sender_core.x
+                        and input_socket_core.core_coord.y == mcast_sender_core.y
+                    )
+                if enable_socket_input and not skip_ccl:
+                    if (row == sender_row and col == sender_col) and not recv_socket_on_this_device:
+                        raise ValueError(
+                            "socket input active core must match sender device/core in multi-device lm_head_sampling"
+                        )
+                    if recv_socket_on_this_device and not (row == sender_row and col == sender_col):
+                        raise ValueError(
+                            "socket input active core must be on sender device/core in multi-device lm_head_sampling"
+                        )
+                input_socket_mode = input_socket_mode_selected if recv_socket_on_this_device else input_socket_mode_none
 
                 # Matmul cores: from vocab_tensor (multiple cores with weight shards)
                 matmul_core_grid = vocab_tensor_device.memory_config().shard_spec.grid
@@ -565,6 +602,21 @@ class LMHeadSampling:
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
 
+                # broadcast_rms-style BRISC source selection:
+                # - CCL path: packet CB
+                # - skip_ccl + socket path: rmsnorm input CB
+                # - otherwise BRISC broadcast path is idle
+                if not skip_ccl:
+                    brisc_bcast_cb = bcast_pkt_cb
+                    brisc_bcast_num_pages_to_read = bcast_num_pages
+                elif recv_socket_on_this_device:
+                    brisc_bcast_cb = rmsnorm_input_cb
+                    brisc_bcast_num_pages_to_read = rms_num_tiles
+                else:
+                    brisc_bcast_cb = 0
+                    brisc_bcast_num_pages_to_read = 0
+                brisc_is_active = (not skip_ccl) or recv_socket_on_this_device
+
                 # Get NOC coordinates for mcast destination
                 mcast_dest_noc_start = device.worker_core_from_logical_core(mcast_grid.start)
                 mcast_dest_noc_end = device.worker_core_from_logical_core(mcast_grid.end)
@@ -590,6 +642,7 @@ class LMHeadSampling:
                     ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
+                    ("input_socket_mode", input_socket_mode),
                     # Mcast source (for setup_sharded_buffer on sender core)
                     ("mcast_src_cb", mcast_src_cb),
                     ("mcast_src_num_pages", rms_num_tiles),
@@ -640,9 +693,10 @@ class LMHeadSampling:
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("bcast_cb0_id", brisc_bcast_cb),
+                    ("bcast_num_pages_to_read", brisc_bcast_num_pages_to_read),
+                    ("bcast_is_sender", int(is_sender) if brisc_is_active else 0),
+                    ("input_socket_mode", input_socket_mode),
                     # Mcast sender
                     ("mcast_dest_noc_start_x", mcast_dest_noc_start.x),
                     ("mcast_dest_noc_start_y", mcast_dest_noc_start.y),
@@ -652,6 +706,8 @@ class LMHeadSampling:
                     ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
                     ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
                     ("mcast_data_size_bytes", mcast_data_size_bytes),
+                    ("rmsnorm_input_cb", rmsnorm_input_cb),
+                    ("rmsnorm_num_tiles", rms_num_tiles),
                     ("mcast_src_cb", mcast_src_cb),
                     ("mcast_src_num_pages", rms_num_tiles),
                     ("mcast_dst_cb", mcast_dst_cb),
@@ -669,6 +725,7 @@ class LMHeadSampling:
                 trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
+                    ("input_socket_mode", input_socket_mode),
                     ("rmsnorm_input_cb", rmsnorm_input_cb),
                     ("rmsnorm_gamma_cb", rmsnorm_gamma_cb),
                     ("rmsnorm_output_cb", mcast_src_cb),
@@ -701,6 +758,9 @@ class LMHeadSampling:
                         int(final_core_phys.y),
                         0,
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
+                        int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
+                        packet_size_bytes if recv_socket_on_this_device else 0,
+                        1 if recv_socket_on_this_device else 0,
                     ]
                     dst_nodes = []
                     fabric_node_id = None
@@ -760,6 +820,9 @@ class LMHeadSampling:
                         int(final_core_phys.y),
                         int(scratch_tensors_per_device[device_idx].buffer_address()),
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
+                        int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
+                        packet_size_bytes if recv_socket_on_this_device else 0,
+                        1 if recv_socket_on_this_device else 0,
                     ]
 
                 # ================================================================
@@ -995,6 +1058,7 @@ class LMHeadSampling:
                         ncrisc_args=[(worker_core, [])],
                         brisc_args=[(worker_core, [])] + per_core_brisc_runtime_args,
                     ),
+                    defines=[("ENABLE_SOCKET_READER", "1")] if enable_socket_input else [],
                 )
 
                 # ================================================================
