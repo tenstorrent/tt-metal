@@ -39,22 +39,21 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs) {
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
-    JitDeviceConfig config;
-    config.hal = &hal;
-    config.arch = cluster.arch();
-    config.num_dram_banks = num_dram_banks;
-    config.num_l1_banks = num_l1_banks;
-    config.pcie_core = pcie_core;
-    config.harvesting_mask = cluster.get_harvesting_mask(device_id);
-    config.dispatch_core_type = dispatch_core_config.get_dispatch_core_type();
-    config.dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis();
-    config.coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled();
-    config.dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start();
-    config.max_cbs = hal.get_arch_num_circular_buffers();
-    config.num_hw_cqs = num_hw_cqs;
-    config.routing_fw_enabled = cluster.is_base_routing_fw_enabled();
-    config.profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes(ctx.rtoptions());
-    return config;
+    return {
+        .hal = &hal,
+        .arch = cluster.arch(),
+        .num_dram_banks = num_dram_banks,
+        .num_l1_banks = num_l1_banks,
+        .pcie_core = pcie_core,
+        .harvesting_mask = cluster.get_harvesting_mask(device_id),
+        .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
+        .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
+        .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
+        .dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start(),
+        .max_cbs = hal.get_arch_num_circular_buffers(),
+        .num_hw_cqs = num_hw_cqs,
+        .routing_fw_enabled = cluster.is_base_routing_fw_enabled(),
+        .profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes(ctx.rtoptions())};
 }
 
 std::map<std::string, std::string> initialize_device_kernel_defines(const JitDeviceConfig& config) {

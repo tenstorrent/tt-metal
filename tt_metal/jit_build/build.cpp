@@ -44,7 +44,6 @@
 namespace fs = std::filesystem;
 
 using namespace std;
-using namespace tt;
 
 namespace tt::tt_metal {
 
