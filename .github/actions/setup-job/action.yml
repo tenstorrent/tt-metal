@@ -26,11 +26,11 @@ inputs:
     default: false
     type: boolean
   enable-kernel-ccache:
-    description: 'Enable kernel ccache'
+    description: 'Enable kernel ccache for JIT compilation at runtime'
     default: false
     type: boolean
   redis-ccache-storage:
-    description: 'Redis ccache storage connection string (e.g., redis://user:password@host:port|read-only=false)'
+    description: 'Redis storage for kernel ccache (runtime JIT compilation). Uses separate Redis instance from build ccache (REDIS_USER/REDIS_PASSWORD) to allow different retention/performance policies. Format: redis://user:password@host:port|read-only=false'
     required: false
     default: ''
   use-evaluation-image:
@@ -113,6 +113,11 @@ runs:
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
       shell: bash
 
+    # Kernel ccache configuration for JIT compilation at test runtime
+    # This is separate from build ccache (REDIS_USER/REDIS_PASSWORD) which caches C++ compilation
+    # Different Redis backends allow:
+    # - Build ccache: Large binaries, infrequent changes, high retention
+    # - Kernel ccache: Smaller JIT objects, frequent compilations, different eviction policies
     - name: Set up kernel ccache
       if: ${{ inputs.enable-kernel-ccache == 'true' && github.event_name != 'pull_request' }}
       working-directory: ${{ inputs.path }}
