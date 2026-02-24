@@ -131,11 +131,6 @@ runs:
         echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
 
         mkdir -p /tmp/ccache
-        echo "=== Creating ccache files for ephemeral runner ==="
-        # Create inode cache file that ccache expects
-        touch /tmp/ccache/inode-cache-64.v2
-        # Set appropriate permissions
-        chmod 644 /tmp/ccache/inode-cache-64.v2
       shell: bash
 
     - name: Set up env vars for auto-triage
