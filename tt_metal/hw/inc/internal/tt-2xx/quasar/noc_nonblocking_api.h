@@ -436,7 +436,7 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     return src_addr;
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_vc = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -444,7 +444,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t dest_addr,
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC || use_vc) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
