@@ -132,8 +132,8 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         single_core_set,
         ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Runtime args for the single core: scratch_l1_addr, output addr, then per-input (addr, first_shard_pos,
-    // shards_to_write, shards_to_skip), then shard_id
+    // Runtime args for the single core: scratch_l1_addr, output addr, then per-input (addr, absolute_offset_to_start,
+    // amount_to_write, amount_to_skip), then shard_id
     {
         std::vector<uint32_t> runtime_args;
         runtime_args.push_back(scratch_l1_addr);
@@ -141,13 +141,13 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
             const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
             runtime_args.push_back(buf->address());
-            uint32_t first_shard_pos{0};  //  - to rework - it could be absolute pos inside the tensor to write
-            uint32_t shards_to_write{0};  //  - to fill later  - it could be amount of data to copy
-            uint32_t shards_to_skip{
+            uint32_t absolute_offset_to_start{0};  //  - to rework - it could be absolute pos inside the tensor to write
+            uint32_t amount_to_write{0};           //  - to fill later  - it could be amount of data to copy
+            uint32_t amount_to_skip{
                 0};  //  - to fill later   - it could be how much data to skip to copy next amount of data
-            runtime_args.push_back(first_shard_pos);
-            runtime_args.push_back(shards_to_write);
-            runtime_args.push_back(shards_to_skip);
+            runtime_args.push_back(absolute_offset_to_start);
+            runtime_args.push_back(amount_to_write);
+            runtime_args.push_back(amount_to_skip);
         }
         runtime_args.push_back(static_cast<uint32_t>(max_core_index));
         SetRuntimeArgs(program, reader_kernel_id, max_core, runtime_args);
@@ -197,12 +197,12 @@ void ConcatNDShardedProgramFactory::override_runtime_arguments(
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
         const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
         runtime_args.push_back(buf->address());
-        uint32_t first_shard_pos{0};  //  - to fill later
-        uint32_t shards_to_write{0};  //  - to fill later
-        uint32_t shards_to_skip{0};   //  - to fill later
-        runtime_args.push_back(first_shard_pos);
-        runtime_args.push_back(shards_to_write);
-        runtime_args.push_back(shards_to_skip);
+        uint32_t absolute_offset_to_start{0};  //  - to fill later
+        uint32_t amount_to_write{0};           //  - to fill later
+        uint32_t amount_to_skip{0};            //  - to fill later
+        runtime_args.push_back(absolute_offset_to_start);
+        runtime_args.push_back(amount_to_write);
+        runtime_args.push_back(amount_to_skip);
     }
     runtime_args.push_back(shard_id);
     SetRuntimeArgs(program, shared_vars.reader_kernel_id, single_core, runtime_args);

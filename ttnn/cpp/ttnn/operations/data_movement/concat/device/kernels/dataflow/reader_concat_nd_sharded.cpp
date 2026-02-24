@@ -32,9 +32,9 @@ uint32_t copy_tensor_data(
     const TensorAccessor<DestDSpec>& dest,
     const TensorAccessor<SrcDSpec>& src,
     uint32_t offset,
-    uint32_t /*first_shard_pos*/,
-    uint32_t /*shards_to_write*/,
-    uint32_t /*shards_to_skip*/) {
+    uint32_t /*absolute_offset_to_start*/,
+    uint32_t /*amount_to_write*/,
+    uint32_t /*amount_to_skip*/) {
     const uint32_t num_pages = src.dspec().tensor_volume();
     const uint32_t src_page_size = src.page_size;
     const uint32_t total_bytes = num_pages * src_page_size;
@@ -71,14 +71,14 @@ void kernel_main() {
 
     const uint32_t output_addr = get_arg_val<uint32_t>(argidx++);
     uint32_t input_addrs[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
-    uint32_t first_shard_pos[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
-    uint32_t shards_to_write[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
-    uint32_t shards_to_skip[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
+    uint32_t absolute_offset_to_start[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
+    uint32_t amount_to_write[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
+    uint32_t amount_to_skip[CONCAT_ND_SHARDED_MAX_NUM_INPUTS];
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
         input_addrs[i] = get_arg_val<uint32_t>(argidx++);
-        first_shard_pos[i] = get_arg_val<uint32_t>(argidx++);
-        shards_to_write[i] = get_arg_val<uint32_t>(argidx++);
-        shards_to_skip[i] = get_arg_val<uint32_t>(argidx++);
+        absolute_offset_to_start[i] = get_arg_val<uint32_t>(argidx++);
+        amount_to_write[i] = get_arg_val<uint32_t>(argidx++);
+        amount_to_skip[i] = get_arg_val<uint32_t>(argidx++);
     }
     const uint32_t shard_id = get_arg_val<uint32_t>(argidx++);
 
@@ -125,8 +125,8 @@ void kernel_main() {
         const auto in##n##_accessor = TensorAccessor(in##n##_args, input_addrs[n], in_page_size_##n);              \
         DPRINT << "input " << (n) << " source: shards=" << in##n##_accessor.dspec().num_banks()                    \
                << " pages=" << in##n##_accessor.dspec().tensor_volume() << " page_size=" << in_page_size_##n       \
-               << " tile_size=" << in_page_size_##n << " first_shard_pos=" << first_shard_pos[n]                   \
-               << " shards_to_write=" << shards_to_write[n] << " shards_to_skip=" << shards_to_skip[n] << ENDL();  \
+               << " tile_size=" << in_page_size_##n << " absolute_offset_to_start=" << absolute_offset_to_start[n] \
+               << " amount_to_write=" << amount_to_write[n] << " amount_to_skip=" << amount_to_skip[n] << ENDL();  \
         {                                                                                                          \
             const uint32_t in_rank_##n = in##n##_accessor.dspec().rank();                                          \
             DPRINT << "input " << (n) << " dimensions: rank=" << in_rank_##n;                                      \
@@ -138,7 +138,12 @@ void kernel_main() {
             DPRINT << ENDL();                                                                                      \
         }                                                                                                          \
         offset = copy_tensor_data(                                                                                 \
-            output_accessor, in##n##_accessor, offset, first_shard_pos[n], shards_to_write[n], shards_to_skip[n]); \
+            output_accessor,                                                                                       \
+            in##n##_accessor,                                                                                      \
+            offset,                                                                                                \
+            absolute_offset_to_start[n],                                                                           \
+            amount_to_write[n],                                                                                    \
+            amount_to_skip[n]);                                                                                    \
         const uint32_t bytes_copied_##n = offset - initial_offset_##n;                                             \
         DPRINT << "input " << (n) << ": copied " << bytes_copied_##n << " bytes to initial offset "                \
                << initial_offset_##n << " (input tensor " << (n) << ")" << ENDL();                                 \
