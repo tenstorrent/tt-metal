@@ -60,6 +60,19 @@ public:
      * Constructs a host tensor in the default constructed state, acting like a nullptr.
      */
     HostTensor() = default;
+
+    // TODO:
+    // These constructors should be hidden or go away as part of #38376
+    // External user should not be able to construct a HostTensor directly and opt to use the from_xxx static methods
+    // instead, as the constructor does not perform invariant checks.
+    explicit HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+        impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+    }
+
+    // Candidate for the "trust me bro, bypass everything" constructor?
+    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
+        impl(std::make_unique<attribute_type>(HostStorage(std::move(buffer)), std::move(spec), std::move(topology))) {}
+
     ~HostTensor() = default;
 
     /**
@@ -110,14 +123,9 @@ public:
 
     // End special member functions
 
-    // constructions:
-
-    // Make this private + the main constructor?
-    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-        impl(std::make_unique<attribute_type>(HostStorage(std::move(buffer)), std::move(spec), std::move(topology))) {}
+    // Factory methods for creating an Engaged HostTensor.
 
     /**
-     * From original Tensor:
      * Converts a buffer of elements of type `T` to a `Tensor`.
      * Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
      * elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
@@ -136,6 +144,7 @@ public:
      */
     template <typename T>
     static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin);
+
     template <typename T>
     static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
 
@@ -147,26 +156,81 @@ public:
     template <typename T>
     static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
 
-    // getters
+    // Getters:
 
     /**
-     * From original Tensor:
      * Converts a `Tensor` to a `std::vector<T>`.
      * Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
      * the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+     *
+     * pre-condition: The HostTensor must be engaged.
      */
     template <typename T>
     std::vector<T> to_vector() const;
 
+    /**
+     * Returns the TensorSpec of the HostTensor.
+     *
+     * pre-condition: The HostTensor must be engaged.
+     */
+    const TensorSpec& tensor_spec() const {
+        // Pre-condition
+        TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
+        return impl->tensor_spec_;
+    }
+
+    /**
+     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
+     *
+     * pre-condition: The HostTensor must be engaged.
+     */
+    const TensorTopology& tensor_topology() const {
+        // Pre-condition
+        TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
+        return impl->tensor_topology_;
+    }
+
+    // DeviceStorage is meant to bridge ttnn::Tensor and HostTensor,
+    // this should go away as part of refactoring, see: #38376
+    const HostStorage& get_storage() const {
+        // Pre-condition
+        TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
+        return impl->storage_;
+    }
+
     // Use host_buffer::get_host_buffer instead.
     // HostBuffer get_host_buffer() const;
 
+    /**
+     * Returns the DistributedHostBuffer of the HostTensor.
+     *
+     * pre-condition: The HostTensor must be engaged.
+     */
     const DistributedHostBuffer& get_distributed_host_buffer() const { return get_storage().buffer(); }
 
+    // Derivables:
+
+    DataType dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
+    Layout layout() const { return tensor_spec().tensor_layout().get_layout(); }
+    const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
+    const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
+
+    volumn_type logical_volume() const { return logical_shape().volume(); }
+    volumn_type physical_volume() const { return padded_shape().volume(); }
+
+    const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
     bool is_sharded() const {
         // TODO: this is technically divergent from ttnn::Tensor
         return tensor_spec().memory_config().is_sharded();
     }
+
+    // From original Tensor:
+    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
+    // TODO: Is there a way to express this "either or"?
+    const std::optional<ShardSpec>& shard_spec() const { return memory_config().shard_spec(); }
+    const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
+
+    // Utils:
 
     // Get the dataum's size in bytes
     std::size_t element_size() const {
@@ -185,50 +249,14 @@ public:
         }
     }
 
-    // "other getters"
-
-    // TODO: I want to put this into HostBuffer
-    DataType dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
-    Layout layout() const { return tensor_spec().tensor_layout().get_layout(); }
-    const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
-    const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
-
-    const TensorSpec& tensor_spec() const { return impl->tensor_spec_; }
-
-    // Can't these be derived from other functions?
-    volumn_type logical_volume() const { return logical_shape().volume(); }
-    // This was called "physical_volumn", renaming here to be consistent with `padded_shape`.
-    volumn_type padded_volume() const { return padded_shape().volume(); }
-
-    // Can't this be accessed from tensor_spec?
-    const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
-
-    /**
-     * From original Tensor:
-     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     */
-    const TensorTopology& tensor_topology() const { return impl->tensor_topology_; }
-
-    // From original Tensor:
-    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    // TODO: Is there a way to express this "either or"?
-    const std::optional<ShardSpec>& shard_spec() const { return memory_config().shard_spec(); }
-    const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
-
-    // "Extra helper functions"
     Strides strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
-    // TODO: Remove these after refactoring.
-    HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-        impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    }
+    // Questionables:
 
     // TODO: Does this make sense for HostTensor?
     HostTensor with_tensor_topology(TensorTopology tensor_topology) const {
         return HostTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
     }
-
-    const HostStorage& get_storage() const { return impl->storage_; }
 
 private:
     std::unique_ptr<attribute_type> impl;
