@@ -135,4 +135,16 @@ rm -f "$VENV_DIR/bin/python"*
 echo "  Copying Python interpreter files into venv..."
 cp -r "$CPYTHON_DIR"/* "$VENV_DIR/"
 
+# Update pyvenv.cfg to point 'home' to the bundled venv's bin directory
+# This is critical for Python to find its stdlib without relying on external paths
+echo "  Updating pyvenv.cfg to reference bundled Python..."
+if [[ -f "$VENV_DIR/pyvenv.cfg" ]]; then
+    # Use absolute path to ensure it works regardless of where script is run from
+    VENV_ABS_PATH=$(readlink -f "$VENV_DIR")
+    sed -i "s|^home = .*|home = $VENV_ABS_PATH/bin|" "$VENV_DIR/pyvenv.cfg"
+    echo "  Updated pyvenv.cfg: home = $VENV_ABS_PATH/bin"
+else
+    echo "WARNING: pyvenv.cfg not found, Python may not be properly configured" >&2
+fi
+
 echo "  Python interpreter bundled successfully"
