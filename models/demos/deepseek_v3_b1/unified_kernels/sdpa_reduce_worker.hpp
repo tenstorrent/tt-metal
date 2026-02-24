@@ -269,9 +269,9 @@ ALWI void sdpa_tail_streaming(
         }
     }
 
-    // Finalize the worker/neighbor MS without popping the previous-round MS.
+    // Postamble only — caller handles MS pops based on round context
+    // (R1 inputs are TRISC-owned, R2 prev MS is BRISC-owned)
     ckernel::sdpa_bcast_col_reuse_postamble();
-    cb_pop_front(cb_prev_max_sum, 1);
 }
 
 ALWI void sdpa_forward_data(
@@ -406,8 +406,8 @@ struct SdpaReduceWorker {
         uint32_t lChunkSizeBytes,
         uint32_t numLChunks,
         uint32_t tilesPerLChunk,
-        uint32_t cbPosition,
-        uint32_t positionEnabled>
+        uint32_t positionEnabled,
+        uint32_t perDeviceChunkSize>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
@@ -419,8 +419,8 @@ struct SdpaReduceWorker {
         static constexpr uint32_t l_chunk_size_bytes = lChunkSizeBytes;
         static constexpr uint32_t num_l_chunks = numLChunks;
         static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
-        static constexpr uint32_t cb_position = cbPosition;
         static constexpr uint32_t position_enabled = positionEnabled;
+        static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
         // Derived constants
         static constexpr uint32_t out_tiles = numLChunks * tilesPerLChunk;
         static constexpr uint32_t total_l_bytes = numLChunks * lChunkSizeBytes;
@@ -492,8 +492,8 @@ struct SdpaReduceWorker {
         uint32_t scaleFp32,
         uint32_t tilesPerLChunk,
         uint32_t numLChunks,
-        uint32_t cbPosition,
         uint32_t positionEnabled,
+        uint32_t perDeviceChunkSize,
         uint32_t finalReduction>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
@@ -509,8 +509,8 @@ struct SdpaReduceWorker {
         static constexpr uint32_t scale_fp32 = scaleFp32;
         static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
         static constexpr uint32_t num_l_chunks = numLChunks;
-        static constexpr uint32_t cb_position = cbPosition;
         static constexpr uint32_t position_enabled = positionEnabled;
+        static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
         static constexpr bool final_reduction = finalReduction;
         // SDPA uses "block_size" terminology
         static constexpr uint32_t block_size = tilesPerLChunk;
@@ -585,20 +585,17 @@ struct SdpaReduceWorker {
             bool r1_neighbor_valid = true;
 
             if constexpr (ReaderCT::position_enabled) {
+                uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
                 uint32_t r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
                 uint32_t r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
                 uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
-                cb_reserve_back(ReaderCT::cb_position, 1);
-                uint64_t position_cb_addr = get_write_ptr(ReaderCT::cb_position);
-                volatile tt_l1_ptr uint32_t* position_data_base =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_cb_addr);
-                cb_push_back(ReaderCT::cb_position, 1);
-
-                uint32_t r1_neighbor_val = position_data_base[r1_neighbor_device_idx];
-                uint32_t r2_neighbor_val = position_data_base[r2_neighbor_device_idx];
-                uint32_t r2_neighbor_r1_neighbor_val = position_data_base[r2_neighbor_r1_neighbor_idx];
-                r2_neighbor_r1_valid = (r2_neighbor_val != 0) || (r2_neighbor_r1_neighbor_val != 0);
-                r1_neighbor_valid = (r1_neighbor_val != 0);
+                // Read position_id from HEIGHT_SHARDED L1 tensor
+                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+                uint32_t position_id = pos_ptr[0];
+                constexpr uint32_t chunk = ReaderCT::per_device_chunk_size;
+                r1_neighbor_valid = (position_id >= r1_neighbor_device_idx * chunk);
+                r2_neighbor_r1_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
+                                       (position_id >= r2_neighbor_r1_neighbor_idx * chunk);
             }
 
             // Prepare R1 neighbor data for compute
@@ -764,24 +761,25 @@ struct SdpaReduceWorker {
             [[maybe_unused]] uint32_t device_idx = 0;
             [[maybe_unused]] uint32_t r1_neighbor_device_idx = 0;
             [[maybe_unused]] uint32_t r2_neighbor_device_idx = 0;
+            [[maybe_unused]] uint32_t position_id = 0;
 
             if constexpr (ComputeCT::position_enabled) {
                 size_t arg_idx = 0;
+                uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
                 device_idx = get_arg_val<uint32_t>(arg_idx++);
                 r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
                 r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
                 uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
 
-                cb_wait_front(ComputeCT::cb_position, 1);
-                uint32_t local_val = read_tile_value(ComputeCT::cb_position, 0, device_idx);
-                uint32_t r1_val = read_tile_value(ComputeCT::cb_position, 0, r1_neighbor_device_idx);
-                uint32_t r2_val = read_tile_value(ComputeCT::cb_position, 0, r2_neighbor_device_idx);
-                uint32_t r2_neighbor_r1_val = read_tile_value(ComputeCT::cb_position, 0, r2_neighbor_r1_neighbor_idx);
-                cb_pop_front(ComputeCT::cb_position, 1);
+                // Read position_id from HEIGHT_SHARDED L1 tensor
+                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+                position_id = pos_ptr[0];
 
-                local_valid = (local_val != 0);
-                r1_neighbor_valid = (r1_val != 0);
-                r2_neighbor_valid = (r2_val != 0) || (r2_neighbor_r1_val != 0);
+                constexpr uint32_t chunk = ComputeCT::per_device_chunk_size;
+                local_valid = (position_id >= device_idx * chunk);
+                r1_neighbor_valid = (position_id >= r1_neighbor_device_idx * chunk);
+                r2_neighbor_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
+                                    (position_id >= r2_neighbor_r1_neighbor_idx * chunk);
             }
 
             // ROUND 1: reduce(local, r1_neighbor) -> r1_result (unnormalized)
@@ -801,6 +799,14 @@ struct SdpaReduceWorker {
                 ComputeCT::cb_r1_result_l,
                 r1_neighbor_valid,
                 local_valid);
+
+            // Pop R1 input MS CBs — TRISC-owned, no BRISC race.
+            // cb_r1_neighbor_ms: incoming from neighbor, consumed only by TRISC
+            // cb_local_ms: BRISC reads via send_all() (L1 address, no cb_wait/pop)
+            // No cb_wait_front needed: NCRISC always pushes all MS CBs unconditionally
+            // (even for invalid neighbors with dummy data), so tiles are guaranteed present.
+            cb_pop_front(ComputeCT::cb_r1_neighbor_ms, 1);
+            cb_pop_front(ComputeCT::cb_local_ms, 1);
 
             // ROUND 2: reduce(r1_result, r2_neighbor) -> final output (normalized L)
             bool local_r1_valid = local_valid || r1_neighbor_valid;
@@ -824,6 +830,11 @@ struct SdpaReduceWorker {
                 ComputeCT::cb_l_out,
                 r2_neighbor_r1_valid,
                 local_r1_valid);
+
+            // Pop R2 worker MS CB — incoming from neighbor, consumed only by TRISC.
+            // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)
+            // after send_streaming() reads it for R2 forwarding.
+            cb_pop_front(ComputeCT::cb_r2_neighbor_ms, 1);
         }
 #endif  // COMPILE_FOR_TRISC
     };
