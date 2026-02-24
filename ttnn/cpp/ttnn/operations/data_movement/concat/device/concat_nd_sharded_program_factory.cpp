@@ -77,19 +77,30 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         std::cout << "[concat_nd_sharded] Output tensor: total pages = " << out_buf->num_pages();
         std::cout << ", logical_shape = " << output_logical_shape << ", padded_shape = " << output.padded_shape();
         std::cout << ", rank = " << output_logical_shape.rank() << "\n";
-        // tt::stl::SmallVector<size_t> strides = in0.compute_strides(in0shape);
-        //  for (size_t sz : strides) {
-        //      " stride: " << sz;
-        //  }
-        //  std::cout << "\n";
+
+        const size_t sz_to_fill = output.logical_volume() * output.element_size();
+        std::cout << " size to fill in output " << sz_to_fill;
 
         const NdShardSpec& nd_spec = *output.nd_shard_spec();
         std::cout << ", nd_shard_spec: shard_shape = " << nd_spec.shard_shape
                   << ", grid num_cores = " << nd_spec.grid.num_cores();
         std::cout << "\n";
     }
-    // TODO: calculate strides for first input tensor - it will help for padded tensors
+    std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> initial_offsets_bytes{0};
+    std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> to_write_bytes{0};
+    std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> to_skip_bytes{0};
     {
+        for (uint32_t i = 0; i < num_input_tensors; ++i) {
+            const uint32_t sz_to_fill =
+                static_cast<uint32_t>(input_tensors[i].logical_volume() * input_tensors[i].element_size());
+            to_write_bytes[i] = sz_to_fill;
+            std::cout << " tensor " << i << " size to fill in output " << sz_to_fill;
+
+            if (i + 1 < num_input_tensors) {
+                initial_offsets_bytes[i + 1] = initial_offsets_bytes[i] + sz_to_fill;
+            }
+        }
+        std::cout << "\n";
     }
 
     // Host-allocated L1 scratch buffer (one page, max page size across all tensors) for copy_tensor_data.
@@ -141,13 +152,10 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
             const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
             runtime_args.push_back(buf->address());
-            uint32_t absolute_offset_to_start{0};  //  - to rework - it could be absolute pos inside the tensor to write
-            uint32_t amount_to_write{0};           //  - to fill later  - it could be amount of data to copy
-            uint32_t amount_to_skip{
-                0};  //  - to fill later   - it could be how much data to skip to copy next amount of data
-            runtime_args.push_back(absolute_offset_to_start);
-            runtime_args.push_back(amount_to_write);
-            runtime_args.push_back(amount_to_skip);
+
+            runtime_args.push_back(initial_offsets_bytes[i]);
+            runtime_args.push_back(to_write_bytes[i]);
+            runtime_args.push_back(to_skip_bytes[i]);
         }
         runtime_args.push_back(static_cast<uint32_t>(max_core_index));
         SetRuntimeArgs(program, reader_kernel_id, max_core, runtime_args);
