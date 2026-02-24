@@ -69,7 +69,7 @@ ALWI void gelu_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void gelu_derivative_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL(gelu_derivative_polynomial, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu_derivative_polynomial, RC, fast_and_approx, idst));
 }
 
 }  // namespace ckernel
