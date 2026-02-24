@@ -22,7 +22,9 @@ namespace sfpu {
  */
 template <ckernel::ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
-    static_assert(APPROX_MODE == ApproximationMode::FastApproximate, "Only fast approximation mode is supported");
+    static_assert(
+        APPROX_MODE == ApproximationMode::FastApproximate || APPROX_MODE == ApproximationMode::Precise,
+        "Only fast and precise approximation modes are supported");
     sfpi::vFloat abs_x = sfpi::abs(val);
     sfpi::vFloat result;
     v_if(abs_x < 0.0078125) {  // use 2^(-7) as threshold value
