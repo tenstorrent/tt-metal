@@ -138,11 +138,7 @@ void sdpa_single_core(
     create_cb(program, core, CBIndex::c_1, 2 * k_chunk_tiles, single_tile_size, cb_data_format);  // KT (double-buf)
     create_cb(program, core, CBIndex::c_2, qkt_tiles, single_tile_size, cb_data_format);          // QKT
     create_cb(program, core, CBIndex::c_3, 2 * v_chunk_tiles, single_tile_size, cb_data_format);  // V (double-buf)
-    create_cb(
-        program, core, CBIndex::c_4, subblock_h * Sk_chunk_t, single_tile_size, cb_data_format);  // qkt_row_A (ping)
     create_cb(program, core, CBIndex::c_5, 1, single_tile_size, cb_data_format);                  // identity_scalar
-    create_cb(
-        program, core, CBIndex::c_6, subblock_h * Sk_chunk_t, single_tile_size, cb_data_format);  // qkt_row_B (pong)
     if (padded_k_tiles > 0) {
         create_cb(program, core, CBIndex::c_7, 1, single_tile_size, cb_data_format);  // neginf tile for padded mask
     }
