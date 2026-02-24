@@ -93,13 +93,13 @@ on:
           - ethernet
           - trace stress
           - falcon40b
-          - llama3.2-vision
-          - n300 mesh llama3.2-vision
-          - llama3.2-90b-vision
+          # - llama3.2-vision #Tier 3 models
+          # - n300 mesh llama3.2-vision #Tier 3 models
+          # - llama3.2-90b-vision #Tier 3 model
           - llama3
           - llama3 accuracy
           - llama3_70n90b accuracy
-          - llama3_90b
+          # - llama3_90b #Tier 3 model
           # - llama3_70b # disabled in -impl file
           # - mixtral # disabled in -impl file
           - resnet
