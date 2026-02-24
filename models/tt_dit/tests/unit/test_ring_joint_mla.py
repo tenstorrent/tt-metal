@@ -265,14 +265,16 @@ def run_ring_joint_sdpa(
         gt_joint_out = gt[:, :, base_seq_len:, :]
 
         for i in range(n_iters):
-            print("Getting results from device...")
+            print("Synchronize call...")
+            ttnn.synchronize_device(submesh)
+            print("Done synchronizing...")
             tt_out = ttnn.to_torch(
                 tt_out_list[i],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
                 ),
             )
-            print("Done getting results from device...")
+            print("Started doing to_torch stuff...")
             joint_shard_dims = [None, None]
             joint_shard_dims[up_axis] = 1
             joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
@@ -282,6 +284,7 @@ def run_ring_joint_sdpa(
                     submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
                 ),
             )
+            print("Done to torch stuff...")
             # Slice out any tile-padding
             tt_out = tt_out[:, :, :base_seq_len, :]
             tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
@@ -420,5 +423,5 @@ def test_mla_sdpa(
         all_gather_topology,
         skip_check,
         0.999,
-        is_causal=False,
+        is_causal=True,
     )
