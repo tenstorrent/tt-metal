@@ -64,9 +64,7 @@ runs:
                     "    • " + .name
                   end) + (if (.owners | type) == "array" and (.owners | length) > 0 then
                     " " + (.owners | map(
-                      if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
-                      elif (.id // "") != "" then "<@" + .id + ">"
-                      elif (.name // "") != "" then .name
+                      if (.name // "") != "" then "@" + .name
                       else null end
                     ) | map(select(. != null)) | join(" "))
                   else "" end)
