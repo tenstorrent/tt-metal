@@ -2597,8 +2597,8 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
+        # RoPE params (default 10000.0 matches classic LLaMA; LLaMA 3.x use 500000.0 from config when present)
+        self.rope_theta = text_config.get("rope_theta") if text_config.get("rope_theta") is not None else 10000.0
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -2857,13 +2857,22 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
-            if type(self.hf_config) in model_cls._model_mapping:
+        import transformers
+
+        vision2seq = getattr(transformers, "AutoModelForVision2Seq", None)
+        image_text = getattr(transformers, "AutoModelForImageTextToText", None)
+        if vision2seq is None and image_text is None:
+            raise ImportError(
+                "Multimodal config requires AutoModelForVision2Seq or AutoModelForImageTextToText from transformers. "
+                "Upgrade transformers or use a text-only model."
+            )
+        for model_cls in (vision2seq, image_text):
+            if model_cls is not None and type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")

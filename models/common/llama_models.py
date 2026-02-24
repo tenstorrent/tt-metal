@@ -9,7 +9,6 @@ from typing import Dict, List, Optional, Union
 import torch
 from PIL import Image
 from pydantic import BaseModel, validator
-from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
 
 
 class Role(Enum):
@@ -164,6 +163,8 @@ def encode_content(content, images, image_token):
 
 class GeneratorChat:
     def __init__(self, model_name, max_batch_size=1):
+        from transformers import pipeline
+
         self.pipe = pipeline("image-text-to-text", model=model_name, batch_size=max_batch_size)
 
     def chat_completion(
@@ -184,6 +185,12 @@ class GeneratorChat:
 
 class GeneratorText:
     def __init__(self, model_name):
+        import transformers
+        from transformers import AutoProcessor
+
+        AutoModelForVision2Seq = getattr(transformers, "AutoModelForVision2Seq", None)
+        if AutoModelForVision2Seq is None:
+            raise ImportError("GeneratorText requires AutoModelForVision2Seq from transformers. Upgrade transformers.")
         self.processor = AutoProcessor.from_pretrained(model_name)
         self.model = AutoModelForVision2Seq.from_pretrained(model_name)
 
