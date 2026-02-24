@@ -49,8 +49,9 @@ from models.demos.deepseek_v3.utils.run_config import (
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-def pad_n_to_dram_banks(n, tile_w=32, lcm=32 * 12):
-    """Pad n dimension to be divisible by tile_size * num_dram_banks (default 384)."""
+def pad_n_to_dram_banks(n, tile_size=32, num_dram_banks=12):
+    """Pad n dimension to be divisible by tile_size * num_dram_banks (default 32 and 12 respectively)."""
+    lcm = tile_size * num_dram_banks
     remainder = n % lcm
     if remainder == 0:
         return n
@@ -109,6 +110,8 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     # in0_block_w (inner dim block) must divide K_tiles.
     # Target: keep in1 CB tiles (in0_block_w * out_block_w * 2) under ~256 tiles
     # while maximizing in0_block_w to minimize inner loop iterations.
+    # BF8 is 1088 Bytes per tile, so 256 tiles ≈ 272 KB
+    # This is just under a quarter of the WH CB budget, thereby leaving room for in0, interm0, and output CBs.
     max_in1_cb_tiles = 256
     in0_block_w = K_tiles
     while in0_block_w > 1:
@@ -209,7 +212,9 @@ class MLA1D(AbstractModule):
         # wq_b: k=q_lora_rank, n=num_heads*q_head_dim (sharded by TP)
         wq_b_k = q_lora_rank  # 1536
         wq_b_n = num_heads * q_head_dim // mesh_device.shape[1]  # 3072 per device
-        wq_b_n_padded = pad_n_to_dram_banks(wq_b_n)  # 3072 (already aligned)
+        wq_b_n_padded = pad_n_to_dram_banks(
+            wq_b_n, tile_size=32, num_dram_banks=num_dram_banks
+        )  # 3072 (already aligned)
         wq_b_shard_shape = [wq_b_k, wq_b_n_padded // num_dram_banks]
         wq_b_dram_shard_grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
@@ -223,7 +228,7 @@ class MLA1D(AbstractModule):
         # wo: k=num_heads*v_head_dim, n=dim
         wo_k = num_heads * v_head_dim  # 16384
         wo_n = dim // mesh_device.shape[1]  # 896
-        wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
+        wo_n_padded = pad_n_to_dram_banks(wo_n, tile_size=32, num_dram_banks=num_dram_banks)  # 1152
         wo_shard_shape = [wo_k, wo_n_padded // num_dram_banks]
         wo_dram_shard_grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
@@ -294,7 +299,7 @@ class MLA1D(AbstractModule):
         # wq_kv_a: k=dim, n=q_lora_rank+kv_lora_rank+qk_rope_head_dim
         qkv_a_k = dim // mesh_device.shape[1]  # 896
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
-        qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n)  # 2304
+        qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n, tile_size=32, num_dram_banks=num_dram_banks)  # 2304
         qkv_a_shard_shape = [qkv_a_k, qkv_a_n_padded // num_dram_banks]
         qkv_a_dram_shard_grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
@@ -658,7 +663,7 @@ class MLA1D(AbstractModule):
         # in0_core_grid=(7,1), out_core_grid=(8,1), WIDTH sharding
         # =====================================================================
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
-        qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n)  # 2304
+        qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n, tile_size=32, num_dram_banks=num_dram_banks)  # 2304
         qkv_a_in0_core_grid = ttnn.CoreGrid(y=1, x=7)
         qkv_a_out_core_grid = ttnn.CoreGrid(y=1, x=8)
 
@@ -703,7 +708,9 @@ class MLA1D(AbstractModule):
         # in0_core_grid=(8,2), out_core_grid=(8,2), WIDTH sharding
         # =====================================================================
         wq_b_n = num_heads_local * qk_head_dim  # 16 * 192 = 3072
-        wq_b_n_padded = pad_n_to_dram_banks(wq_b_n)  # 3072 (already aligned)
+        wq_b_n_padded = pad_n_to_dram_banks(
+            wq_b_n, tile_size=32, num_dram_banks=num_dram_banks
+        )  # 3072 (already aligned)
         wq_b_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
         wq_b_out_core_grid = ttnn.CoreGrid(y=2, x=8)
 
@@ -866,7 +873,7 @@ class MLA1D(AbstractModule):
         # =====================================================================
         wo_k = num_heads * v_head_dim  # 16384
         wo_n = dim // mesh_device.shape[1]  # 896
-        wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
+        wo_n_padded = pad_n_to_dram_banks(wo_n, tile_size=32, num_dram_banks=num_dram_banks)  # 1152
         wo_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
         wo_out_core_grid = ttnn.CoreGrid(y=2, x=6)
 
