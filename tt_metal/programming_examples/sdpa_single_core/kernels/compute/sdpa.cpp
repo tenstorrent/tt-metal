@@ -465,7 +465,6 @@ void sub_exp_block_bcast_cols(
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
-                // Row buffer positions: row i starts at i * cols_in_row
                 uint32_t read_tile = i * cols_in_row + global_col_base + j;
                 sub_tiles_bcast_cols(read_cb, max_cb, read_tile, max_row_base + i, dst_index++);
             }
@@ -634,6 +633,9 @@ void blocked_matmul_and_pack(
 
     // --- Matmul phase ---
     tile_regs_acquire();
+    if constexpr (!SEQUENTIAL_OUTPUT) {
+        PACK((llk_pack_mop_config<false, false, false>(out_cb, SUBBLOCK_W)));
+    }
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
@@ -654,16 +656,18 @@ void blocked_matmul_and_pack(
             }
         }
     } else {
+        // MOP=SUBBLOCK_W: one pack_tile<true> packs a full row of tiles
         uint32_t dst_idx = 0;
         for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
             uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
-            for (uint32_t c = 0; c < SUBBLOCK_W; c++) {
-                pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
-                dst_idx++;
-            }
+            pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
+            dst_idx += SUBBLOCK_W;
         }
     }
     tile_regs_release();
+    if constexpr (!SEQUENTIAL_OUTPUT) {
+        PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
+    }
 }
 
 // ===================== Normalization Functions =====================
