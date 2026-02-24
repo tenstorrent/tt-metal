@@ -89,7 +89,7 @@ class AllToAllDispatchConfig:
 
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
-    num_links: int = 4
+    num_links: Optional[int] = None
     topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
     subdevice_id: Optional[int] = None
     output_concat_dim: Optional[int] = 2  # 2 for tokens on seq_len dim (decode and prefill)
@@ -99,10 +99,11 @@ class AllToAllDispatchConfig:
         result = {
             "cluster_axis": self.cluster_axis,
             "memory_config": self.memory_config,
-            "num_links": self.num_links,
             "topology": self.topology,
             "output_concat_dim": self.output_concat_dim,
         }
+        if self.num_links is not None:
+            result["num_links"] = self.num_links
         if self.subdevice_id is not None:
             result["subdevice_id"] = self.subdevice_id
         return result
@@ -117,19 +118,21 @@ class AllToAllCombineConfig:
 
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
-    num_links: int = 4
+    num_links: Optional[int] = None
     topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
     output_shard_dim: int = 2  # 1 for batch dim, 2 for seq_len dim (prefer 2 for decode)
 
     def as_dict(self):
         """Convert to kwargs dict for ttnn.all_to_all_combine."""
-        return {
+        result = {
             "cluster_axis": self.cluster_axis,
             "memory_config": self.memory_config,
-            "num_links": self.num_links,
             "topology": self.topology,
             "output_shard_dim": self.output_shard_dim,
         }
+        if self.num_links is not None:
+            result["num_links"] = self.num_links
+        return result
 
 
 @dataclass
