@@ -15,12 +15,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/gelu.h"
 
-// DEBUG ONLY:
-#define XSTR(x) STR(x)
-#define STR(x) #x
-
-#pragma message "The value of SFPU_OP_FUNC_ACTIVATION: " XSTR(SFPU_OP_FUNC_ACTIVATION)
-
 // SPLIT REDUCE across Cores
 void kernel_main() {
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
@@ -39,8 +33,6 @@ void kernel_main() {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-
-    MATH(DPRINT << "Value of SFPU_OP_FUNC_ACTIVATION: " XSTR(SFPU_OP_FUNC_ACTIVATION) << ENDL(););
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
