@@ -1196,21 +1196,21 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
     b_tile = ttnn.Tile([32, 32])
     out_tile = ttnn.Tile([1, 32])
 
-    mcast_core_x = 10
-    mcast_core_y = 9
-    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
-    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+    lmhead_input_core_x = 10
+    lmhead_input_core_y = 9
+    lmhead_input_core = ttnn.CoreCoord(lmhead_input_core_x, lmhead_input_core_y)
+    lmhead_input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(lmhead_input_core, lmhead_input_core)])
     matmul_core_grid = ttnn.CoreRangeSet(
         [
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
             ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
         ]
     )
-    final_core = ttnn.CoreCoord(0, 0)
-    final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(final_core, final_core)])
+    argmax_final_core = ttnn.CoreCoord(0, 0)
+    argmax_final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)])
 
     mcast_bbox = matmul_core_grid.bounding_box()
-    reserved_cores = {(final_core.x, final_core.y), (mcast_core.x, mcast_core.y)}
+    reserved_cores = {(argmax_final_core.x, argmax_final_core.y), (lmhead_input_core.x, lmhead_input_core.y)}
     extra_cores = []
     for y in range(device_grid_size.y):
         for x in range(device_grid_size.x):
@@ -1244,7 +1244,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
     input_a_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(lmhead_input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
     )
     width_shard_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -1264,14 +1264,14 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
     output_index_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(argmax_final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
     )
     winner_page_bytes = 16
     scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes) // 4)
     scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(argmax_final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
@@ -1361,12 +1361,12 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
     out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    global_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
-    global_stage2_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
+    global_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
+    global_stage2_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
 
     final_mesh_core = ttnn.MeshCoreCoord(
         ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        final_core,
+        argmax_final_core,
     )
 
     d2d1_mesh_core = ttnn.MeshCoreCoord(
@@ -1415,7 +1415,8 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
         d2d2_mesh_core,
         upstream_core_coord=final_mesh_core,
         downstream_socket=host_io.get_upstream_socket(),
-        mesh_device=submesh,
+        sender_mesh=MeshWrapper(mesh_device=submesh),
+        receiver_mesh=MeshWrapper(mesh_device=submesh),
     )
 
     logger.info("Running HostInterface")
@@ -1432,7 +1433,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
         sender_coord=sender_coord,
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
-        argmax_final_core_coord=final_core,
+        argmax_final_core_coord=argmax_final_core,
         argmax_final_mesh_coord=final_mesh_coord,
         semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
         global_semaphore=global_semaphore,
@@ -1515,20 +1516,20 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
     b_tile = ttnn.Tile([32, 32])
     out_tile = ttnn.Tile([1, 32])
 
-    mcast_core_x = 10
-    mcast_core_y = 9
-    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
-    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+    lmhead_input_core_x = 10
+    lmhead_input_core_y = 9
+    lmhead_input_core = ttnn.CoreCoord(lmhead_input_core_x, lmhead_input_core_y)
+    lmhead_input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(lmhead_input_core, lmhead_input_core)])
     matmul_core_grid = ttnn.CoreRangeSet(
         [
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
             ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
         ]
     )
-    final_core = ttnn.CoreCoord(0, 0)
-    final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(final_core, final_core)])
+    argmax_final_core = ttnn.CoreCoord(0, 0)
+    argmax_final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)])
 
-    reserved_cores = {(final_core.x, final_core.y), (mcast_core.x, mcast_core.y)}
+    reserved_cores = {(argmax_final_core.x, argmax_final_core.y), (lmhead_input_core.x, lmhead_input_core.y)}
     extra_cores = []
     for y in range(device_grid_size.y):
         for x in range(device_grid_size.x):
@@ -1540,11 +1541,11 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
     if len(extra_cores) < 4:
         pytest.skip("Test requires at least 4 spare cores for H2D/D2D and D2D/D2H pipeline wiring")
 
-    d2d1_core = ttnn.CoreCoord(11, 0)
-    d2d2_core = ttnn.CoreCoord(11, 1)
-    d2h_core = ttnn.CoreCoord(11, 2)
-    dummy_h2d_core = ttnn.CoreCoord(11, 3)
-    ingress_send_core = ttnn.CoreCoord(11, 4)
+    ingress_forward_core = ttnn.CoreCoord(11, 0)
+    egress_sink_core = ttnn.CoreCoord(11, 1)
+    d2h_endpoint_core = ttnn.CoreCoord(11, 2)
+    h2d_endpoint_core = ttnn.CoreCoord(11, 3)
+    ingress_relay_core = ttnn.CoreCoord(11, 4)
 
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
@@ -1563,7 +1564,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
     input_a_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(lmhead_input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
     )
     width_shard_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -1583,14 +1584,14 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
     output_index_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(argmax_final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
     )
     winner_page_bytes = 16
     scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes) // 4)
     scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(argmax_final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
@@ -1680,78 +1681,78 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
     out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    global_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
-    global_stage2_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
+    global_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
+    global_stage2_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
     sender_mesh_coord = ttnn.MeshCoordinate(int(sender_coord[0]), int(sender_coord[1]))
 
-    sender_input_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, mcast_core)
-    ingress_send_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, ingress_send_core)
-    ingress_d2d1_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, d2d1_core)
-    ingress_h2d_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, dummy_h2d_core)
+    lmhead_input_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, lmhead_input_core)
+    ingress_relay_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, ingress_relay_core)
+    ingress_forward_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, ingress_forward_core)
+    h2d_endpoint_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, h2d_endpoint_core)
 
-    final_mesh_core = ttnn.MeshCoreCoord(
+    argmax_final_mesh_core = ttnn.MeshCoreCoord(
         ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        final_core,
+        argmax_final_core,
     )
 
-    d2d1_mesh_core = ttnn.MeshCoreCoord(
+    egress_forward_mesh_core = ttnn.MeshCoreCoord(
         ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        d2d1_core,
+        ingress_forward_core,
     )
-    d2d2_mesh_core = ttnn.MeshCoreCoord(
+    egress_sink_mesh_core = ttnn.MeshCoreCoord(
         ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        d2d2_core,
+        egress_sink_core,
     )
-    d2h_mesh_core = ttnn.MeshCoreCoord(
+    d2h_endpoint_mesh_core = ttnn.MeshCoreCoord(
         ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        d2h_core,
+        d2h_endpoint_core,
     )
-    h2d_socket = ttnn.H2DSocket(
+    h2d_host_socket = ttnn.H2DSocket(
         submesh,
-        ingress_h2d_mesh_core,
+        h2d_endpoint_mesh_core,
         ttnn.BufferType.L1,
         activation_fifo_size,
         ttnn.H2DMode.HOST_PUSH,
     )
-    d2h_socket = ttnn.D2HSocket(submesh, d2h_mesh_core, socket_fifo_size)
-    host_io = HostInterface(
-        h2d_socket,
-        d2h_socket,
+    d2h_host_socket = ttnn.D2HSocket(submesh, d2h_endpoint_mesh_core, socket_fifo_size)
+    host_io_bridge = HostInterface(
+        h2d_host_socket,
+        d2h_host_socket,
         activation_page_size_bytes,
         socket_page_size_bytes,
         core_to_core_socket_buffer_size=activation_fifo_size,
-        h2d_downstream_core=ingress_send_mesh_core,
-        d2h_upstream_core=d2d2_mesh_core,
+        h2d_downstream_core=ingress_relay_mesh_core,
+        d2h_upstream_core=egress_sink_mesh_core,
     )
-    ingress_socket_interface = SocketInterface(
+    ingress_d2d_link = SocketInterface(
         activation_page_size_bytes,
         activation_fifo_size,
         activation_page_size_bytes,
-        ingress_send_mesh_core,
-        ingress_d2d1_mesh_core,
-        upstream_socket=host_io.get_downstream_socket(),
-        downstream_core_coord=sender_input_mesh_core,
+        ingress_relay_mesh_core,
+        ingress_forward_mesh_core,
+        upstream_socket=host_io_bridge.get_downstream_socket(),
+        downstream_core_coord=lmhead_input_mesh_core,  # LMHead sender/socket-receiver core
         sender_mesh=MeshWrapper(submesh),
         receiver_mesh=MeshWrapper(submesh),
     )
-    egress_socket_interface = SocketInterface(
+    egress_d2d_link = SocketInterface(
         socket_page_size_bytes,
         socket_fifo_size,
         socket_page_size_bytes,
-        d2d1_mesh_core,
-        d2d2_mesh_core,
-        upstream_core_coord=final_mesh_core,
-        downstream_socket=host_io.get_upstream_socket(),
+        egress_forward_mesh_core,
+        egress_sink_mesh_core,
+        upstream_core_coord=argmax_final_mesh_core,  # sampling winner core / socket sender core
+        downstream_socket=host_io_bridge.get_upstream_socket(),
         sender_mesh=MeshWrapper(submesh),
         receiver_mesh=MeshWrapper(submesh),
     )
 
     logger.info("Running HostInterface")
-    host_io.run()
+    host_io_bridge.run()
     logger.info("Running Input SocketInterface")
-    ingress_socket_interface.run()
+    ingress_d2d_link.run()
     logger.info("Running Output SocketInterface")
-    egress_socket_interface.run()
+    egress_d2d_link.run()
 
     try:
         h2d_activation_tensor = ttnn.from_torch(
@@ -1760,7 +1761,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         logger.info("Running H2D socket write")
-        h2d_socket.write_tensor(h2d_activation_tensor)
+        h2d_host_socket.write_tensor(h2d_activation_tensor)
 
         logger.info("Running LMHeadSampling")
         LMHeadSampling.op(
@@ -1772,7 +1773,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
             sender_coord=sender_coord,
             indices_tensor=ttnn_indices,
             output_index_tensor=ttnn_output_index,
-            argmax_final_core_coord=final_core,
+            argmax_final_core_coord=argmax_final_core,
             argmax_final_mesh_coord=final_mesh_coord,
             semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
             global_semaphore=global_semaphore,
@@ -1780,8 +1781,8 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
             fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
-            socket_input=ingress_socket_interface.get_downstream_socket(),
-            socket_output=egress_socket_interface.get_upstream_socket(),
+            socket_input=ingress_d2d_link.get_downstream_socket(),
+            socket_output=egress_d2d_link.get_upstream_socket(),
         )
         logger.info("Running D2H socket read")
         d2h_page_words = socket_page_size_bytes // 4
@@ -1790,13 +1791,13 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pip
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        d2h_socket.read_tensor(d2h_read_tensor)
+        d2h_host_socket.read_tensor(d2h_read_tensor)
         d2h_token = ttnn.to_torch(d2h_read_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
         assert torch.equal(
             d2h_token, torch_expected_idx
         ), f"Mesh H2D->D2D->LMHead->D2D->D2H token mismatch. expected={torch_expected_idx.item()}, got={int(d2h_token.item())}"
     finally:
-        host_io.terminate(False)
-        ingress_socket_interface.terminate(False)
-        egress_socket_interface.terminate(True)
+        host_io_bridge.terminate(False)
+        ingress_d2d_link.terminate(False)
+        egress_d2d_link.terminate(True)
         ttnn.synchronize_device(submesh)
