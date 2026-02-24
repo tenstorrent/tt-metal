@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import build_cb_reconfig_tensor, float_to_uint32, record_cb_metadata
 
 
 @dataclass
@@ -83,6 +83,9 @@ class MoeContext:
     # RMSNorm runtime args (common across all devices)
     rmsnorm_epsilon_packed: int = 0
     rmsnorm_scalar_packed: int = 0
+
+    # CB reconfig
+    reconfig_moe_cbs: bool = False
 
 
 @dataclass
@@ -3867,6 +3870,7 @@ class MoeOp:
         reduce_output_tensor=None,
         reduce_semaphores=None,
         reduce_root_coord=None,
+        reconfig_moe_cbs=False,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
@@ -3957,6 +3961,7 @@ class MoeOp:
             mesh_cols=routed_ctx.mesh_cols,
             enable_routing=routed_ctx.enable_routing,
             enable_reduce_to_one=routed_ctx.enable_reduce_to_one,
+            reconfig_moe_cbs=reconfig_moe_cbs,
             # IO tensors
             gate_mm_weights_tensor=gate_mm_weights_tensor,
             gate_bias_tensor=gate_bias_tensor,
@@ -4006,7 +4011,15 @@ class MoeOp:
         cb_descriptors = []
         cb_descriptors += MoeRoutedExpertOp._build_cb_descriptors(self.ctx.routed_ctx)
         cb_descriptors += MoeSharedExpertOp._build_cb_descriptors(self.ctx.shared_ctx)
+        if self.ctx.reconfig_moe_cbs:
+            self.cb_metadata = record_cb_metadata(cb_descriptors)
         return cb_descriptors
+
+    def _build_cb_reconfig_tensor(self):
+        """Build L1-sharded CB reconfig tensor using shared utility."""
+        self.reconfig_tensor = build_cb_reconfig_tensor(
+            self.cb_metadata, self.ctx.full_device_grid, self.ctx.mesh_device
+        )
 
     def _build_core_descriptors(self):
         """Build combined core descriptors for routed + shared expert."""
@@ -4098,6 +4111,8 @@ class MoeOp:
             ctx.sdpa_kv_cache_buffer,
             ctx.sdpa_out_interm_buffer,
         ]
+        if ctx.reconfig_moe_cbs:
+            io_tensors += [self.reconfig_tensor]
         if ctx.enable_reduce_to_one:
             io_tensors += [
                 ctx.reduce_intermediate_tensors[0],
@@ -4114,11 +4129,15 @@ class MoeOp:
             defines += [("ENABLE_ROUTING", "1")]
         if self.ctx.enable_reduce_to_one:
             defines += [("ENABLE_REDUCE_TO_ONE", "1")]
+        if self.ctx.reconfig_moe_cbs:
+            defines += [("RECONFIG_MOE_CBS", "1")]
         return defines
 
     def _build_descriptors(self):
         """Build all shared (non-per-device) descriptors and store on self."""
         self.cb_descriptors = self._build_cb_descriptors()
+        if self.ctx.reconfig_moe_cbs:
+            self._build_cb_reconfig_tensor()
         self.unified_core_descs, self.per_core_descs = self._build_core_descriptors()
         self.semaphore_descriptors = self._build_semaphore_descriptors()
         self.io_tensors = self._build_io_tensors()
@@ -4131,6 +4150,12 @@ class MoeOp:
         self.brisc_args = []
         self.trisc_args = []
         self._append_compile_time_args(chip_id, num_iterations, self.ncrisc_args, self.brisc_args, self.trisc_args)
+
+        if self.ctx.reconfig_moe_cbs:
+            addr = self.reconfig_tensor.buffer_address()
+            self.ncrisc_args.append(("reconfig_cb_config_l1_addr", addr))
+            self.brisc_args.append(("reconfig_cb_config_l1_addr", addr))
+            self.trisc_args.append(("reconfig_cb_config_l1_addr", addr))
 
         self.device_cb_descs = list(self.cb_descriptors)
         self.device_sem_descs = list(self.semaphore_descriptors)
@@ -4175,6 +4200,8 @@ class MoeOp:
         reduce_output_tensor: Optional[ttnn.Tensor] = None,
         reduce_semaphores: Optional[list] = None,
         reduce_root_coord: Optional[ttnn.MeshCoordinate] = None,
+        # CB reconfig for fusion with preceding op
+        reconfig_moe_cbs=False,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4200,6 +4227,8 @@ class MoeOp:
             reduce_output_tensor: (Optional) Final reduced output tensor on ROOT1 device
             reduce_semaphores: (Optional) List of 4 global semaphores for reduce synchronization
             reduce_root_coord: (Optional) MeshCoordinate of ROOT1 device
+            reconfig_moe_cbs: If True, create a per-core CB config tensor and reconfigure
+                CBs at kernel start (for fusion with a preceding op)
 
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor or reduce_output_tensor)
@@ -4233,6 +4262,7 @@ class MoeOp:
             reduce_output_tensor=reduce_output_tensor,
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
+            reconfig_moe_cbs=reconfig_moe_cbs,
         )
 
         # ==================================================================
