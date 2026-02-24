@@ -38,17 +38,18 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
 
     const uint32_t batch_size = operation_attributes.batch_size;
     const uint32_t seq_size = operation_attributes.seq_size;
+    const uint32_t select_experts_k = operation_attributes.select_experts_k;
 
-    const uint32_t experts = operation_attributes.experts;
+    // const uint32_t experts = operation_attributes.experts;
 
     const auto& axis = operation_attributes.axis;
     const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
+    // const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
-    const uint32_t experts_per_cluster = experts / num_clusters;
+    // const uint32_t experts_per_cluster = experts / num_clusters;
 
-    auto output_shape = ttnn::Shape({experts_per_cluster, total_tokens_per_device, hidden_size});
+    auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
 
     auto mem_config = operation_attributes.output_memory_config;
     return TensorSpec(
@@ -68,7 +69,7 @@ SelectiveReduceCombineDeviceOperation::create_output_tensors(
 namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
-    const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_activations_tensor,
     const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     const uint32_t hidden_size,
@@ -106,7 +107,7 @@ ttnn::Tensor selective_reduce_combine(
             .optional_cross_device_semaphore = optional_cross_device_semaphore},
         OperationType::tensor_args_t{
             .dense_input_tensor = dense_input_tensor,
-            .dense_metadata_tensor = dense_metadata_tensor,
+            .dense_activations_tensor = dense_activations_tensor,
             .dense_token_maps_tensor = dense_token_maps_tensor,
             .dense_token_counts_tensor = dense_token_counts_tensor,
             .optional_output_tensor = optional_output_tensor});

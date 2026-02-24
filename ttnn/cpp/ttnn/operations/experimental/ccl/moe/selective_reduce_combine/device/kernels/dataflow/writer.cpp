@@ -8,8 +8,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
-#include "api/debug/dprint_pages.h"
-
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
@@ -42,15 +40,18 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
 
 // output is [cluster experts ,tokens, hidden]
 template <uint32_t TokensPerDevice>
-inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t expert_offset) {
+inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
     uint32_t t_idx = t % TokensPerDevice;
-    return expert_offset * TokensPerDevice + t_idx;
+    return k * TokensPerDevice + t_idx;
 }
 }  // namespace detail
 
 void kernel_main() {
     constexpr uint32_t dense_token_maps_cb_id = get_named_compile_time_arg_val("dense_token_maps_cb_id");
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
+    constexpr uint32_t token_activations_cb_id = get_named_compile_time_arg_val("token_activations_cb_id");
+    constexpr uint32_t aligned_token_activation_page_size =
+        get_named_compile_time_arg_val("aligned_token_activation_page_size");
 
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
 
@@ -97,12 +98,12 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t replicate_group_index = (replicate_axis == ReplicateGroup::COLS) ? row : col;
+    // constexpr uint32_t replicate_group_index = (replicate_axis == ReplicateGroup::COLS) ? row : col;
 
     constexpr uint32_t num_local_experts = experts / num_devices;
     constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
-    constexpr uint32_t cluster_expert_offset = replicate_group_index * num_local_experts;
+    // constexpr uint32_t cluster_expert_offset = replicate_group_index * num_local_experts;
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -161,11 +162,18 @@ void kernel_main() {
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
 
+    cb_wait_front(token_activations_cb_id, global_num_tokens);
+    const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
+    auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
+
     uint32_t token_split_offsets[num_local_experts];
     uint32_t token_split_counts[num_local_experts];
+    uint32_t token_activation_offsets[num_local_experts];
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         token_split_offsets[e] = dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + e];
         token_split_counts[e] = dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + num_local_experts + e];
+        token_activation_offsets[e] =
+            dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + 2 * num_local_experts + e];
     }
 
     if constexpr (use_init_semaphore) {
@@ -186,12 +194,19 @@ void kernel_main() {
 
     bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
+        auto* expert_token_activations_ptr =
+            token_activations_l1_ptr + token_activation_offsets[e] * aligned_token_activation_page_size;
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr[e * global_num_tokens + token_split_offsets[e] + dt];
+            uint32_t gaurd = 0;
+            while (expert_token_activations_ptr[0] != st) {
+                expert_token_activations_ptr += aligned_token_activation_page_size;
+                ASSERT(gaurd++ < global_num_tokens);
+            }
+            const uint32_t k = expert_token_activations_ptr[1 + e];
 
             // figure out output page index, noc address.
-            const uint32_t output_page_idx =
-                detail::get_output_page_idx<tokens_per_device>(st, cluster_expert_offset + e);
+            const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(st, k);
 
             const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
                                               dt * source_token_segment_buffer_size_bytes;

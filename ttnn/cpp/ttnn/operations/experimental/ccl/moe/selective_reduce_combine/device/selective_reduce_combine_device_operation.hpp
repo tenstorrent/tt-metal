@@ -52,7 +52,7 @@ struct SelectiveReduceCombineDeviceOperation {
 namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
-    const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_activations_tensor,
     const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     const uint32_t hidden_size,
