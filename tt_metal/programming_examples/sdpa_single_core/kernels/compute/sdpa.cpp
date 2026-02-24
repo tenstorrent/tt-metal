@@ -913,11 +913,6 @@ void sdpa_inner_loop_step(
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
     // ========== PHASE 1: Q@KT with alternating row buffers ==========
-#ifdef ARCH_BLACKHOLE
-    mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-#else
-    mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-#endif
     PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
@@ -926,6 +921,13 @@ void sdpa_inner_loop_step(
 
         // Reserve current row buffer for matmul output
         cb_reserve_back(alias_cur_qkt_row, row_tiles);
+
+        // Full matmul init once per q_subblock (restores state after reduce).
+#ifdef ARCH_BLACKHOLE
+        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#else
+        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#endif
 
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
@@ -939,25 +941,12 @@ void sdpa_inner_loop_step(
                     true,
                     VectorMode::RC,
                     true>(alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
-#ifdef ARCH_BLACKHOLE
-                mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-#else
-                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-#endif
+                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
                 PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
             }
 
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
-            blocked_matmul_and_pack<
-                true,
-                qkt_subblock_w,
-                sbh,
-                in0_block_w,
-                Sk_chunk_t,
-                Sk_chunk_t,
-                false,
-                false,
-                false>(
+            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, false, true, false>(
                 cb_q_in, cb_kt_in, alias_cur_qkt_row, q_index_offset, kt_index_offset, 0, kt_subblock * qkt_subblock_w);
             kt_index_offset += qkt_subblock_w;
         }
@@ -1063,7 +1052,12 @@ void sdpa_inner_loop_step(
 
                     // Matmul — FPU overlaps with SFPU EXP
 #ifdef ARCH_BLACKHOLE
-                    mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+                    if (kt_sub == 0) {
+                        mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+                    } else {
+                        mm_no_mop_reinit_short(
+                            cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+                    }
 #else
                     mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
 #endif
@@ -1151,8 +1145,7 @@ void sdpa_inner_loop_step(
                 cb_push_back(cb_exp_max_diff, sbh);
             }
 
-            // 2. Full matmul for CURRENT row — FPU overlaps with SFPU EXP above
-            // Uses w_q for the output row offset (adjusted for pushed rows)
+            // 2. Matmul for CURRENT row — FPU overlaps with SFPU EXP above
 #ifdef ARCH_BLACKHOLE
             mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
 #else
