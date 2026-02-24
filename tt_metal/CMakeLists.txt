@@ -238,6 +238,8 @@ target_sources(
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
             ${TT_LLK_HEADERS}
+            # SFPI Version for kernel caching
+            sfpi-version
 )
 
 include(CheckFunctionExists)

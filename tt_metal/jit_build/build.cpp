@@ -130,6 +130,20 @@ void JitBuildEnv::init(
         TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
     }
 
+    // Read the sfpi version file tracked in the repo.  This captures the
+    // toolchain version (e.g. "sfpi_version='7.25.0'", "sfpi_build='252'")
+    // so that upgrading sfpi invalidates the build cache.
+    std::string sfpi_version_contents;
+    {
+        std::string sfpi_version_path = this->root_ + "tt_metal/sfpi-version";
+        std::ifstream ifs(sfpi_version_path);
+        if (ifs.is_open()) {
+            std::ostringstream oss;
+            oss << ifs.rdbuf();
+            sfpi_version_contents = oss.str();
+        }
+    }
+
     // Flags
     string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
 
@@ -281,6 +295,7 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
+    hasher.update(sfpi_version_contents);
     build_key_ = hasher.digest();
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
@@ -441,7 +456,8 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
 }
 
 void JitBuildState::write_build_state_hash(const string& out_dir) const {
-    std::ofstream file(out_dir + string(BUILD_STATE_HASH_FILE));
+    jit_build::utils::FileRenamer tmp(out_dir + string(BUILD_STATE_HASH_FILE));
+    std::ofstream file(tmp.path());
     file << build_state_hash_;
 }
 
