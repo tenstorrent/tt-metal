@@ -80,19 +80,23 @@ pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py 
 
 ### Test cases
 
-| ID | Q chunks | K/V chunks | Sk_chunk_t | Padded | Data |
-|----|----------|------------|------------|--------|------|
-| `1q_1k-zeros-sk16` | 1 | 1 | 16 | 0 | All zeros |
-| `1q_1k-ones-sk16` | 1 | 1 | 16 | 0 | All ones |
-| `1q_1k-random-sk16` | 1 | 1 | 16 | 0 | `fa_rand` (FlashAttention-style) |
-| `1q_5k-random-sk16` | 1 | 5 | 16 | 0 | `fa_rand` |
-| `3q_5k-random-sk16` | 3 | 5 | 16 | 0 | `fa_rand` |
-| `1q_1k-random-sk8` | 1 | 1 | 8 | 0 | `fa_rand` |
-| `1q_5k-random-sk8` | 1 | 5 | 8 | 0 | `fa_rand` |
-| `3q_5k-random-sk8` | 3 | 5 | 8 | 0 | `fa_rand` |
-| `1q_5k-random-sk16-pad4` | 1 | 5 | 16 | 4 | `fa_rand` |
-| `1q_5k-random-sk8-pad2` | 1 | 5 | 8 | 2 | `fa_rand` |
-| `3q_5k-random-sk16-pad8` | 3 | 5 | 16 | 8 | `fa_rand` |
+| ID | Q chunks | K/V chunks | Sk_chunk_t | sbh | Padded | Data |
+|----|----------|------------|------------|-----|--------|------|
+| `1q_1k-zeros-sk16` | 1 | 1 | 16 | 1 | 0 | All zeros |
+| `1q_1k-ones-sk16` | 1 | 1 | 16 | 1 | 0 | All ones |
+| `1q_1k-random-sk16` | 1 | 1 | 16 | 1 | 0 | `fa_rand` (FlashAttention-style) |
+| `1q_5k-random-sk16` | 1 | 5 | 16 | 1 | 0 | `fa_rand` |
+| `3q_5k-random-sk16` | 3 | 5 | 16 | 1 | 0 | `fa_rand` |
+| `1q_1k-random-sk8` | 1 | 1 | 8 | 1 | 0 | `fa_rand` |
+| `1q_5k-random-sk8` | 1 | 5 | 8 | 1 | 0 | `fa_rand` |
+| `3q_5k-random-sk8` | 3 | 5 | 8 | 1 | 0 | `fa_rand` |
+| `1q_5k-random-sk16-pad4` | 1 | 5 | 16 | 1 | 4 | `fa_rand` |
+| `1q_5k-random-sk8-pad2` | 1 | 5 | 8 | 1 | 2 | `fa_rand` |
+| `3q_5k-random-sk16-pad8` | 3 | 5 | 16 | 1 | 8 | `fa_rand` |
+| `1q_1k-random-sk4-sbh2` | 1 | 1 | 4 | 2 | 0 | `fa_rand` |
+| `1q_5k-random-sk4-sbh2` | 1 | 5 | 4 | 2 | 0 | `fa_rand` |
+| `1q_5k-random-sk8-sbh2` | 1 | 5 | 8 | 2 | 0 | `fa_rand` |
+| `3q_5k-random-sk4-sbh2-pad1` | 3 | 5 | 4 | 2 | 1 | `fa_rand` |
 
 ### Run a single test
 
