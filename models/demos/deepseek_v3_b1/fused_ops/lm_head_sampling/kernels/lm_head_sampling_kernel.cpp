@@ -87,6 +87,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
         get_named_compile_time_arg_val("bcast_range_hops_backward")>;
 
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
+
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
     if constexpr (!Core::skip_ccl) {
@@ -150,6 +153,23 @@ void kernel_main() {
         constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
     }
+    constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
+    constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
+
+    // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
+    // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
+    // or intermediate_tensor (CCL mode, where broadcast placed the data)
+    if constexpr (Core::is_input_core) {
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        // In skip_ccl + socket mode BRISC owns CB push for rmsnorm_input_cb.
+        if constexpr (!(Core::skip_ccl && Core::bcast_use_socket_input)) {
+            unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        }
+        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+    }
+
 #elif defined(COMPILE_FOR_BRISC)
     uint32_t brisc_rt_arg_idx = 0;
     // --- BRISC: CCL broadcast reader + optional socket-reader path + mcast sender ---
@@ -166,6 +186,9 @@ void kernel_main() {
         get_common_arg_val<uint32_t>(5),  // socket_page_size
         get_common_arg_val<uint32_t>(6),  // socket_num_pages
     };
+
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
 
     // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
     // loopback=false because sender does not consume its own multicast data
@@ -199,6 +222,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_socket_mode"),
         get_named_compile_time_arg_val("argmax_socket_cb"),
         get_named_compile_time_arg_val("argmax_socket_page_size_bytes")>;
+
+    deepseek_b1_ops::Sampling::WriterArgs sampling_args{
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+    };
 
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---
@@ -255,29 +285,11 @@ void kernel_main() {
         }
     }
 
-#if defined(COMPILE_FOR_NCRISC)
-    // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
-    // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
-    // or intermediate_tensor (CCL mode, where broadcast placed the data)
-    if constexpr (Core::is_input_core) {
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        // In skip_ccl + socket mode BRISC owns CB push for rmsnorm_input_cb.
-        if constexpr (!(Core::skip_ccl && Core::bcast_use_socket_input)) {
-            unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
-        }
-        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
-        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
-    }
-#endif
-
-#if defined(COMPILE_FOR_TRISC)
     deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
     {
         DeviceZoneScopedN("RMSNORM");
         rmsnorm(rmsnorm_args);
     }
-#endif
 
     // ========================================================================
     // Phase 1: Mcast — multicast input from sender core to all device cores
@@ -319,8 +331,6 @@ void kernel_main() {
         uint32_t scores_addr = 0;
         if constexpr (Core::is_matmul_core) {
             // Matmul (TRISC) pushes matmul_out CB; wait before NCRISC consumes scores.
-            constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
-            constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
             cb_wait_front(matmul_out_cb, out_w);
             scores_addr = get_read_ptr(matmul_out_cb);
         }
@@ -335,15 +345,8 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
             get_write_ptr(gather_cb),
         };
-#elif defined(COMPILE_FOR_BRISC)
-    deepseek_b1_ops::Sampling::WriterArgs sampling_args{
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-    };
-#endif
         // k=1 fast path: fused sampling invocation matches micro-op style.
+#endif
         deepseek_b1_ops::Sampling::
             Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
                 sampling_op;
@@ -353,8 +356,6 @@ void kernel_main() {
         }
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_matmul_core) {
-            constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
-            constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
             cb_pop_front(matmul_out_cb, out_w);
         }
 #endif

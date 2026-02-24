@@ -86,6 +86,8 @@ struct Sampling {
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
     };
 
+    struct ComputeCTArgs {};
+
     struct ReaderArgs {
         uint32_t scores_addr;
         uint32_t indices_addr;
