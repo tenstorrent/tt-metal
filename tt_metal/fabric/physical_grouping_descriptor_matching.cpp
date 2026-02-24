@@ -546,8 +546,8 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     MappingConstraints<uint32_t, AsicID> constraints;
 
     // Build trait maps: graph nodes are 0..n-1, items[i] is the item for node i
-    std::map<uint32_t, uint32_t> target_tray_traits;
-    std::map<uint32_t, uint32_t> target_location_traits;
+    std::map<uint32_t, TrayID> target_tray_traits;
+    std::map<uint32_t, ASICLocation> target_location_traits;
 
     for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
         if (node_id >= grouping_info.items.size()) {
@@ -557,33 +557,33 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
             continue;
         }
-        if (item.tray_id > 0) {
+        if (*item.tray_id > 0) {
             target_tray_traits[node_id] = item.tray_id;
         }
-        if (item.asic_location > 0) {
+        if (*item.asic_location > 0) {
             target_location_traits[node_id] = item.asic_location;
         }
     }
     // Build trait maps for global nodes (from physical graph)
-    std::map<AsicID, uint32_t> global_tray_traits;
-    std::map<AsicID, uint32_t> global_location_traits;
+    std::map<AsicID, TrayID> global_tray_traits;
+    std::map<AsicID, ASICLocation> global_location_traits;
 
     for (const auto& asic_id : physical_graph.get_nodes()) {
         TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
         ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
-        global_tray_traits[asic_id] = *tray_id;
-        global_location_traits[asic_id] = *asic_location;
+        global_tray_traits[asic_id] = tray_id;
+        global_location_traits[asic_id] = asic_location;
     }
 
     // Add trait constraints for tray_id and asic_location
     if (!target_tray_traits.empty() && !global_tray_traits.empty()) {
         TT_FATAL(
-            constraints.add_required_trait_constraint<uint32_t>(target_tray_traits, global_tray_traits),
+            constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits),
             "Internal error: Failed to add required trait constraint for tray_id");
     }
     if (!target_location_traits.empty() && !global_location_traits.empty()) {
         TT_FATAL(
-            constraints.add_required_trait_constraint<uint32_t>(target_location_traits, global_location_traits),
+            constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits),
             "Internal error: Failed to add required trait constraint for asic_location");
     }
 
