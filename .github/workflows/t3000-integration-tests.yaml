@@ -19,7 +19,7 @@ on:
           - llama3
           - llama3 accuracy
           - llama3_70n90b accuracy
-          # - llama3_90b # Tier 3 model
+          - llama3_90b
           - resnet
           - sd35_large
           - flux1

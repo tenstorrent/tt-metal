@@ -82,28 +82,28 @@ run_t3000_llama3_70b_tests() {
   fi
 }
 
-#
-#run_t3000_llama3_90b_tests() {
+
+run_t3000_llama3_90b_tests() {
   # Record the start time
-#  fail=0
-#  start_time=$(date +%s)
+  fail=0
+  start_time=$(date +%s)
 
-#  echo "LOG_METAL: Running run_t3000_llama3_90b_tests"
+  echo "LOG_METAL: Running run_t3000_llama3_90b_tests"
 
-  # Run test_model (decode and prefill) for llama3 70B
-#  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-#  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
-#  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
-#  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
+  # Run test_model (decode and prefill) for llama3 90B
+  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
+  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
 
   # Record the end time
-#  end_time=$(date +%s)
-#  duration=$((end_time - start_time))
-#  echo "LOG_METAL: run_t3000_llama3_90b_tests $duration seconds to complete"
-#  if [[ $fail -ne 0 ]]; then
-#    exit 1
-# fi
-#}
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_90b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+ fi
+}
 
 run_t3000_llama3_accuracy_tests() {
   # Record the start time
@@ -461,7 +461,7 @@ run_t3000_tests() {
   run_t3000_llama3_70b_tests
 
   # Run llama3-90b tests
-  #run_t3000_llama3_90b_tests
+  run_t3000_llama3_90b_tests
 
   # Run llama3 accuracy tests
   run_t3000_llama3_accuracy_tests

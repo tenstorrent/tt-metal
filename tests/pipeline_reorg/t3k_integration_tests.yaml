@@ -91,14 +91,14 @@
   team: models
   model-name: llama3_70n90b accuracy
 
-#- name: t3k_llama3_90b_tests
-#  cmd: run_t3000_llama3_90b_tests
-#  skus:
-#    wh_llmbox:
-#      timeout: 30
-#  owner_id: U07RY6B5FLJ # Gongyu Wang
-#  team: models
-#  model-name: llama3_90b
+- name: t3k_llama3_90b_tests
+  cmd: run_t3000_llama3_90b_tests
+  skus:
+    wh_llmbox:
+      timeout: 30
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  model-name: llama3_90b
 
 - name: t3k_resnet_tests
   cmd: run_t3000_resnet_tests
