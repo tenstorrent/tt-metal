@@ -145,6 +145,36 @@ class TestBarkCoarse:
         assert tt_logits_torch is not None
         assert tt_logits_torch.numel() > 0
 
+    def test_coarse_pcc(self, device, hf_model):
+        """Test PCC for coarse model between TTNN and PyTorch."""
+        batch_size, seq_len = 1, 32
+        input_ids = torch.randint(0, 10048, (batch_size, seq_len))
+
+        # TTNN forward
+        config = BarkConfig(
+            hidden_size=hf_model.coarse_acoustics.config.hidden_size,
+            num_heads=hf_model.coarse_acoustics.config.num_heads,
+            num_layers=hf_model.coarse_acoustics.config.num_layers,
+            block_size=hf_model.coarse_acoustics.config.block_size,
+            input_vocab_size=hf_model.coarse_acoustics.config.input_vocab_size,
+            output_vocab_size=hf_model.coarse_acoustics.config.output_vocab_size,
+            bias=getattr(hf_model.coarse_acoustics.config, "bias", False),
+        )
+        params = preprocess_model_parameters(hf_model.coarse_acoustics, device)
+        tt_model = TtBarkGPT(device, params, config, is_causal=True)
+
+        tt_logits, _ = tt_model(input_ids=input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
+
+        # Reference forward
+        ref_logits = run_coarse_forward(hf_model, input_ids)
+
+        # PCC check
+        pcc = compute_pcc(tt_logits_torch, ref_logits)
+        print(f"Coarse PCC: {pcc:.6f}")
+        assert pcc >= 0.95, f"Coarse PCC {pcc:.6f} below threshold 0.95"
+
 
 class TestBarkFine:
     """Tests for Stage 3: Coarse-to-Fine model."""
@@ -232,7 +262,7 @@ class TestBarkFine:
 class TestBarkPipeline:
     """Tests for full end-to-end pipeline."""
 
-    def test_full_pipeline(self, device):
+    def test_full_pipeline(self, device, hf_model):
         """Test complete text-to-audio pipeline."""
         model = TtBarkModel(device, model_name="suno/bark-small")
 
@@ -244,7 +274,7 @@ class TestBarkPipeline:
         assert np.isfinite(audio).all(), "Audio contains NaN or Inf values"
         print(f"Generated audio: {len(audio)} samples, {len(audio)/24000:.2f}s")
 
-    def test_multilingual(self, device):
+    def test_multilingual(self, device, hf_model):
         """Test with non-English text."""
         model = TtBarkModel(device, model_name="suno/bark-small")
 
@@ -255,7 +285,7 @@ class TestBarkPipeline:
         assert isinstance(audio, np.ndarray)
         assert len(audio) > 0
 
-    def test_emotion_annotations(self, device):
+    def test_emotion_annotations(self, device, hf_model):
         """Test with emotion annotations."""
         model = TtBarkModel(device, model_name="suno/bark-small")
 
@@ -269,7 +299,7 @@ class TestBarkPipeline:
 class TestBarkThroughput:
     """Benchmark tests for throughput validation."""
 
-    def test_semantic_throughput(self, device):
+    def test_semantic_throughput(self, device, hf_model):
         """Check semantic token generation throughput (target >= 20 tok/s)."""
         import time
 
