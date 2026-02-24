@@ -15,7 +15,7 @@ namespace deepseek_b1_ops {
 // Mcast utility functions (inlined from mcast_utils.hpp)
 // ============================================================================
 
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC)
 
 constexpr bool mcast_is_shared_write_cmd_buf = write_cmd_buf == write_reg_cmd_buf;
 
