@@ -905,7 +905,6 @@ class Generator(WarmupForwardMixin):
                     kv_cache=kv_cache,
                     batch_size=batch_size,
                     user_id_tensor=chunk_user_id_tensor,
-                    **kwargs,
                 )
 
                 if chunk_start_relative == last_chunk_start:
