@@ -43,7 +43,7 @@ void kernel_main() {
     const uint32_t read_end_page = get_arg_val<uint32_t>(4);
     const uint32_t write_start_page = get_arg_val<uint32_t>(5);
     const uint32_t write_start_offset = get_arg_val<uint32_t>(6);
-    const uint32_t nop = get_arg_val<uint32_t>(9);
+    const uint32_t nop = get_arg_val<uint32_t>(7);
 
     constexpr bool src_aligned_to_64 = get_compile_time_arg_val(0) == 1;
     constexpr bool src_aligned_to_16 = get_compile_time_arg_val(1) == 1;
