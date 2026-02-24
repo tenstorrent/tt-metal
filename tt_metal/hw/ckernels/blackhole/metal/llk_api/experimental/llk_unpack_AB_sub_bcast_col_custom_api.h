@@ -41,3 +41,5 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
 
     _llk_unpack_AB_sub_bcast_col_custom_<BType>(address_a, address_b, ct_dim);
 }
+
+inline void llk_unpack_AB_sub_bcast_col_uninit_custom() { _llk_unpack_AB_sub_bcast_col_uninit_custom_(); }

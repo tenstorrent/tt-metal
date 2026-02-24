@@ -512,7 +512,7 @@ void sub_exp_block_bcast_cols(
 
 #ifdef ARCH_BLACKHOLE
     if constexpr (use_custom_sub) {
-        sub_bcast_cols_init_short_custom(read_cb, max_cb, tiles_per_column);
+        sub_bcast_cols_init_short_custom(read_cb, max_cb);
     } else
 #endif
     {
@@ -926,8 +926,14 @@ void sdpa_inner_loop_step(
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-                sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                    alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+                sub_exp_block_bcast_cols<
+                    PROFILING_ENABLED,
+                    scale_fp32,
+                    sbh,
+                    qkt_subblock_w,
+                    true,
+                    VectorMode::RC,
+                    true>(alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
 #ifdef ARCH_BLACKHOLE
                 mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #else
@@ -1014,8 +1020,14 @@ void sdpa_inner_loop_step(
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_subblocks; ++kt_sub) {
                     // sub_exp drain — EXP runs on SFPU, freeing FPU for matmul overlap
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=" << kt_sub << ENDL());
-                    sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                        alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
+                    sub_exp_block_bcast_cols<
+                        PROFILING_ENABLED,
+                        scale_fp32,
+                        sbh,
+                        qkt_subblock_w,
+                        true,
+                        VectorMode::RC,
+                        true>(alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
 
                     // After last sub_exp: push softmax'd row, free raw row buffer.
                     // cur_sum stays RESERVED — SALAD will L1-accumulate onto it later.
