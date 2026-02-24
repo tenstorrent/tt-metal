@@ -527,8 +527,8 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
                 }
                 TT_FATAL(
                     found_remote,
-                    "Couldn't find paired remote chip for device {}. Potential hardware configuration issue as each "
-                    "MMIO device should have a Remote Chip.",
+                    "Couldn't find paired remote chip for device {}. Potential hardware configuration "
+                    "and/or topology issue as each MMIO device should have a Remote Chip.",
                     mmio_device_id);
 
                 // Add dispatch kernels for the mmio/remote pair
