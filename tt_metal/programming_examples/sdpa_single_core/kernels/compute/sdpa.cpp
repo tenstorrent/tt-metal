@@ -734,8 +734,11 @@ void blocked_matmul_and_pack(
     if constexpr (SEQUENTIAL_OUTPUT) {
         uint32_t dst_idx = 0;
         for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
+            uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
             for (uint32_t c = 0; c < SUBBLOCK_W; c++) {
-                pack_tile<false>(dst_idx++, out_cb);
+                // Sequential per-tile pack with explicit output coordinates avoids MOP reprogramming
+                // while preserving deterministic placement for overlap/L1-accumulate paths.
+                pack_tile<true>(dst_idx++, out_cb, out_row_offset + out_col_offset + c);
             }
         }
     } else {
@@ -942,14 +945,8 @@ void sdpa_inner_loop_step(
             }
 
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
-            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true, true>(
-                cb_q_in,
-                cb_kt_in,
-                alias_cur_qkt_row,
-                q_index_offset,
-                kt_index_offset,
-                q_subblock,
-                kt_subblock * qkt_subblock_w);
+            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true, false>(
+                cb_q_in, cb_kt_in, alias_cur_qkt_row, q_index_offset, kt_index_offset, 0, kt_subblock * qkt_subblock_w);
             kt_index_offset += qkt_subblock_w;
         }
 
@@ -1063,7 +1060,7 @@ void sdpa_inner_loop_step(
                                 matmul_inner,
                                 head_dim_t,
                                 head_dim_t,
-                                false,
+                                true,
                                 true>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -1154,7 +1151,7 @@ void sdpa_inner_loop_step(
                         qktv_in0_block_w,
                         head_dim_t,
                         head_dim_t,
-                        false,
+                        true,
                         true>(
                         cb_qkt_im,
                         cb_v_in,
