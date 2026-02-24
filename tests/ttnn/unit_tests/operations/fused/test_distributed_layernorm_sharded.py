@@ -553,3 +553,305 @@ def test_simulated_distributed_layernorm(
 
     assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
     assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+
+
+# Tests for non-rectangular sharded grid bug fixes
+#
+# Before the code being fixed, these tests fail in one of two ways:
+#   • Watcher runtime-arg OOB crash – two_stage_reduce is incorrectly enabled
+#     for non-rectangular grids in sharded_layernorm_factory_helpers.cpp because
+#     it used num_blocks == grid_size.x * grid_size.y (true only on rectangular
+#     grids).
+#   • Hang at noc_async_write_barrier() – the NOC multicast num_dests was set
+#     to num_blocks - 1 (actual shard core count - 1), but the multicast
+#     rectangle spans the full bounding-box, so num_dests must equal
+#     bbox_x * bbox_y - 1.  The mismatch caused the NOC ACK counter to never
+#     reach zero.  Affected kernels:
+#       reader_mcast_sender_unary_sharded_ln.cpp
+#       reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp
+#       reader_mcast_sender_unary_sharded_ln_post_allgather.cpp
+
+
+def _nonrect_grid(name):
+    """Return a named non-rectangular CoreRangeSet for the non-rect bug-fix tests."""
+    if name == "8plus4":
+        # 12-core grid: 8 cores in row 0, 4 in row 1; bounding box 8×2
+        return ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(3, 1)),
+            ]
+        )
+    if name == "4plus2":
+        # 6-core grid: 4 cores in row 0, 2 in row 1; bounding box 4×2
+        return ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
+            ]
+        )
+    raise ValueError(f"Unknown non-rectangular grid name: {name!r}")
+
+
+def _nonrect_mem_cfg(grid, H, shard_w):
+    """WIDTH_SHARDED MemoryConfig for a non-rectangular grid."""
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [H, shard_w], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def _run_nonrect_sharded_norm(device, is_rmsnorm, eps, grid, H, W, shard_w):
+    """
+    Run ttnn.rms_norm or ttnn.layer_norm on a non-rectangular WIDTH_SHARDED
+    grid and compare the result to a torch reference.
+
+    No explicit program_config is provided so the factory auto-detects the
+    grid from the shard spec – this exercises both the two_stage_reduce guard
+    and the num_mcast_dests fix in the regular sender kernel.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, H, W, dtype=torch.bfloat16)
+    torch_weight = torch.ones(1, 1, 1, W, dtype=torch.bfloat16)
+
+    if is_rmsnorm:
+        torch_ref = rms_norm(torch_input, torch_weight, eps=eps)
+    else:
+        torch_ref = torch.nn.functional.layer_norm(torch_input, (W,), weight=torch_weight.reshape(W), eps=eps)
+
+    sharded_cfg = _nonrect_mem_cfg(grid, H, shard_w)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_input = ttnn.to_device(tt_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_input = ttnn.to_memory_config(tt_input, sharded_cfg)
+
+    # Float32 weight matches the dtype used in test_rms38429.py and avoids
+    # an extra bfloat16 cast that would eat into numerical precision.
+    tt_weight = ttnn.from_torch(torch_weight.to(torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.to_device(tt_weight, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    if is_rmsnorm:
+        tt_out = ttnn.rms_norm(tt_input, epsilon=eps, weight=tt_weight, memory_config=sharded_cfg)
+    else:
+        tt_out = ttnn.layer_norm(tt_input, epsilon=eps, weight=tt_weight, memory_config=sharded_cfg)
+
+    tt_torch = ttnn.to_torch(tt_out).to(torch.bfloat16)
+
+    passing, pcc = comp_pcc(torch_ref, tt_torch, pcc=0.999)
+    atol = torch.max(torch.abs(torch_ref - tt_torch)).item()
+    assert passing, f"PCC check failed: {pcc}"
+    assert atol <= 0.5, f"Max atol exceeded: {atol}"
+
+
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize(
+    "grid_id, H, W, shard_w",
+    [
+        # 12-core non-rectangular grid: 8 cores in row 0 + 4 in row 1.
+        # bounding box 8×2; W=2304 → 12 shards of 192 cols; mcast_1d=True
+        # because M == block_h == 1 tile row.
+        ("8plus4", 32, 2304, 192),
+        # 6-core non-rectangular grid: 4 cores in row 0 + 2 in row 1.
+        # bounding box 4×2; W=1152 → 6 shards of 192 cols.
+        ("4plus2", 32, 1152, 192),
+    ],
+)
+def test_nonrect_grid_sharded_norm(device, is_rmsnorm, grid_id, H, W, shard_w):
+    """
+    Sharded rms_norm / layer_norm on a non-rectangular core grid.
+
+    Exercises two related fixes:
+      1. sharded_layernorm_factory_helpers.cpp – is_rectangular_grid guard
+         that prevents use_two_stage_reduce on non-rectangular grids (would
+         otherwise trigger a Watcher runtime-arg OOB error).
+      2. reader_mcast_sender_unary_sharded_ln.cpp – use num_mcast_dests
+         (bounding-box area - 1) instead of num_blocks - 1 in NOC multicast
+         calls (wrong value caused noc_async_write_barrier to hang).
+    """
+    _run_nonrect_sharded_norm(
+        device,
+        is_rmsnorm=is_rmsnorm,
+        eps=1e-7,
+        grid=_nonrect_grid(grid_id),
+        H=H,
+        W=W,
+        shard_w=shard_w,
+    )
+
+
+def _run_nonrect_pre_allgather_norm(device, is_rmsnorm, grid, bbox_x, bbox_y, H, W, shard_w):
+    """
+    Run rms_norm_pre_all_gather / layer_norm_pre_all_gather on a non-rectangular
+    grid and verify the partial statistics against a torch reference.
+
+    Exercises the fix in reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp
+    where noc_semaphore_set_multicast used num_blocks-1 instead of num_mcast_dests,
+    causing noc_async_write_barrier to hang for non-rectangular grids.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, H, W, dtype=torch.bfloat16)
+
+    block_w = shard_w // 32
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(bbox_x, bbox_y),
+        subblock_w=block_w,
+        block_h=1,
+        block_w=block_w,
+        inplace=False,
+    )
+
+    sharded_cfg = _nonrect_mem_cfg(grid, H, shard_w)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_input = ttnn.to_device(tt_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_input = ttnn.to_memory_config(tt_input, sharded_cfg)
+
+    if is_rmsnorm:
+        tt_stats = ttnn.rms_norm_pre_all_gather(tt_input, program_config=program_config)
+        tt_stats_torch = ttnn.to_torch(tt_stats).to(torch.bfloat16)
+        tt_ex2 = tt_stats_torch[..., :1]
+        torch_ex2 = torch.mean(torch_input.float() ** 2, dim=-1, keepdim=True).to(torch.bfloat16)
+        passing, pcc = comp_pcc(torch_ex2, tt_ex2, pcc=0.98)
+        assert passing, f"E(x²) PCC check failed: {pcc}"
+    else:
+        tt_stats = ttnn.layer_norm_pre_all_gather(tt_input, program_config=program_config)
+        tt_stats_torch = ttnn.to_torch(tt_stats).to(torch.bfloat16)
+        tt_ex = tt_stats_torch[..., :1]
+        tt_ex2 = tt_stats_torch[..., 32:33]
+        torch_ex = torch.mean(torch_input.float(), dim=-1, keepdim=True).to(torch.bfloat16)
+        torch_ex2 = torch.mean(torch_input.float() ** 2, dim=-1, keepdim=True).to(torch.bfloat16)
+        passing_ex, pcc_ex = comp_pcc(torch_ex, tt_ex, pcc=0.9997)
+        passing_ex2, pcc_ex2 = comp_pcc(torch_ex2, tt_ex2, pcc=0.98)
+        assert passing_ex, f"E(x) PCC check failed: {pcc_ex}"
+        assert passing_ex2, f"E(x²) PCC check failed: {pcc_ex2}"
+
+
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+def test_nonrect_grid_pre_allgather_norm(device, is_rmsnorm):
+    """
+    Pre-allgather partial statistics on a non-rectangular 12-core grid
+    (8 cores in row 0 + 4 in row 1; bounding box 8×2).
+
+    Exercises the fix in reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp
+    where noc_semaphore_set_multicast used num_blocks-1 instead of num_mcast_dests,
+    causing a hang at noc_async_write_barrier() for non-rectangular grids.
+    """
+    _run_nonrect_pre_allgather_norm(
+        device,
+        is_rmsnorm=is_rmsnorm,
+        grid=_nonrect_grid("8plus4"),
+        bbox_x=8,
+        bbox_y=2,
+        H=32,
+        W=2304,
+        shard_w=192,
+    )
+
+
+def _run_nonrect_distributed_norm(device, is_rmsnorm, eps, grid, bbox_x, bbox_y, H, W, shard_w):
+    """
+    Simulate single-device distributed layernorm (pre_allgather + post_allgather)
+    on a non-rectangular grid and verify the final output against a torch reference.
+
+    Exercises the fix in reader_mcast_sender_unary_sharded_ln_post_allgather.cpp
+    where noc_async_write_multicast_loopback_src / noc_semaphore_set_multicast_loopback_src
+    used num_blocks (actual shard count) instead of the bounding-box area as the
+    loopback num_dests, causing a hang for non-rectangular grids.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, H, W, dtype=torch.bfloat16)
+    torch_weight = torch.ones(1, 1, 1, W, dtype=torch.bfloat16)
+
+    if is_rmsnorm:
+        torch_ref = rms_norm(torch_input, torch_weight, eps=eps)
+    else:
+        torch_ref = torch.nn.functional.layer_norm(torch_input, (W,), weight=torch_weight.reshape(W), eps=eps)
+
+    block_w = shard_w // 32
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(bbox_x, bbox_y),
+        subblock_w=block_w,
+        block_h=1,
+        block_w=block_w,
+        inplace=False,
+    )
+    sharded_cfg = _nonrect_mem_cfg(grid, H, shard_w)
+
+    # Pre-allgather stage
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_input = ttnn.to_device(tt_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_input = ttnn.to_memory_config(tt_input, sharded_cfg)
+
+    if is_rmsnorm:
+        tt_stats = ttnn.rms_norm_pre_all_gather(tt_input, program_config=program_config)
+    else:
+        tt_stats = ttnn.layer_norm_pre_all_gather(tt_input, program_config=program_config)
+
+    # Simulate allgather (single device: shard stats to one core)
+    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=ttnn.L1_MEMORY_CONFIG)
+    stats_sharded_cfg = ttnn.create_sharded_memory_config(
+        shape=(H, tt_stats.padded_shape[-1]),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=stats_sharded_cfg)
+
+    # Post-allgather stage
+    tt_input2 = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_input2 = ttnn.to_device(tt_input2, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_input2 = ttnn.to_memory_config(tt_input2, sharded_cfg)
+
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.to_device(tt_weight, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    if is_rmsnorm:
+        tt_out = ttnn.rms_norm_post_all_gather(
+            tt_input2,
+            epsilon=eps,
+            weight=tt_weight,
+            program_config=program_config,
+            stats=tt_stats,
+            dtype=ttnn.bfloat16,
+            memory_config=sharded_cfg,
+        )
+    else:
+        tt_out = ttnn.layer_norm_post_all_gather(
+            tt_input2,
+            epsilon=eps,
+            weight=tt_weight,
+            program_config=program_config,
+            stats=tt_stats,
+            dtype=ttnn.bfloat16,
+            memory_config=sharded_cfg,
+        )
+
+    tt_torch = ttnn.to_torch(tt_out).to(torch.bfloat16)
+
+    passing, pcc = comp_pcc(torch_ref, tt_torch, pcc=0.9997)
+    atol = torch.max(torch.abs(torch_ref - tt_torch)).item()
+    assert passing, f"PCC check failed: {pcc}"
+    assert atol <= 0.45, f"Max atol exceeded: {atol}"
+
+
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+def test_nonrect_grid_distributed_norm(device, is_rmsnorm):
+    """
+    Simulated single-device distributed rms_norm / layer_norm (pre_allgather
+    followed by post_allgather) on a non-rectangular 12-core grid
+    (8 cores in row 0 + 4 in row 1; bounding box 8×2).
+
+    Exercises the fix in reader_mcast_sender_unary_sharded_ln_post_allgather.cpp
+    where the loopback multicast num_dests was set to num_blocks (12, the actual
+    shard count) instead of the bounding-box area (16), causing a hang.
+    """
+    _run_nonrect_distributed_norm(
+        device,
+        is_rmsnorm=is_rmsnorm,
+        eps=1e-7,
+        grid=_nonrect_grid("8plus4"),
+        bbox_x=8,
+        bbox_y=2,
+        H=32,
+        W=2304,
+        shard_w=192,
+    )

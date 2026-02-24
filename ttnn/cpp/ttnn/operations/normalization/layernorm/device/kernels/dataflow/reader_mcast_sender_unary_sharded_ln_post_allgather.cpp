@@ -9,12 +9,13 @@
 // split REDUCE across cores
 void kernel_main() {
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t block_h = get_compile_time_arg_val(3);
     constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
     constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+    // NOC multicast destination count (loopback: includes sender = bounding-box area).
+    constexpr uint32_t num_mcast_dests_loopback = get_compile_time_arg_val(19) + 1;
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
@@ -36,7 +37,7 @@ void kernel_main() {
         *reduce_sender_semaphore_addr_ptr = VALID;
 
         noc_semaphore_set_multicast_loopback_src(
-            reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks, false);
+            reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_mcast_dests_loopback, false);
         noc_async_write_barrier();
     };
 
@@ -48,7 +49,7 @@ void kernel_main() {
             l1_read_addr_ex,
             multicast_data_noc | l1_read_addr_ex_global,
             stats_tiles * num_tiles_per_worker_bytes,
-            num_blocks,
+            num_mcast_dests_loopback,
             false);
         noc_async_write_barrier();
     };

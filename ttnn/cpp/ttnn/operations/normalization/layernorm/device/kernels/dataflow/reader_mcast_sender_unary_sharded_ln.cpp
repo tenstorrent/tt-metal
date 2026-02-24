@@ -55,6 +55,9 @@ void kernel_main() {
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
     constexpr bool use_welford = get_compile_time_arg_val(18) == 1;
+    // Number of non-sender cores in the NOC multicast rectangle (may exceed
+    // num_blocks - 1 for non-rectangular grids where the bounding-box includes extra cores).
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------
     // Runtime arguments
@@ -130,7 +133,8 @@ void kernel_main() {
             *reduce_sender_semaphore_addr_ptr = VALID;
             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks - 1);
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-            noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
+            noc_semaphore_set_multicast(
+                reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_mcast_dests);
         }
 
         // ============================================================================
@@ -250,10 +254,10 @@ void kernel_main() {
                     l1_read_addr_ex_global,
                     multicast_data_noc | l1_read_addr_ex_global,
                     num_tiles_scaler * num_tiles_bytes,
-                    num_blocks - 1,
+                    num_mcast_dests,
                     true);
                 noc_semaphore_set_multicast(
-                    reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
+                    reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_mcast_dests);
 
                 l1_read_addr_ex_global += num_tiles_scaler * num_tiles_bytes;
                 noc_async_write_barrier();

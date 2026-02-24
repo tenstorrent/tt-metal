@@ -109,6 +109,11 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
         offset = bbox.start_coord;
     }
     uint32_t nb = get_num_blocks(mcast, rw, gs, spec);
+    // Two-stage reduce builds core ranges assuming a full rectangular bounding-box grid.
+    // For non-rectangular grids the bounding box contains holes; the rectangle constructed
+    // for not_all_to_all_workers would include cores outside the shard spec, which would
+    // receive the compute kernel but get no runtime args, triggering a Watcher error.
+    bool is_rectangular_grid = (spec.grid.num_cores() == gs.x * gs.y);
     return GridParams{
         .shard_spec = spec,
         .grid_size = gs,
@@ -117,7 +122,8 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
         .row_wise = rw,
         .num_blocks = nb,
         .use_mcast = nb > 1,
-        .use_two_stage_reduce = should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size)};
+        .use_two_stage_reduce =
+            is_rectangular_grid && should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size)};
 }
 
 WorkerDistribution WorkerDistribution::compute(const GridParams& grid, uint32_t block_ht) {
@@ -572,6 +578,21 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 
     uint32_t num_subblocks_w = ctx.block_wt / ctx.subblock_wt;
 
+    // Number of non-sender cores in the NOC multicast rectangle.
+    // For mcast_1d, the rectangle spans the full bounding box; for 2D mcast it is
+    // per-row (row_wise) or per-column (!row_wise).  On rectangular grids this
+    // equals num_blocks - 1, but on non-rectangular grids num_blocks counts only
+    // the actual shard cores while the bounding-box rectangle is larger.
+    // noc_async_write_multicast requires num_dests to match the rectangle exactly.
+    uint32_t num_mcast_dests;
+    if (grid.mcast_1d) {
+        num_mcast_dests = grid.grid_size.x * grid.grid_size.y - 1;
+    } else if (grid.row_wise) {
+        num_mcast_dests = grid.grid_size.x - 1;
+    } else {
+        num_mcast_dests = grid.grid_size.y - 1;
+    }
+
     // Reader sender compile time args
     args.reader_sender = {
         ctx.reduce_receiver_semaphore_id,
@@ -592,7 +613,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         workers.num_blocks_second_stage,
         ctx.reduce_second_stage_semaphore_id,
         (uint32_t)ctx.rms_norm,
-        (uint32_t)ctx.use_welford};
+        (uint32_t)ctx.use_welford,
+        num_mcast_dests};
 
     // Reader receiver all-to-all compile time args
     args.reader_receiver_all_to_all = {

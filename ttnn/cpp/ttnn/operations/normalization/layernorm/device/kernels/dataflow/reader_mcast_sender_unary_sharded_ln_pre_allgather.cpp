@@ -26,6 +26,8 @@ void kernel_main() {
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+    // Number of non-sender cores in the NOC multicast rectangle.
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
@@ -100,7 +102,8 @@ void kernel_main() {
             *reduce_sender_semaphore_addr_ptr = VALID;
             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks - 1);
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-            noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
+            noc_semaphore_set_multicast(
+                reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_mcast_dests);
         }
 
         // read data from other cores - first stage reduce
