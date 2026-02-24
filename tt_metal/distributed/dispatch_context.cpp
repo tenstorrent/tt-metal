@@ -54,7 +54,6 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     }
     // Query the number of command queues requested
     device_manager->initialize_dispatch_firmware(/*force_recreate_topology=*/true);
-    tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 
     auto& mesh_device_impl = mesh_device->impl();
     mesh_device_impl.mesh_command_queues_.clear();
@@ -106,6 +105,24 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor
     MetalContext::instance().set_fast_dispatch_mode(false);
+}
+
+void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
+    TT_FATAL(
+        !MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "{} can only be called when Fast Dispatch is disabled.",
+        __func__);
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    sd_mesh_cq.enable_asynchronous_slow_dispatch();
+}
+
+void DispatchContext::disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
+    TT_FATAL(
+        MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "{} can only be called when Fast Dispatch is enabled.",
+        __func__);
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    sd_mesh_cq.disable_asynchronous_slow_dispatch();
 }
 
 }  // namespace tt::tt_metal::experimental
