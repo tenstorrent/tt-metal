@@ -787,12 +787,127 @@ bool is_flattened(const GroupingInfo& grouping) {
 
 namespace tt::tt_fabric {
 
+MappingResult<uint32_t, AsicID> solve_for_many_groupings_to_psd(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    using tt::tt_metal::ASICLocation;
+    using tt::tt_metal::TrayID;
+
+    MappingConstraints<uint32_t, AsicID> constraints = {};
+
+    const AdjacencyGraph<uint32_t>& flat_mesh = grouping_info.adjacency_graph;
+
+    // Enumerate as many flat meshes as possible to fit in the physical graph
+    size_t num_meshes_to_fit = physical_graph.get_nodes().size() / flat_mesh.get_nodes().size();
+
+    // Step 1: Get adjacency map directly from flat_mesh and find max unique_id
+    const auto& original_adj_map = flat_mesh.get_adjacency_map();
+    uint32_t max_unique_id = 0;
+    for (const auto& node : flat_mesh.get_nodes()) {
+        if (node > max_unique_id) {
+            max_unique_id = node;
+        }
+    }
+    uint32_t unique_id_offset = max_unique_id + 1;
+
+    // Step 2: Copy adjacency map for each copy and modify unique_ids
+    AdjacencyGraph<uint32_t>::AdjacencyMap combined_adj_map;
+
+    for (size_t copy_idx = 0; copy_idx < num_meshes_to_fit; ++copy_idx) {
+        uint32_t offset = unique_id_offset * copy_idx;
+
+        // Copy the adjacency map and modify unique_ids
+        AdjacencyGraph<uint32_t>::AdjacencyMap modified_adj_map;
+        for (const auto& [node, neighbors] : original_adj_map) {
+            // Create node with modified unique_id
+            uint32_t modified_node = node + offset;
+
+            // Modify unique_ids in neighbor list
+            std::vector<uint32_t> modified_neighbors;
+            modified_neighbors.reserve(neighbors.size());
+            for (const auto& neighbor : neighbors) {
+                uint32_t modified_neighbor = neighbor + offset;
+                modified_neighbors.push_back(modified_neighbor);
+            }
+
+            modified_adj_map[modified_node] = modified_neighbors;
+        }
+
+        // Join this copy into the combined map
+        combined_adj_map.insert(modified_adj_map.begin(), modified_adj_map.end());
+    }
+
+    // Step 3: Create adjacency graph from combined map
+    AdjacencyGraph<uint32_t> all_meshes(combined_adj_map);
+
+    // Step 4: Build trait maps for target nodes (from joined flattened mesh)
+    // Map new node IDs back to original node IDs to get trait information from items
+    std::map<uint32_t, TrayID> target_tray_traits;
+    std::map<uint32_t, ASICLocation> target_location_traits;
+
+    for (const auto& node : all_meshes.get_nodes()) {
+        // Map back to original node ID by removing the offset
+        // The offset calculation ensures: node = original_node_id + (copy_idx * unique_id_offset)
+        // So: original_node_id = node % unique_id_offset (works because unique_id_offset > max_unique_id)
+        uint32_t original_node_id = node % unique_id_offset;
+
+        // Check if this original node ID exists in the items array
+        if (original_node_id >= grouping_info.items.size()) {
+            continue;
+        }
+
+        const GroupingItemInfo& item = grouping_info.items[original_node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        if (*item.tray_id > 0) {
+            target_tray_traits[node] = item.tray_id;
+        }
+        if (*item.asic_location > 0) {
+            target_location_traits[node] = item.asic_location;
+        }
+    }
+
+    // Build trait maps for global nodes (from physical graph)
+    std::map<AsicID, TrayID> global_tray_traits;
+    std::map<AsicID, ASICLocation> global_location_traits;
+
+    for (const auto& asic_id : physical_graph.get_nodes()) {
+        TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
+        ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
+        global_tray_traits[asic_id] = tray_id;
+        global_location_traits[asic_id] = asic_location;
+    }
+
+    // Add trait constraints for tray_id and asic_location
+    if (!target_tray_traits.empty() && !global_tray_traits.empty()) {
+        TT_FATAL(
+            constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits),
+            "Internal error: Failed to add required trait constraint for tray_id");
+    }
+    if (!target_location_traits.empty() && !global_location_traits.empty()) {
+        TT_FATAL(
+            constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits),
+            "Internal error: Failed to add required trait constraint for asic_location");
+    }
+
+    return solve_topology_mapping(all_meshes, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+}
+}  // namespace tt::tt_fabric
+
+std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
+    const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    std::vector<std::string> errors;
+    return find_any_in_psd(grouping, physical_system_descriptor, errors);
+}
+
 std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    std::vector<std::string>* errors_out) const {
+    std::vector<std::string>& errors_out) const {
     // Build physical adjacency map from PSD (empty map means include all ASICs)
-    PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor, {});
+    PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
     // Convert to AdjacencyGraph
     AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
 
@@ -847,11 +962,26 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
         TT_THROW("Internal error: grouping produced empty graph");
     }
 
-    if (errors_out != nullptr && last_mesh_tried != nullptr) {
-        errors_out->push_back(build_pgd_mapping_failure_message(grouping.name, *last_mesh_tried, last_result));
+    if (last_mesh_tried != nullptr) {
+        errors_out.push_back(build_pgd_mapping_failure_message(grouping.name, *last_mesh_tried, last_result));
     }
 
     return asic_ids;
 }
 
-}  // namespace tt::tt_fabric
+std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+    const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    std::vector<std::string> errors;
+    return find_all_in_psd(grouping, physical_system_descriptor, errors);
+}
+
+std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+    const GroupingInfo& grouping,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    std::vector<std::string>& errors_out) const {
+    // TODO: Implement find_all_in_psd
+    (void)grouping;
+    (void)physical_system_descriptor;
+    (void)errors_out;
+    return {};
+}
