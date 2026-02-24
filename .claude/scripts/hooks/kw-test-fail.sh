@@ -3,12 +3,12 @@
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
-[[ "$COMMAND" == *dev-test.sh* || "$COMMAND" == *pytest* ]] || exit 0
+[[ "$COMMAND" == *tt-test.sh* || "$COMMAND" == *pytest* ]] || exit 0
 
 ERROR=$(echo "$INPUT" | jq -r '.error // empty')
 
-# Hang: dev-test.sh exits 2, or triage log was generated
-if [[ "$ERROR" == *"status code 2"* || "$ERROR" == *"exit code 2"* ]] || [[ -s /tmp/dev-test-triage.log ]]; then
+# Hang: tt-test.sh exits 2, or triage log was generated
+if [[ "$ERROR" == *"status code 2"* || "$ERROR" == *"exit code 2"* ]] || [[ -s /tmp/tt-test-triage-dev0.log ]]; then
   jq -n '{
     hookSpecificOutput: {
       hookEventName: "PostToolUseFailure",

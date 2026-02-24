@@ -30,7 +30,7 @@ BLOCKED: You created/modified $test_file but never ran it.
 
 ACTION REQUIRED:
 Run your tests before completing:
-  .claude/scripts/dev-test.sh $test_file
+  .claude/scripts/tt-test.sh --dev $test_file
 
 This catches CB misconfigurations, DataFormat errors, and allocation failures
 before downstream agents have to deal with them.
