@@ -82,11 +82,11 @@ static void RunTest(
                         // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
                         // others exit early. This lets us verify assert works on each DM individually
                         uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
-                        assert_kernel = experimental::quasar::CreateKernel(
+                        assert_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
                             program_,
                             kernel,
                             logical_core,
-                            experimental::quasar::QuasarDataMovementConfig{
+                            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
                                 .num_processors_per_cluster = 8, .compile_args = {dm_id}});
                     } else {
                         DataMovementConfig dm_config{};
@@ -202,9 +202,9 @@ static void RunTest(
         std::string pattern = regex_escape(expected);
         const std::string placeholder = "on line 0";
         size_t pos = pattern.find(placeholder);
-        if (pos != std::string::npos) {
-            pattern.replace(pos, placeholder.length(), "on line \\d+");
-        }
+        ASSERT_NE(pos, std::string::npos)
+            << "Expected placeholder '" << placeholder << "' not found in escaped pattern: " << pattern;
+        pattern.replace(pos, placeholder.length(), "on line \\d+");
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
