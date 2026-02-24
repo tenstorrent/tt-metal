@@ -90,30 +90,64 @@ async function run() {
       core.info(`Slack timestamp provided: ${slackTs}`);
     }
 
-    // --- TESTING: Force t3k_ttnn_tests as the only triaged job ---
-    const FORCE_WORKFLOW = 't3000-unit-tests';
-    const FORCE_JOB = 't3k_ttnn_tests';
-    core.info(`TESTING MODE: Only triaging forced job ${FORCE_WORKFLOW} / ${FORCE_JOB}`);
+    for (const workflow of regressedWorkflows) {
+      const workflowPath = workflow.workflow_path || workflow.name;
 
-    try {
-      await octokit.rest.actions.createWorkflowDispatch({
-        owner: github.context.repo.owner,
-        repo: github.context.repo.repo,
-        workflow_id: 'auto-triage.yml',
-        ref: dispatchRef,
-        inputs: {
-          workflow_name: FORCE_WORKFLOW,
-          job_name: FORCE_JOB,
-          slack_ts: slackTs,
-          'send-slack-message': sendSlackMessageFlag,
-          slack_channel_id: slackChannelId
+      // Extract workflow file name (remove .github/workflows/ prefix and .yaml extension)
+      const workflowFileName = workflowPath
+        .replace(/^\.github\/workflows\//, '')
+        .replace(/\.ya?ml$/i, '');
+
+      const failingJobs = workflow.failing_jobs || [];
+
+      core.info(`Processing workflow: ${workflowFileName} with ${failingJobs.length} failing job(s)`);
+
+      if (failingJobs.length === 0) {
+        core.warning(`No failing jobs found for workflow: ${workflowFileName}`);
+
+        // Send Slack notification if credentials are available
+        if (slackTs && slackChannelId && slackBotToken) {
+          try {
+            const message = `⚠️ Failed to find failing jobs for workflow: \`${workflowFileName}\``;
+            await sendSlackMessage(slackChannelId, slackBotToken, message, slackTs);
+          } catch (error) {
+            // Log but don't fail the workflow if Slack message fails
+            core.warning(`Failed to send Slack notification: ${error.message}`);
+          }
         }
-      });
-      core.info(`✓ Successfully triggered auto-triage for ${FORCE_WORKFLOW} / ${FORCE_JOB}`);
-    } catch (error) {
-      core.error(`Failed to trigger auto-triage for ${FORCE_WORKFLOW} / ${FORCE_JOB}: ${error.message}`);
+        continue;
+      }
+
+      for (const job of failingJobs) {
+        // Handle both old format (string) and new format ({name, url} object)
+        const jobName = (typeof job === 'object' && job !== null && job.name) ? job.name : String(job);
+        core.info(`Triggering auto-triage for workflow: ${workflowFileName}, job: ${jobName}`);
+
+        try {
+          await octokit.rest.actions.createWorkflowDispatch({
+            owner: github.context.repo.owner,
+            repo: github.context.repo.repo,
+            workflow_id: 'auto-triage.yml',
+            ref: dispatchRef,
+            inputs: {
+              workflow_name: workflowFileName,
+              job_name: jobName,
+              slack_ts: slackTs,
+              'send-slack-message': sendSlackMessageFlag,
+              slack_channel_id: slackChannelId
+            }
+          });
+          core.info(`✓ Successfully triggered auto-triage for ${workflowFileName} / ${jobName}`);
+
+          // Add a small delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+        } catch (error) {
+          core.error(`Failed to trigger auto-triage for ${workflowFileName} / ${jobName}: ${error.message}`);
+          // Continue with other jobs even if one fails
+        }
+      }
     }
-    // --- END TESTING ---
 
   } catch (error) {
     core.setFailed(error.message);
