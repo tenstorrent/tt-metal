@@ -455,9 +455,9 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         GroupingItemInfo item_info;
         if (instance.has_asic_location()) {
             item_info.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
-            item_info.asic_location = static_cast<uint32_t>(instance.asic_location());
+            item_info.asic_location = tt::tt_metal::ASICLocation{static_cast<uint32_t>(instance.asic_location())};
             info.items.push_back(item_info);
-            asic_locations.push_back(item_info.asic_location);
+            asic_locations.push_back(*item_info.asic_location);
             has_asic_locations = true;
         } else if (instance.has_grouping_ref()) {
             item_info.type = GroupingItemInfo::ItemType::GROUPING_REF;
@@ -467,19 +467,19 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
                 switch (ref.preset_type()) {
                     case proto::TRAY_1:
                         item_info.grouping_name = "TRAY_1";
-                        item_info.tray_id = 1;
+                        item_info.tray_id = tt::tt_metal::TrayID{1};
                         break;
                     case proto::TRAY_2:
                         item_info.grouping_name = "TRAY_2";
-                        item_info.tray_id = 2;
+                        item_info.tray_id = tt::tt_metal::TrayID{2};
                         break;
                     case proto::TRAY_3:
                         item_info.grouping_name = "TRAY_3";
-                        item_info.tray_id = 3;
+                        item_info.tray_id = tt::tt_metal::TrayID{3};
                         break;
                     case proto::TRAY_4:
                         item_info.grouping_name = "TRAY_4";
-                        item_info.tray_id = 4;
+                        item_info.tray_id = tt::tt_metal::TrayID{4};
                         break;
                     case proto::HOSTS:
                         item_info.grouping_name = "HOSTS";
@@ -598,7 +598,7 @@ enum class AdjacencyDirection { A_LEFT_OF_B, A_ABOVE_B, A_RIGHT_OF_B, A_BELOW_B 
 
 // Metadata for flattened mesh nodes
 struct NodeMetadata {
-    uint32_t tray_id = 0;
+    tt::tt_metal::TrayID tray_id{0};
     std::vector<std::string> grouping_path;
 };
 
@@ -875,8 +875,8 @@ AdjacencyGraph<uint32_t> join_mesh_level(const std::vector<FlattenedMesh>& meshe
     return AdjacencyGraph<uint32_t>(adj_map);
 }
 
-// Helper to extract tray ID from grouping name (e.g., "tray_1" -> 1, "TRAY_2" -> 2)
-uint32_t extract_tray_id(const std::string& grouping_name) {
+// Helper to extract tray ID from grouping name (e.g., "tray_1" -> TrayID{1}, "TRAY_2" -> TrayID{2})
+tt::tt_metal::TrayID extract_tray_id(const std::string& grouping_name) {
     const std::string lower_name = [&]() {
         std::string result = grouping_name;
         std::transform(result.begin(), result.end(), result.begin(), ::tolower);
@@ -885,26 +885,26 @@ uint32_t extract_tray_id(const std::string& grouping_name) {
 
     if (lower_name.starts_with("tray_")) {
         try {
-            return static_cast<uint32_t>(std::stoul(lower_name.substr(5)));
+            return tt::tt_metal::TrayID{static_cast<uint32_t>(std::stoul(lower_name.substr(5)))};
         } catch (...) {
-            return 0;
+            return tt::tt_metal::TrayID{0};
         }
     }
-    return 0;
+    return tt::tt_metal::TrayID{0};
 }
 
-// Helper to extract ASIC location from grouping path string (e.g., "ASIC_LOCATION_1" -> 1)
-uint32_t extract_asic_location_from_path(const std::vector<std::string>& grouping_path) {
+// Helper to extract ASIC location from grouping path string (e.g., "ASIC_LOCATION_1" -> ASICLocation{1})
+tt::tt_metal::ASICLocation extract_asic_location_from_path(const std::vector<std::string>& grouping_path) {
     for (const auto& path_elem : grouping_path) {
         if (path_elem.starts_with("ASIC_LOCATION_")) {
             try {
-                return static_cast<uint32_t>(std::stoul(path_elem.substr(14)));
+                return tt::tt_metal::ASICLocation{static_cast<uint32_t>(std::stoul(path_elem.substr(14)))};
             } catch (...) {
-                return 0;
+                return tt::tt_metal::ASICLocation{0};
             }
         }
     }
-    return 0;
+    return tt::tt_metal::ASICLocation{0};
 }
 
 // Rebuild GroupingInfo.items from FlattenedMesh. Graph nodes are 0..n-1; items[i] is the item for node i.
@@ -916,8 +916,8 @@ void rebuild_items_from_flattened_mesh(GroupingInfo& info, const FlattenedMesh& 
     for (uint32_t node_id : node_ids) {
         GroupingItemInfo item;
         item.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
-        item.asic_location = 0;
-        item.tray_id = 0;
+        item.asic_location = tt::tt_metal::ASICLocation{0};
+        item.tray_id = tt::tt_metal::TrayID{0};
 
         auto metadata_it = mesh.node_metadata.find(node_id);
         if (metadata_it != mesh.node_metadata.end()) {
@@ -957,8 +957,8 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         // Extract tray ID from grouping path
         NodeMetadata metadata;
         for (const auto& path_elem : grouping_path) {
-            uint32_t tray_id = extract_tray_id(path_elem);
-            if (tray_id > 0) {
+            tt::tt_metal::TrayID tray_id = extract_tray_id(path_elem);
+            if (*tray_id > 0) {
                 metadata.tray_id = tray_id;
                 break;
             }
@@ -966,7 +966,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
         // Build grouping path: copy existing path and add ASIC location
         metadata.grouping_path = grouping_path;
-        metadata.grouping_path.push_back("ASIC_LOCATION_" + std::to_string(item.asic_location));
+        metadata.grouping_path.push_back("ASIC_LOCATION_" + std::to_string(*item.asic_location));
 
         mesh.nodes_row_major = {node_id};
         mesh.node_metadata[node_id] = metadata;
@@ -989,12 +989,12 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
         // Ensure tray_id is extractable in leaf nodes: add type (e.g. "TRAY_1") if it encodes tray
         // and the name didn't already provide it. This handles cases where name might not match "tray_N".
-        if (extract_tray_id(sub_grouping.name) == 0 && extract_tray_id(sub_grouping.type) > 0) {
+        if (*extract_tray_id(sub_grouping.name) == 0 && *extract_tray_id(sub_grouping.type) > 0) {
             new_path.push_back(sub_grouping.type);
         }
         // Fallback: ref item has tray_id (e.g. TRAY_1) but neither name nor type encodes it
-        if (extract_tray_id(sub_grouping.name) == 0 && extract_tray_id(sub_grouping.type) == 0 && item.tray_id > 0) {
-            new_path.push_back("tray_" + std::to_string(item.tray_id));
+        if (*extract_tray_id(sub_grouping.name) == 0 && *extract_tray_id(sub_grouping.type) == 0 && *item.tray_id > 0) {
+            new_path.push_back("tray_" + std::to_string(*item.tray_id));
         }
 
         // Single-item grouping: recurse directly, add each possibility as its own entry (no join)
