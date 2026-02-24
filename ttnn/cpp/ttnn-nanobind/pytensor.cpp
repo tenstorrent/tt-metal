@@ -300,11 +300,7 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
-    // Fiddling with sign bit to match previous behavior
     nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
-    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
-        dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
-    }
 
     // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
     // with shape/stride pointers
@@ -641,7 +637,8 @@ void pytensor_module(nb::module_& mod) {
                const std::optional<Tile>& tile,
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
-               const distributed::TensorToMesh* mesh_mapper) {
+               const distributed::TensorToMesh* mesh_mapper,
+               bool col_tilize) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -672,7 +669,8 @@ void pytensor_module(nb::module_& mod) {
                     device,
                     cq_id,
                     mesh_mapper,
-                    pad_value));
+                    pad_value,
+                    col_tilize));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -683,6 +681,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("cq_id") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
+            nb::arg("col_tilize") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
@@ -706,6 +705,8 @@ void pytensor_module(nb::module_& mod) {
                 | pad_value    | Padding value (optional)       |
                 +--------------+--------------------------------+
                 | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
+                +--------------+--------------------------------+
+                | col_tilize   | Column-wise BFP tilize (false)  |
                 +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:

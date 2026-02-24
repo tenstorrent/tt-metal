@@ -97,10 +97,6 @@ protected:
     bool process_defines_at_compile_{};
     bool firmware_is_kernel_object_{};
 
-    HalProgrammableCoreType core_type_;
-    HalProcessorClassType processor_class_;
-    uint32_t processor_id_;
-
     std::string out_path_;
     std::string target_name_;
     std::string target_full_path_;
@@ -116,6 +112,7 @@ protected:
     vector_cache_aligned<std::string> temp_objs_;
 
     std::string extra_link_objs_;
+    std::string weakened_firmware_name_;
 
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
@@ -135,7 +132,6 @@ protected:
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
-    std::string weakened_firmware_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
