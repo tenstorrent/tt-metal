@@ -30,6 +30,7 @@ TILE_WIDTH = 32
         ([1, 64, 64], 2, False),
         ([1, 64], 0, False),
         ([1, 64], 1, True),
+        ([237], 0, False),
     ],
 )
 def test_sort_standard(shape, dim, descending, device):
@@ -48,7 +49,7 @@ def test_sort_standard(shape, dim, descending, device):
     assert list(ttnn_sort_values.shape) == shape
     assert list(ttnn_sort_indices.shape) == shape
 
-    if len(shape) == 0 or len(shape) == 1:
+    if len(shape) == 0 or (len(shape) == 1 and shape[0] == 1):
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
         assert torch_sort_indices == ttnn.to_torch(ttnn_sort_indices)
     else:
