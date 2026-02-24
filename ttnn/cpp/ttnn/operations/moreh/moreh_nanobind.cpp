@@ -18,8 +18,6 @@
 #include "ttnn/operations/moreh/moreh_getitem/moreh_getitem_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_group_norm/moreh_group_norm_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_group_norm_backward/moreh_group_norm_backward_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_linear/moreh_linear_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul_nanobind.hpp"
@@ -53,8 +51,6 @@ void bind_moreh_operations(nb::module_& mod) {
     moreh_getitem::bind_moreh_getitem_operation(mod);
     moreh_group_norm_backward::bind_moreh_group_norm_backward_operation(mod);
     moreh_group_norm::bind_moreh_group_norm_operation(mod);
-    moreh_layer_norm_backward::bind_moreh_layer_norm_backward_operation(mod);
-    moreh_layer_norm::bind_moreh_layer_norm_operation(mod);
     moreh_linear_backward::bind_moreh_linear_backward_operation(mod);
     moreh_linear::bind_moreh_linear_operation(mod);
     moreh_matmul_backward::bind_moreh_matmul_backward_operation(mod);
