@@ -39,13 +39,13 @@ class TtScaleAttn:
 
     def __call__(self, feat_nchw):
         B, C, H, W = feat_nchw.shape
-        pooled = ttnn.mean(feat_nchw, dim=(-2, -1), keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        pooled = ttnn.mean(feat_nchw, dim=(-2, -1), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        out = ttnn.matmul(pooled, self.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.add(out, self.bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.relu(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.hardsigmoid(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.matmul(pooled, self.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.add(out, self.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.relu(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.hardsigmoid(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.reshape(out, (B, 1, 1, 1))
         return out
 
@@ -77,17 +77,17 @@ class TtDyReLU:
     def __call__(self, feat_nchw):
         B, C, H, W = feat_nchw.shape
 
-        pooled = ttnn.mean(feat_nchw, dim=(-2, -1), keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        pooled = ttnn.mean(feat_nchw, dim=(-2, -1), keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         pooled = ttnn.reshape(pooled, (B, C))
 
-        h = ttnn.matmul(pooled, self.weight1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        h = ttnn.add(h, self.bias1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        h = ttnn.relu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.matmul(pooled, self.weight1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.add(h, self.bias1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.relu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        coeffs = ttnn.matmul(h, self.weight2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        coeffs = ttnn.add(coeffs, self.bias2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        coeffs = ttnn.matmul(h, self.weight2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        coeffs = ttnn.add(coeffs, self.bias2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.L1_MEMORY_CONFIG)
+        coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         coeffs_cpu = ttnn.to_torch(ttnn.from_device(coeffs)).float()
         a1_t, b1_t, a2_t, b2_t = torch.split(coeffs_cpu, C, dim=1)
@@ -102,16 +102,16 @@ class TtDyReLU:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
         a1, b1, a2, b2 = _to_dev(a1_t), _to_dev(b1_t), _to_dev(a2_t), _to_dev(b2_t)
 
-        feat = ttnn.to_layout(feat_nchw, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        branch1 = ttnn.multiply(feat, a1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        branch2 = ttnn.multiply(feat, a2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        feat = ttnn.to_layout(feat_nchw, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch1 = ttnn.multiply(feat, a1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch1 = ttnn.add(branch1, b1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch2 = ttnn.multiply(feat, a2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        branch2 = ttnn.add(branch2, b2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = ttnn.maximum(branch1, branch2)
         return output
@@ -167,7 +167,7 @@ class TtHybridDyHead:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     def _to_host(self, feat_ttnn) -> Tensor:
@@ -188,7 +188,7 @@ class TtHybridDyHead:
 
             mid_tt = self._to_device(mid_feat)
             scale_w = scale_attn(mid_tt)
-            sum_feat_tt = ttnn.multiply(mid_tt, scale_w, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            sum_feat_tt = ttnn.multiply(mid_tt, scale_w, memory_config=ttnn.L1_MEMORY_CONFIG)
             summed_levels = 1
 
             if level > 0:
@@ -201,8 +201,8 @@ class TtHybridDyHead:
 
                 low_tt = self._to_device(low_feat)
                 scale_w_low = scale_attn(low_tt)
-                weighted_low = ttnn.multiply(low_tt, scale_w_low, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_low, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                weighted_low = ttnn.multiply(low_tt, scale_w_low, memory_config=ttnn.L1_MEMORY_CONFIG)
+                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_low, memory_config=ttnn.L1_MEMORY_CONFIG)
                 summed_levels += 1
 
             if level < len(x) - 1:
@@ -218,12 +218,12 @@ class TtHybridDyHead:
 
                 high_tt = self._to_device(high_feat)
                 scale_w_high = scale_attn(high_tt)
-                weighted_high = ttnn.multiply(high_tt, scale_w_high, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_high, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                weighted_high = ttnn.multiply(high_tt, scale_w_high, memory_config=ttnn.L1_MEMORY_CONFIG)
+                sum_feat_tt = ttnn.add(sum_feat_tt, weighted_high, memory_config=ttnn.L1_MEMORY_CONFIG)
                 summed_levels += 1
 
             if summed_levels > 1:
-                sum_feat_tt = ttnn.multiply(sum_feat_tt, 1.0 / summed_levels, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                sum_feat_tt = ttnn.multiply(sum_feat_tt, 1.0 / summed_levels, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             out_tt = task_attn(sum_feat_tt)
             outs.append(self._to_host(out_tt))
