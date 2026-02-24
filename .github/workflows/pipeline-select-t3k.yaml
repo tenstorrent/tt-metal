@@ -99,7 +99,7 @@ on:
           - llama3
           - llama3 accuracy
           - llama3_70n90b accuracy
-           - llama3_90b
+          - llama3_90b
           # - llama3_70b # disabled in -impl file
           # - mixtral # disabled in -impl file
           - resnet
