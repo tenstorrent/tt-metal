@@ -106,11 +106,9 @@ void kernel_main() {
     }
 
     if constexpr (use_streaming_compute) {
-        // Streaming SDPA path: row-by-row with alternating buffers for FPU/SFPU overlap.
-        // Uses existing qk_subblock_h (arg 12) as the streaming row-group size.
-        constexpr uint32_t cb_qkt_row_A = tt::CBIndex::c_4;
-        constexpr uint32_t cb_qkt_row_B = tt::CBIndex::c_6;
-        constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_4;  // Reuse row buffer A in Phase 2
+        // Streaming SDPA v2: direct cb_qkt_im writes via cb_push_back_hold_wr_ptr.
+        // No row buffers needed. c_4 used only as 1-tile recip scratch for normalization.
+        constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_4;
 
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
             for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -129,8 +127,6 @@ void kernel_main() {
                         cb_qk_im,
                         cb_identity_scale_in,
                         cb_exp_max_diff,
-                        cb_qkt_row_A,
-                        cb_qkt_row_B,
                         cb_col_identity,
                         cb_recip_scratch,
                         cb_out,  // normalized output goes directly to output CB
