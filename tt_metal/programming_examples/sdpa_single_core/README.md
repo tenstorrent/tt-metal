@@ -40,7 +40,8 @@ Runs with hardcoded defaults: `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_
     --test <dir> \
     --Sq_chunk_t 7 --Sk_chunk_t 16 --head_dim_t 4 \
     --num_q_chunks 1 --num_k_chunks 5 \
-    --subblock_h 1 --mm_throttle_level 0 --exp_approx_mode 0
+    --subblock_h 1 --mm_throttle_level 0 --exp_approx_mode 0 \
+    --padded_k_tiles 0
 ```
 
 Reads `<dir>/q.bin`, `k.bin`, `v.bin` (raw bfloat16), tilizes, runs the kernel, untilizes output, and writes `<dir>/device_output.bin`.
@@ -56,7 +57,9 @@ Reads `<dir>/q.bin`, `k.bin`, `v.bin` (raw bfloat16), tilizes, runs the kernel, 
 
 Where `Sq = num_q_chunks * Sq_chunk_t * 32`, `Sk = num_k_chunks * Sk_chunk_t * 32`, `d = head_dim_t * 32`.
 
-**CLI parameter defaults** (when omitted): `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=3, num_k_chunks=5, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0`.
+**CLI parameter defaults** (when omitted): `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=3, num_k_chunks=5, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0, padded_k_tiles=0`.
+
+**Padded K masking:** When `--padded_k_tiles N` is nonzero, the last N tiles of the last K chunk are treated as zero-padding and masked with -inf before softmax. K/V input files must still have the full padded shape.
 
 ## Python Correctness Tests
 
@@ -77,16 +80,19 @@ pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py 
 
 ### Test cases
 
-| ID | Q chunks | K/V chunks | Sk_chunk_t | Data |
-|----|----------|------------|------------|------|
-| `1q_1k-zeros-sk16` | 1 | 1 | 16 | All zeros |
-| `1q_1k-ones-sk16` | 1 | 1 | 16 | All ones |
-| `1q_1k-random-sk16` | 1 | 1 | 16 | `fa_rand` (FlashAttention-style) |
-| `1q_5k-random-sk16` | 1 | 5 | 16 | `fa_rand` |
-| `3q_5k-random-sk16` | 3 | 5 | 16 | `fa_rand` |
-| `1q_1k-random-sk8` | 1 | 1 | 8 | `fa_rand` |
-| `1q_5k-random-sk8` | 1 | 5 | 8 | `fa_rand` |
-| `3q_5k-random-sk8` | 3 | 5 | 8 | `fa_rand` |
+| ID | Q chunks | K/V chunks | Sk_chunk_t | Padded | Data |
+|----|----------|------------|------------|--------|------|
+| `1q_1k-zeros-sk16` | 1 | 1 | 16 | 0 | All zeros |
+| `1q_1k-ones-sk16` | 1 | 1 | 16 | 0 | All ones |
+| `1q_1k-random-sk16` | 1 | 1 | 16 | 0 | `fa_rand` (FlashAttention-style) |
+| `1q_5k-random-sk16` | 1 | 5 | 16 | 0 | `fa_rand` |
+| `3q_5k-random-sk16` | 3 | 5 | 16 | 0 | `fa_rand` |
+| `1q_1k-random-sk8` | 1 | 1 | 8 | 0 | `fa_rand` |
+| `1q_5k-random-sk8` | 1 | 5 | 8 | 0 | `fa_rand` |
+| `3q_5k-random-sk8` | 3 | 5 | 8 | 0 | `fa_rand` |
+| `1q_5k-random-sk16-pad4` | 1 | 5 | 16 | 4 | `fa_rand` |
+| `1q_5k-random-sk8-pad2` | 1 | 5 | 8 | 2 | `fa_rand` |
+| `3q_5k-random-sk16-pad8` | 3 | 5 | 16 | 8 | `fa_rand` |
 
 ### Run a single test
 

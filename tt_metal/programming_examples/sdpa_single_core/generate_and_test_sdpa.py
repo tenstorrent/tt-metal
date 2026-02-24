@@ -224,24 +224,32 @@ def run_sdpa_single_core_test(
     mm_throttle_level=MM_THROTTLE_LEVEL,
     exp_approx_mode=EXP_APPROX_MODE,
     pcc_threshold=PCC_THRESHOLD,
+    padded_k_tiles=0,
 ):
     torch.manual_seed(SEED)
 
     Sq = num_q_chunks * sq_chunk_t * TILE
     Sk = num_k_chunks * sk_chunk_t * TILE
     d = head_dim_t * TILE
+    valid_Sk = Sk - padded_k_tiles * TILE  # actual K length before padding
 
-    logger.info(f"Sq={Sq}, Sk={Sk}, d={d}, data={data_mode}")
+    logger.info(f"Sq={Sq}, Sk={Sk}, valid_Sk={valid_Sk}, d={d}, data={data_mode}, padded_k_tiles={padded_k_tiles}")
 
     # --- Generate inputs ---
-    Q, K, V = generate_inputs(data_mode, Sq, Sk, d)
+    # When padded: generate valid-sized K/V, then zero-pad to chunk-aligned size
+    Q, K_valid, V_valid = generate_inputs(data_mode, Sq, valid_Sk, d)
+    if padded_k_tiles > 0:
+        K = F.pad(K_valid, (0, 0, 0, padded_k_tiles * TILE))
+        V = F.pad(V_valid, (0, 0, 0, padded_k_tiles * TILE))
+    else:
+        K, V = K_valid, V_valid
 
-    # Truncate to bf16 precision for reference
+    # Truncate to bf16 precision for reference (use unpadded K/V)
     Q_ref = Q.to(torch.bfloat16).float()
-    K_ref = K.to(torch.bfloat16).float()
-    V_ref = V.to(torch.bfloat16).float()
+    K_ref = K_valid.to(torch.bfloat16).float()
+    V_ref = V_valid.to(torch.bfloat16).float()
 
-    # --- PyTorch reference ---
+    # --- PyTorch reference (uses unpadded K/V) ---
     scale = 1.0 / (d**0.5)
     ref_output = (
         F.scaled_dot_product_attention(
@@ -304,6 +312,8 @@ def run_sdpa_single_core_test(
             str(mm_throttle_level),
             "--exp_approx_mode",
             str(int(exp_approx_mode)),
+            "--padded_k_tiles",
+            str(padded_k_tiles),
         ]
 
         logger.info(f"Running: {' '.join(cmd)}")
@@ -342,16 +352,20 @@ def run_sdpa_single_core_test(
 # ---------------------------------------------------------------------------
 
 TEST_CASES = [
-    # (num_q_chunks, num_k_chunks, data_mode, sk_chunk_t)
-    (1, 1, "zeros", 16),
-    (1, 1, "ones", 16),
-    (1, 1, "random", 16),
-    (1, 5, "random", 16),
-    (3, 5, "random", 16),
+    # (num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles)
+    (1, 1, "zeros", 16, 0),
+    (1, 1, "ones", 16, 0),
+    (1, 1, "random", 16, 0),
+    (1, 5, "random", 16, 0),
+    (3, 5, "random", 16, 0),
     # K=8 variants
-    (1, 1, "random", 8),
-    (1, 5, "random", 8),
-    (3, 5, "random", 8),
+    (1, 1, "random", 8, 0),
+    (1, 5, "random", 8, 0),
+    (3, 5, "random", 8, 0),
+    # Padded K variants (last chunk partially valid)
+    (1, 5, "random", 16, 4),
+    (1, 5, "random", 8, 2),
+    (3, 5, "random", 16, 8),
 ]
 
 TEST_IDS = [
@@ -363,15 +377,18 @@ TEST_IDS = [
     "1q_1k-random-sk8",
     "1q_5k-random-sk8",
     "3q_5k-random-sk8",
+    "1q_5k-random-sk16-pad4",
+    "1q_5k-random-sk8-pad2",
+    "3q_5k-random-sk16-pad8",
 ]
 
 
 @pytest.mark.parametrize(
-    "num_q_chunks, num_k_chunks, data_mode, sk_chunk_t",
+    "num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles",
     TEST_CASES,
     ids=TEST_IDS,
 )
-def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode, sk_chunk_t):
+def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles):
     test_id = request.node.callspec.id  # e.g. "1q_1k-zeros-sk16"
     save_only = request.config.getoption("--save-inputs", default=False)
     run_sdpa_single_core_test(
@@ -381,4 +398,5 @@ def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode, sk_chu
         data_mode,
         save_inputs_only=save_only,
         sk_chunk_t=sk_chunk_t,
+        padded_k_tiles=padded_k_tiles,
     )

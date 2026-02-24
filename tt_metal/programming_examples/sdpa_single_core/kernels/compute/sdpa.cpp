@@ -658,6 +658,46 @@ void blocked_matmul_and_pack(
     tile_regs_release();
 }
 
+/**
+ * Applies padded-K mask by L1-accumulating a -inf tile onto padded tile positions
+ * in a row buffer that is in reserved (not yet pushed) state.
+ *
+ * Processes in batches of up to DST_BATCH tiles to minimize tile_regs_acquire/release overhead.
+ * The neginf_cb must have 1 tile fronted and is NOT popped (reusable across calls).
+ *
+ * @tparam num_padded  Number of padded tiles to mask (must be > 0)
+ * @tparam num_cols    Total tiles per row (Sk_chunk_t)
+ * @tparam DST_BATCH   Max tiles per DST batch (8 for fp16b half-sync)
+ */
+template <bool PROFILING_ENABLED, uint32_t num_padded, uint32_t num_cols, uint32_t DST_BATCH = 8>
+void apply_padded_mask(uint32_t neginf_cb, uint32_t out_cb) {
+    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PAD_MASK");
+    static_assert(num_padded > 0, "num_padded must be > 0");
+    static_assert(num_padded < num_cols, "num_padded must be less than num_cols");
+    static_assert(DST_BATCH <= 8, "DST_BATCH must fit in DST (max 8 tiles with fp16b half-sync)");
+    constexpr uint32_t start = num_cols - num_padded;
+
+    sdpa_reduce_copy_tile_to_dst_init_short(neginf_cb);
+    cb_wait_front(neginf_cb, 1);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+
+    for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
+        uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < batch; i++) {
+            copy_tile(neginf_cb, 0, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < batch; i++) {
+            pack_tile<true>(i, out_cb, base + i);
+        }
+        tile_regs_release();
+    }
+
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
 // ===================== Normalization Functions =====================
 
 #ifdef TRISC_MATH
@@ -773,7 +813,9 @@ template <
     uint32_t cb_qkt_row_B,
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
-    uint32_t cb_normalized_out>
+    uint32_t cb_normalized_out,
+    uint32_t padded_k_tiles,
+    uint32_t cb_mask_in>
 void sdpa_inner_loop_step(
     const uint32_t prev_max,
     const uint32_t cur_max,
@@ -846,6 +888,14 @@ void sdpa_inner_loop_step(
             // Push softmax'd prev row to cb_qkt_im, free prev row buffer
             cb_push_back(cb_qkt_im, row_tiles);
             cb_pop_front(alias_prev_qkt_row, row_tiles);
+        }
+
+        // Apply padded mask on last K chunk: L1-accumulate -inf onto padded tile positions.
+        // Tiles are still in reserved (not pushed) state, so pack_tile<true> with L1 acc works.
+        if constexpr (padded_k_tiles > 0) {
+            if (is_last_iter) {
+                apply_padded_mask<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t>(cb_mask_in, alias_cur_qkt_row);
+            }
         }
 
         // Push raw matmul row (makes it available for max reduce read)
@@ -1085,6 +1135,7 @@ void kernel_main() {
     constexpr uint32_t num_k_chunks = get_compile_time_arg_val(5);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(7);
+    constexpr uint32_t padded_k_tiles = get_compile_time_arg_val(8);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_kt_in = tt::CBIndex::c_1;
@@ -1093,6 +1144,7 @@ void kernel_main() {
     constexpr uint32_t cb_qkt_row_A = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_qkt_row_B = tt::CBIndex::c_6;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_out_A = tt::CBIndex::c_25;
     constexpr uint32_t cb_out_B = tt::CBIndex::c_26;
@@ -1153,7 +1205,9 @@ void kernel_main() {
                     cb_qkt_row_B,
                     cb_col_identity,
                     cb_recip_scratch,
-                    cb_normalized_out>(
+                    cb_normalized_out,
+                    padded_k_tiles,
+                    cb_mask_in>(
                     alias_prev_max,
                     alias_cur_max,
                     alias_prev_sum,

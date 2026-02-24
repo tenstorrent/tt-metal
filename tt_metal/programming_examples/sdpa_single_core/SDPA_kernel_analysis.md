@@ -85,6 +85,7 @@ Runs on the Math+Pack RISC-V cores (TRISC_MATH, TRISC_PACK). This is the main ke
 | c4 | `cb_qkt_row_A` | 1×16 = 16 | Ping row buffer for raw matmul | Compute | Compute |
 | c5 | `cb_identity_scale_in` | 1 | Identity scaler (all 1.0s) | Writer | Compute |
 | c6 | `cb_qkt_row_B` | 1×16 = 16 | Pong row buffer for raw matmul | Compute | Compute |
+| c7 | `cb_mask_in` | 1 (optional) | -inf tile for padded K masking | Writer | Compute |
 | c8 | `cb_col_identity` | 1 | Column identity for matmul_reduce | Writer | Compute |
 | c9 | `cb_normalized_out` | 4 | Normalized output streaming | Compute | Writer |
 | c10 | `cb_recip_scratch` | 1 | 1/sum scratch | Compute | Compute |
@@ -186,10 +187,11 @@ This matches the reference SDPA's `processed_k_chunks > 0` pattern and eliminate
      - `sub_exp_block_bcast_cols()`: reads from prev_qkt_row, subtracts cur_max, applies exp with scale, packs to cb_qkt_im (sequential), reduces (L1 accum) to cur_sum
    - `blocked_matmul_and_pack()`: Q × KT for this subblock, packs to cur_qkt_row (sequential, SEQUENTIAL_OUTPUT=true)
 4. **If q_subblock > 0:** push softmax'd prev row to cb_qkt_im, pop prev row buffer
-5. **Push raw matmul row** (makes it available for reading)
-6. **Max reduce:** reads from cur_qkt_row, writes to cur_max
+5. **If padded_k_tiles > 0 and last K chunk:** `apply_padded_mask()` — L1-accumulates -inf onto padded tile positions in the row buffer (still in reserved state). Processes in batches of up to 8 tiles (DST capacity).
+6. **Push raw matmul row** (makes it available for reading)
+7. **Max reduce:** reads from cur_qkt_row, writes to cur_max
    - `reduce_c_row_group()`: uses `reduce_block_max_row` (block-based, not per-tile reduce_tile), plus eltwise_max with prev_max (skipped on first K-chunk via `do_eltwise_max = !is_first_iter`)
-7. **Swap row buffer aliases** (ping↔pong)
+8. **Swap row buffer aliases** (ping↔pong)
 
 **Key optimization:** The sub_exp of the *previous* row overlaps with the matmul of the *current* row's subblock. Since sub_exp uses SFPU (exp) while matmul uses FPU, they can overlap.
 
@@ -567,9 +569,9 @@ The reference supports attention sink logits (additional softmax denominator con
 
 The reference supports user-provided masks (not just causal). Not implemented here.
 
-### 9.5 Padded Mask Support
+### 9.5 Padded Mask Support (DONE)
 
-The reference supports padding masks for variable-length sequences. Not implemented here.
+Tile-aligned padded K masking is implemented via `apply_padded_mask()`. When `padded_k_tiles > 0`, the writer generates a single -inf tile in `cb_mask_in` (c7). On the last K chunk, the compute kernel L1-accumulates -inf onto the padded tile positions in the row buffer before push and max_reduce. This uses `pack_tile<true>` with L1 acc while tiles are still in reserved state — no row buffer doubling needed. The -inf tile stays fronted (never popped) for reuse across all Q subblocks.
 
 ### 9.6 Multi-Head / Multi-Batch
 
@@ -607,8 +609,11 @@ Bidirectional attention is numerically correct. Test results against PyTorch `F.
 | `1q_1k-random-sk8` | 0.999717 | 0.103503 | 0.004362 |
 | `1q_5k-random-sk8` | 0.999863 | 0.094849 | 0.004022 |
 | `3q_5k-random-sk8` | 0.999847 | 0.072169 | 0.003000 |
+| `1q_5k-random-sk16-pad4` | 0.999855 | 0.159379 | 0.003332 |
+| `1q_5k-random-sk8-pad2` | 0.999799 | 0.081001 | 0.003905 |
+| `3q_5k-random-sk16-pad8` | 0.999752 | 0.518033 | 0.004621 |
 
-The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Tests run with both Sk_chunk_t=16 (kt_num_subblocks=2) and Sk_chunk_t=8 (kt_num_subblocks=1). Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
+The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Tests run with both Sk_chunk_t=16 (kt_num_subblocks=2) and Sk_chunk_t=8 (kt_num_subblocks=1). Padded tests (`-padN`) verify that zero-padded K tiles are correctly masked out via `apply_padded_mask`. Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
 
 ### Step 2: Add Causal Masking
 
@@ -646,6 +651,7 @@ For multi-device scenarios, implement the ring attention pattern from the refere
 | `reduce_c_row_group` | sdpa.cpp:551 | Max reduce across rows using reduce_block_max_row + eltwise_max |
 | `normalize_row_streaming` | sdpa.cpp:700 | Per-row normalization: matmul_reduce + recip + bcast multiply |
 | `normalize_row` | sdpa.cpp (lambda) | Push sum/out tiles, call normalize_row_streaming (decoupled from SALAD) |
+| `apply_padded_mask` | sdpa.cpp:672 | L1-accumulate -inf onto padded K tile positions (batched, up to 8 tiles/DST) |
 | `calculate_exponential_polynomial` | sdpa.cpp:86 | Custom polynomial exp (degree 1-4) |
 
 ## Appendix B: Compile-Time Arguments
@@ -660,6 +666,7 @@ For multi-device scenarios, implement the ring attention pattern from the refere
 | 5 | `num_k_chunks` | 3 | Number of K/V chunks |
 | 6 | `scale_fp32` | 1/sqrt(128) as uint32 | Scale factor (bit-cast float) |
 | 7 | `subblock_h` | 1 | Subblock height (1 or 2) |
+| 8 | `padded_k_tiles` | 0 | Zero-padded K tiles in last chunk (0 = no masking) |
 
 ## Appendix C: Defines
 

@@ -14,6 +14,7 @@ void kernel_main() {
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(4);
     constexpr uint32_t num_k_chunks = get_compile_time_arg_val(5);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(6);
+    constexpr uint32_t padded_k_tiles = get_compile_time_arg_val(7);
 
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
@@ -22,12 +23,27 @@ void kernel_main() {
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
+    // Generate a single -inf tile for padded-K masking.
+    // Compute kernel L1-accumulates this onto padded tile positions in the row buffer.
+    // Stays fronted (never popped) for reuse across all Q subblocks and rows.
+    if constexpr (padded_k_tiles > 0) {
+        constexpr uint32_t cb_mask_in = tt::CBIndex::c_7;
+        const uint32_t tile_size_bytes = get_tile_size(cb_mask_in);
+
+        cb_reserve_back(cb_mask_in, 1);
+        auto* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mask_in));
+        for (uint32_t i = 0; i < tile_size_bytes / sizeof(uint32_t); i++) {
+            ptr[i] = 0xFF80FF80;  // -inf in bfloat16
+        }
+        cb_push_back(cb_mask_in, 1);
+    }
+
     // Normalized output streams through a dedicated 1-tile CB (decoupled from ping-pong out CBs).
     constexpr uint32_t cb_normalized_out = tt::CBIndex::c_9;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * head_dim_t;
 
     uint32_t out_addr = get_arg_val<uint32_t>(0);
-    constexpr auto out_accessor_args = TensorAccessorArgs<7>();
+    constexpr auto out_accessor_args = TensorAccessorArgs<8>();
     const auto out_accessor = TensorAccessor(out_accessor_args, out_addr, get_tile_size(cb_normalized_out));
 
     constexpr uint32_t subblock_h = 1;  // Must match compute kernel's subblock_h

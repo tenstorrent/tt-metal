@@ -81,6 +81,7 @@ void sdpa_single_core(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const uint32_t mm_throttle_level = 0,
     const bool exp_approx_mode = false,
+    const uint32_t padded_k_tiles = 0,
     const std::string& test_dir = "") {
     const bool test_mode = !test_dir.empty();
 
@@ -89,6 +90,11 @@ void sdpa_single_core(
     TT_FATAL(
         Sq_chunk_t % subblock_h == 0, "Sq_chunk_t ({}) must be divisible by subblock_h ({}).", Sq_chunk_t, subblock_h);
     TT_FATAL(head_dim_t <= 8, "head_dim_t ({}) must fit in DST (max 8 tiles with fp16b double-buffer).", head_dim_t);
+    TT_FATAL(
+        padded_k_tiles < Sk_chunk_t,
+        "padded_k_tiles ({}) must be less than Sk_chunk_t ({}).",
+        padded_k_tiles,
+        Sk_chunk_t);
 
     // ---- Device / program setup ----
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -137,6 +143,9 @@ void sdpa_single_core(
     create_cb(program, core, CBIndex::c_5, 1, single_tile_size, cb_data_format);                  // identity_scalar
     create_cb(
         program, core, CBIndex::c_6, subblock_h * Sk_chunk_t, single_tile_size, cb_data_format);  // qkt_row_B (pong)
+    if (padded_k_tiles > 0) {
+        create_cb(program, core, CBIndex::c_7, 1, single_tile_size, cb_data_format);  // neginf tile for padded mask
+    }
     create_cb(program, core, CBIndex::c_8, 1, single_tile_size, cb_data_format);                  // col_identity
     create_cb(program, core, CBIndex::c_9, head_dim_t, single_tile_size, cb_data_format);         // normalized_out
     create_cb(program, core, CBIndex::c_10, 1, single_tile_size, cb_data_format);                 // recip_scratch
@@ -191,7 +200,14 @@ void sdpa_single_core(
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
     std::vector<uint32_t> writer_compile_time_args = {
-        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_q_chunks, num_k_chunks, packed_identity_scalar};
+        Sq_chunk_t,
+        Sk_chunk_t,
+        Sv_chunk_t,
+        head_dim_t,
+        num_q_chunks,
+        num_k_chunks,
+        packed_identity_scalar,
+        padded_k_tiles};
     TensorAccessorArgs(*out_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
@@ -211,7 +227,15 @@ void sdpa_single_core(
     scale_union.f = 1.0f / std::sqrt(static_cast<float>(head_dim_t * TILE_WIDTH));
 
     std::vector<uint32_t> compute_compile_time_args = {
-        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_q_chunks, num_k_chunks, scale_union.u, subblock_h};
+        Sq_chunk_t,
+        Sk_chunk_t,
+        Sv_chunk_t,
+        head_dim_t,
+        num_q_chunks,
+        num_k_chunks,
+        scale_union.u,
+        subblock_h,
+        padded_k_tiles};
     tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/compute/sdpa.cpp",
@@ -314,12 +338,14 @@ int main(int argc, char* argv[]) {
         uint32_t subblock_h = get_arg_uint(argc, argv, "--subblock_h", 1);
         uint32_t mm_throttle_level = get_arg_uint(argc, argv, "--mm_throttle_level", 0);
         bool exp_approx_mode = get_arg_uint(argc, argv, "--exp_approx_mode", 0) != 0;
+        uint32_t padded_k_tiles = get_arg_uint(argc, argv, "--padded_k_tiles", 0);
         uint32_t Sv_chunk_t = Sk_chunk_t;  // Always equal
 
         if (!test_dir.empty()) {
             fmt::print(
                 "Test mode: dir={}, Sq_chunk_t={}, Sk_chunk_t={}, head_dim_t={}, "
-                "num_q_chunks={}, num_k_chunks={}, subblock_h={}, mm_throttle={}, exp_approx_mode={}\n",
+                "num_q_chunks={}, num_k_chunks={}, subblock_h={}, mm_throttle={}, exp_approx_mode={}, "
+                "padded_k_tiles={}\n",
                 test_dir,
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -328,7 +354,8 @@ int main(int argc, char* argv[]) {
                 num_k_chunks,
                 subblock_h,
                 mm_throttle_level,
-                exp_approx_mode);
+                exp_approx_mode,
+                padded_k_tiles);
         }
 
         sdpa_single_core(
@@ -342,6 +369,7 @@ int main(int argc, char* argv[]) {
             mesh_device,
             mm_throttle_level,
             exp_approx_mode,
+            padded_k_tiles,
             test_dir);
 
         pass &= mesh_device->close();
