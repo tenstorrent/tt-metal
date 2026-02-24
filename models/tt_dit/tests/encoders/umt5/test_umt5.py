@@ -245,6 +245,7 @@ def test_umt5_encoder(
 
     tt_prompt = ttnn.from_torch(
         text_input_ids,
+        dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
         device=encoder_submesh,
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
@@ -252,6 +253,7 @@ def test_umt5_encoder(
 
     tt_mask = ttnn.from_torch(
         mask,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=encoder_submesh,
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
@@ -293,7 +295,7 @@ def test_umt5_encoder(
 
     # get HF reference outputs
     with torch.no_grad():
-        hf_outputs = hf_model(text_input_ids).last_hidden_state
+        hf_outputs = hf_model(text_input_ids, attention_mask=mask).last_hidden_state
 
     # # convert mesh tensor to torch tensor for pcc
     # # since weights are replicated, can get the tensor from any single device
