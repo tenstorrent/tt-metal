@@ -261,10 +261,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self._prepare_vae()
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding models
-            self.unload_for_t1.extend([self.transformer_2])
-            self.unload_for_t2.extend([self.transformer, self.tt_umt5_encoder])
-            self.unload_for_text_encoder.extend([self.transformer_2])
-            self.unload_for_vae.extend([])  # All models currently load fine with VAE loaded. Here for completeness
+            # The module loading utility will take care of the necessary unloading.
+            self.tt_umt5_encoder.set_unload_set(self.transformer_2)
+            self.transformer.set_unload_set(self.transformer_2)
+            self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
         else:
             self._prepare_transformer2()
 
@@ -372,63 +372,45 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             checkpoint_name=checkpoint_name,
         )
 
-        # Does nothing if the text encoder is already loaded.
-
     def _prepare_text_encoder(self):
-        if not self.tt_umt5_encoder.is_loaded():
-            for model in self.unload_for_text_encoder:
-                model.deallocate_weights()
-
-            cache.load_model(
-                self.tt_umt5_encoder,
-                model_name=os.path.basename(self.checkpoint_name),
-                subfolder="text_encoder",
-                parallel_config=self.encoder_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=lambda: self.text_encoder.state_dict(),
-            )
+        cache.load_model(
+            self.tt_umt5_encoder,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="text_encoder",
+            parallel_config=self.encoder_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.text_encoder.state_dict(),
+        )
 
     def _prepare_transformer1(self):
-        if not self.transformer.is_loaded():
-            for model in self.unload_for_t1:
-                model.deallocate_weights()
-
-            cache.load_model(
-                self.transformer,
-                model_name=os.path.basename(self.checkpoint_name),
-                subfolder="transformer",
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
-            )
+        cache.load_model(
+            self.transformer,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="transformer",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
+        )
 
     def _prepare_transformer2(self):
-        if not self.transformer_2.is_loaded():
-            for model in self.unload_for_t2:
-                model.deallocate_weights()
-
-            cache.load_model(
-                self.transformer_2,
-                model_name=os.path.basename(self.checkpoint_name),
-                subfolder="transformer_2",
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
-            )
+        cache.load_model(
+            self.transformer_2,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="transformer_2",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
+        )
 
     def _prepare_vae(self):
-        if not self.tt_vae.is_loaded():
-            for model in self.unload_for_vae:
-                model.deallocate_weights()
-
-            cache.load_model(
-                self.tt_vae,
-                model_name=os.path.basename(self.checkpoint_name),
-                subfolder="vae",
-                parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=lambda: self.vae.state_dict(),
-            )
+        cache.load_model(
+            self.tt_vae,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="vae",
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.vae.state_dict(),
+        )
 
     def _get_t5_prompt_embeds(
         self,
