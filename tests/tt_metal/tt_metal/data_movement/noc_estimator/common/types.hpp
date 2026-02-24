@@ -5,11 +5,14 @@
 #pragma once
 
 #include <vector>
+#include <map>
+#include <string>
 #include <cstdint>
 
 namespace tt::tt_metal::noc_estimator::common {
 
-enum class Architecture { WORMHOLE_B0, BLACKHOLE };
+// Values match tt::ARCH from umd/device/types/arch.hpp
+enum class Architecture { WORMHOLE_B0 = 2, BLACKHOLE = 3 };
 
 enum class NocMechanism { UNICAST, MULTICAST, MULTICAST_LINKED };
 
@@ -40,7 +43,7 @@ struct LatencyData {
 constexpr int DEFAULT_MECHANISM = 0;  // UNICAST
 constexpr int DEFAULT_PATTERN = 1;    // ONE_TO_ONE
 constexpr int DEFAULT_MEMORY = 0;     // L1
-constexpr int DEFAULT_ARCH = 0;       // WORMHOLE_B0
+constexpr int DEFAULT_ARCH = static_cast<int>(Architecture::WORMHOLE_B0);
 constexpr uint32_t DEFAULT_NUM_TRANSACTIONS = 1;
 constexpr uint32_t DEFAULT_NUM_SUBORDINATES = 1;
 constexpr bool DEFAULT_SAME_AXIS = false;
@@ -106,18 +109,16 @@ struct GroupKey {
 // Generic numeric field accessors for interpolation
 // To add a new numeric field: update extract() and with_values()
 struct NumericFields {
-    // Extract all numeric values from a GroupKey
-    static std::vector<uint32_t> extract(const GroupKey& key) { return {key.num_transactions, key.num_subordinates}; }
-
-    // Create a new key with different numeric values
-    static GroupKey with_values(const GroupKey& base, const std::vector<uint32_t>& values) {
-        GroupKey result = base;
-        result.num_transactions = values[0];
-        result.num_subordinates = values[1];
-        return result;
+    static std::map<std::string, uint32_t> extract(const GroupKey& key) {
+        return {{"num_transactions", key.num_transactions}, {"num_subordinates", key.num_subordinates}};
     }
 
-    static constexpr std::size_t count = 2;  // Number of numeric fields
+    static GroupKey with_values(const GroupKey& base, const std::map<std::string, uint32_t>& values) {
+        GroupKey result = base;
+        result.num_transactions = values.at("num_transactions");
+        result.num_subordinates = values.at("num_subordinates");
+        return result;
+    }
 };
 
 }  // namespace tt::tt_metal::noc_estimator::common
