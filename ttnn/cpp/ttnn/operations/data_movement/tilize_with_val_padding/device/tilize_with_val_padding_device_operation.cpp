@@ -131,7 +131,8 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             shard_width,
             page_size_bytes,
             alignment_requirement);  // The shard_width must be an aligned size, or we will face alignment issues when
-                                     // the reader tries to the CB, since we might write to unaligned addresses.
+                                     // the reader tries to write to the CB, since we might write to unaligned
+                                     // addresses.
     }
 }
 
