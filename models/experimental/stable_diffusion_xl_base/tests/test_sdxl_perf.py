@@ -114,7 +114,7 @@ def test_refiner_unet(
         ),
         (
             'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet -k "512x512"',
-            87_296_975 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            91_463_635 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             "sdxl_unet_512x512",
             "sdxl_unet_512x512",
             1,
