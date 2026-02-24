@@ -60,6 +60,9 @@
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
+#ifdef ENABLE_BCAST
+#include "../../unified_kernels/broadcast.hpp"
+#endif
 
 // Compile-time role flags for dead code elimination via if constexpr.
 // Mirrors Python-side MoeRoutedExpertOp / MoeSharedExpertOp split.
@@ -325,12 +328,19 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
         unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
 
-        // Residual mcast source (pre-RMSNorm input on sender, tensor-backed)
+#ifdef ENABLE_BCAST
+        // Broadcast pkt_cb: tensor-backed input staging buffer (init before bcast_op)
+        constexpr uint32_t bcast_pkt_cb = get_named_compile_time_arg_val("bcast_pkt_cb");
+        constexpr uint32_t bcast_num_pages = get_named_compile_time_arg_val("bcast_num_pages_to_read");
+        unified_kernels::setup_sharded_buffer(bcast_pkt_cb, bcast_num_pages);
+#else
+        // When no broadcast, CB 25 data is pre-loaded in tensor — set up here
         constexpr uint32_t shared_residual_mcast_src_cb =
             get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
         constexpr uint32_t shared_residual_mcast_src_num_pages =
             get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(shared_residual_mcast_src_cb, shared_residual_mcast_src_num_pages);
+#endif
     }
     if constexpr (Core::Routed::is_gate_mm_core) {
         constexpr uint32_t gate_mm_in1 = get_named_compile_time_arg_val("gate_mm_in1");
@@ -894,6 +904,72 @@ void kernel_main() {
     constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
 
     auto moe_body = [&]() {
+#ifdef ENABLE_BCAST
+        // Step -1: CCL Broadcast — receive data from fabric into intermediate tensor
+        {
+            DeviceZoneScopedN("BCAST");
+#if defined(COMPILE_FOR_NCRISC)
+            using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+                get_named_compile_time_arg_val("bcast_pkt_cb"),
+                get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+                get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+                get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+                get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
+                get_named_compile_time_arg_val("bcast_is_sender"),
+                get_named_compile_time_arg_val("bcast_core_noc_x"),
+                get_named_compile_time_arg_val("bcast_core_noc_y"),
+                get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+                get_named_compile_time_arg_val("bcast_has_secondary_target"),
+                get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+                get_named_compile_time_arg_val("bcast_range_hops_forward"),
+                get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+                get_named_compile_time_arg_val("bcast_range_hops_backward")>;
+            deepseek_b1_ops::Broadcast::WriterArgs bcast_args{
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 0),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 1),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 2),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 3),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 4),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 5),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 6),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 7),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 8),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 9),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 10),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 11),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 12),
+            };
+
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_sender_core> bcast_op;
+            bcast_op(bcast_args);
+#elif defined(COMPILE_FOR_BRISC)
+            using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+                get_named_compile_time_arg_val("bcast_pkt_cb"),
+                get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+                get_named_compile_time_arg_val("bcast_is_sender"),
+                0>;
+            deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_sender_core> bcast_op;
+            bcast_op(bcast_args);
+#else
+            // TRISC: broadcast is a no-op
+            deepseek_b1_ops::Broadcast::Op<deepseek_b1_ops::Broadcast::ComputeCTArgs, Core::is_sender_core> bcast_op;
+            deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+            bcast_op(bcast_args);
+#endif
+        }
+        // After broadcast completes, set up CB 25 so pipeline can read from it
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t shared_residual_mcast_src_cb =
+                get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+            constexpr uint32_t shared_residual_mcast_src_num_pages =
+                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
+            unified_kernels::setup_sharded_buffer(shared_residual_mcast_src_cb, shared_residual_mcast_src_num_pages);
+        }
+#endif
+#endif
+
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
