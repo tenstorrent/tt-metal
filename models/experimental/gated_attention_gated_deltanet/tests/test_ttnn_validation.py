@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-
-# SPDX-License-Identifier: Apache-2.0
-
 """
 TTNN validation and performance tests.
 
@@ -83,10 +79,7 @@ def test_gated_attention_ttnn():
     device = ttnn.open_device(device_id=0)
     try:
         ttnn_params = {}
-        skip_keys = {"attention_mask"}
         for key, val in params.items():
-            if key in skip_keys:
-                continue
             if isinstance(val, torch.Tensor):
                 # ttnn.linear expects [in, out]; PyTorch uses [out, in]
                 if key.endswith("_proj_weight"):
@@ -150,14 +143,16 @@ def test_gated_deltanet_recurrent_ttnn(seq_len=16):
                     val = val.T.contiguous()
                 # conv1d weights stay on host; ttnn.conv1d handles device placement
                 if key.endswith("_conv_weight"):
-                    ttnn_params[key] = ttnn.from_torch(val, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+                    ttnn_params[key] = ttnn.from_torch(
+                        val,
+                        dtype=ttnn.bfloat16,
+                    )
                 else:
                     ttnn_params[key] = ttnn.from_torch(
                         val,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
                         device=device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
             else:
                 ttnn_params[key] = val
@@ -190,9 +185,6 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
     torch_out, _ = gated_deltanet_forward(**params, mode=torch_mode, chunk_size=chunk_size)
 
     device = ttnn.open_device(device_id=0, l1_small_size=16384)
-    # Note: Fast dispatch (default) already enables async execution
-    # The op-to-op gaps in the perf report are likely due to synchronization points
-    # or operation dependencies, not lack of async execution
     try:
         ttnn_params = {}
         skip_keys = {
@@ -212,18 +204,13 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
                 if key.endswith("_proj_weight"):
                     val = val.T.contiguous()
                 if key.endswith("_conv_weight"):
-                    ttnn_params[key] = ttnn.from_torch(
-                        val,
-                        dtype=ttnn.bfloat16,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
+                    ttnn_params[key] = ttnn.from_torch(val, dtype=ttnn.bfloat16)
                 else:
                     ttnn_params[key] = ttnn.from_torch(
                         val,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
                         device=device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
             else:
                 ttnn_params[key] = val
@@ -270,10 +257,7 @@ def benchmark_gated_attention(warmup=3, iterations=10):
     device = ttnn.open_device(device_id=0)
     try:
         ttnn_params = {}
-        skip_keys = {"attention_mask"}
         for key, val in params.items():
-            if key in skip_keys:
-                continue
             if isinstance(val, torch.Tensor):
                 if key.endswith("_proj_weight"):
                     val = val.T.contiguous()
