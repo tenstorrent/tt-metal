@@ -19,5 +19,6 @@ set(UNIT_TESTS_LLK_SRC
     test_single_core_matmul_int8.cpp
     test_transpose.cpp
     test_unary_broadcast.cpp
+    test_tilize_untilize_helpers.cpp
     test_untilize_tilize.cpp
 )
