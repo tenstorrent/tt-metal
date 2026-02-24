@@ -46,12 +46,8 @@ std::string read_file_to_string(const std::filesystem::path& file_path) {
     return buffer.str();
 }
 
-// Helper function to get grouping name string from proto
-// Get the name field from a grouping (mandatory field)
-std::string get_grouping_name(const proto::Grouping& grouping) { return grouping.name(); }
-
-// Get the type string from a grouping (preset_type or custom_type)
-std::string get_grouping_type_string(const proto::Grouping& grouping) {
+// Legacy function for backward compatibility - returns type string
+std::string get_grouping_name_string(const proto::Grouping& grouping) {
     if (grouping.has_preset_type()) {
         switch (grouping.preset_type()) {
             case proto::TRAY_1: return "TRAY_1";
@@ -68,9 +64,6 @@ std::string get_grouping_type_string(const proto::Grouping& grouping) {
     return "";
 }
 
-// Legacy function for backward compatibility - returns type string
-std::string get_grouping_name_string(const proto::Grouping& grouping) { return get_grouping_type_string(grouping); }
-
 bool grouping_exists(const proto::PhysicalGroupings& proto, const std::string& grouping_name) {
     for (const auto& grouping : proto.groupings()) {
         std::string name = get_grouping_name_string(grouping);
@@ -84,6 +77,26 @@ bool grouping_exists(const proto::PhysicalGroupings& proto, const std::string& g
 }  // namespace
 
 namespace tt::tt_fabric {
+
+// Static helper functions to access grouping name and type from proto
+std::string PhysicalGroupingDescriptor::get_grouping_name(const proto::Grouping& grouping) { return grouping.name(); }
+
+std::string PhysicalGroupingDescriptor::get_grouping_type_string(const proto::Grouping& grouping) {
+    if (grouping.has_preset_type()) {
+        switch (grouping.preset_type()) {
+            case proto::TRAY_1: return "TRAY_1";
+            case proto::TRAY_2: return "TRAY_2";
+            case proto::TRAY_3: return "TRAY_3";
+            case proto::TRAY_4: return "TRAY_4";
+            case proto::HOSTS: return "HOSTS";
+            case proto::MESH: return "MESH";
+            default: return "";
+        }
+    } else if (grouping.has_custom_type()) {
+        return grouping.custom_type();
+    }
+    return "";
+}
 
 PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::string& text_proto) {
     proto::PhysicalGroupings temp_proto;
@@ -135,49 +148,73 @@ bool PhysicalGroupingDescriptor::has_grouping(const std::string& grouping_name) 
 size_t PhysicalGroupingDescriptor::get_grouping_count() const { return proto_->groupings_size(); }
 
 uint32_t PhysicalGroupingDescriptor::get_grouping_asic_count(const std::string& grouping_name) const {
-    auto it = resolved_groupings_cache_.find(grouping_name);
-    if (it != resolved_groupings_cache_.end() && !it->second.empty()) {
-        // Return the ASIC count from the first grouping with this name
+    auto name_it = resolved_groupings_cache_.find(grouping_name);
+    if (name_it != resolved_groupings_cache_.end() && !name_it->second.empty()) {
+        // Return the ASIC count from the first grouping with this name (any type)
         // (all groupings with same name should have same structure/count)
-        return it->second[0].asic_count;
+        const auto& first_type_map = name_it->second.begin()->second;
+        if (!first_type_map.empty()) {
+            return first_type_map[0].asic_count;
+        }
     }
     return 0;
 }
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(const std::string& grouping_name) const {
-    auto it = resolved_groupings_cache_.find(grouping_name);
-    if (it != resolved_groupings_cache_.end()) {
-        return it->second;
+    auto name_it = resolved_groupings_cache_.find(grouping_name);
+    if (name_it != resolved_groupings_cache_.end()) {
+        std::vector<GroupingInfo> result;
+        // Collect all groupings with this name (across all types)
+        for (const auto& [type, groupings] : name_it->second) {
+            result.insert(result.end(), groupings.begin(), groupings.end());
+        }
+        return result;
     }
     // Fallback: return empty vector if not found in cache
     return {};
 }
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_type(const std::string& grouping_type) const {
-    auto it = resolved_groupings_cache_.find(grouping_type);
-    if (it != resolved_groupings_cache_.end()) {
-        return it->second;
+    std::vector<GroupingInfo> result;
+    // Search through all names to find groupings with the specified type
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        auto type_it = type_map.find(grouping_type);
+        if (type_it != type_map.end()) {
+            result.insert(result.end(), type_it->second.begin(), type_it->second.end());
+        }
     }
-    // Fallback: return empty vector if not found in cache
-    return {};
+    return result;
 }
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_all_groupings() const {
     std::vector<GroupingInfo> result;
-    for (const auto& [name, groupings] : resolved_groupings_cache_) {
-        for (const auto& grouping : groupings) {
-            result.push_back(grouping);
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        for (const auto& [type, groupings] : type_map) {
+            for (const auto& grouping : groupings) {
+                result.push_back(grouping);
+            }
         }
     }
     return result;
 }
 
 std::vector<std::string> PhysicalGroupingDescriptor::get_all_grouping_names() const {
-    std::vector<std::string> types;
+    std::vector<std::string> names;
     for (const auto& grouping : proto_->groupings()) {
-        types.push_back(get_grouping_type_string(grouping));
+        names.push_back(PhysicalGroupingDescriptor::get_grouping_name(grouping));
     }
-    return types;
+    return names;
+}
+
+std::vector<std::string> PhysicalGroupingDescriptor::get_all_grouping_types() const {
+    std::set<std::string> types_set;
+    for (const auto& grouping : proto_->groupings()) {
+        std::string type = PhysicalGroupingDescriptor::get_grouping_type_string(grouping);
+        if (!type.empty()) {
+            types_set.insert(type);
+        }
+    }
+    return std::vector<std::string>(types_set.begin(), types_set.end());
 }
 
 std::string PhysicalGroupingDescriptor::get_validation_report(const std::vector<std::string>& errors) {
@@ -203,7 +240,7 @@ void PhysicalGroupingDescriptor::uniquify_duplicate_names(proto::PhysicalGroupin
 
     for (int i = 0; i < proto.groupings_size(); ++i) {
         auto* grouping = proto.mutable_groupings(i);
-        std::string current_name = get_grouping_name(*grouping);
+        std::string current_name = PhysicalGroupingDescriptor::get_grouping_name(*grouping);
 
         if (current_name.empty()) {
             continue;  // Skip if name is empty (will be caught by other validation)
@@ -237,7 +274,7 @@ void PhysicalGroupingDescriptor::validate_unique_names(
 
     for (int i = 0; i < proto.groupings_size(); ++i) {
         const auto& grouping = proto.groupings(i);
-        std::string name = get_grouping_name(grouping);
+        std::string name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
 
         if (name.empty()) {
             continue;  // Empty names are caught by other validation
@@ -434,9 +471,15 @@ void PhysicalGroupingDescriptor::populate() {
         }
     }
 
-    // Step 5: Store resolved groupings
+    // Step 5: Reorganize into two-tier cache structure: name -> type -> vector<GroupingInfo>
     // Note: Cycle detection is now handled by validate_no_cycles() in grouping_validate()
-    resolved_groupings_cache_ = std::move(groupings_by_name);
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>> new_cache;
+    for (const auto& [type, groupings] : groupings_by_name) {
+        for (const auto& grouping : groupings) {
+            new_cache[grouping.name][type].push_back(grouping);
+        }
+    }
+    resolved_groupings_cache_ = std::move(new_cache);
 }
 void PhysicalGroupingDescriptor::grouping_validate() const {
     std::vector<std::string> errors;
@@ -466,23 +509,26 @@ void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string
     std::unordered_set<std::string> all_grouping_types;
 
     // First pass: identify all groupings and their characteristics
-    for (const auto& [type, groupings] : resolved_groupings_cache_) {
-        all_grouping_types.insert(type);
-        bool has_asic = false;
-        bool has_refs = false;
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        for (const auto& [type, groupings] : type_map) {
+            all_grouping_types.insert(type);
+            bool has_asic = false;
+            bool has_refs = false;
 
-        for (const auto& grouping : groupings) {
-            for (const auto& item : grouping.items) {
-                if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
-                    has_asic = true;
-                } else if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-                    has_refs = true;
+            for (const auto& grouping : groupings) {
+                for (const auto& item : grouping.items) {
+                    if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                        has_asic = true;
+                    } else if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
+                        has_refs = true;
+                    }
                 }
             }
-        }
 
-        has_asic_locations[type] = has_asic;
-        has_grouping_refs[type] = has_refs;
+            // Update flags for this type (may be set by multiple names with same type)
+            has_asic_locations[type] = has_asic_locations[type] || has_asic;
+            has_grouping_refs[type] = has_grouping_refs[type] || has_refs;
+        }
     }
 
     // Validation: At least one leaf grouping uses ASIC locations
@@ -506,23 +552,26 @@ void PhysicalGroupingDescriptor::validate_asic_location_usage(std::vector<std::s
     std::unordered_set<std::string> all_grouping_types;
 
     // First pass: identify all groupings and their characteristics
-    for (const auto& [type, groupings] : resolved_groupings_cache_) {
-        all_grouping_types.insert(type);
-        bool has_asic = false;
-        bool has_refs = false;
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        for (const auto& [type, groupings] : type_map) {
+            all_grouping_types.insert(type);
+            bool has_asic = false;
+            bool has_refs = false;
 
-        for (const auto& grouping : groupings) {
-            for (const auto& item : grouping.items) {
-                if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
-                    has_asic = true;
-                } else if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-                    has_refs = true;
+            for (const auto& grouping : groupings) {
+                for (const auto& item : grouping.items) {
+                    if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                        has_asic = true;
+                    } else if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
+                        has_refs = true;
+                    }
                 }
             }
-        }
 
-        has_asic_locations[type] = has_asic;
-        has_grouping_refs[type] = has_refs;
+            // Update flags for this type (may be set by multiple names with same type)
+            has_asic_locations[type] = has_asic_locations[type] || has_asic;
+            has_grouping_refs[type] = has_grouping_refs[type] || has_refs;
+        }
     }
 
     // Validation: Only leaf groupings should use ASIC locations, others should not
@@ -542,12 +591,14 @@ void PhysicalGroupingDescriptor::validate_no_cycles(std::vector<std::string>& er
     std::unordered_map<std::string, std::set<std::string>> dependencies;  // grouping -> set of dependencies
     std::unordered_set<std::string> all_grouping_types;
 
-    for (const auto& [type, groupings] : resolved_groupings_cache_) {
-        all_grouping_types.insert(type);
-        for (const auto& grouping : groupings) {
-            for (const auto& item : grouping.items) {
-                if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-                    dependencies[type].insert(item.grouping_name);
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        for (const auto& [type, groupings] : type_map) {
+            all_grouping_types.insert(type);
+            for (const auto& grouping : groupings) {
+                for (const auto& item : grouping.items) {
+                    if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
+                        dependencies[type].insert(item.grouping_name);
+                    }
                 }
             }
         }
@@ -604,28 +655,30 @@ void PhysicalGroupingDescriptor::validate_instance_counts(std::vector<std::strin
 
     // Validation: all groupings should have ASIC counts > 0
     // Exception: groupings that only reference preset names (which can be auto-populated) may have 0 count
-    for (const auto& [name, groupings] : resolved_groupings_cache_) {
-        for (const auto& grouping : groupings) {
-            if (grouping.asic_count == 0) {
-                // Check if this grouping only references preset names
-                bool only_preset_refs = true;
-                bool has_any_refs = false;
-                for (const auto& item : grouping.items) {
-                    if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-                        has_any_refs = true;
-                        if (preset_names.find(item.grouping_name) == preset_names.end()) {
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        for (const auto& [type, groupings] : type_map) {
+            for (const auto& grouping : groupings) {
+                if (grouping.asic_count == 0) {
+                    // Check if this grouping only references preset names
+                    bool only_preset_refs = true;
+                    bool has_any_refs = false;
+                    for (const auto& item : grouping.items) {
+                        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
+                            has_any_refs = true;
+                            if (preset_names.find(item.grouping_name) == preset_names.end()) {
+                                only_preset_refs = false;
+                                break;
+                            }
+                        } else if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
                             only_preset_refs = false;
                             break;
                         }
-                    } else if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
-                        only_preset_refs = false;
-                        break;
                     }
-                }
 
-                // Allow zero count only if grouping only references preset names
-                if (!only_preset_refs || !has_any_refs) {
-                    errors.push_back(fmt::format("Grouping '{}' has zero ASIC count after resolution", name));
+                    // Allow zero count only if grouping only references preset names
+                    if (!only_preset_refs || !has_any_refs) {
+                        errors.push_back(fmt::format("Grouping '{}' has zero ASIC count after resolution", name));
+                    }
                 }
             }
         }
@@ -637,8 +690,8 @@ void PhysicalGroupingDescriptor::validate_required_groupings(
     // Validate grouping names are non-empty and types are set
     for (int i = 0; i < proto.groupings_size(); ++i) {
         const auto& grouping = proto.groupings(i);
-        std::string name = get_grouping_name(grouping);
-        std::string type = get_grouping_type_string(grouping);
+        std::string name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
+        std::string type = PhysicalGroupingDescriptor::get_grouping_type_string(grouping);
 
         if (name.empty()) {
             errors.push_back(
@@ -661,7 +714,7 @@ void PhysicalGroupingDescriptor::validate_grouping_references(
     // Build set of all grouping types
     std::unordered_set<std::string> grouping_types;
     for (const auto& grouping : proto.groupings()) {
-        grouping_types.insert(get_grouping_type_string(grouping));
+        grouping_types.insert(PhysicalGroupingDescriptor::get_grouping_type_string(grouping));
     }
 
     // Set of preset types that don't need to exist (can be auto-populated)
@@ -670,7 +723,7 @@ void PhysicalGroupingDescriptor::validate_grouping_references(
     // Validate all grouping references
     for (int i = 0; i < proto.groupings_size(); ++i) {
         const auto& grouping = proto.groupings(i);
-        std::string name = get_grouping_name(grouping);
+        std::string name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
 
         for (int j = 0; j < grouping.instances_size(); ++j) {
             const auto& instance = grouping.instances(j);
@@ -721,8 +774,8 @@ void PhysicalGroupingDescriptor::validate_counts(
     const proto::PhysicalGroupings& proto, std::vector<std::string>& errors) {
     for (int i = 0; i < proto.groupings_size(); ++i) {
         const auto& grouping = proto.groupings(i);
-        std::string name = get_grouping_name(grouping);
-        std::string type = get_grouping_type_string(grouping);
+        std::string name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
+        std::string type = PhysicalGroupingDescriptor::get_grouping_type_string(grouping);
         uint32_t instance_count = static_cast<uint32_t>(grouping.instances_size());
 
         // Validate instance count - all groupings must have at least 1 instance
@@ -745,7 +798,9 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
         // Check that grouping has instances
         if (grouping.instances_size() == 0) {
             errors.push_back(fmt::format(
-                "Grouping '{}' (type '{}') must have at least one instance", name, get_grouping_type_string(grouping)));
+                "Grouping '{}' (type '{}') must have at least one instance",
+                name,
+                PhysicalGroupingDescriptor::get_grouping_type_string(grouping)));
             continue;
         }
 
