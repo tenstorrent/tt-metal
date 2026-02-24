@@ -295,7 +295,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
 
     tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+        tt_input_tensor, mesh_device, layout=ttnn.TILE_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
 
     with torch.no_grad():
@@ -515,7 +515,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
     tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+        tt_input_tensor, mesh_device, layout=ttnn.TILE_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
@@ -645,7 +645,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
     tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+        tt_input_tensor, mesh_device, layout=ttnn.TILE_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
 
     torch_feat_cache = []
@@ -944,7 +944,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         if logical_h != tt_input_tensor.shape[2]:
             logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
         tt_input_tensor = bf16_tensor_2dshard(
-            tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+            tt_input_tensor, mesh_device, layout=ttnn.TILE_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
         )
 
         logger.info(f"running torch model")
