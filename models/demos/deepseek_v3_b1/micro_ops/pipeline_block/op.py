@@ -109,6 +109,11 @@ class PipelineBlock:
                 embedding_tensor=embedding_tensor,
             )
 
+            print(f"OP INFRA: Set Downstream D2D Socket Page Size: {downstream_d2d_socket_page_size}")
+            print(f"OP INFRA: Set Downstream D2D Socket FIFO Size: {downstream_d2d_socket_fifo_size}")
+            print(f"OP INFRA: Set Upstream D2D Socket Page Size: {upstream_d2d_socket_page_size}")
+            print(f"OP INFRA: Set Upstream D2D Socket FIFO Size: {upstream_d2d_socket_fifo_size}")
+
             self.exit_socket_interface = SocketInterface(
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
