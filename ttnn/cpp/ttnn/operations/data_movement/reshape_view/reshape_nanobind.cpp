@@ -60,7 +60,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grid") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none()),
 
         // Overload 2: logical_shape and padded_shape (ttnn::Shape, ttnn::Shape)
         ttnn::overload_t(
@@ -79,7 +79,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grid") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none()),
 
         // Overload 3: shape vector (SmallVector<int32_t>)
         ttnn::overload_t(
@@ -97,7 +97,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grid") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 }  // namespace detail
