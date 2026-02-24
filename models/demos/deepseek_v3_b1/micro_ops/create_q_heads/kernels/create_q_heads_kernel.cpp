@@ -82,8 +82,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("nope_tiles"),
         get_named_compile_time_arg_val("rope_tiles"),
     };
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<Core::is_sender_core, Core::is_receiver_core, true, true>;
