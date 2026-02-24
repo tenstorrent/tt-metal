@@ -129,9 +129,9 @@ static void RunTest(
                 eth_config.eth_mode = Eth::IDLE;
             }
             assert_kernel = CreateKernel(program_, kernel, logical_core, eth_config);
-            // TODO: replace string literal "erisc" with hal.get_processor_class_name() after
+            // TODO: replace string literals with hal.get_processor_class_name() after
             // unifying all tests + watcher_device_reader::get_riscv_name() with same method
-            risc = "erisc";
+            risc = is_active ? "erisc" : "ierisc";
             break;
         }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
@@ -171,8 +171,13 @@ static void RunTest(
 
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
-    const std::string_view core_str =
-        (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker";
+    // TODO: replace below code snippet with helper after unifying all tests + watcher_device_reader
+    std::string core_str;
+    switch (processor.core_type) {
+        case HalProgrammableCoreType::ACTIVE_ETH: core_str = "acteth"; break;
+        case HalProgrammableCoreType::IDLE_ETH: core_str = "idleth"; break;
+        default: core_str = "worker";
+    }
 
     // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
     // can shift as code changes. Use regex to match any line number for DebugAssertTripped
@@ -233,14 +238,19 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
                      << " but only " << available_processors << " available on this architecture";
     }
 
-    if (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH && !this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+    // Dispatch mode validation:
+    // - IDLE_ETH cores only support SD (FD not yet implemented)
+    // - TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
+    bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
+    bool is_quasar = (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR);
+    bool using_slow_dispatch = this->IsSlowDispatch();
+
+    if (is_idle_eth && !using_slow_dispatch) {
+        log_info(tt::LogTest, "IDLE_ETH requires Slow Dispatch (Fast Dispatch not yet supported).");
         GTEST_SKIP();
     }
-    // TODO: SD is only used for Quasar watcher assert tests. Remove once FD is enabled on quasar
-    if (this->slow_dispatch_ && (tt::tt_metal::MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) &&
-        params.processor.core_type != HalProgrammableCoreType::IDLE_ETH) {
-        GTEST_SKIP() << "Slow dispatch watcher assert tests only run on Quasar (except IDLE_ETH)";
+    if (using_slow_dispatch && !is_quasar && !is_idle_eth) {
+        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
     }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

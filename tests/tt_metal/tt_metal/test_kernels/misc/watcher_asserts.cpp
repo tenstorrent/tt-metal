@@ -43,12 +43,16 @@ void kernel_main() {
         //Dispatcher Kernel is able to finish.
         //Device Close () requires fast dispatch kernels to finish.
         volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+
+        // Signal completion to dispatcher before assert hangs the kernel
+        // SD signaling: IDLE_ERISC (all archs) and Quasar DM require RUN_MSG_DONE
+        // TODO: Remove COMPILE_FOR_DM once FD is enabled on Quasar
+#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM)
+        go_message_in->signal = RUN_MSG_DONE;
+#else
+        // FD: ACTIVE_ETH, BRISC, NCRISC notify dispatcher via NOC
         uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
         notify_dispatch_core_done(dispatch_addr, noc_index);
-
-        // TODO: SD is only used for Quasar watcher assert tests. Remove once FD is enabled on quasar
-#if !defined(COMPILE_FOR_ERISC) and (defined(COMPILE_FOR_DM) or defined(COMPILE_FOR_IDLE_ERISC))
-        go_message_in->signal = RUN_MSG_DONE;
 #endif
     }
 #else
