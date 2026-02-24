@@ -151,9 +151,14 @@ class TtHybridDyHead:
             )
 
     def __call__(self, inputs_torch: List[Tensor]) -> List[Tensor]:
-        x = list(inputs_torch)
+        # Convert input layout from NHWC (FPN output) to NCHW
+        x = list([feat.permute(0, 3, 1, 2).contiguous() for feat in inputs_torch])
+
         for block_idx in range(self.num_blocks):
             x = self._forward_block(block_idx, x)
+
+        # Prepare for ATSS Head (NCHW -> NHWC)
+        x = [feat.permute(0, 2, 3, 1).contiguous() for feat in x]
         return x
 
     def _to_device(self, feat_torch: Tensor):
