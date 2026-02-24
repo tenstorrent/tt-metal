@@ -216,19 +216,8 @@ static bool test_sdpa_reduce_c(
         k_chunk_size,
         static_cast<uint32_t>(do_eltwise_max ? 1 : 0)};
     std::map<std::string, std::string> compute_defines;
-    // unnecessary defines
-    compute_defines["SUB_EXP_GRANULARITY"] = "0";
-    compute_defines["LOG2_SUB_EXP_GRANULARITY"] = "0";
-    compute_defines["STATS_GRANULARITY"] = "0";
-    compute_defines["LOG2_STATS_GRANULARITY"] = "0";
-    compute_defines["MUL_BCAST_GRANULARITY"] = "0";
-    compute_defines["LOG2_MUL_BCAST_GRANULARITY"] = "0";
-    compute_defines["DHT_GRANULARITY"] = "0";
-    compute_defines["LOG2_DHT_GRANULARITY"] = "0";
     compute_defines["EXP_APPROX_MODE"] = "0";
-    // For this testing, use granularity of 1
     compute_defines["REDUCE_GRANULARITY"] = "1";
-    compute_defines["LOG2_REDUCE_GRANULARITY"] = "0";
 
     tt_metal::CreateKernel(
         program,

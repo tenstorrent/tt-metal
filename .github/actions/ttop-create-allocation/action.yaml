@@ -1,0 +1,68 @@
+# Create allocation object in Kubernetes & wait
+
+name: 'Create Allocation'
+description: 'Composable action that creates Allocation object in Kubernetes'
+
+inputs:
+  allocationName:
+    description: 'Allocation name'
+    required: true
+  spec:
+    description: 'Allocation spec'
+    required: false
+    default: ''
+  explicit:
+    description: 'List of explicit nodes (ignored when spec is provided)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Construct allocation manifest (explicit)
+      shell: bash
+      id: explicit
+      if: ${{ inputs.explicit != '' }}
+      run: |
+        cat <<EOF >> $GITHUB_ENV
+        ALLOCATION_MANIFEST<<ALLOCATION_EOF
+        apiVersion: tenstorrent.com/v1alpha1
+        kind: Allocation
+        metadata:
+          name: ${{ inputs.allocationName }}
+        spec:
+          retryPolicy: Always
+          allocationType: Explicit
+          explicit: [${{ inputs.explicit }}]
+        ALLOCATION_EOF
+        EOF
+
+    - name: Construct allocation manifest (spec)
+      shell: bash
+      id: spec
+      if: ${{ inputs.spec != '' }}
+      run: |
+        SPEC=$(printf '%s\n' '${{ inputs.spec }}' | sed 's/^/  /')
+        cat <<EOF >> $GITHUB_ENV
+        ALLOCATION_MANIFEST<<ALLOCATION_EOF
+        apiVersion: tenstorrent.com/v1alpha1
+        kind: Allocation
+        metadata:
+          name: ${{ inputs.allocationName }}
+        spec:
+          retryPolicy: Always
+        ${SPEC}
+        ALLOCATION_EOF
+        EOF
+
+    - name: Create Allocation
+      shell: bash
+      run: |
+        echo "Creating allocation..."
+        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl apply -f -
+
+    - name: Wait for allocation
+      shell: bash
+      run: |
+        echo "Waiting for allocation to be ready..."
+        kubectl wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m
