@@ -246,20 +246,12 @@ struct MeshDeviceOperationAdapter {
         static std::vector<tt::tt_metal::Buffer*> collect_buffers(
             const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
             std::vector<tt::tt_metal::Buffer*> bufs;
+            // buffer() returns a valid pointer or throws; optional tensors are
+            // already skipped by the reflection visitor's std::optional handling.
             tt::stl::reflection::visit_object_of_type<Tensor>(
-                [&](const Tensor& t) {
-                    if (t.buffer()) {
-                        bufs.push_back(t.buffer());
-                    }
-                },
-                tensor_args);
+                [&](const Tensor& t) { bufs.push_back(t.buffer()); }, tensor_args);
             tt::stl::reflection::visit_object_of_type<Tensor>(
-                [&](const Tensor& t) {
-                    if (t.buffer()) {
-                        bufs.push_back(t.buffer());
-                    }
-                },
-                tensor_return_value);
+                [&](const Tensor& t) { bufs.push_back(t.buffer()); }, tensor_return_value);
             return bufs;
         }
 

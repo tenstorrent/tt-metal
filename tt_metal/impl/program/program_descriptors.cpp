@@ -119,7 +119,7 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
     return result;
 }
 
-static inline size_t hash_kernel_descriptor(const KernelDescriptor& kernel) {
+static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& kernel) {
     return ttsl::hash::hash_objects_with_default_seed(
         kernel.kernel_source,
         kernel.source_type,
@@ -132,7 +132,7 @@ static inline size_t hash_kernel_descriptor(const KernelDescriptor& kernel) {
         kernel.config);
 }
 
-static inline size_t hash_cb_format_descriptor(const CBFormatDescriptor& format_descriptor) {
+static inline ttsl::hash::hash_t hash_cb_format_descriptor(const CBFormatDescriptor& format_descriptor) {
     return ttsl::hash::hash_objects_with_default_seed(
         format_descriptor.buffer_index,
         format_descriptor.data_format,
@@ -140,8 +140,8 @@ static inline size_t hash_cb_format_descriptor(const CBFormatDescriptor& format_
         format_descriptor.tile);
 }
 
-static inline size_t hash_cb_descriptor(const CBDescriptor& cb) {
-    size_t hash = cb.core_ranges.size();
+static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
+    ttsl::hash::hash_t hash = cb.core_ranges.size();
     for (const auto& core_range : cb.core_ranges.ranges()) {
         ttsl::hash::hash_combine(hash, core_range);
     }
@@ -158,7 +158,7 @@ static inline size_t hash_cb_descriptor(const CBDescriptor& cb) {
     return hash;
 }
 
-static inline size_t hash_semaphore_descriptor(const SemaphoreDescriptor& semaphore) {
+static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescriptor& semaphore) {
     return ttsl::hash::hash_objects_with_default_seed(
         semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
 }
@@ -168,7 +168,7 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const ProgramDescriptor& desc
         return *descriptor.custom_program_hash;
     }
 
-    size_t hash = 0;
+    ttsl::hash::hash_t hash = 0;
     for (const auto& kernel : descriptor.kernels) {
         ttsl::hash::hash_combine(hash, hash_kernel_descriptor(kernel));
     }
