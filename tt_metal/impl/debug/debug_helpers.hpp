@@ -72,6 +72,11 @@ inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core
     return addr + (sizeof(DebugPrintMemLayout) * risc_id);
 }
 
+inline uint64_t GetDevicePrintBufAddr(ChipId device_id, const CoreCoord& virtual_core) {
+    return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+}
+
 inline std::string_view get_core_type_name(CoreType ct) {
     switch (ct) {
         case CoreType::ARC: return "ARC";

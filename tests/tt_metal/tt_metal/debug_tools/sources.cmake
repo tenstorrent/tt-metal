@@ -4,6 +4,7 @@
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_compilation_failures.cpp
     device_print/test_format_updates.cpp
+    device_print/test_print_output.cpp
     dprint/test_eth_cores.cpp
     dprint/test_invalid_print_core.cpp
     dprint/test_mute_device.cpp

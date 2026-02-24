@@ -112,7 +112,7 @@
         DEVICE_PRINT_GET_STRING_INDEX(device_print_info_index, updated_format);                                       \
         /* Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                          \
         /* Also check if printing is disabled */                                                                      \
-        if (!device_print_detail::locking::acquire_lock()) {                                                          \
+        if (device_print_detail::locking::acquire_lock()) {                                                           \
             /* Get device_print buffer*/                                                                              \
             volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();              \
             /* Check if we need to wrap buffer and wait for enough space in it */                                     \
@@ -955,7 +955,10 @@ using arg_reorder_seq_t = typename arg_reorder_seq<Args...>::type;
 namespace locking {
 
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size);
+void release_lock();
 
+// Takes lock unconditionally. Returns true if caller should proceed with printing,
+// false if caller should not print (either because server is disabled or this core should not print).
 bool acquire_lock() {
     volatile uint32_t* lock_ptr = get_device_print_sync_register_ptr();
 
@@ -996,26 +999,36 @@ bool acquire_lock() {
 
     // Check if we should print kernel id
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
-    if (device_print_buffer->aux.risc_state[PROCESSOR_INDEX] == DevicePrintRiscCoreState::KernelNotPrinted) {
-        uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-        tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
-        auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
-        device_print_detail::structures::DevicePrintHeader new_kernel_message = {};
-        new_kernel_message.is_kernel = 1;
-        new_kernel_message.risc_id = PROCESSOR_INDEX;
-        new_kernel_message.message_payload =
-            device_print_detail::structures::DevicePrintHeader::max_message_payload_size;
-        new_kernel_message.info_id = kernel_id;
-        auto header_value = new_kernel_message.value;
-        wait_for_space(device_print_buffer, sizeof(new_kernel_message));
-        auto write_position = device_print_buffer->aux.wpos;
-        auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;
-        device_print_detail::formatting::device_print_type<decltype(header_value)>::serialize(
-            device_print_buffer_ptr, 0, header_value);
-        device_print_buffer->aux.risc_state[PROCESSOR_INDEX] = DevicePrintRiscCoreState::KernelPrinted;
+    if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+        auto risc_state = device_print_buffer->aux.risc_state[PROCESSOR_INDEX];
+        if (risc_state != DevicePrintRiscCoreState::PrintingDisabled) {
+            if (risc_state == DevicePrintRiscCoreState::KernelNotPrinted) {
+                uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+                tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
+                auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
+                device_print_detail::structures::DevicePrintHeader new_kernel_message = {};
+                new_kernel_message.is_kernel = 1;
+                new_kernel_message.risc_id = PROCESSOR_INDEX;
+                new_kernel_message.message_payload =
+                    device_print_detail::structures::DevicePrintHeader::max_message_payload_size;
+                new_kernel_message.info_id = kernel_id;
+                auto header_value = new_kernel_message.value;
+                wait_for_space(device_print_buffer, sizeof(new_kernel_message));
+                auto write_position = device_print_buffer->aux.wpos;
+                auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;
+                device_print_detail::formatting::device_print_type<decltype(header_value)>::serialize(
+                    device_print_buffer_ptr, 0, header_value);
+                device_print_buffer->aux.wpos += sizeof(new_kernel_message);
+                device_print_buffer->aux.risc_state[PROCESSOR_INDEX] = DevicePrintRiscCoreState::KernelPrinted;
+            }
+            return true;
+        }
     }
-    return device_print_buffer->aux.risc_state[PROCESSOR_INDEX] != DevicePrintRiscCoreState::PrintingDisabled &&
-           device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC;
+
+    // Either server disabled printing or this core should not print.
+    // Release buffer lock and return we should not print.
+    release_lock();
+    return false;
 }
 
 void release_lock() {
@@ -1034,9 +1047,19 @@ void initialize_lock() {
 }
 
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size) {
-    // Check if we are wrapped around
+    // Read pointers
     auto write_position = device_print_buffer->aux.wpos;
     auto read_position = device_print_buffer->aux.rpos;
+
+    // Check if it is starting magic
+    if (write_position == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+        // Initialize valid state after print server starting magic.
+        device_print_buffer->aux.wpos = 0;
+        device_print_buffer->aux.rpos = 0;
+        return 0;
+    }
+
+    // Check if we are wrapped around
     if (write_position > read_position) {
         // We are writing in front of the read position. Check if we need to wrap around.
         if (write_position + message_size >= sizeof(device_print_buffer->data)) {

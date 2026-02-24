@@ -14,7 +14,7 @@
 
 #include "core_config.h"
 
-enum class DevicePrintRiscCoreState {
+enum class DevicePrintRiscCoreState : uint8_t {
     KernelNotPrinted = 0,
     KernelPrinted = 1,
     PrintingDisabled = 2,

@@ -305,7 +305,21 @@ public:
 
 class DevicePrintFixture : public DebugToolsMeshFixture {
 protected:
+    std::string dprint_file_name;
+    int memfd_;
+
     void SetUp() override {
+        const testing::TestInfo* test_info = testing::UnitTest::GetInstance()->current_test_info();
+        std::string test_desc =
+            fmt::format("dprint_{}_{}_{}", getpid(), test_info->test_suite_name(), test_info->name());
+
+        memfd_ = memfd_create(test_desc.c_str(), 0);
+        if (memfd_ < 0) {
+            TT_THROW("Failed to create memory file descriptor: {}", strerror(errno));
+        }
+        // Use /proc/self/fd path which works transparently with ofstream/ifstream
+        dprint_file_name = fmt::format("/proc/self/fd/{}", memfd_);
+
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
             tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
@@ -317,6 +331,8 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
             tt::llrt::RunTimeDebugFeatureDprint, true);
         // Send output to a file so the test can check after program is run.
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(
+            tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
@@ -369,6 +385,32 @@ public:
         const auto& kernel = program_.impl().get_kernel(kernel_handle);
         const std::string full_kernel_name = kernel->get_full_kernel_name();
         return build_state.get_target_out_path(full_kernel_name);
+    }
+
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        const std::string& kernel_path,
+        stl::Span<const uint32_t> runtime_args = {}) {
+        // Set up program
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        // This tests prints only on a single core
+        constexpr CoreCoord core = {0, 0};  // Print on first core only
+        DataMovementConfig config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
+
+        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+        // Only difference is that we need to wait for the print server to catch
+        // up after running a test.
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
     }
 };
 
