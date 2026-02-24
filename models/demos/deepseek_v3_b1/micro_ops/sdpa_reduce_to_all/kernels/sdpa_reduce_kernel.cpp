@@ -50,8 +50,15 @@ void kernel_main() {
         using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
         using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
+        uint32_t per_core_rta_arg_idx = 0;
+        Worker::ReaderArgs reader_args{
+            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+        };
         Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op();
+        op(reader_args);
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -60,8 +67,15 @@ void kernel_main() {
             get_named_compile_time_arg_val("fwd_slot_size"),
             get_named_compile_time_arg_val("fwd_r2_buffer_offset")>;
 
+        uint32_t per_core_rta_arg_idx = 0;
+        Fwd::ForwarderArgs fwd_args{
+            .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+        };
         Fwd::Op<FwdCTArgs> op;
-        op();
+        op(fwd_args);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -97,8 +111,33 @@ void kernel_main() {
 
         using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
+        uint32_t per_core_rta_arg_idx = 0;
+        Worker::WriterArgs writer_args{
+            .r1_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .current_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .current_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .fwd_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .fwd_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r1_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
+            // scatter_arrival_enabled=0, so this is not used
+            .scatter_arrival_sem_addr = 0,
+        };
         Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op();
+        op(writer_args);
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -107,8 +146,15 @@ void kernel_main() {
             get_named_compile_time_arg_val("fwd_slot_size"),
             get_named_compile_time_arg_val("fwd_r2_buffer_offset")>;
 
+        uint32_t per_core_rta_arg_idx = 0;
+        Fwd::ForwarderArgs fwd_args{
+            .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+        };
         Fwd::Op<FwdCTArgs> op;
-        op();
+        op(fwd_args);
     }
 
 #elif defined(COMPILE_FOR_TRISC)
@@ -143,8 +189,9 @@ void kernel_main() {
         // Initialize compute engine for unified kernel
         deepseek_compute_kernel_init();
 
+        Worker::ComputeArgs compute_args{};
         Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
-        op();
+        op(compute_args);
     }
     // else: forwarder TRISC is no-op
 #endif

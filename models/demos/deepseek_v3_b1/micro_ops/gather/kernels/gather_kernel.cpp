@@ -50,7 +50,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_dest_noc_x"),
         get_named_compile_time_arg_val("gather_dest_noc_y"),
         get_named_compile_time_arg_val("gather_data_size_bytes"),
-        get_named_compile_time_arg_val("gather_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather_src_cb"),
         get_named_compile_time_arg_val("gather_src_num_pages"),
         get_named_compile_time_arg_val("gather_sender_grid_start_x"),
@@ -72,8 +72,8 @@ void kernel_main() {
     Gather::ReceiverArgs gather_args{
         get_named_compile_time_arg_val("gather_noc0_num_senders"),
         get_named_compile_time_arg_val("gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather_dst_cb"),
         get_named_compile_time_arg_val("gather_dst_num_pages"),
     };

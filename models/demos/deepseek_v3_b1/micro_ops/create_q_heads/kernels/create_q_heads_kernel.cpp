@@ -44,9 +44,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("qrope_cb"),
         get_named_compile_time_arg_val("src_num_pages"),
         // 3 semaphores for race-free synchronization
-        get_named_compile_time_arg_val("nope_phase1_semaphore_id"),
-        get_named_compile_time_arg_val("nope_phase2_semaphore_id"),
-        get_named_compile_time_arg_val("rope_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase1_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase2_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("rope_semaphore_id")),
         {
             get_named_compile_time_arg_val("target_noc_coords_row0"),
             get_named_compile_time_arg_val("target_noc_coords_row1"),
@@ -63,9 +63,9 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     // BRISC: Receiver args for SDPA input cores (matching pre_sdpa gather pattern: NCRISC sender, BRISC receiver)
     deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
-        get_named_compile_time_arg_val("nope_phase1_semaphore_id"),
-        get_named_compile_time_arg_val("nope_phase2_semaphore_id"),
-        get_named_compile_time_arg_val("rope_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase1_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase2_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("rope_semaphore_id")),
         get_named_compile_time_arg_val("num_nope_senders"),
         get_named_compile_time_arg_val("num_rope_senders"),
         get_named_compile_time_arg_val("receiver_in_cb"),

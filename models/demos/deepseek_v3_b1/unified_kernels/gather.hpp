@@ -40,18 +40,18 @@ struct Gather {
     // Runtime args structs - different layout per RISC
     // ========================================================================
 
-    // Receiver args (BRISC): [noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id,
-    //                         noc1_receiver_semaphore_id, dst_cb, dst_num_pages]
+    // Receiver args (BRISC): [noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_addr,
+    //                         noc1_receiver_semaphore_addr, dst_cb, dst_num_pages]
     struct ReceiverArgs {
         uint32_t noc0_num_senders;
         uint32_t noc1_num_senders;
-        uint32_t noc0_receiver_semaphore_id;
-        uint32_t noc1_receiver_semaphore_id;
+        uint32_t noc0_receiver_semaphore_addr;
+        uint32_t noc1_receiver_semaphore_addr;
         uint32_t dst_cb;
         uint32_t dst_num_pages;
     };
 
-    // Sender args (NCRISC): [dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id,
+    // Sender args (NCRISC): [dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_addr,
     //                        src_cb, src_num_pages, sender_grid_start_x, sender_grid_start_y,
     //                        sender_grid_end_x, sender_grid_end_y, row_major, receiver_data_addr,
     //                        sender_idx]
@@ -59,7 +59,7 @@ struct Gather {
         uint32_t dest_noc_x;
         uint32_t dest_noc_y;
         uint32_t data_size_bytes;
-        uint32_t receiver_semaphore_id;
+        uint32_t receiver_semaphore_addr;
         uint32_t src_cb;
         uint32_t src_num_pages;
         uint32_t sender_grid_start_x;
@@ -113,10 +113,9 @@ struct Gather {
                 }
                 uint32_t offset = core_index * args.data_size_bytes;
 
-                uint32_t receiver_semaphore_addr = get_semaphore(args.receiver_semaphore_id);
                 const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + offset);
-                uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)receiver_semaphore_addr;
+                uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
@@ -139,9 +138,8 @@ struct Gather {
             // BRISC (Receiver) - DataMovementProcessor.RISCV_0
             // ================================================================
             if constexpr (IsReceiverCore) {
-                uint32_t noc0_receiver_semaphore_addr = get_semaphore(args.noc0_receiver_semaphore_id);
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)noc0_receiver_semaphore_addr;
+                    (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
 
                 // Reserve space in destination CB
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
@@ -149,9 +147,8 @@ struct Gather {
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
 
                 if (args.noc1_num_senders > 0) {
-                    uint32_t noc1_receiver_semaphore_addr = get_semaphore(args.noc1_receiver_semaphore_id);
                     volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
-                        (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
+                        (volatile tt_l1_ptr uint32_t*)args.noc1_receiver_semaphore_addr;
                     noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
                     noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
                 }
