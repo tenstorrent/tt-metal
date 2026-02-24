@@ -87,6 +87,54 @@ class TrainingConfig:
         self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
 
+class OptimizerConfig:
+    """Configuration parsed from an optimizer YAML file.
+
+    Each optimizer config YAML (e.g. adamw.yaml, sgd.yaml) specifies a
+    ``type`` field and the relevant hyperparameters.  This class loads
+    that YAML and exposes the values as attributes.
+    """
+
+    def __init__(self, yaml_config: Union[dict, str]):
+        """Initialize optimizer configuration.
+
+        Args:
+            yaml_config: Top-level YAML config dict (must contain
+                ``training_config.optimizer_config`` pointing to the
+                optimizer YAML file), **or** the optimizer YAML dict
+                itself when ``is_optimizer_yaml`` would be True.
+        """
+        if isinstance(yaml_config, str):
+            cfg = load_config(yaml_config)
+        elif "type" in yaml_config:
+            cfg = yaml_config
+        else:
+            tc = yaml_config.get("training_config", {})
+            optimizer_config_path = tc.get("optimizer_config")
+            if optimizer_config_path is None:
+                raise ValueError(
+                    "training_config must specify 'optimizer_config' path "
+                    "(e.g. 'configs/optimizer_configs/adamw.yaml')"
+                )
+            from ttml.common.utils import get_tt_metal_home
+
+            tt_train_root = f"{get_tt_metal_home()}/tt-train"
+            cfg = load_config(optimizer_config_path, tt_train_root)
+
+        self.type = cfg.get("type", "AdamW")
+        self.lr = float(cfg.get("lr", 3e-4))
+        self.beta1 = float(cfg.get("beta1", 0.9))
+        self.beta2 = float(cfg.get("beta2", 0.999))
+        self.epsilon = float(cfg.get("epsilon", 1e-8))
+        self.weight_decay = float(cfg.get("weight_decay", 0.01))
+        self.amsgrad = bool(cfg.get("amsgrad", False))
+        self.use_kahan_summation = bool(cfg.get("use_kahan_summation", False))
+        self.stochastic_rounding = bool(cfg.get("stochastic_rounding", False))
+        self.momentum = float(cfg.get("momentum", 0.0))
+        self.dampening = float(cfg.get("dampening", 0.0))
+        self.nesterov = bool(cfg.get("nesterov", False))
+
+
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
 

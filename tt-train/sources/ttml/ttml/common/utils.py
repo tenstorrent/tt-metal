@@ -67,28 +67,6 @@ def initialize_device(yaml_config: dict):
     )
 
 
-def parse_optimizer_config(yaml_config: dict) -> dict:
-    """Parse the optimizer config YAML referenced by the training config.
-
-    Args:
-        yaml_config: Top-level YAML config dict containing training_config.optimizer_config
-
-    Returns:
-        Dictionary with optimizer hyperparameters and type
-    """
-    from ttml.common.config import load_config
-
-    tc = yaml_config.get("training_config", {})
-    optimizer_config_path = tc.get("optimizer_config")
-    if optimizer_config_path is None:
-        raise ValueError(
-            "training_config must specify 'optimizer_config' path "
-            "(e.g. 'configs/optimizer_configs/adamw.yaml')"
-        )
-    tt_train_root = f"{get_tt_metal_home()}/tt-train"
-    return load_config(optimizer_config_path, tt_train_root)
-
-
 def create_optimizer(model, yaml_config: dict):
     """Create an optimizer from the optimizer config YAML.
 
@@ -102,48 +80,40 @@ def create_optimizer(model, yaml_config: dict):
     Returns:
         Optimizer instance
     """
-    cfg = parse_optimizer_config(yaml_config)
-    opt_type = cfg.get("type", "AdamW")
+    from ttml.common.config import OptimizerConfig
 
-    lr = float(cfg.get("lr", 3e-4))
-    beta1 = float(cfg.get("beta1", 0.9))
-    beta2 = float(cfg.get("beta2", 0.999))
-    epsilon = float(cfg.get("epsilon", 1e-8))
-    weight_decay = float(cfg.get("weight_decay", 0.01))
+    cfg = OptimizerConfig(yaml_config)
 
-    if opt_type in ("AdamW", "MorehAdamW"):
-        if opt_type == "MorehAdamW":
+    if cfg.type in ("AdamW", "MorehAdamW"):
+        if cfg.type == "MorehAdamW":
             adamw_cfg = ttml.optimizers.AdamWCompositeConfig.make(
-                lr,
-                beta1,
-                beta2,
-                epsilon,
-                weight_decay,
+                cfg.lr,
+                cfg.beta1,
+                cfg.beta2,
+                cfg.epsilon,
+                cfg.weight_decay,
             )
             return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
         adamw_cfg = ttml.optimizers.AdamWConfig.make(
-            lr,
-            beta1,
-            beta2,
-            epsilon,
-            weight_decay,
+            cfg.lr,
+            cfg.beta1,
+            cfg.beta2,
+            cfg.epsilon,
+            cfg.weight_decay,
         )
         return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
 
-    if opt_type == "SGD":
-        momentum = float(cfg.get("momentum", 0.0))
-        dampening = float(cfg.get("dampening", 0.0))
-        nesterov = bool(cfg.get("nesterov", False))
+    if cfg.type == "SGD":
         sgd_cfg = ttml.optimizers.SGDConfig.make(
-            lr,
-            momentum,
-            dampening,
-            weight_decay,
-            nesterov,
+            cfg.lr,
+            cfg.momentum,
+            cfg.dampening,
+            cfg.weight_decay,
+            cfg.nesterov,
         )
         return ttml.optimizers.SGD(model.parameters(), sgd_cfg)
 
-    raise ValueError(f"Unsupported optimizer type: {opt_type}")
+    raise ValueError(f"Unsupported optimizer type: {cfg.type}")
 
 
 def get_loss_over_devices(loss):
