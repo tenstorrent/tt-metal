@@ -180,7 +180,7 @@ void kernel_main() {
     constexpr uint32_t config_page_size = get_compile_time_arg_val(34);
     constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(35);
     constexpr uint32_t reader_page_size = get_compile_time_arg_val(36);
-    constexpr uint32_t reader_tensor_args_index = 37;
+    constexpr uint32_t reader_tensor_args_index = 55;
 
     constexpr bool use_split_reader = split_reader;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
