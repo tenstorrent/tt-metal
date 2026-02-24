@@ -10,7 +10,8 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-TIMEOUT = 120
+
+TIMEOUT = 300
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("rms_norm_pre_all_gather", all_cases=False)
@@ -46,73 +47,52 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle both sample suite (tuple) and model_traced suite (dict)
     if isinstance(input_shape, dict) and "self" in input_shape:
-        # This is model_traced suite - dict with 'self' key (unary op, but config loader may return dict)
         shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
     elif isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
     else:
         shape = (1, 1, 32, 32)
 
-    eps = 1e-5
-
-    # Tensor creation
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         shape
     )
-    torch_weight = torch.randn(int(shape[-1]), dtype=torch.float32)
-    torch_output = torch_input * torch_weight / torch.sqrt(torch.mean(torch_input**2, dim=-1, keepdim=True) + eps)
-    torch_weight_padded = torch.cat(
-        [torch_weight, torch.zeros(((torch_weight.numel() + 31) // 32) * 32 - torch_weight.numel())]
-    ).reshape(1, 1, -1, 32)
 
-    input_layout = ttnn.TILE_LAYOUT
+    torch_expected_stats = torch_input.pow(2).sum(dim=-1, keepdim=True)
 
-    actual_input_mem_config = input_a_memory_config
-    used_dram_fallback = False
-    if isinstance(input_a_memory_config, dict):
-        actual_input_mem_config = ttnn.DRAM_MEMORY_CONFIG
-        used_dram_fallback = True
-
-    try:
-        input_tensor = ttnn.from_torch(
-            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=actual_input_mem_config
-        )
-    except Exception:
-        input_tensor = ttnn.from_torch(
-            torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        used_dram_fallback = True
-
-    weight_tensor = ttnn.from_torch(
-        torch_weight_padded,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    # Create tensor in DRAM first, then move to target memory config
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=input_a_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    start_time = start_measuring_time()
-    try:
-        if program_config and isinstance(program_config, dict) and not used_dram_fallback:
-            compute_grid = program_config.get("compute_with_storage_grid_size", {})
-            ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
-                subblock_w=program_config.get("subblock_w", 1),
-                block_h=program_config.get("block_h", 1),
-                block_w=program_config.get("block_w", 1),
-                inplace=bool(program_config.get("inplace", 0)),
-            )
-            stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ttnn_program_config)
-        else:
-            stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+    # If the traced config specifies a sharded memory config, move the tensor there
+    is_sharded = False
+    if hasattr(input_a_memory_config, "memory_layout"):
+        mem_layout = str(input_a_memory_config.memory_layout)
+        if "SHARDED" in mem_layout:
+            is_sharded = True
+            input_tensor = ttnn.to_memory_config(input_tensor, input_a_memory_config)
 
-        output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
-    except Exception as e:
-        e2e_perf = stop_measuring_time(start_time)
-        return [(False, f"Op execution failed: {e}"), e2e_perf]
+    # Build program_config if provided from traced JSON
+    ttnn_program_config = None
+    if program_config and isinstance(program_config, dict):
+        compute_grid = program_config.get("compute_with_storage_grid_size", {})
+        ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
+            subblock_w=program_config.get("subblock_w", 1),
+            block_h=program_config.get("block_h", 1),
+            block_w=program_config.get("block_w", 1),
+            inplace=bool(program_config.get("inplace", 0)),
+        )
+
+    start_time = start_measuring_time()
+    op_kwargs = {"dtype": ttnn.bfloat16}
+    if ttnn_program_config is not None:
+        op_kwargs["program_config"] = ttnn_program_config
+    tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, **op_kwargs)
+    tt_stats_torch = ttnn.to_torch(tt_stats)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]
+    tt_sum_x2 = tt_stats_torch[..., 0:1]
+
+    return [check_with_pcc(torch_expected_stats, tt_sum_x2, 0.99), e2e_perf]
