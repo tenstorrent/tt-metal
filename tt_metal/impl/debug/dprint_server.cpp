@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cctype>
 #include <cmath>
 #include <pthread.h>
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -47,6 +49,7 @@
 #include <llrt/tt_cluster.hpp>
 #include "impl/debug/inspector/inspector.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "tt_stl/span.hpp"
 
 using std::flush;
 using std::int32_t;
@@ -311,6 +314,7 @@ protected:
 private:
     void print_buffer_data(
         ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data);
+    std::string format_message(std::string_view format_str, std::span<const std::byte> payload_bytes);
 
     struct ElfFileCacheEntry {
         uint32_t ref_count;
@@ -403,6 +407,236 @@ bool DPrintImpl::core_has_outstanding_prints(
 }
 
 // DEVICE_PRINT implementations — single shared buffer per core.
+
+struct FormatPlaceholderInfo {
+    uint32_t arg_id;
+    char type_id;
+    std::string_view format_spec;  // The part after ':' in the format string, if it exists, including ':' itself.
+};
+
+// TODO: Add more types here
+using ArgumentValue =
+    std::variant<bool, int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t, float, double>;
+
+std::optional<FormatPlaceholderInfo> parse_placeholder(std::string_view format_str, std::size_t& pos) {
+    if (pos >= format_str.size() || format_str[pos] != '{') {
+        return std::nullopt;
+    }
+
+    // Start of a placeholder. Read until the closing '}' to extract the placeholder content.
+    pos++;  // Skip '{'
+
+    // We are trying to mimic fmtlib format specifiers here, but device already changed it a bit:
+    // replacement_field ::= "{" arg_id "," type_id [":" (format_spec | chrono_format_spec)] "}"
+    // type_id           ::= "a"..."z" | "A"..."Z"
+    // arg_id            ::= integer
+    // integer           ::= digit+
+    // digit             ::= "0"..."9"
+    // But we don't support using identifiers to reduce kernel size, only integers for arg_id.
+
+    // Regarding format_spec:
+    // format_spec ::= [[fill]align][sign]["#"]["0"][width]["." precision]["L"][type]
+    // fill        ::= <a character other than '{' or '}'>
+    // align       ::= "<" | ">" | "^"
+    // sign        ::= "+" | "-" | " "
+    // width       ::= integer | "{" [arg_id] "}"
+    // precision   ::= integer | "{" [arg_id] "}"
+    // type        ::= "a" | "A" | "b" | "B" | "c" | "d" | "e" | "E" | "f" | "F" |
+    //                 "g" | "G" | "o" | "p" | "s" | "x" | "X" | "?"
+    // We don't support using arg_id for width/precision.
+
+    // As everything is verified during kernel compile time, we can parse format_spec just by reading until the closing
+    // '}' without needing to fully understand it on the host side.
+    uint32_t arg_id = 0;
+
+    // arg_id parsing
+    if (!std::isdigit(format_str[pos])) {
+        return std::nullopt;
+    }
+    while (pos < format_str.size() && std::isdigit(format_str[pos])) {
+        arg_id = arg_id * 10 + (format_str[pos] - '0');
+        pos++;
+    }
+
+    // Read type_id (the character after arg_id and ',')
+    if (pos >= format_str.size() || format_str[pos] != ',') {
+        return std::nullopt;
+    }
+    pos++;  // Skip ','
+    char type_id = format_str[pos++];
+
+    uint32_t format_spec_start = pos;
+    while (pos < format_str.size() && format_str[pos] != '}') {
+        pos++;
+    }
+    pos++;  // Skip '}'
+    return {{arg_id, type_id, format_str.substr(format_spec_start, pos - format_spec_start - 1)}};
+}
+
+std::vector<FormatPlaceholderInfo> parse_format_string(std::string_view format_str) {
+    std::vector<FormatPlaceholderInfo> placeholders;
+    for (size_t i = 0; i < format_str.size(); i++) {
+        if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
+            // Escaped '{', add a single '{' to the result and skip the next character.
+            i++;
+            continue;
+        }
+        if (format_str[i] == '}' && i + 1 < format_str.size() && format_str[i + 1] == '}') {
+            // Escaped '}', add a single '}' to the result and skip the next character.
+            i++;
+            continue;
+        }
+        if (format_str[i] == '{') {
+            auto placeholder = parse_placeholder(format_str, i);
+            if (!placeholder) {
+                TT_THROW("Invalid format string: failed to parse placeholder at position {}", i);
+            }
+            placeholders.push_back(*placeholder);
+            i--;  // Step back so that the main loop can correctly identify the end of the placeholder
+        } else {
+            // Regular character, add it to the result.
+            continue;
+        }
+    }
+    return placeholders;
+}
+
+std::vector<ArgumentValue> read_arguments_from_payload(
+    std::string_view format_str, std::span<const std::byte> payload_bytes) {
+    auto placeholders = parse_format_string(format_str);
+    uint32_t max_arg_id = 0;
+    for (const auto& placeholder : placeholders) {
+        max_arg_id = std::max(max_arg_id, placeholder.arg_id);
+    }
+    std::vector<char> argument_types(max_arg_id + 1);
+    for (const auto& placeholder : placeholders) {
+        argument_types[placeholder.arg_id] = placeholder.type_id;
+    }
+    std::vector<ArgumentValue> arguments;
+    std::size_t payload_offset = 0;
+
+    arguments.reserve(argument_types.size());
+    for (char argument_type : argument_types) {
+        switch (argument_type) {
+            case 'b':  // int8_t
+                arguments.push_back(*reinterpret_cast<const int8_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(int8_t);
+                break;
+            case 'B':  // uint8_t
+                arguments.push_back(*reinterpret_cast<const uint8_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(uint8_t);
+                break;
+            case 'h':  // int16_t
+                arguments.push_back(*reinterpret_cast<const int16_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(int16_t);
+                break;
+            case 'H':  // uint16_t
+                arguments.push_back(*reinterpret_cast<const uint16_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(uint16_t);
+                break;
+            case 'i':  // int32_t
+                arguments.push_back(*reinterpret_cast<const int32_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(int32_t);
+                break;
+            case 'I':  // uint32_t
+                arguments.push_back(*reinterpret_cast<const uint32_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(uint32_t);
+                break;
+            case 'q':  // int64_t
+                arguments.push_back(*reinterpret_cast<const int64_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(int64_t);
+                break;
+            case 'Q':  // uint64_t
+                arguments.push_back(*reinterpret_cast<const uint64_t*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(uint64_t);
+                break;
+            case 'f':  // float
+                arguments.push_back(*reinterpret_cast<const float*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(float);
+                break;
+            case 'g':  // double
+                arguments.push_back(*reinterpret_cast<const double*>(payload_bytes.data() + payload_offset));
+                payload_offset += sizeof(double);
+                break;
+            case '?':  // bool
+                arguments.push_back(*reinterpret_cast<const uint8_t*>(payload_bytes.data() + payload_offset) != 0);
+                payload_offset += sizeof(uint8_t);
+                break;
+            // Add more cases here for other supported types.
+            default: TT_THROW("Unsupported type_id in format placeholder: {}", argument_type);
+        }
+    }
+
+    return arguments;
+}
+
+std::string DevicePrintImpl::format_message(std::string_view format_str, std::span<const std::byte> payload_bytes) {
+    // Iterate over format_str and replace {} with format of payload values.
+    std::stringstream result;
+    auto argument_values = read_arguments_from_payload(format_str, payload_bytes);
+
+    for (size_t i = 0; i < format_str.size(); i++) {
+        if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
+            // Escaped '{', add a single '{' to the result and skip the next character.
+            result << '{';
+            i++;
+        } else if (format_str[i] == '}' && i + 1 < format_str.size() && format_str[i + 1] == '}') {
+            // Escaped '}', add a single '}' to the result and skip the next character.
+            result << '}';
+            i++;
+        } else if (format_str[i] == '{') {
+            auto placeholder = parse_placeholder(format_str, i);
+            if (!placeholder) {
+                return {};
+            }
+            i--;  // Step back so that the main loop can correctly identify the end of the placeholder
+
+            // Do the actual formatting of the argument
+            auto format = fmt::runtime("{0" + std::string(placeholder->format_spec) + "}");
+
+            switch (placeholder->type_id) {
+                case 'b':  // int8_t
+                    result << fmt::format(format, std::get<int8_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'B':  // uint8_t
+                    result << fmt::format(format, std::get<uint8_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'h':  // int16_t
+                    result << fmt::format(format, std::get<int16_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'H':  // uint16_t
+                    result << fmt::format(format, std::get<uint16_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'i':  // int32_t
+                    result << fmt::format(format, std::get<int32_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'I':  // uint32_t
+                    result << fmt::format(format, std::get<uint32_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'q':  // int64_t
+                    result << fmt::format(format, std::get<int64_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'Q':  // uint64_t
+                    result << fmt::format(format, std::get<uint64_t>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'f':  // float
+                    result << fmt::format(format, std::get<float>(argument_values[placeholder->arg_id]));
+                    break;
+                case 'g':  // double
+                    result << fmt::format(format, std::get<double>(argument_values[placeholder->arg_id]));
+                    break;
+                case '?':  // bool
+                    result << fmt::format(format, std::get<bool>(argument_values[placeholder->arg_id]));
+                    break;
+                default: TT_THROW("Unsupported type_id in format placeholder: {}", placeholder->type_id);
+            }
+        } else {
+            // Regular character, add it to the result.
+            result << format_str[i];
+        }
+    }
+    return result.str();
+}
 
 void DevicePrintImpl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data) {
@@ -537,9 +771,25 @@ void DevicePrintImpl::print_buffer_data(
                             elf_entry_ptr->format_strings_bytes.data() +
                             (info.format_string_ptr - elf_entry_ptr->format_strings_address));
                         std::string_view format_str(format_string);
+                        std::string_view file_str;
+                        if (info.file >= elf_entry_ptr->format_strings_address &&
+                            info.file <
+                                elf_entry_ptr->format_strings_address + elf_entry_ptr->format_strings_bytes.size()) {
+                            const char* file_string = reinterpret_cast<const char*>(
+                                elf_entry_ptr->format_strings_bytes.data() +
+                                (info.file - elf_entry_ptr->format_strings_address));
+                            file_str = std::string_view(file_string);
+                        }
+
+                        // Print formatted message
+                        std::span<const std::byte> payload_bytes(
+                            reinterpret_cast<const std::byte*>(data.data() + word_index), header->message_payload);
+
+                        auto formatted_message = format_message(format_str, payload_bytes);
 
                         // TODO: Remove debug print
-                        std::cout << "Resolved format string: " << format_str << std::endl;
+                        std::cout << "Formatted message: " << formatted_message << " at " << file_str << ":"
+                                  << info.line << std::endl;
                     }
                 }
             }
