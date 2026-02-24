@@ -454,9 +454,12 @@ inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     TTI_SFPNOP;
 
     // Calculate 1 / (sum + eps) * scale
-    TTI_SFPCONFIG(0, 0xF, 1);
+    // Store the value in lreg0 and reload later since the following instructions overwrite it
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    TTI_SFPCONFIG(0, 0xF, 1);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value = Converter::as_float(eps);
     l0 = l0 + eps_value;
