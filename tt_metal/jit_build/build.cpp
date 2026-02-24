@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <system_error>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -70,7 +71,14 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
 
 void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
-        std::filesystem::remove_all(dir_path);
+        std::error_code ec;
+        std::filesystem::remove_all(dir_path, ec);
+        // Ignore ENOENT (file not found) - another process may have already deleted it
+        // Also ignore ENOTEMPTY - directory may have been repopulated by another process
+        if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::directory_not_empty) {
+            log_warning(
+                tt::LogBuildKernels, "Failed to remove cache directory {}: {}", dir_path.string(), ec.message());
+        }
     }
 }
 
@@ -116,9 +124,26 @@ void JitBuildEnv::init(
     std::filesystem::path git_hash_path(this->out_root_ + git_hash);
     std::filesystem::path root_path(this->out_root_);
     if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-            check_built_dir(dir_entry.path(), git_hash_path);
-        });
+        try {
+            std::error_code ec;
+            auto it = std::filesystem::directory_iterator(
+                root_path, std::filesystem::directory_options::skip_permission_denied, ec);
+            if (ec) {
+                log_warning(
+                    tt::LogBuildKernels,
+                    "Cache cleanup: failed to open cache directory {}: {}",
+                    root_path.string(),
+                    ec.message());
+            } else {
+                std::ranges::for_each(
+                    it, std::filesystem::directory_iterator{}, [&git_hash_path](const auto& dir_entry) {
+                        check_built_dir(dir_entry.path(), git_hash_path);
+                    });
+            }
+        } catch (const std::filesystem::filesystem_error& e) {
+            // Directory contents may change during iteration in multi-process scenarios
+            log_warning(tt::LogBuildKernels, "Cache cleanup interrupted (likely concurrent access): {}", e.what());
+        }
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
