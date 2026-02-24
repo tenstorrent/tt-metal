@@ -26,6 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
@@ -39,7 +40,6 @@ from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_padded_prefill_len,
     preprocess_inputs_prefill,
-    sample_host,
 )
 
 # Import specific utilities from tt_transformers
@@ -463,6 +463,15 @@ def test_gpt_oss_demo(
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     profiler.end(f"generator_setup", iteration=batch_idx)
+
+    # Create on-device sampling params
+    SAMPLING_BATCH_SIZE = 32
+    greedy = sampling_params["temperature"] == 0
+    device_sampling_params = SamplingParams(
+        temperature=[sampling_params["temperature"]] * SAMPLING_BATCH_SIZE,
+        top_k=[1] * SAMPLING_BATCH_SIZE if greedy else [40] * SAMPLING_BATCH_SIZE,
+        top_p=[1.0] * SAMPLING_BATCH_SIZE if greedy else [sampling_params["top_p"]] * SAMPLING_BATCH_SIZE,
+    )
 
     # Prepare input prompts
     logger.info(f"Reading inputs...")
@@ -983,21 +992,14 @@ def test_gpt_oss_demo(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Decode forward (matching tt_transformers call)
-            logits, _ = generator.decode_forward(
+            # Decode forward with on-device sampling
+            out_tok, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_decode_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-            )
-
-            # Sample next token (reusing tt_transformers sampling)
-            _, out_tok = sample_host(
-                logits,
-                temperature=sampling_params["temperature"],
-                top_p=sampling_params["top_p"],
-                on_host=True,
+                sampling_params=device_sampling_params,
             )
 
             if iteration == 0:
