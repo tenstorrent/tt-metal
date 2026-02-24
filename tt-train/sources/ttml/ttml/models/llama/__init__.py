@@ -188,18 +188,11 @@ class Llama(AbstractModuleBase):
             out = ttml.autograd.create_tensor(out_val)
 
         for layer_idx, block in enumerate(self.blocks):
+            extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
-                if kv_cache is not None:
-                    out = memory_efficient_runner(
-                        block, out, mask, kv_cache, layer_idx, new_tokens
-                    )
-                else:
-                    out = memory_efficient_runner(block, out, mask)
+                out = memory_efficient_runner(block, out, mask, *extra_args)
             elif self.config.runner_type == ttml.models.RunnerType.Default:
-                if kv_cache is not None:
-                    out = block(out, mask, kv_cache, layer_idx, new_tokens)
-                else:
-                    out = block(out, mask)
+                out = block(out, mask, *extra_args)
             else:
                 raise ValueError(
                     "Unknown runner type. Supported runner types ['default', 'memory_efficient']"
