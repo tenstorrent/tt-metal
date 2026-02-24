@@ -45,11 +45,11 @@ void kernel_main() {
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(19);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(20);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(21);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(22);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
+    constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
 
     constexpr bool use_split_reader = split_reader;
 

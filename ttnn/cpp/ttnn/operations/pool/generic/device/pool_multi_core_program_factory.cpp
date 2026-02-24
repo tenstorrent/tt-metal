@@ -705,40 +705,41 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,                                                             // 18
         in_scalar_cb_id_0,                                                                   // 19
         in_scalar_cb_id_1,                                                                   // 20
-        in_idx_cb_id,                                                                        // 21
-        pack_tmp_cb_id,                                                                      // 22
-        pack_idx_tmp_cb_id,                                                                  // 23
-        right_inc_cb_id,                                                                     // 24
-        down_left_wrap_inc_cb_id,                                                            // 25
-        up_left_wrap_inc_cb_id,                                                              // 26
-        clear_value_cb_id,                                                                   // 27
-        (uint32_t)pool_type,                                                                 // 28
-        one_scalar_per_core,                                                                 // 29
-        config_cb_id,                                                                        // 30
-        in_nbytes_c,                                                                         // 31
-        shard_width_bytes,                                                                   // 32
-        params.multi_buffering_factor,                                                       // 33
-        stride_w,                                                                            // 34
-        dilation_h,                                                                          // 35
-        dilation_w,                                                                          // 36
-        pad_t,                                                                               // 37
-        pad_l,                                                                               // 38
-        (uint32_t)zero_pages,                                                                // 39
-        right_inc,                                                                           // 40
-        down_left_wrap_inc,                                                                  // 41
-        up_left_wrap_inc,                                                                    // 42
-        intra_kernel_right_inc,                                                              // 43
-        intra_kernel_down_left_wrap_inc,                                                     // 44
-        out_cb_id,                                                                           // 45
-        out_idx_cb_id,                                                                       // 46
-        intra_kernel_right_inc_cb_id,                                                        // 47
-        intra_kernel_down_left_wrap_inc_cb_id,                                               // 48
-        (uint32_t)indexes_32_bit,                                                            // 49
-        config_tensor_in_dram,                                                               // 50
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 51
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 52
-        reader_indices_storage.get_buffer()->address(),                                      // 53
-        reader_indices_storage.get_buffer()->page_size(),                                    // 54
+        clear_value_cb_id,                                                                   // 21
+        (uint32_t)pool_type,                                                                 // 22
+        one_scalar_per_core,                                                                 // 23
+        config_cb_id,                                                                        // 24
+        in_nbytes_c,                                                                         // 25
+        shard_width_bytes,                                                                   // 26
+        params.multi_buffering_factor,                                                       // 27
+        stride_w,                                                                            // 28
+        dilation_h,                                                                          // 29
+        dilation_w,                                                                          // 30
+        (uint32_t)zero_pages,                                                                // 31
+        config_tensor_in_dram,                                                               // 32
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 33
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 34
+        reader_indices_storage.get_buffer()->address(),                                      // 35
+        reader_indices_storage.get_buffer()->page_size(),                                    // 36
+        // MPWI-only args start here (for reader_mpwi.cpp, not used by reader_pool_2d.cpp)
+        in_idx_cb_id,                           // 37
+        pack_tmp_cb_id,                         // 38
+        pack_idx_tmp_cb_id,                     // 39
+        right_inc_cb_id,                        // 40
+        down_left_wrap_inc_cb_id,               // 41
+        up_left_wrap_inc_cb_id,                 // 42
+        pad_t,                                  // 43
+        pad_l,                                  // 44
+        right_inc,                              // 45
+        down_left_wrap_inc,                     // 46
+        up_left_wrap_inc,                       // 47
+        intra_kernel_right_inc,                 // 48
+        intra_kernel_down_left_wrap_inc,        // 49
+        out_cb_id,                              // 50
+        out_idx_cb_id,                          // 51
+        intra_kernel_right_inc_cb_id,           // 52
+        intra_kernel_down_left_wrap_inc_cb_id,  // 53
+        (uint32_t)indexes_32_bit,               // 54
     };
 
     tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader0_ct_args);
@@ -772,29 +773,30 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
 
     std::vector<uint32_t> compute_ct_args = {
-        params.in_ntiles_c,                     // 0
-        kernel_h * kernel_w,                    // 1
-        params.split_reader,                    // 2
-        0,                                      // 3 - max_out_nhw_per_core, used for grid sample but not for pool
-        in_c_per_shard_ceil,                    // 4
-        in_nblocks_c,                           // 5
-        params.max_rows_for_reduction,          // 6
-        in_cb_id_0,                             // 7
-        in_cb_id_1,                             // 8
-        in_scalar_cb_id_0,                      // 9
-        in_scalar_cb_id_1,                      // 10
-        in_idx_cb_id,                           // 11
-        pack_tmp_cb_id,                         // 12
-        pack_idx_tmp_cb_id,                     // 13
-        right_inc_cb_id,                        // 14
-        down_left_wrap_inc_cb_id,               // 15
-        up_left_wrap_inc_cb_id,                 // 16
-        out_cb_id,                              // 17
-        out_idx_cb_id,                          // 18
-        one_scalar_per_core,                    // 19
-        pre_tilize_cb_id,                       // 20
-        is_output_tiled,                        // 21
-        is_output_block_format,                 // 22
+        params.in_ntiles_c,             // 0
+        kernel_h * kernel_w,            // 1
+        params.split_reader,            // 2
+        0,                              // 3 - max_out_nhw_per_core, used for grid sample but not for pool
+        in_c_per_shard_ceil,            // 4
+        in_nblocks_c,                   // 5
+        params.max_rows_for_reduction,  // 6
+        in_cb_id_0,                     // 7
+        in_cb_id_1,                     // 8
+        in_scalar_cb_id_0,              // 9
+        in_scalar_cb_id_1,              // 10
+        out_cb_id,                      // 11
+        one_scalar_per_core,            // 12
+        pre_tilize_cb_id,               // 13
+        is_output_tiled,                // 14
+        is_output_block_format,         // 15
+        // MPWI-only args start here (for compute_mpwi.cpp, not used by compute_pool_2d.cpp)
+        in_idx_cb_id,                           // 16
+        pack_tmp_cb_id,                         // 17
+        pack_idx_tmp_cb_id,                     // 18
+        right_inc_cb_id,                        // 19
+        down_left_wrap_inc_cb_id,               // 20
+        up_left_wrap_inc_cb_id,                 // 21
+        out_idx_cb_id,                          // 22
         stride_h,                               // 23
         stride_w,                               // 24
         in_h_padded,                            // 25

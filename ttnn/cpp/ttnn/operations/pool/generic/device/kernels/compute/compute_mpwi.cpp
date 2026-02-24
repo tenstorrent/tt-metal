@@ -45,16 +45,19 @@ void kernel_main() {
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(11);
-    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(16);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(20);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(21);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
+    constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
+    // MPWI-specific args start here
+    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(16);
+    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(22);
     constexpr uint32_t stride_h = get_compile_time_arg_val(23);
     constexpr uint32_t stride_w = get_compile_time_arg_val(24);
     constexpr uint32_t in_h_padded = get_compile_time_arg_val(25);
