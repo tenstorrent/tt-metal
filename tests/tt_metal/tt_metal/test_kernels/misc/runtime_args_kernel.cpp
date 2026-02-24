@@ -18,6 +18,7 @@ void kernel_main() {
     uint64_t hartid = 0;
 #ifdef COMPILE_FOR_DM
     // Quasar DM only: Get DM processor ID
+    // TODO: Replace with get_thread_idx() kernel API when available
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     // Quasar DM only: write the actual L1 base addresses at the end of CRTA payload from all DMs
     results[kCommonRTASeparation + MAX_DMS * NUM_RUNTIME_ARGS + hartid] = static_cast<uint32_t>(get_common_arg_addr(0));

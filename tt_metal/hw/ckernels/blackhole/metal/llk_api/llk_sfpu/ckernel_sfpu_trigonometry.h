@@ -136,24 +136,6 @@ inline void calculate_tangent() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
-static sfpi::vFloat sfpu_sinpi(sfpi::vFloat x);
-
-template <>
-sfpi_inline sfpi::vFloat sfpu_sinpi<true>(sfpi::vFloat x) {
-    sfpi::vFloat xx = x * x;
-
-    return x * ((0x1.29cf02p+1f * xx - 0x1.4954d4p+2f) * xx + 0x1.92149p+1f);
-}
-
-template <>
-sfpi_inline sfpi::vFloat sfpu_sinpi<false>(sfpi::vFloat x) {
-    sfpi::vFloat xx = x * x;
-
-    return x *
-           ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
-}
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sine() {
     // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-PI/2, PI/2].

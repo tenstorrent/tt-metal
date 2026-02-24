@@ -8,7 +8,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Import helper functions from unit test
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention_decode import (
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     nearest_n,
     nearest_pow_2,
     fa_rand,
