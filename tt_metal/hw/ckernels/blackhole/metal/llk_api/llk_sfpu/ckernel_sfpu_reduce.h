@@ -16,10 +16,9 @@ inline void calculate_reduce(uint32_t ct_dim, uint32_t rt_dim) {
     _calculate_reduce_<pool_type, reduce_dim, format>(ct_dim, rt_dim);
 }
 
-template <DataFormat format>
+template <PoolType pool_type, DataFormat format>
 inline void init_reduce() {
-    // Use the specified format for initialization
-    _init_reduce_<format>();
+    _init_reduce_<pool_type, format>();
 }
 
 }  // namespace ckernel::sfpu
