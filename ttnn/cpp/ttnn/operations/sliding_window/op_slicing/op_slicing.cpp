@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "op_slicing.hpp"
+#include <tuple>
 #include <ttnn/operations/core/core.hpp>
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -80,8 +81,8 @@ static uint32_t compute_L1_usage_for_slice_config(
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
                 {output_slice_height_start, output_slice_width_start},
                 {output_slice_height_end, output_slice_width_end});
-            std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
-            std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
+            std::tie(input_slice_height_start, std::ignore) = input_slice_start;
+            std::tie(input_slice_height_end, std::ignore) = input_slice_end;
 
             input_slice_width_start = 0;
             input_slice_width_end = input_width;
@@ -102,8 +103,8 @@ static uint32_t compute_L1_usage_for_slice_config(
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
                 {output_slice_height_start, output_slice_width_start},
                 {output_slice_height_end, output_slice_width_end});
-            std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
-            std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
+            std::tie(std::ignore, input_slice_width_start) = input_slice_start;
+            std::tie(std::ignore, input_slice_width_end) = input_slice_end;
 
             input_slice_height_start = 0;
             input_slice_height_end = input_height;
@@ -407,8 +408,8 @@ void run_sliced_op(
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
                 {output_slice_height_start, output_slice_width_start},
                 {output_slice_height_end, output_slice_width_end});
-            std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
-            std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
+            std::tie(input_slice_height_start, std::ignore) = input_slice_start;
+            std::tie(input_slice_height_end, std::ignore) = input_slice_end;
 
             input_slice_width_start = 0;
             input_slice_width_end = input_width;
@@ -429,8 +430,8 @@ void run_sliced_op(
             auto [input_slice_start, input_slice_end] = op_slice_attr->get_input_slice(
                 {output_slice_height_start, output_slice_width_start},
                 {output_slice_height_end, output_slice_width_end});
-            std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
-            std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
+            std::tie(std::ignore, input_slice_width_start) = input_slice_start;
+            std::tie(std::ignore, input_slice_width_end) = input_slice_end;
 
             input_slice_height_start = 0;
             input_slice_height_end = input_height;

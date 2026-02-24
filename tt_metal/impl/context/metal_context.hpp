@@ -16,6 +16,10 @@ namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
 
+namespace tt::tt_metal::distributed {
+class SystemMesh;
+}  // namespace tt::tt_metal::distributed
+
 namespace tt {
 class Cluster;
 }  // namespace tt
@@ -110,6 +114,9 @@ public:
     // Control plane accessors
     void initialize_control_plane();
     tt::tt_fabric::ControlPlane& get_control_plane();
+
+    // System mesh accessor — lazily initialized, reset when control plane is reset.
+    distributed::SystemMesh& get_system_mesh();
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
@@ -253,6 +260,7 @@ private:
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
+    std::unique_ptr<distributed::SystemMesh> system_mesh_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
