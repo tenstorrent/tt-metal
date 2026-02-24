@@ -6,8 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
-from tests.didt.op_test_base_multi import OpTestBaseMulti, OpParameter
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -16,7 +15,7 @@ MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
 MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
-class SdpaOpTest(OpTestBaseMulti):
+class SdpaOpTest(OpTestBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -65,10 +64,8 @@ def test_sdpa_op(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    compute_with_storage_grid_size = (8, 8)
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-        compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+    compute_grid = get_mesh_grid_size(mesh_device)
+    compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
 
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
@@ -105,7 +102,7 @@ def test_sdpa_op(
         sdpa_program_config,
         sdpa_compute_kernel_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
 
