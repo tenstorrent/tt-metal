@@ -91,7 +91,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
-            edm_connection_handshake_l1_addr = get_stream_scratch_register_address<0>();
+            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
@@ -393,7 +393,7 @@ struct WorkerToFabricEdmSenderImpl {
             this->buffer_slot_index = BufferIndex(0);
         }
 
-        noc_inline_dw_write<InlineWriteDst::L1, posted>(
+        noc_inline_dw_write<InlineWriteDst::REG, posted>(
             edm_connection_handshake_noc_addr,
             tt::tt_fabric::connection_interface::open_connection_value,
             0xf,
@@ -436,7 +436,7 @@ struct WorkerToFabricEdmSenderImpl {
             noc_inline_dw_write<InlineWriteDst::L1>(remote_buffer_index_addr, this->get_buffer_slot_index(), 0xF, noc);
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write<InlineWriteDst::L1>(
+        noc_inline_dw_write<InlineWriteDst::REG>(
             dest_edm_connection_state_addr,
             tt::tt_fabric::connection_interface::close_connection_request_value,
             0xF,

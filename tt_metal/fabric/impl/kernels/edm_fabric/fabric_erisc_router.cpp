@@ -2818,7 +2818,6 @@ void kernel_main() {
     for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
-    local_sender_channel_connection_semaphore_addrs[0] = get_stream_scratch_register_address<0>();
     write_stream_scratch_register<0>(0);
 
     // Read sender channel connection buffer index IDs (9 channels: 8 base + 1 for Z routers)

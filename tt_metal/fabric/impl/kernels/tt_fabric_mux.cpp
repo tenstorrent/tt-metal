@@ -179,10 +179,7 @@ void kernel_main() {
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>
         full_size_channel_worker_interface_zero;
 
-    size_t const uladdr = static_cast<size_t>(get_stream_scratch_register_address<0>());
-    *(reinterpret_cast<volatile tt_reg_ptr uint32_t*>(connection_handshake_address)) = uladdr;
-
-    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>(
         &full_size_channels[0],
         &full_size_channel_worker_interface_zero,
         full_size_channel_connection_established[0],
@@ -195,7 +192,7 @@ void kernel_main() {
         StreamId{channel_stream_ids[0]});
 
     for (uint8_t i = 1; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_l1_ptr uint32_t*>(
             &full_size_channels[i],
             &full_size_channel_worker_interfaces[i],
             full_size_channel_connection_established[i],
@@ -209,7 +206,7 @@ void kernel_main() {
     }
 
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
+        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, volatile tt_l1_ptr uint32_t*>(
             &header_only_channels[i],
             &header_only_channel_worker_interfaces[i],
             header_only_channel_connection_established[i],
@@ -262,7 +259,7 @@ void kernel_main() {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 // this approach stalls
-                forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+                forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>(
                     full_size_channels[0],
                     full_size_channel_worker_interface_zero,
                     fabric_connection,
@@ -271,7 +268,7 @@ void kernel_main() {
                     0);
 
                 for (uint8_t channel_id = 1; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_l1_ptr uint32_t*>(
                         full_size_channels[channel_id],
                         full_size_channel_worker_interfaces[channel_id],
                         fabric_connection,

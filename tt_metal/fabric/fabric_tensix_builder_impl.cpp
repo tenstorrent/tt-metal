@@ -4,6 +4,7 @@
 
 #include "fabric_tensix_builder_impl.hpp"
 
+#include <cstdint>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -513,6 +514,11 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
         ct_args.push_back(region.get_address(base_channel_id));
     }
     // Connection handshake base addresses (one per channel type)
+    // Use get_connection_handshake_address() to respect stream register override for channel 0
+    for (const auto& [type, region] : connection_handshake_regions_) {
+        ct_args.push_back(get_connection_handshake_address(type, base_channel_id));
+    }
+    // Connection handshake L1 region base addresses (for channels 1+ when channel 0 uses stream register)
     for (const auto& [type, region] : connection_handshake_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
@@ -774,6 +780,11 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
         ct_args.push_back(region.get_address(base_channel_id));
     }
     // Connection handshake base addresses (one per channel type)
+    // Use get_connection_handshake_address() to respect stream register override for channel 0
+    for (const auto& [type, region] : connection_handshake_regions_) {
+        ct_args.push_back(get_connection_handshake_address(type, base_channel_id));
+    }
+    // Connection handshake L1 region base addresses (for channels 1+ when channel 0 uses stream register)
     for (const auto& [type, region] : connection_handshake_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
