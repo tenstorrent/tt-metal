@@ -214,7 +214,7 @@ async function run() {
       failing_jobs: [{
         name: 't3k_ttnn_tests',
         url: '',
-        owners: [{ name: 'Evan Small' }]
+        owners: [{ name: 'Evan Smal' }]
       }]
     });
     // --- END TESTING ---
