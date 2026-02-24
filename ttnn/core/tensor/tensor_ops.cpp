@@ -57,8 +57,8 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     return output;
 }
 
-DeviceTensor create_device_metal_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
-    DeviceTensor output = tensor_impl::allocate_tensor_on_device(tensor_spec, mesh_device);
+MeshTensor create_device_metal_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
+    MeshTensor output = tensor_impl::allocate_tensor_on_device(tensor_spec, mesh_device);
     return output;
 }
 }  // namespace tt::tt_metal

@@ -22,15 +22,15 @@ class MeshDevice;
 }
 
 /**
- * DeviceTensor is a device memory object. The user’s mental model of DeviceTensor is an owning handle to
+ * MeshTensor is a device memory object. The user’s mental model of MeshTensor is an owning handle to
  * device-allocated memory.
  *
- * DeviceTensor should have RAII semantics with unique ownership:
+ * MeshTensor should have RAII semantics with unique ownership:
  * - Device memory resource lifetime == object lifetime
  *   - Device memory is allocated on construction, and released on destruction.
  *   - The programmer explicitly manages the device-allocated memory lifetime.
  *   - This can be tricky in an asynchronous runtime environment. For now, the onus is on the programmer to correctly
- *     manage DeviceTensor lifetime around queue synchronization events.
+ *     manage MeshTensor lifetime around queue synchronization events.
  * - Movable (RAII transfer of ownership)
  * - Non-copyable
  * - No equality/inequality operator. (If we did add this, equality would mean the same underlying allocation – no value
@@ -40,12 +40,12 @@ class MeshDevice;
  * - Default constructed: Acts like a nullptr, any access to any member function outside of assignment and move
  *   construction will be UB, this is checked by TT_ASSERT (enabled at debug build) in accessors. This is similar to
  *   HostTensor.
- * - Allocated: The device memory is allocated and **solely owned** by DeviceTensor, user is able to get non-null
+ * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
  *   pointers to the device and underlying storage (MeshBuffer).
- * - Deallocated: The device memory is deallocated and the DeviceTensor is in a default constructed state, pointer to
+ * - Deallocated: The device memory is deallocated and the MeshTensor is in a default constructed state, pointer to
  *   Device and MeshBuffer will be null.
  */
-class DeviceTensor {
+class MeshTensor {
     using attribute_type = TensorAttributes<DeviceStorage>;
 
 public:
@@ -56,11 +56,11 @@ public:
     /**
      * Construct a tensor that does not own any device memory.
      */
-    DeviceTensor() = default;
+    MeshTensor() = default;
 
-    // TODO: This should be a private constructor, external user should not be able to construct a DeviceTensor
+    // TODO: This should be a private constructor, external user should not be able to construct a MeshTensor
     // directly. As this will lead to leaks of the MeshBuffer unique ownership.
-    explicit DeviceTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    explicit MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
         impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
     }
 
@@ -69,31 +69,31 @@ public:
      * Whether or not the device memory is actually deallocated depends on the destructor semantics of the underlying
      * MeshBuffer.
      */
-    ~DeviceTensor() = default;
+    ~MeshTensor() = default;
 
     /**
      * A device tensor is non-copyable as this is the sole owner of the underlying device memory.
      */
-    DeviceTensor(const DeviceTensor&) = delete;
+    MeshTensor(const MeshTensor&) = delete;
 
     /**
      * A device tensor is non-copyable as this is the sole owner of the underlying device memory.
      */
-    DeviceTensor& operator=(const DeviceTensor&) = delete;
+    MeshTensor& operator=(const MeshTensor&) = delete;
 
     /**
-     * Transfer ownership of the underlying device memory to the other DeviceTensor.
+     * Transfer ownership of the underlying device memory to the other MeshTensor.
      *
-     * post-condition: The other DeviceTensor will be in a default constructed state.
+     * post-condition: The other MeshTensor will be in a default constructed state.
      */
-    DeviceTensor(DeviceTensor&& other) = default;
+    MeshTensor(MeshTensor&& other) = default;
 
     /**
-     * Transfer ownership of the underlying device memory to the other DeviceTensor.
+     * Transfer ownership of the underlying device memory to the other MeshTensor.
      *
-     * post-condition: The other DeviceTensor will be in a default constructed state.
+     * post-condition: The other MeshTensor will be in a default constructed state.
      */
-    DeviceTensor& operator=(DeviceTensor&& other) = default;
+    MeshTensor& operator=(MeshTensor&& other) = default;
 
     // End speical member functions
 
@@ -161,7 +161,7 @@ public:
 
     const TensorSpec& tensor_spec() const {
         // Pre-condition
-        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
         return impl->tensor_spec_;
     }
 
@@ -172,15 +172,15 @@ public:
      */
     const TensorTopology& tensor_topology() const {
         // Pre-condition
-        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
         return impl->tensor_topology_;
     }
 
-    // DeviceStorage is meant to bridge ttnn::Tensor and DeviceTensor,
+    // DeviceStorage is meant to bridge ttnn::Tensor and MeshTensor,
     // this should go away as part of refactoring, see: #38376
     const DeviceStorage& get_storage() const {
         // Pre-condition
-        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
         return impl->storage_;
     }
 
@@ -188,7 +188,7 @@ private:
     // Mutable version of get_storage().
     DeviceStorage& get_storage() {
         // Pre-condition
-        TT_ASSERT(impl != nullptr, "DeviceTensor is in a default constructed state");
+        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
         return impl->storage_;
     }
 
@@ -239,12 +239,12 @@ public:
 
     // TODO: This is a hack right now, because this allows multiple device tensor holding on to the same conceptual
     // storage, find a better way to do this.
-    DeviceTensor with_tensor_topology(TensorTopology tensor_topology) const {
-        return DeviceTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
+    MeshTensor with_tensor_topology(TensorTopology tensor_topology) const {
+        return MeshTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
     }
 
 private:
-    // impl could be a nullptr if DeviceTensor is in a default constructed state.
+    // impl could be a nullptr if MeshTensor is in a default constructed state.
     // Avoid using impl pointer directly, use the accessors instead.
     // Otherwise, please add manual TT_ASSERT checks for nullptr.
     std::unique_ptr<attribute_type> impl;

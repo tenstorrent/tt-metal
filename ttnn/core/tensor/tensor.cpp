@@ -85,15 +85,15 @@ Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tenso
     Tensor(HostTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    Tensor(DeviceTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+    Tensor(MeshTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
 Tensor::Tensor(tt::tt_metal::HostTensor host_tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(host_tensor))) {}
+    tensor_attributes(std::make_shared<std::variant<HostTensor, MeshTensor>>(std::move(host_tensor))) {}
 
-Tensor::Tensor(tt::tt_metal::DeviceTensor device_tensor) :
+Tensor::Tensor(tt::tt_metal::MeshTensor device_tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(device_tensor))) {
+    tensor_attributes(std::make_shared<std::variant<HostTensor, MeshTensor>>(std::move(device_tensor))) {
     if (auto mesh_buffer = device_storage().mesh_buffer) {
         mesh_device_ = mesh_buffer->device();
     }
@@ -138,7 +138,7 @@ void Tensor::deallocate(bool force) {
 
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
     if (storage_type() == StorageType::DEVICE && can_deallocate(tensor_attributes, force)) {
-        std::get<DeviceTensor>(*tensor_attributes).deallocate();
+        std::get<MeshTensor>(*tensor_attributes).deallocate();
     }
     // GraphTracker::instance().track_function_end();
 }
@@ -381,8 +381,8 @@ Tensor Tensor::reshape(
 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
     Tensor result = *this;
-    result.tensor_attributes = std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::visit(
-        [&](auto& tensor) -> std::variant<HostTensor, DeviceTensor> {
+    result.tensor_attributes = std::make_shared<std::variant<HostTensor, MeshTensor>>(std::visit(
+        [&](auto& tensor) -> std::variant<HostTensor, MeshTensor> {
             return tensor.with_tensor_topology(std::move(tensor_topology));
         },
         *tensor_attributes));
@@ -400,7 +400,7 @@ StorageType Tensor::storage_type() const {
     return std::visit(
         tt::stl::overloaded{
             [](const HostTensor&) { return StorageType::HOST; },
-            [](const DeviceTensor&) { return StorageType::DEVICE; },
+            [](const MeshTensor&) { return StorageType::DEVICE; },
         },
         *this->tensor_attributes);
 }
@@ -521,25 +521,25 @@ const HostStorage& Tensor::host_storage() const& { return host_tensor().get_stor
 
 const HostTensor& Tensor::host_tensor() const& {
     const auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());
-    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got DeviceTensor");
+    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got MeshTensor");
     return *host_tensor;
 }
 
 HostTensor& Tensor::host_tensor() & {
     auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());
-    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got DeviceTensor");
+    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got MeshTensor");
     return *host_tensor;
 }
 
-const DeviceTensor& Tensor::device_tensor() const& {
-    const auto* device_tensor = std::get_if<DeviceTensor>(tensor_attributes.get());
-    TT_FATAL(device_tensor != nullptr, "Expected Tensor with DeviceTensor, got HostTensor");
+const MeshTensor& Tensor::device_tensor() const& {
+    const auto* device_tensor = std::get_if<MeshTensor>(tensor_attributes.get());
+    TT_FATAL(device_tensor != nullptr, "Expected Tensor with MeshTensor, got HostTensor");
     return *device_tensor;
 }
 
-DeviceTensor& Tensor::device_tensor() & {
-    auto* device_tensor = std::get_if<DeviceTensor>(tensor_attributes.get());
-    TT_FATAL(device_tensor != nullptr, "Expected Tensor with DeviceTensor, got HostTensor");
+MeshTensor& Tensor::device_tensor() & {
+    auto* device_tensor = std::get_if<MeshTensor>(tensor_attributes.get());
+    TT_FATAL(device_tensor != nullptr, "Expected Tensor with MeshTensor, got HostTensor");
     return *device_tensor;
 }
 

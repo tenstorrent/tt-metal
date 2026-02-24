@@ -91,11 +91,11 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
-HostTensor to_host(distributed::MeshCommandQueue& queue, const DeviceTensor& tensor, bool blocking = true);
+HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking = true);
 
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
-    const DeviceTensor& device_tensor,
+    const MeshTensor& device_tensor,
     HostTensor& host_tensor,
     bool blocking = true);
 
@@ -107,12 +107,12 @@ void copy_to_host(
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-DeviceTensor to_device(
+MeshTensor to_device(
     distributed::MeshCommandQueue& queue,
     const HostTensor& tensor,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
-void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, DeviceTensor& device_tensor);
+void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 // TODO: figure out what to do with this.
 void copy_to_device(
@@ -135,8 +135,8 @@ HostTensor view(
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
 
-DeviceTensor view(
-    const DeviceTensor& tensor,
+MeshTensor view(
+    const MeshTensor& tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
 
@@ -168,10 +168,9 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 //                                 Runtime Tensor Creation Functions
 // ======================================================================================
 
-// Creations, these should be static factory functions of HostTensor and DeviceTensor
+// Creations, these should be static factory functions of HostTensor and MeshTensor
 
-tt::tt_metal::DeviceTensor allocate_tensor_on_device(
-    const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+tt::tt_metal::MeshTensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 // ======================================================================================
 //                                  HostTensor Factory Functions
