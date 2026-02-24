@@ -527,6 +527,11 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // Disable rank bindings if we're generating mapping locally (single host, single mesh)
         config.disable_rank_bindings = generate_mapping_locally_;
 
+        // Provide hostname_to_asics for host consistency constraint
+        for (const auto& [asic_id, desc] : physical_system_descriptor_.get_asic_descriptors()) {
+            config.hostname_to_asics[desc.host_name].insert(asic_id);
+        }
+
         // Use multi-mesh topology solver to map all meshes at once
         auto mapping_result = ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(
             adjacency_map_logical_multi_mesh,

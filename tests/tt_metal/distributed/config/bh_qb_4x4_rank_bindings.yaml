@@ -1,6 +1,7 @@
 rank_bindings:
   - rank: 0
     mesh_id: 0
+    mesh_host_rank: 0
 
   - rank: 1
     mesh_id: 0
