@@ -78,19 +78,20 @@ double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>&
 }
 
 struct InterpolationBounds {
-    std::vector<uint32_t> lower;
-    std::vector<uint32_t> upper;
+    std::map<std::string, uint32_t> lower;
+    std::map<std::string, uint32_t> upper;
 };
 
 static InterpolationBounds find_bounds(const GroupKey& target, const std::map<GroupKey, LatencyData>& entries) {
     InterpolationBounds bounds;
     auto target_values = NumericFields::extract(target);
-    std::size_t n = NumericFields::count;
 
-    bounds.lower.resize(n, 0);
-    bounds.upper.resize(n, std::numeric_limits<uint32_t>::max());
+    for (const auto& [name, _] : target_values) {
+        bounds.lower[name] = 0;
+        bounds.upper[name] = std::numeric_limits<uint32_t>::max();
+    }
 
-    std::vector<std::set<uint32_t>> available_values(n);
+    std::map<std::string, std::set<uint32_t>> available_values;
 
     for (const auto& [key, _] : entries) {
         if (!key.matches_non_numeric(target)) {
@@ -98,14 +99,13 @@ static InterpolationBounds find_bounds(const GroupKey& target, const std::map<Gr
         }
 
         auto values = NumericFields::extract(key);
-        for (std::size_t i = 0; i < n; i++) {
-            available_values[i].insert(values[i]);
+        for (const auto& [name, val] : values) {
+            available_values[name].insert(val);
         }
     }
 
-    for (std::size_t i = 0; i < n; i++) {
-        uint32_t target_val = target_values[i];
-        const auto& vals = available_values[i];
+    for (const auto& [name, target_val] : target_values) {
+        const auto& vals = available_values[name];
 
         if (vals.empty()) {
             continue;
@@ -113,16 +113,16 @@ static InterpolationBounds find_bounds(const GroupKey& target, const std::map<Gr
 
         auto it_upper = vals.upper_bound(target_val);
         if (it_upper != vals.begin()) {
-            bounds.lower[i] = *prev(it_upper);
+            bounds.lower[name] = *prev(it_upper);
         } else {
-            bounds.lower[i] = *vals.begin();
+            bounds.lower[name] = *vals.begin();
         }
 
         auto it_lb = vals.lower_bound(target_val);
         if (it_lb != vals.end()) {
-            bounds.upper[i] = *it_lb;
+            bounds.upper[name] = *it_lb;
         } else {
-            bounds.upper[i] = *vals.rbegin();
+            bounds.upper[name] = *vals.rbegin();
         }
     }
 
@@ -136,15 +136,21 @@ double interpolate_latency_nd(
     const std::map<GroupKey, LatencyData>& entries) {
     InterpolationBounds bounds = find_bounds(key, entries);
     auto target_values = NumericFields::extract(key);
-    std::size_t n = NumericFields::count;
+
+    std::vector<std::string> field_names;
+    for (const auto& [name, _] : target_values) {
+        field_names.push_back(name);
+    }
+    std::size_t n = field_names.size();
 
     std::vector<double> weights(n, 0.0);
     for (std::size_t i = 0; i < n; i++) {
-        if (bounds.lower[i] == bounds.upper[i]) {
+        const auto& name = field_names[i];
+        if (bounds.lower.at(name) == bounds.upper.at(name)) {
             weights[i] = 0.0;
         } else {
-            weights[i] = static_cast<double>(target_values[i] - bounds.lower[i]) /
-                         static_cast<double>(bounds.upper[i] - bounds.lower[i]);
+            weights[i] = static_cast<double>(target_values.at(name) - bounds.lower.at(name)) /
+                         static_cast<double>(bounds.upper.at(name) - bounds.lower.at(name));
         }
     }
 
@@ -152,12 +158,13 @@ double interpolate_latency_nd(
     double result = 0.0;
 
     for (std::size_t corner = 0; corner < num_corners; corner++) {
-        std::vector<uint32_t> corner_values(n);
+        std::map<std::string, uint32_t> corner_values;
         double corner_weight = 1.0;
 
         for (std::size_t i = 0; i < n; i++) {
+            const auto& name = field_names[i];
             bool use_upper = (corner >> i) & 1;
-            corner_values[i] = use_upper ? bounds.upper[i] : bounds.lower[i];
+            corner_values[name] = use_upper ? bounds.upper.at(name) : bounds.lower.at(name);
             corner_weight *= use_upper ? weights[i] : (1.0 - weights[i]);
         }
 
