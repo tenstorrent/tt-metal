@@ -9,6 +9,8 @@ from types import ModuleType
 import torch
 from loguru import logger
 
+from models.vllm_test_utils.generative_base import GenerativeTestModelBase
+
 # Create a namespace package for 'tests' pointing to local directory
 # This ensures 'tests.*' imports resolve to the local tests directory instead of vllm's
 _project_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -19,16 +21,17 @@ if _tests_dir.exists():
     sys.modules["tests"] = _tests_module
 
 import ttnn
-from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 
 
-class DummyT3000MultiProcessModel:
+class DummyT3000MultiProcessModel(GenerativeTestModelBase):
     """
     Dummy model class for testing simulated multihost on T3000 with 2x4 MeshDevice.
     This model runs a reduce scatter async test instead of actual inference.
     """
 
-    def __init__(self, mesh_device, max_batch_size, vocab_size):
+    def __init__(self, mesh_device, max_batch_size, vocab_size, **kwargs):
+        # Accept arbitrary kwargs so the signature supports `vllm_config=...`
+        # (used by vLLM interface checks) without impacting TT initialization.
         self.mesh_device = mesh_device
         self.submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
         self.max_batch_size = max_batch_size
@@ -41,6 +44,10 @@ class DummyT3000MultiProcessModel:
 
     def prefill_forward(self, *args, **kwargs):
         logger.info("Dummy prefill: running reduce scatter async test (for 2x4 MeshDevice)")
+        # Import lazily so this test model can be imported/inspected by vLLM
+        # without requiring the full test dependency stack.
+        from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
+
         run_reduce_scatter_impl(
             self.submesh_device,
             self.submesh_device.get_num_devices(),
