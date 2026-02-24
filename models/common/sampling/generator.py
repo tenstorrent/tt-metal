@@ -327,6 +327,8 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling.force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
+        ttnn.copy_host_to_device_tensor(self.tt_sampling.seeds_tt_host_tensor, self.tt_sampling.seeds_tt_tensor)
+
         if not use_internal_trace:
             tt_out = self._run_sampling(
                 logits,
@@ -529,7 +531,6 @@ class SeedManager:
             assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
             new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
         # send new seeds to sampling module
-        new_seed_tt = ttnn.from_torch(
+        self.tt_sampling.seeds_tt_host_tensor = ttnn.from_torch(
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
         )
-        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
