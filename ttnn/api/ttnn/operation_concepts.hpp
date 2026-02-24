@@ -53,8 +53,12 @@ template <typename T>
 concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
 // A factory that implements ONLY create_descriptor (not create + override_runtime_arguments).
-// The framework builds the Program from the descriptor on cache miss, and updates
-// runtime args from a fresh descriptor on cache hit.
+// The framework builds the Program from the descriptor on cache miss, and auto-patches
+// buffer addresses on cache hits.
+//
+// create_descriptor must return tt::tt_metal::ProgramDescriptor.  There is no
+// MeshWorkloadDescriptor — mesh coordination is handled by the adapter layer
+// (DescriptorMeshWorkloadFactoryAdapter).
 //
 // Note: some existing factories (e.g. LayerNorm) have create_descriptor alongside the
 // traditional create/override_runtime_arguments.  Those still satisfy ProgramFactoryConcept.

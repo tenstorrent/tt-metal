@@ -53,8 +53,7 @@ In order to add a new device operation, follow the directory structure shown bel
 .. note::
  **All new operations must use the ProgramDescriptor pattern** (see below).
  The old ``CachedProgram`` / ``shared_variables_t`` pattern is legacy and should not
- be used for new operations. See :doc:`descriptor_migration_recipe` for migrating
- existing operations.
+ be used for new operations.
 
 A concrete example of a device operation can be found in `ttnn/cpp/ttnn/operations/examples/example/device`
 
@@ -171,7 +170,8 @@ that excludes those fields. Otherwise the cache will miss on every call. Always 
    }
 
 If all attributes are compile-time deterministic, you can omit ``compute_program_hash``
-and the framework will use a sensible default.
+and the framework will use a sensible default that hashes ``type_hash<YourDeviceOperation>``,
+all of ``operation_attributes_t``, and all of ``tensor_args_t``.
 
 Full example files:
 

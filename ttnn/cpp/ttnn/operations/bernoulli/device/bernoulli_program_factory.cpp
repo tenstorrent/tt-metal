@@ -145,7 +145,7 @@ ProgramDescriptor BernoulliDeviceOperation::ProgramFactory::create_descriptor(
     // ---- Runtime args per core ----
 
     uint32_t tile_offset = 0;
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
+    for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         uint32_t units_per_core;
         if (core_group_1.contains(core)) {
@@ -160,7 +160,8 @@ ProgramDescriptor BernoulliDeviceOperation::ProgramFactory::create_descriptor(
             core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), tile_offset, units_per_core});
 
         // Each core has its own seed to increase the number of generated random numbers
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        uint32_t seed =
+            operation_attributes.seed != 0 ? operation_attributes.seed + static_cast<uint32_t>(i) : get_random_seed();
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
 
@@ -190,9 +191,10 @@ void BernoulliDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     // Compute kernel is index 2 (reader=0, writer=1, compute=2 per create_descriptor).
     constexpr uint32_t compute_kernel_handle = 2;
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
+    for (size_t i = 0; i < cores.size(); ++i) {
         auto& runtime_args = GetRuntimeArgs(program, compute_kernel_handle, cores[i]);
-        runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        runtime_args[0] =
+            operation_attributes.seed != 0 ? operation_attributes.seed + static_cast<uint32_t>(i) : get_random_seed();
     }
 }
 

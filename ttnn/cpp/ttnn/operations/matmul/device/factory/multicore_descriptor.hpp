@@ -11,9 +11,11 @@
 
 namespace ttnn::prim::matmul_detail {
 
-// MeshWorkloadFactoryConcept factory that uses ProgramDescriptor for clean
-// program construction (cache miss) while having efficient runtime-arg
-// updates (cache hit) that only touch buffer addresses.
+// Satisfies MeshWorkloadFactoryConcept (not ProgramDescriptorFactoryConcept)
+// because matmul needs manual control over mesh workload distribution.
+// Uses ProgramDescriptor internally via create_descriptor() for cleaner
+// program construction on cache miss, while override_runtime_arguments
+// handles efficient buffer-address patching on cache hits.
 struct MultiCoreDescriptorFactory {
     struct shared_variables_t {
         uint32_t num_cores{};

@@ -1,12 +1,12 @@
-# Program Descriptor Migration Recipe
+# Migrate Operation to ProgramDescriptor Pattern
 
-**Purpose:** Step-by-step guide for migrating a TTNN device operation from the old
-`CachedProgram` / `ProgramFactoryConcept` architecture to the new
-`ProgramDescriptor` / `ProgramDescriptorFactoryConcept` architecture.
+Migrate a device operation from the old `CachedProgram` / `ProgramFactoryConcept` architecture to the new `ProgramDescriptor` / `ProgramDescriptorFactoryConcept` architecture.
 
-This recipe was validated on the Bernoulli, Matmul, and Conv2d operations.
+## Usage
 
----
+When you need to migrate a device operation to the descriptor pattern, use this command and provide:
+- The operation name you're migrating (e.g., 'FullLike', 'Bernoulli')
+- The location of the old device operation code
 
 ## Overview
 
@@ -17,6 +17,8 @@ The migration has three phases:
    performance overhead (< 3-5 %).
 3. **Replace** the old operation's ProgramFactory with the new descriptor-based one,
    delete the `_new` directory, and clean up CMake/test references.
+
+This recipe was validated on the Bernoulli, Matmul, Conv2d, and FullLike operations.
 
 ---
 
@@ -59,9 +61,9 @@ struct ProgramFactory {
         const tensor_args_t&,
         tensor_return_value_t&);
 
-    // Optional: only needed if runtime args change on cache hits
+    // Optional: only needed if non-address runtime args change on cache hits
     // (e.g., random seeds, dynamic parameters).
-    // Buffer addresses are auto-patched by the framework.
+    // Buffer addresses and dynamic CB addresses are auto-patched by the framework.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t&,
@@ -75,8 +77,10 @@ struct ProgramFactory {
 - `create_descriptor()` returns a `ProgramDescriptor` that declares CBs, kernels,
   and runtime args declaratively.
 - The framework handles buffer address patching on cache hits automatically.
+- The framework handles dynamic circular buffer address patching automatically
+  (set `.buffer` on `CBDescriptor` for sharded ops).
 - `override_runtime_arguments` is only needed for truly dynamic parameters
-  (random seeds, etc.) — not for buffer addresses.
+  (random seeds, semaphore addresses, etc.) — not for buffer addresses.
 - Include `<tt-metalium/program_descriptors.hpp>`.
 
 **Optional `prepare_resources` hook:**
@@ -163,6 +167,10 @@ Keep the `type_hash<>` after migration as well — it prevents collisions betwee
 different operations in the shared device cache. Rename it from `type_hash<MyNewOp>`
 to `type_hash<MyOp>` in Phase 3.
 
+If all attributes are compile-time deterministic, you can omit `compute_program_hash`
+and the framework will use a sensible default that hashes `type_hash<YourDeviceOperation>`,
+all of `operation_attributes_t`, and all of `tensor_args_t`.
+
 ### 1.5 CMakeLists.txt
 
 Create a `CMakeLists.txt` for the `_new` operation and add it to `ttnn/CMakeLists.txt`:
@@ -246,7 +254,7 @@ Run the performance test **3-5 times** and compute the average overhead.
 If performance exceeds the threshold, check:
 - Is `compute_program_hash` doing unnecessary work?
 - Is `override_runtime_arguments` doing too much? Buffer addresses are auto-patched.
-- In the `mesh_device_operation_adapter.hpp`, verify the hash path is efficient.
+- In `mesh_device_operation_adapter.hpp`, verify the hash path is efficient.
 
 ---
 
@@ -357,3 +365,20 @@ Both must succeed with zero errors.
 
 5. **External consumers of old factories.** Check sparse matmul, CCL fusion ops, and
    any other code that directly instantiates your factory type.
+
+6. **Don't delete useful comments.** When copying factory implementations, preserve
+   algorithmic comments from the original code. These explain non-obvious hardware
+   behavior, NOC bandwidth constraints, padding rules, etc.
+
+## Example Reference
+
+See the FullLike operation for the simplest complete example:
+- Descriptor-based: `ttnn/cpp/ttnn/operations/full_like/device/full_like_factory.cpp`
+- Header: `ttnn/cpp/ttnn/operations/full_like/device/full_like_device_operation.hpp`
+
+See the Bernoulli operation for an example with `override_runtime_arguments` (seed patching):
+- Factory: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_program_factory.cpp`
+- Header: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp`
+
+See the Conv2d operation for an example with `prepare_resources`:
+- Factory: `ttnn/cpp/ttnn/operations/conv/conv2d/device/factory/sharded_descriptor.cpp`

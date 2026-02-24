@@ -32,6 +32,8 @@ struct BernoulliDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
 
+        // Optional: only needed because `seed` is a non-address runtime arg that
+        // changes per call.  Buffer addresses are auto-patched by the framework.
         static void override_runtime_arguments(
             tt::tt_metal::Program& program,
             const operation_attributes_t& operation_attributes,
