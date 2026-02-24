@@ -133,7 +133,8 @@ void kernel_main() {
             .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
-            .scatter_arrival_sem_addr = get_semaphore(WriterCTArgs::scatter_arrival_semaphore_id),
+            // scatter_arrival_enabled=0, so this is not used
+            .scatter_arrival_sem_addr = 0,
         };
         Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
         op(writer_args);

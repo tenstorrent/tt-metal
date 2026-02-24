@@ -906,6 +906,7 @@ class FlashMLADecode:
                 brisc_args=brisc_per_core_args,
                 trisc_args=trisc_per_core_args,
             ),
+            noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         )
 
         kernel_result = unified_kernel.get_kernel_descriptors()

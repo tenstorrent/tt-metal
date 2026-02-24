@@ -141,6 +141,7 @@ class PreSDPA:
         output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
         return full_q, new_kv, output
 
+    @staticmethod
     def create_semaphores(mesh_device, skip_ccl=False):
         num_semaphores = 11 if skip_ccl else 14
         device_grid_size = mesh_device.compute_with_storage_grid_size()

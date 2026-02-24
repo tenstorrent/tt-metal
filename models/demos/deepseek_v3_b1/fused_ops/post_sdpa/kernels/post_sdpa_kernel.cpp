@@ -424,7 +424,8 @@ void kernel_main() {
                 .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
                 // scatter_arrival_enabled=1, so we need to pass the semaphore address
-                .scatter_arrival_sem_addr = get_semaphore(WriterCTArgs::scatter_arrival_semaphore_id),
+                .scatter_arrival_sem_addr =
+                    get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
             };
             Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
             sdpa_worker(writer_args);

@@ -38,7 +38,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(1, 1)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize(
     "position_id", [127, 255, 1023, 2047]
@@ -84,6 +84,8 @@ def test_pre_sdpa(
 
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
+
+    semaphores = PreSDPA.create_semaphores(submesh, skip_ccl)
 
     # ========================================================================
     # Configuration
@@ -662,8 +664,6 @@ def test_pre_sdpa(
         memory_config=pos_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
-
-    semaphores = PreSDPA.create_semaphores(submesh, skip_ccl)
 
     # KV Cache tensor in DRAM sharded
     # Create KV cache (non-paged) based on max seq len

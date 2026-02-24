@@ -265,6 +265,8 @@ struct FlashMLADecode {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 8);
             volatile tt_l1_ptr uint32_t* k_write_next_ptr_shared =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 12);
+            // Reset the other semaphores outside the base offset to 0
+            *ncrisc_brisc_sync_next_ptr = 0;
 
             volatile tt_l1_ptr uint32_t* receiver_ready_semaphore_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.receiver_ready_semaphore_addr);
