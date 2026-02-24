@@ -36,17 +36,201 @@ using namespace tt::tt_fabric;
 
 namespace {
 
-// Forward declarations for MGD helper functions (defined in graph_building.cpp)
+// Helper function to build adjacency graph from row-major mesh connection
+// Always uses LINE connectivity (no wrap-around) with configurable connections per edge
+AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
+    const std::vector<uint32_t>& instance_ids,
+    const std::vector<int32_t>& dims,
+    const std::string& grouping_name = "",
+    uint32_t connections_per_edge = 1) {
+    std::map<uint32_t, std::vector<uint32_t>> adj_map;
+
+    if (instance_ids.empty() || dims.empty()) {
+        return AdjacencyGraph<uint32_t>(adj_map);
+    }
+
+    // Calculate total size
+    int32_t total_size = 1;
+    for (int32_t dim : dims) {
+        total_size *= dim;
+    }
+
+    if (static_cast<size_t>(total_size) != instance_ids.size()) {
+        std::string dims_str = "[";
+        for (size_t i = 0; i < dims.size(); ++i) {
+            if (i > 0) {
+                dims_str += ", ";
+            }
+            dims_str += std::to_string(dims[i]);
+        }
+        dims_str += "]";
+
+        std::string error_msg = fmt::format(
+            "Invalid row_major_mesh configuration in grouping '{}': "
+            "dimensions {} multiply to {} (expected {} instances), but grouping has {} instance(s). "
+            "The product of row_major_mesh dimensions must equal the number of instances in the grouping. "
+            "If this is a mistake in the Physical Grouping Descriptor file, please file an error with the scaleout "
+            "team.",
+            grouping_name.empty() ? "<unknown>" : grouping_name,
+            dims_str,
+            total_size,
+            total_size,
+            instance_ids.size());
+        TT_THROW("{}", error_msg);
+    }
+
+    // Build coordinate system helpers
+    auto get_coords = [&](uint32_t idx) -> std::vector<int32_t> {
+        std::vector<int32_t> coords(dims.size());
+        int32_t remaining = static_cast<int32_t>(idx);
+        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
+            coords[i] = remaining % dims[i];
+            remaining /= dims[i];
+        }
+        return coords;
+    };
+
+    auto get_index = [&](const std::vector<int32_t>& coords) -> uint32_t {
+        uint32_t idx = 0;
+        uint32_t multiplier = 1;
+        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
+            idx += static_cast<uint32_t>(coords[i]) * multiplier;
+            multiplier *= static_cast<uint32_t>(dims[i]);
+        }
+        return idx;
+    };
+
+    // Build adjacency: connect neighbors in each dimension
+    for (uint32_t node_idx = 0; node_idx < instance_ids.size(); ++node_idx) {
+        uint32_t node_id = instance_ids[node_idx];
+        std::vector<int32_t> coords = get_coords(node_idx);
+
+        // For each dimension, connect to neighbor
+        for (int32_t dim_idx = 0; dim_idx < static_cast<int32_t>(dims.size()); ++dim_idx) {
+            // Connect to neighbor in positive direction
+            if (coords[dim_idx] < dims[dim_idx] - 1) {
+                std::vector<int32_t> neighbor_coords = coords;
+                neighbor_coords[dim_idx]++;
+                uint32_t neighbor_idx = get_index(neighbor_coords);
+                uint32_t neighbor_id = instance_ids[neighbor_idx];
+
+                // Add connections_per_edge edges (bidirectional)
+                for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
+                    adj_map[node_id].push_back(neighbor_id);
+                    adj_map[neighbor_id].push_back(node_id);
+                }
+            }
+        }
+    }
+
+    return AdjacencyGraph<uint32_t>(adj_map);
+}
+
+// Helper function to build adjacency graph from MGD mesh instance's device topology
+// Builds a row-major mesh graph based on the mesh's device_topology dims
+// This represents the topology at the ASIC level, which matches the flattened physical grouping graphs
 AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
-    const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId mesh_instance_id);
+    const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId mesh_instance_id) {
+    const auto& mesh_instance = mesh_graph_descriptor.get_instance(mesh_instance_id);
+    TT_FATAL(mesh_instance.kind == NodeKind::Mesh, "build_mgd_mesh_instance_adjacency called on non-mesh instance");
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
+    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null");
+
+    // Get device topology dimensions (represents ASIC-level layout)
+    const auto& device_topology = mesh_desc->device_topology();
+    std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+
+    if (device_dims.empty()) {
+        // No device topology - return empty graph
+        return AdjacencyGraph<uint32_t>();
+    }
+
+    // Calculate number of ASICs
+    int32_t num_asics = 1;
+    for (int32_t dim : device_dims) {
+        num_asics *= dim;
+    }
+
+    // Create abstract ASIC node IDs (0, 1, 2, ..., num_asics-1)
+    std::vector<uint32_t> asic_ids;
+    asic_ids.reserve(num_asics);
+    for (uint32_t i = 0; i < static_cast<uint32_t>(num_asics); ++i) {
+        asic_ids.push_back(i);
+    }
+
+    // Build row-major mesh graph representing ASIC-level topology
+    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
+    auto result = build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
+
+    return result;
+}
+
+// Helper function to build adjacency graph from MGD graph instance
+// The graph instance's sub_instances become nodes, and connections between them become edges
+// Ensures no duplicate connections and all connections are bidirectional
 AdjacencyGraph<uint32_t> build_mgd_graph_instance_adjacency(
-    const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId graph_instance_id);
+    const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId graph_instance_id) {
+    const auto& graph_instance = mesh_graph_descriptor.get_instance(graph_instance_id);
+
+    // Get all sub-instances (these will be the nodes in our adjacency graph)
+    std::vector<uint32_t> sub_instance_ids(graph_instance.sub_instances.begin(), graph_instance.sub_instances.end());
+
+    // Build adjacency map from connections
+    std::map<uint32_t, std::vector<uint32_t>> adj_map;
+
+    // Initialize adjacency map for all sub-instances
+    for (uint32_t sub_id : sub_instance_ids) {
+        adj_map[sub_id] = std::vector<uint32_t>();
+    }
+
+    // Use a set to track processed edges to avoid duplicates
+    std::set<std::pair<uint32_t, uint32_t>> processed_edges;
+
+    // Get all connections for this graph instance
+    const auto& connection_ids = mesh_graph_descriptor.connections_by_instance_id(graph_instance_id);
+
+    // Build adjacency from connections
+    for (ConnectionId conn_id : connection_ids) {
+        const auto& conn = mesh_graph_descriptor.get_connection(conn_id);
+
+        // Connections have nodes array: [src, dst]
+        if (conn.nodes.size() >= 2) {
+            uint32_t src = conn.nodes[0];
+            uint32_t dst = conn.nodes[1];
+
+            // Only add edges if both nodes are sub-instances of this graph
+            if (graph_instance.sub_instances.contains(src) && graph_instance.sub_instances.contains(dst)) {
+                // Skip self-loops
+                if (src == dst) {
+                    continue;
+                }
+
+                // Normalize edge pair to avoid duplicates (treat (A,B) and (B,A) as the same)
+                auto edge_pair = std::minmax(src, dst);
+
+                // Only add edge if not already processed (prevents duplicates)
+                if (processed_edges.insert(edge_pair).second) {
+                    // Add bidirectional edge (undirected graph)
+                    adj_map[src].push_back(dst);
+                    adj_map[dst].push_back(src);
+                }
+            }
+        }
+    }
+
+    return AdjacencyGraph<uint32_t>(adj_map);
+}
+
+}  // namespace
+
+namespace tt::tt_fabric {
 
 // Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts)
 // Calculates required ASIC counts bottom-up and builds adjacency graphs
 // Returns map: (type, name) -> GroupingInfo
-std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> build_mgd_to_grouping_info_map(
-    const MeshGraphDescriptor& mesh_graph_descriptor) {
+std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>>
+PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescriptor& mesh_graph_descriptor) {
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos;
 
     // ===== Step 1: Calculate required ASIC counts bottom-up =====
@@ -166,7 +350,7 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
 
         // Assign corner orientations based on mesh dimensions
         // For mesh instances with a single item, the helper function will assign corners appropriately
-        assign_corner_orientations_to_grouping(grouping_info, device_dims);
+        PhysicalGroupingDescriptor::assign_corner_orientations_to_grouping(grouping_info, device_dims);
 
         // Store keyed by mesh definition name (not instance key)
         mgd_grouping_infos[mesh_type][mesh_name] = std::move(grouping_info);
@@ -202,6 +386,10 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
 
     return mgd_grouping_infos;
 }
+
+}  // namespace tt::tt_fabric
+
+namespace {
 
 // -----------------------------------------------------------------------------
 // Phase 3: Higher-layer graph matching helpers
@@ -254,7 +442,8 @@ bool pgd_grouping_depends_on(const GroupingInfo& pgd_grouping, const std::string
 void process_higher_layer_and_recurse(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>>& mgd_grouping_infos,
-    const std::unordered_map<std::string, std::vector<GroupingInfo>>& resolved_groupings_cache_,
+    const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>&
+        resolved_groupings_cache_,
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>& result,
     std::unordered_map<std::string, std::string>& known_mappings,
     const std::string& mgd_type,
@@ -291,33 +480,35 @@ void process_higher_layer_and_recurse(
     }
 
     std::vector<GroupingInfo> matches;
-    for (const auto& [pgd_type, pgd_groupings] : resolved_groupings_cache_) {
-        if (pgd_type == "MESH") {
-            continue;
-        }
-        for (const auto& pgd_grouping : pgd_groupings) {
-            // PGD grouping must depend on one of the allowed child types
-            bool depends_on_allowed = false;
-            for (const std::string& allowed_type : allowed_pgd_child_types) {
-                if (pgd_grouping_depends_on(pgd_grouping, allowed_type)) {
-                    depends_on_allowed = true;
-                    break;
+    for (const auto& [pgd_name, type_map] : resolved_groupings_cache_) {
+        for (const auto& [pgd_type, pgd_groupings] : type_map) {
+            if (pgd_type == "MESH") {
+                continue;
+            }
+            for (const auto& pgd_grouping : pgd_groupings) {
+                // PGD grouping must depend on one of the allowed child types
+                bool depends_on_allowed = false;
+                for (const std::string& allowed_type : allowed_pgd_child_types) {
+                    if (pgd_grouping_depends_on(pgd_grouping, allowed_type)) {
+                        depends_on_allowed = true;
+                        break;
+                    }
                 }
-            }
-            if (!depends_on_allowed) {
-                continue;
-            }
+                if (!depends_on_allowed) {
+                    continue;
+                }
 
-            size_t pgd_nodes = pgd_grouping.adjacency_graph.get_nodes().size();
-            if (pgd_nodes < mgd_nodes) {
-                continue;
-            }
+                size_t pgd_nodes = pgd_grouping.adjacency_graph.get_nodes().size();
+                if (pgd_nodes < mgd_nodes) {
+                    continue;
+                }
 
-            auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
-                mgd_adjacency, pgd_grouping.adjacency_graph, {}, ConnectionValidationMode::STRICT, true);
+                auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
+                    mgd_adjacency, pgd_grouping.adjacency_graph, {}, ConnectionValidationMode::STRICT, true);
 
-            if (mapping_result.success) {
-                matches.push_back(pgd_grouping);
+                if (mapping_result.success) {
+                    matches.push_back(pgd_grouping);
+                }
             }
         }
     }
@@ -393,21 +584,27 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
-        build_mgd_to_grouping_info_map(mesh_graph_descriptor);
+        PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
     // ===== PHASE 1: Build flattened adjacency graphs for all mesh group infos =====
     // Each possibility from build_flattened_adjacency_mesh gets a uniquified key (name_0, name_1, ...)
     std::unordered_map<std::string, GroupingInfo> mesh_flat_groupings;  // Lookup map for flattened GroupingInfo by key
-    auto mesh_it = resolved_groupings_cache_.find("MESH");
-    if (mesh_it != resolved_groupings_cache_.end()) {
-        for (const auto& mesh_group_info : mesh_it->second) {
-            auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
-            for (size_t i = 0; i < meshes.size(); ++i) {
-                std::string uniquified_key = mesh_group_info.name + "_" + std::to_string(i);
-                mesh_flat_groupings[uniquified_key] = std::move(meshes[i]);
+    // Find MESH type groupings across all names
+    bool found_mesh = false;
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        auto mesh_it = type_map.find("MESH");
+        if (mesh_it != type_map.end()) {
+            found_mesh = true;
+            for (const auto& mesh_group_info : mesh_it->second) {
+                auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
+                for (size_t i = 0; i < meshes.size(); ++i) {
+                    std::string uniquified_key = mesh_group_info.name + "_" + std::to_string(i);
+                    mesh_flat_groupings[uniquified_key] = std::move(meshes[i]);
+                }
             }
         }
-    } else {
+    }
+    if (!found_mesh) {
         TT_THROW("Internal error: MESH grouping not found in resolved_groupings_cache_");
     }
 

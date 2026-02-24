@@ -87,6 +87,9 @@ public:
     // Get all grouping names (including duplicates)
     std::vector<std::string> get_all_grouping_names() const;
 
+    // Get all grouping types (preset_type or custom_type)
+    std::vector<std::string> get_all_grouping_types() const;
+
     // Get total number of groupings (including duplicates)
     size_t get_grouping_count() const;
 
@@ -133,7 +136,9 @@ private:
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
 
     // Cache of resolved groupings with ASIC counts (populated bottom-up)
-    std::unordered_map<std::string, std::vector<GroupingInfo>> resolved_groupings_cache_;
+    // Two-tier structure: name -> type -> vector of GroupingInfo
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
+        resolved_groupings_cache_;
 
     // Internal helper to convert proto grouping to GroupingInfo
     GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
@@ -176,6 +181,19 @@ private:
     static uint32_t calculate_dependent_grouping_asic_count(
         const GroupingInfo& grouping,
         const std::unordered_map<std::string, std::vector<GroupingInfo>>& groupings_by_name);
+
+    // Helper functions to access grouping name and type from proto
+    static std::string get_grouping_name(const proto::Grouping& grouping);
+    static std::string get_grouping_type_string(const proto::Grouping& grouping);
+
+    // Helper function to assign corner orientations to grouping items based on mesh dimensions
+    static void assign_corner_orientations_to_grouping(GroupingInfo& info, const std::vector<int32_t>& dims);
+
+    // Helper function to convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts)
+    // Calculates required ASIC counts bottom-up and builds adjacency graphs
+    // Returns map: (type, name) -> GroupingInfo
+    static std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>>
+    build_mgd_to_grouping_info_map(const MeshGraphDescriptor& mesh_graph_descriptor);
 
     // Static validation - returns vector of error strings (similar to MeshGraphDescriptor)
     static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
