@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <algorithm>
+#include <memory>
 #include <mutex>
 #include <future>
 #include <set>
@@ -140,6 +141,14 @@ void MetalContext::initialize_device_manager(
     size_t worker_l1_size,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
+    // Slow dispatch only supports 1 hardware CQ
+    if (!rtoptions_.get_fast_dispatch() && num_hw_cqs != 1) {
+        log_warning(
+            tt::LogMetal,
+            "Slow dispatch supports only 1 hardware command queue; requested {} CQs ignored, using 1.",
+            num_hw_cqs);
+        num_hw_cqs = 1;
+    }
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     device_manager_->initialize(
         device_ids,
