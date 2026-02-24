@@ -41,9 +41,6 @@ using address_t = uint32_t;
 
 namespace deepseek_b1_ops {
 
-// Atomic semaphore decrement by 1
-inline void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) { __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED); }
-
 // Unified kernel for CCL Broadcast operation
 struct Broadcast {
     // ========================================================================
@@ -261,7 +258,8 @@ struct Broadcast {
 
                     // 4. global semaphore reset
                     if (args.reset_global_semaphore) {
-                        semaphore_dec(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
@@ -277,7 +275,8 @@ struct Broadcast {
 
                     // Reset semaphore after receiving data
                     if (args.reset_global_semaphore) {
-                        semaphore_dec(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
 
                     // broadcast the received data along the primary axis
@@ -309,7 +308,8 @@ struct Broadcast {
 
                     // Reset global semaphore
                     if (args.reset_global_semaphore) {
-                        semaphore_dec(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
                 }
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
