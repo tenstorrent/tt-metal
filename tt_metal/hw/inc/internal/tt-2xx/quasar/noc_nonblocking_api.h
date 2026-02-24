@@ -20,6 +20,8 @@
 
 // Map legacy per-processor cmd buf names to the overlay buffers so
 // dataflow_cmd_bufs.h works without modification.
+// Quasar has 2 normal cmd buffers (0,1) + 1 simple buffer (2, for atomics & inline writes).
+// cmd_buf==0,1 use normal cmdbuf instructions; cmd_buf==2 routes to simple buffer (scmdbuf).
 constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t DYNAMIC_NOC_NCRISC_AT_CMD_BUF = OVERLAY_AT_CMD_BUF;
