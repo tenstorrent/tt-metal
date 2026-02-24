@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
+from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 from tests.ttnn.utils_for_testing import comp_pcc
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
@@ -357,6 +358,10 @@ def test_forward_pass_new_moe_gate(
     """Test forward pass against reference model."""
 
     batch_size = 1
+    eps = 1e-6
+    scaling_factor = 2.5
+    enable_sigmoid = True
+    mesh_shape = tuple(mesh_device.shape)
 
     # Get state dict from actual model or use synthetic weights
     torch.use_deterministic_algorithms(True)
@@ -407,29 +412,88 @@ def test_forward_pass_new_moe_gate(
     reference_model.to(torch.bfloat16)
     reference_topk_indices, reference_topk_weights = reference_model(torch_input)
 
-    torch_input_new_moe_gate = torch.reshape(torch_input, (batch_size, seq_len, -1, 16, 16))
-    # the input is (1, 128, 28, 16, 16)
-    # since mesh shape is 4*8, we divide the input by row-wise, so each row will receive (1, 32, 28, 16, 16)
+    input_tile = ttnn.Tile((16, 16))
+    output_tile = ttnn.Tile((1, 16))
+    torch_input = torch.reshape(torch_input, (-1, 16, 16))
+    # the input is (128*28, 16, 16)
 
     # Convert input to TTNN
     # since each input will take 28 cores, and there are only 70 cores in total
-    # we divide the 32 inputs into 16 groups
-    torch_input_new_moe_gate_list = list(torch.split(torch_input_new_moe_gate, 2, dim=1))
+    # each time, we send 2 inputs to each row
+    torch_input_list = torch.chunk(torch_input, torch_input.shape[0] // (mesh_shape[0] * 2), dim=0)
+    # create the all-zero bias tensor
+    torch_bias = torch.zeros(torch_input_list[0].shape, dtype=torch.bfloat16)
+    tt_bias = ttnn.from_torch(
+        torch_bias,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        tile=input_tile,
+    )
+    reshaped_input_shape = torch_input_list[0].shape
+    output_shape = (reshaped_input_shape[0], 1, reshaped_input_shape[2])
+    torch_input_indices = torch.arange(reshaped_input_shape[1] * reshaped_input_shape[2], dtype=torch.int32)
+    torch_input_indices = torch_input_indices.unsqueeze(0).expand(reshaped_input_shape[0], -1)
+    torch_input_indices = torch_input_indices.reshape(reshaped_input_shape)
+    torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
+    tt_input_indices = ttnn.from_torch(
+        torch_input_indices,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=input_tile,
+    )
+
     tt_topk_weight_list = []
     tt_topk_indices_list = []
-    for i in range(len(torch_input_new_moe_gate)):
+    for i in range(len(torch_input_list)):
         tt_input = ttnn.from_torch(
-            torch_input_new_moe_gate[i],
+            torch_input_list[i],
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
+            tile=input_tile,
+        )
+
+        # Create output tensor sharded on same core
+        torch_output = torch.zeros(output_shape, dtype=torch.bfloat16)
+        tt_output = ttnn.from_torch(
+            torch_output,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=output_tile,
+        )
+
+        torch_output_indices = torch.zeros(output_shape, dtype=torch.uint16)
+        tt_output_indices = ttnn.from_torch(
+            torch_output_indices,
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=output_tile,
         )
 
         # TTNN forward pass using utility function
+
         tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-        tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+        tt_topk_weights, tt_topk_indices = DeepseekMoeGateSingleCore.op(
+            tt_input,
+            tt_bias,
+            tt_output,
+            tt_input_indices,
+            tt_output_indices,
+            eps,
+            scaling_factor,
+            enable_sigmoid,
+        )
 
         tt_topk_weight_list.append(tt_topk_weights)
         tt_topk_indices_list.append(tt_topk_indices)

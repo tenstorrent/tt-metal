@@ -5,9 +5,11 @@
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
@@ -135,6 +137,56 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         scaling_factor,
         enable_sigmoid,
     )
+    ttnn.synchronize_device(device)
+
+    trace_id_warmup = ttnn.begin_trace_capture(device, cq_id=0)
+    for i in range(10):
+        ttnn_result, ttnn_result_indices = DeepseekMoeGateSingleCore.op(
+            ttnn_input,
+            ttnn_bias,
+            ttnn_output,
+            ttnn_input_indices,
+            ttnn_output_indices,
+            eps,
+            scaling_factor,
+            enable_sigmoid,
+        )
+    ttnn.end_trace_capture(device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    for i in range(10):
+        ttnn_result, ttnn_result_indices = DeepseekMoeGateSingleCore.op(
+            ttnn_input,
+            ttnn_bias,
+            ttnn_output,
+            ttnn_input_indices,
+            ttnn_output_indices,
+            eps,
+            scaling_factor,
+            enable_sigmoid,
+        )
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    # Execute warmup trace
+    logger.info("Executing warmup trace")
+    profiler = BenchmarkProfiler()
+    profiler.start("warmup")
+    ttnn.execute_trace(device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(device, trace_id_warmup)
+    profiler.end("warmup")
+    ttnn.synchronize_device(device)
+
+    # Execute main trace with signposts
+    logger.info("Executing main trace")
+    signpost("start")
+    profiler.start("main")
+    ttnn.execute_trace(device, trace_id, blocking=False)
+    ttnn.release_trace(device, trace_id)
+    profiler.end("main")
+    signpost("stop")
+    ttnn.synchronize_device(device)
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)
