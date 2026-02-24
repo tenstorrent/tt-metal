@@ -454,11 +454,10 @@ class WanPatchEmbed(Module):
         """
 
         # Apply unfolded conv2d projection
-        latent_1BND = ttnn.linear(
+        latent_1BND = ttnn.experimental.minimal_matmul(
             latent_1BNI,
-            self.proj_weight.data,
-            bias=self.proj_bias.data,
-            dtype=ttnn.bfloat16,
+            weight_tensor=self.proj_weight.data,
+            bias_tensor=self.proj_bias.data,
             compute_kernel_config=self.compute_kernel_config,
         )
 
