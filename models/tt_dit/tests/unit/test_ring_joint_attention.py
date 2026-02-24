@@ -994,8 +994,8 @@ def test_ring_joint_sdpa_dit_bh_glx(
     [(1, 128, 4 * 4096, 128)],
     ids=["deepseek_v3_prefill"],
 )
-@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
-@pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
+@pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 256], ids=["q32", "q64", "q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 256], ids=["k32", "k64", "k128", "k256"])
 @pytest.mark.parametrize(
     "n_iters, trace_enabled, skip_check",
     [

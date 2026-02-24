@@ -1541,9 +1541,9 @@ void sdpa_inner_loop(
 
             if (sdpa_type == RING && k_chunk >= q_high_idx && is_causal) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
-                cb_wait_front(cb_v_in, k_chunk_tiles);
+                cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
-                cb_pop_front(cb_v_in, k_chunk_tiles);
+                cb_pop_front(cb_v_in, v_chunk_tiles);
 
                 continue;
             }
