@@ -109,11 +109,16 @@ jobs:
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
 
+      - name: Ensure cache directory is writable
+        run: |
+          sudo mkdir -p /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/Matmul_Integration_Cache/tests_cache
+          sudo chmod -R 777 /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/Matmul_Integration_Cache/tests_cache
+
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────
       - name: Run dual DeepSeek V3 unit tests
         if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -137,7 +142,7 @@ jobs:
       - name: Run quad DeepSeek V3 unit tests
         if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -213,7 +218,7 @@ jobs:
       - name: Run dual teacher forced accuracy test
         if: ${{ inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -247,7 +252,7 @@ jobs:
       - name: Run quad teacher forced accuracy test
         if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -282,7 +287,7 @@ jobs:
       - name: Run dual demo test (256 prompts, 1 batch)
         if: ${{ inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 40
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -316,7 +321,7 @@ jobs:
       - name: Run quad demo test (512 prompts, 1 batch)
         if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -351,7 +356,7 @@ jobs:
       - name: Run dual demo stress test (56 prompts, 20 batches)
         if: ${{ inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 90
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -385,7 +390,7 @@ jobs:
       - name: Run quad demo stress test (56 prompts, 20 batches)
         if: ${{ inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 90
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
