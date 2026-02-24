@@ -1318,7 +1318,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple8x16PsdWi
 TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
     const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/triple_8x16_cluster_psd.textproto";
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings_real.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
@@ -1326,7 +1326,32 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
     tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
+    // Try finding any for BH_galaxy_hosts
     {
+        auto hosts_groupings = pgd.get_groupings_by_name("BH_galaxy_hosts");
+        ASSERT_FALSE(hosts_groupings.empty()) << "BH_galaxy_hosts grouping not found";
+        const auto& hosts_grouping = hosts_groupings[0];
+
+        auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
+
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: BH_galaxy_hosts grouping should map to triple-16x8 PSD";
+    }
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
+        const auto& mesh_grouping = mesh_groupings[0];
+
+        auto asic_ids = pgd.find_any_in_psd(mesh_grouping, psd);
+
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: 8x16_Mesh grouping should map to triple-16x8 PSD";
+    }
+
+    {
+        // get grouping names
+        auto grouping_names = pgd.get_all_grouping_names();
         auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
 
@@ -1336,9 +1361,26 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
 
         auto asic_ids = pgd.find_all_in_psd(mesh_grouping, psd, errors);
 
+        log_critical(tt::LogTest, "Errors: {}", errors);
+
         // Test and see how it goes
         EXPECT_EQ(asic_ids.size(), 3u)
             << "Expected validation to pass: 16x8_Mesh grouping should map to triple-16x8 PSD";
+    }
+
+    {
+        // Test 2x4_Mesh_2tray grouping with find_all_in_psd
+        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh BH");
+        ASSERT_FALSE(mesh_groupings.empty()) << "4x4_mesh BH grouping not found";
+
+        auto mesh_grouping = mesh_groupings[0];
+
+        std::vector<std::string> errors;
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_grouping, psd, errors);
+
+        EXPECT_EQ(asic_ids.size(), 12u)
+            << "Expected validation to pass: 4x4_mesh BH grouping should map to triple-16x8 PSD";
     }
 }
 

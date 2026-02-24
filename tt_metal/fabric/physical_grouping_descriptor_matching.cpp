@@ -730,8 +730,9 @@ std::string build_pgd_mapping_failure_message(
 MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    MappingConstraints<uint32_t, AsicID> constraints;
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
+    MappingConstraints<uint32_t, AsicID> constraints = std::move(initial_constraints);
 
     // Build trait maps: graph nodes are 0..n-1, items[i] is the item for node i
     std::map<uint32_t, TrayID> target_tray_traits;
@@ -765,14 +766,20 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
 
     // Add trait constraints for tray_id and asic_location
     if (!target_tray_traits.empty() && !global_tray_traits.empty()) {
-        TT_FATAL(
-            constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits),
-            "Internal error: Failed to add required trait constraint for tray_id");
+        if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
+            MappingResult<uint32_t, AsicID> failure;
+            failure.success = false;
+            failure.error_message = "Failed to add required trait constraint for tray_id";
+            return failure;
+        }
     }
     if (!target_location_traits.empty() && !global_location_traits.empty()) {
-        TT_FATAL(
-            constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits),
-            "Internal error: Failed to add required trait constraint for asic_location");
+        if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
+            MappingResult<uint32_t, AsicID> failure;
+            failure.success = false;
+            failure.error_message = "Failed to add required trait constraint for asic_location";
+            return failure;
+        }
     }
 
     return solve_topology_mapping(
@@ -787,112 +794,65 @@ bool is_flattened(const GroupingInfo& grouping) {
 
 namespace tt::tt_fabric {
 
-MappingResult<uint32_t, AsicID> solve_for_many_groupings_to_psd(
+std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    using tt::tt_metal::ASICLocation;
-    using tt::tt_metal::TrayID;
-
-    MappingConstraints<uint32_t, AsicID> constraints = {};
-
     const AdjacencyGraph<uint32_t>& flat_mesh = grouping_info.adjacency_graph;
 
-    // Enumerate as many flat meshes as possible to fit in the physical graph
-    size_t num_meshes_to_fit = physical_graph.get_nodes().size() / flat_mesh.get_nodes().size();
-
-    // Step 1: Get adjacency map directly from flat_mesh and find max unique_id
-    const auto& original_adj_map = flat_mesh.get_adjacency_map();
-    uint32_t max_unique_id = 0;
-    for (const auto& node : flat_mesh.get_nodes()) {
-        if (node > max_unique_id) {
-            max_unique_id = node;
-        }
+    // Check if mesh is empty
+    size_t flat_mesh_size = flat_mesh.get_nodes().size();
+    if (flat_mesh_size == 0) {
+        return {};
     }
-    uint32_t unique_id_offset = max_unique_id + 1;
 
-    // Step 2: Copy adjacency map for each copy and modify unique_ids
-    AdjacencyGraph<uint32_t>::AdjacencyMap combined_adj_map;
+    // Iteratively solve for copies until no more can be found
+    // solve_for_one_grouping_to_psd will handle trait constraints internally
+    std::vector<MappingResult<uint32_t, AsicID>> results;
 
-    for (size_t copy_idx = 0; copy_idx < num_meshes_to_fit; ++copy_idx) {
-        uint32_t offset = unique_id_offset * copy_idx;
+    // Start with empty constraints - solve_for_one_grouping_to_psd will add trait constraints
+    MappingConstraints<uint32_t, AsicID> current_constraints;
 
-        // Copy the adjacency map and modify unique_ids
-        AdjacencyGraph<uint32_t>::AdjacencyMap modified_adj_map;
-        for (const auto& [node, neighbors] : original_adj_map) {
-            // Create node with modified unique_id
-            uint32_t modified_node = node + offset;
+    while (true) {
+        // Solve for one copy using solve_for_one_grouping_to_psd with current constraints
+        MappingResult<uint32_t, AsicID> result = solve_for_one_grouping_to_psd(
+            grouping_info, physical_graph, physical_system_descriptor, current_constraints);
 
-            // Modify unique_ids in neighbor list
-            std::vector<uint32_t> modified_neighbors;
-            modified_neighbors.reserve(neighbors.size());
-            for (const auto& neighbor : neighbors) {
-                uint32_t modified_neighbor = neighbor + offset;
-                modified_neighbors.push_back(modified_neighbor);
+        // If mapping failed, we're done
+        if (!result.success) {
+            break;
+        }
+
+        // Add this result to our collection
+        results.push_back(result);
+
+        // Collect all ASIC IDs that were used in this mapping
+        std::set<AsicID> used_asic_ids;
+        for (const auto& [target_node, asic_id] : result.target_to_global) {
+            used_asic_ids.insert(asic_id);
+        }
+
+        // Get set of all target nodes for forbidden constraints
+        std::set<uint32_t> all_target_nodes(flat_mesh.get_nodes().begin(), flat_mesh.get_nodes().end());
+
+        // Add forbidden constraints: prevent all target nodes from mapping to any of the used ASIC IDs
+        // This ensures these ASIC IDs won't be used in future iterations
+        bool all_constraints_added = true;
+        for (const auto& asic_id : used_asic_ids) {
+            bool constraint_added = current_constraints.add_forbidden_constraint(all_target_nodes, asic_id);
+            if (!constraint_added) {
+                // If we can't add the constraint (e.g., it would make mapping impossible), we're done
+                all_constraints_added = false;
+                break;
             }
-
-            modified_adj_map[modified_node] = modified_neighbors;
         }
 
-        // Join this copy into the combined map
-        combined_adj_map.insert(modified_adj_map.begin(), modified_adj_map.end());
-    }
-
-    // Step 3: Create adjacency graph from combined map
-    AdjacencyGraph<uint32_t> all_meshes(combined_adj_map);
-
-    // Step 4: Build trait maps for target nodes (from joined flattened mesh)
-    // Map new node IDs back to original node IDs to get trait information from items
-    std::map<uint32_t, TrayID> target_tray_traits;
-    std::map<uint32_t, ASICLocation> target_location_traits;
-
-    for (const auto& node : all_meshes.get_nodes()) {
-        // Map back to original node ID by removing the offset
-        // The offset calculation ensures: node = original_node_id + (copy_idx * unique_id_offset)
-        // So: original_node_id = node % unique_id_offset (works because unique_id_offset > max_unique_id)
-        uint32_t original_node_id = node % unique_id_offset;
-
-        // Check if this original node ID exists in the items array
-        if (original_node_id >= grouping_info.items.size()) {
-            continue;
-        }
-
-        const GroupingItemInfo& item = grouping_info.items[original_node_id];
-        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
-            continue;
-        }
-        if (*item.tray_id > 0) {
-            target_tray_traits[node] = item.tray_id;
-        }
-        if (*item.asic_location > 0) {
-            target_location_traits[node] = item.asic_location;
+        if (!all_constraints_added) {
+            break;
         }
     }
 
-    // Build trait maps for global nodes (from physical graph)
-    std::map<AsicID, TrayID> global_tray_traits;
-    std::map<AsicID, ASICLocation> global_location_traits;
-
-    for (const auto& asic_id : physical_graph.get_nodes()) {
-        TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
-        ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
-        global_tray_traits[asic_id] = tray_id;
-        global_location_traits[asic_id] = asic_location;
-    }
-
-    // Add trait constraints for tray_id and asic_location
-    if (!target_tray_traits.empty() && !global_tray_traits.empty()) {
-        TT_FATAL(
-            constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits),
-            "Internal error: Failed to add required trait constraint for tray_id");
-    }
-    if (!target_location_traits.empty() && !global_location_traits.empty()) {
-        TT_FATAL(
-            constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits),
-            "Internal error: Failed to add required trait constraint for asic_location");
-    }
-
-    return solve_topology_mapping(all_meshes, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+    return results;
 }
 }  // namespace tt::tt_fabric
 
@@ -902,6 +862,8 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
     return find_any_in_psd(grouping, physical_system_descriptor, errors);
 }
 
+// NOTE this only works on flattenable meshes right now
+// TODO: Expand Find any to non-flattenable meshes by doing recursive mapping
 std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -975,13 +937,75 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
     return find_all_in_psd(grouping, physical_system_descriptor, errors);
 }
 
+// NOTE this only works on flattenable meshes right now
 std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     std::vector<std::string>& errors_out) const {
-    // TODO: Implement find_all_in_psd
-    (void)grouping;
-    (void)physical_system_descriptor;
-    (void)errors_out;
-    return {};
+    // Build physical adjacency map from PSD (empty map means include all ASICs)
+    PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
+
+    // Detect if its flattened or not, if it its not then flatten it
+    std::vector<GroupingInfo> flat_meshes;
+    if (!is_flattened(grouping)) {
+        flat_meshes = build_flattened_adjacency_mesh(grouping, physical_system_descriptor);
+    } else {
+        flat_meshes.push_back(grouping);
+    }
+
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> all_asic_id_sets;
+
+    // Try all flat meshes and collect all successful mappings
+    for (const auto& flat_mesh : flat_meshes) {
+        if (flat_mesh.adjacency_graph.get_nodes().empty()) {
+            continue;
+        }
+
+        // Try to fit multiple copies - returns a vector of MappingResult, one per copy
+        auto many_results = solve_for_many_groupings_to_psd(flat_mesh, physical_graph, physical_system_descriptor);
+
+        // Extract ASIC IDs from each result
+        for (const auto& result : many_results) {
+            if (result.success) {
+                std::unordered_set<tt::tt_metal::AsicID> asic_set;
+                for (const auto& [target_node, asic_id] : result.target_to_global) {
+                    asic_set.insert(asic_id);
+                }
+                all_asic_id_sets.push_back(std::move(asic_set));
+            }
+        }
+    }
+
+    // If no mappings found, populate errors
+    if (all_asic_id_sets.empty()) {
+        if (flat_meshes.empty()) {
+            // No flattened meshes were produced - grouping cannot be mapped to this PSD
+            errors_out.push_back("No valid groupings found for PSD");
+        } else {
+            // Check if there's an actual internal error (all meshes have empty graphs)
+            bool all_empty = true;
+            const GroupingInfo* last_non_empty_mesh = nullptr;
+            for (const auto& flat_mesh : flat_meshes) {
+                if (!flat_mesh.adjacency_graph.get_nodes().empty()) {
+                    all_empty = false;
+                    last_non_empty_mesh = &flat_mesh;
+                }
+            }
+
+            if (all_empty) {
+                errors_out.push_back("Internal error: grouping produced empty graph");
+            } else {
+                // Try to get error message from last attempted mesh with non-empty graph
+                // Use the last non-empty mesh if available, otherwise fall back to last mesh
+                const GroupingInfo& mesh_to_use =
+                    (last_non_empty_mesh != nullptr) ? *last_non_empty_mesh : flat_meshes.back();
+                auto result = solve_for_one_grouping_to_psd(mesh_to_use, physical_graph, physical_system_descriptor);
+                errors_out.push_back(build_pgd_mapping_failure_message(grouping.name, mesh_to_use, result));
+            }
+        }
+    }
+
+    return all_asic_id_sets;
 }
