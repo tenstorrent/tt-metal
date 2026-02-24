@@ -659,6 +659,7 @@ public:
     // Channel trimming profile import path
     bool has_fabric_trimming_profile() const { return !fabric_trimming_profile_path.empty(); }
     const std::string& get_fabric_trimming_profile_path() const { return fabric_trimming_profile_path; }
+    void set_fabric_trimming_profile_path(const std::string& path) { fabric_trimming_profile_path = path; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }

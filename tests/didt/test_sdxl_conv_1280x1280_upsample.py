@@ -7,7 +7,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
@@ -20,60 +20,25 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 class SdxlConvTest(OpTestBase):
     def __init__(
         self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in2_shape,
-        in0_mem_config,
-        in1_mem_config,
-        in2_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        in2_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        in2_layout,
-        program_config,
-        compute_config,
-        input_channels,
-        out_channels,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        dilation,
-        batch_size,
-        input_height,
-        input_width,
-        groups,
-        weights_df_on_device,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
+        *args,
         compute_with_storage_grid_size=(8, 8),
+        input_channels=None,
+        out_channels=None,
+        filter_height=None,
+        filter_width=None,
+        stride_h=None,
+        stride_w=None,
+        pad_h=None,
+        pad_w=None,
+        dilation=None,
+        batch_size=None,
+        input_height=None,
+        input_width=None,
+        groups=None,
+        **kwargs,
     ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+        super().__init__(*args, **kwargs)
+
         self.compute_with_storage_grid_size = compute_with_storage_grid_size
         self.input_channels = input_channels
         self.out_channels = out_channels
@@ -89,41 +54,37 @@ class SdxlConvTest(OpTestBase):
         self.input_width = input_width
         self.groups = groups
         self.reader_patterns_cache = {}
-        self.bias_shape = in2_shape
-        self.bias_layout = in2_layout
-        self.bias_dtype = in2_dtype
-        self.bias_mem_config = in2_mem_config
-
-    # Remove weights shape
-    def generate_torch_weights(self, shape):
-        return torch.randn(self.in1_shape, dtype=torch.bfloat16).float()
 
     # Remove weights shape
     def generate_torch_activations(self, shape):
-        torch_input_tensor_nchw = torch.randn(self.in0_shape, dtype=torch.bfloat16).float()
+        torch_input_tensor_nchw = torch.randn(shape, dtype=torch.bfloat16).float()
         torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
         return torch_input_tensor
 
     def generate_tt_activations_from_torch(self, torch_tensor):
         return ttnn.from_torch(
             torch_tensor,
-            dtype=self.in0_dtype,
-            layout=self.in0_layout,
+            dtype=self.activation.dtype,
+            layout=self.activation.layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=self.mesh_device,
             mesh_mapper=self.from_torch_mesh_mapper,
         )
 
-    def generate_tt_weights_from_torch(self, torch_tensor):
-        tt_weights = ttnn.from_torch(torch_tensor, self.in1_dtype)
-
-        # hack
-        bias_tensor = torch.randn(self.bias_shape, dtype=torch.bfloat16).float().unsqueeze(0).unsqueeze(0).unsqueeze(0)
-        self.bias = ttnn.from_torch(bias_tensor, self.bias_dtype)
-        return tt_weights
+    def generate_tt_input_from_torch(self, torch_tensor, dtype, layout, mem_config, ind):
+        if ind == 0:
+            return ttnn.from_torch(torch_tensor, dtype)
+        elif ind == 1:
+            # hack
+            bias_tensor = (
+                torch.randn(self.arguments[ind].shape, dtype=torch.bfloat16).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            )
+            return ttnn.from_torch(bias_tensor, dtype)
+        else:
+            raise Exception("Expected only two inputs")
 
     def convert_activations_to_memory_config(self, activations):
-        return ttnn.to_memory_config(activations, self.in0_mem_config)
+        return ttnn.to_memory_config(activations, self.activation.mem_config)
 
     def deallocate_activations(self):
         # Do nothing in conv case as activations are on device
@@ -140,13 +101,13 @@ class SdxlConvTest(OpTestBase):
         )
         hidden_states = ttnn.to_memory_config(hidden_states, memory_config)
         hidden_states = ttnn.upsample(hidden_states, (2, 2))
-        [tt_output_tensor_on_device, [_, _], [self.weights, self.bias]] = ttnn.conv2d(
+        [tt_output_tensor_on_device, [_, _], [self.inputs[0], self.inputs[1]]] = ttnn.conv2d(
             input_tensor=hidden_states,
-            weight_tensor=self.weights,
+            weight_tensor=self.inputs[0],
             in_channels=self.input_channels,
             out_channels=self.out_channels,
             device=self.mesh_device,
-            bias_tensor=self.bias,
+            bias_tensor=self.inputs[1],
             kernel_size=(self.filter_height, self.filter_width),
             stride=(self.stride_h, self.stride_w),
             padding=(self.pad_h, self.pad_w),
@@ -157,8 +118,8 @@ class SdxlConvTest(OpTestBase):
             conv_config=self.program_config,
             slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=self.compute_config,
-            groups=self.groups,
             memory_config=None,
+            groups=self.groups,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -178,7 +139,7 @@ class SdxlConvTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval, grid_size=(8, 8)):
+def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_interval):
     groups = 1
     dilation = 1
     pad_w = 1
@@ -192,11 +153,8 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     input_height = 32
     input_width = 32
 
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-    else:
-        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
-    logger.info(f"Running on {grid_size} cores")
+    compute_grid = get_mesh_grid_size(mesh_device)
+    logger.info(f"Running on {compute_grid} cores")
 
     output_channels = 1280
     input_channels = 1280
@@ -238,42 +196,35 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         packer_l1_acc=False,
     )
 
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     sdxlConvTest = SdxlConvTest(
         mesh_device,
-        in0_shape,
-        in1_shape,
-        conv_bias_shape,
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),  # see what this does
-        in0_dtype,
-        in1_dtype,
-        in1_dtype,  # bias same dtype as weightsz
-        None,  # out_dtype
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.TILE_LAYOUT,
-        ttnn.TILE_LAYOUT,  # bias layout
-        conv_config,  # program config
-        compute_kernel_config,  # compute config
-        input_channels,
-        output_channels,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        dilation,
-        batch_size,
-        input_height,
-        input_width,
-        groups,
-        weights_dtype,
+        OpParameter(in0_shape, in0_dtype, ttnn.ROW_MAJOR_LAYOUT, mem_config),  # activations
+        [
+            OpParameter(in1_shape, in1_dtype, ttnn.TILE_LAYOUT, mem_config),  # inputs
+            OpParameter(conv_bias_shape, in1_dtype, ttnn.TILE_LAYOUT, mem_config),
+        ],
+        out_mem_config=mem_config,
+        out_dtype=None,
+        program_config=conv_config,
+        compute_config=compute_kernel_config,
+        input_channels=input_channels,
+        out_channels=output_channels,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        dilation=dilation,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        groups=groups,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
-        compute_with_storage_grid_size=grid_size,
+        compute_with_storage_grid_size=compute_grid,
     )
 
     sdxlConvTest.run_op_test()

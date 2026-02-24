@@ -300,11 +300,7 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
-    // Fiddling with sign bit to match previous behavior
     nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
-    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
-        dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
-    }
 
     // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
     // with shape/stride pointers
