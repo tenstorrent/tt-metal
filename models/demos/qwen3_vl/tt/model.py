@@ -125,6 +125,8 @@ class VisionTransformer(LightweightModule):
         x,
         unpadded_seq_len,
         rot_mats,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         """
         Forward pass through the Vision Transformer blocks.
@@ -144,6 +146,8 @@ class VisionTransformer(LightweightModule):
             x = block(
                 x,
                 rot_mats=rot_mats,
+                batch_size=batch_size,
+                user_id_tensor=user_id_tensor,
             )
             if i in self.deepstack_visual_indices:
                 idx = self.deepstack_visual_indices.index(i)
@@ -222,21 +226,40 @@ class DropInVisionTransformer(torch.nn.Module):
         Returns:
             torch.Tensor: Output tensor matching the reference model's output shape [total_seq_len, out_hidden_size].
         """
+        # import pdb; pdb.set_trace()
         # process pixel_values for each image/video separately
-        all_pixel_values = pixel_values
-        all_grid_thw = grid_thw
+        all_pixel_values = pixel_values.clone()
+        grid_thw_clone = grid_thw.clone()
         final_outputs = []
         deepstack_visual_embeds_list = [None] * len(self.deepstack_visual_indexes)
+        batch_size = grid_thw[0]
+        batched_prefill = True
+        all_grid_thw = grid_thw
+        if batched_prefill:
+            all_grid_thw = all_grid_thw.unsqueeze(0)
+        # print(f"{all_grid_thw.shape=}")
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
         for grid_thw in all_grid_thw:
             # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
-            pixel_values = all_pixel_values[: grid_thw.prod(), :]
-            all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
-            # --- Preprocessing ---
-            # 1. Calculate total unpadded sequence length
-            grid_thw = grid_thw.unsqueeze(0)
-            unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
+            # pixel_values = all_pixel_values[: grid_thw.prod(), :]
+            # all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
+            # print(f"{grid_thw.shape=}")
+            # print(f"{pixel_values.shape=}")
+            # print(f"{all_pixel_values.shape=}")
+            # # --- Preprocessing ---
+            # # 1. Calculate total unpadded sequence length
+            # print(f"{seq_len=}")
+            # print(f"{unpadded_seq_len=}")
+
             # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
+
+            if not batched_prefill:
+                current_pixel_values = pixel_values[: grid_thw.prod(), :]
+                pixel_values = pixel_values[grid_thw.prod() :, :]
+                grid_thw = grid_thw.unsqueeze(0)
+            else:
+                current_pixel_values = pixel_values
+            unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
             seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
@@ -248,7 +271,7 @@ class DropInVisionTransformer(torch.nn.Module):
             )
 
             # 3. Use reference model's patch embedding
-            patch_input = self.reference_model.patch_embed(pixel_values)
+            patch_input = self.reference_model.patch_embed(current_pixel_values)
             pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
             patch_input = patch_input + pos_embeds
 
@@ -291,6 +314,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 tt_input,
                 unpadded_seq_len=unpadded_seq_len,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
+                batch_size=batch_size,
             )
 
             # deallocate device tensors that are not needed by decode
@@ -312,36 +336,29 @@ class DropInVisionTransformer(torch.nn.Module):
             ]
             [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
 
-            if self.debug:
-                logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-                reference_output, deepstack_ref = self.reference_model.forward(pixel_values, grid_thw)
-                _, pcc = comp_pcc(reference_output, final_output)
-                logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
-
-            # 2. Convert the output to the desired tensor sharding format
-            # TODO: Modify this once we implement TP+DP to use just convert to desired output sharding
-            final_output_sharded = ttnn.mesh_partition(final_output, 1)
-            ttnn.deallocate(final_output)
-            deepstack_visual_embeds_sharded = [
-                ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
-                for i in range(len(deepstack_visual_embeds_output))
-            ]
-            [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
-
-            # 3. Aggregate in batched users list
-            final_outputs.append(final_output_sharded)
+            final_outputs.append(final_output)
             for i in range(len(deepstack_visual_embeds_list)):
                 if deepstack_visual_embeds_list[i] is None:
                     deepstack_visual_embeds_list[i] = [deepstack_visual_embeds_sharded[i]]
                 else:
-                    deepstack_visual_embeds_list[i].append(deepstack_visual_embeds_sharded[i])
+                    deepstack_visual_embeds_list[i] = torch.cat(
+                        [deepstack_visual_embeds_list[i], deepstack_visual_embeds_torch[i]], dim=0
+                    )
+
+        final_output_ttnn = torch.cat(final_outputs, dim=0)
+        if self.debug:
+            logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
+            reference_output, deepstack_ref = self.reference_model.forward(all_pixel_values, grid_thw_clone)
+            torch.save(reference_output, "models/demos/qwen3_vl/tt/ref_out_visual.pt")
+            reference_output = torch.load("models/demos/qwen3_vl/tt/ref_out_visual.pt")
+            _, pcc = comp_pcc(reference_output, final_output_ttnn)
+            logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
+            import sys
+
+            sys.exit(pcc)
 
         # concatenate all the outputs
-        tt_out = ttnn.concat(final_outputs, dim=0)
-        for i in range(len(deepstack_visual_embeds_list)):
-            deepstack_visual_embeds_list[i] = ttnn.concat(deepstack_visual_embeds_list[i], dim=0)
-        (ttnn.deallocate(final_outputs[i]) for i in range(len(final_outputs)))
-        return tt_out, deepstack_visual_embeds_list
+        return final_output_ttnn, deepstack_visual_embeds_list
 
 
 class Transformer(TTTransformer):
