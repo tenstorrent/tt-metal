@@ -32,7 +32,10 @@
 
 #include <google/protobuf/text_format.h>
 
-using namespace tt::tt_fabric;
+namespace tt::tt_fabric {
+
+// Ensure tt::assert resolves correctly (not tt::tt_fabric::tt::assert)
+using namespace ::tt::assert;
 
 namespace {
 
@@ -61,104 +64,6 @@ void iterate_cartesian_product(const std::vector<size_t>& sizes, Callback callba
             indices[d] = 0;
             if (d == 0) {
                 done = true;
-            }
-        }
-    }
-}
-
-void assign_corner_orientations_to_grouping(GroupingInfo& info, const std::vector<int32_t>& dims) {
-    using CO = GroupingItemInfo::CornerOrientation;
-
-    if (dims.empty() || info.items.empty()) {
-        return;
-    }
-
-    size_t total_items = info.items.size();
-
-    if (dims.size() == 1) {
-        // 1D mesh: single dimension
-        int32_t length = dims[0];
-        if (total_items == static_cast<size_t>(length)) {
-            // First item: NW + SW (top-left + bottom-left)
-            if (total_items > 0) {
-                info.items[0].corners.push_back(CO::NW);
-                info.items[0].corners.push_back(CO::SW);
-            }
-            // Last item: NE + SE (top-right + bottom-right)
-            if (total_items > 1) {
-                size_t last_idx = total_items - 1;
-                info.items[last_idx].corners.push_back(CO::NE);
-                info.items[last_idx].corners.push_back(CO::SE);
-            }
-        }
-    } else if (dims.size() >= 2) {
-        int32_t rows = dims[0];
-        int32_t cols = dims[1];
-
-        if (rows == 1 && cols == 1) {
-            // 1x1 mesh: single item has all 4 orientations
-            if (total_items == 1) {
-                info.items[0].corners.push_back(CO::NW);
-                info.items[0].corners.push_back(CO::NE);
-                info.items[0].corners.push_back(CO::SW);
-                info.items[0].corners.push_back(CO::SE);
-            }
-        } else if (rows == 1) {
-            // 1D row mesh (1xN): first item has NW+SW, last item has NE+SE
-            if (total_items == static_cast<size_t>(cols)) {
-                if (total_items > 0) {
-                    info.items[0].corners.push_back(CO::NW);
-                    info.items[0].corners.push_back(CO::SW);
-                }
-                if (total_items > 1) {
-                    size_t last_idx = total_items - 1;
-                    info.items[last_idx].corners.push_back(CO::NE);
-                    info.items[last_idx].corners.push_back(CO::SE);
-                }
-            }
-        } else if (cols == 1) {
-            // 1D column mesh (Nx1): first item has NW+NE, last item has SW+SE
-            if (total_items == static_cast<size_t>(rows)) {
-                if (total_items > 0) {
-                    info.items[0].corners.push_back(CO::NW);
-                    info.items[0].corners.push_back(CO::NE);
-                }
-                if (total_items > 1) {
-                    size_t last_idx = total_items - 1;
-                    info.items[last_idx].corners.push_back(CO::SW);
-                    info.items[last_idx].corners.push_back(CO::SE);
-                }
-            }
-        } else {
-            // 2D mesh: standard 4 corners
-            if (total_items == static_cast<size_t>(rows) * static_cast<size_t>(cols)) {
-                // Multiple items: assign corners to specific items based on position
-                size_t nw_idx = 0;
-                size_t ne_idx = static_cast<size_t>(cols) - 1;
-                size_t sw_idx = (static_cast<size_t>(rows) - 1) * static_cast<size_t>(cols);
-                size_t se_idx =
-                    ((static_cast<size_t>(rows) - 1) * static_cast<size_t>(cols)) + (static_cast<size_t>(cols) - 1);
-
-                // Set corner orientations based on row-major mesh position
-                if (nw_idx < total_items) {
-                    info.items[nw_idx].corners.push_back(CO::NW);
-                }
-                if (ne_idx < total_items && ne_idx != nw_idx) {
-                    info.items[ne_idx].corners.push_back(CO::NE);
-                }
-                if (sw_idx < total_items && sw_idx != nw_idx && sw_idx != ne_idx) {
-                    info.items[sw_idx].corners.push_back(CO::SW);
-                }
-                if (se_idx < total_items && se_idx != nw_idx && se_idx != ne_idx && se_idx != sw_idx) {
-                    info.items[se_idx].corners.push_back(CO::SE);
-                }
-            } else if (total_items == 1) {
-                // Single item representing entire mesh (e.g., MGD mesh instance)
-                // Assign all 4 corners to indicate it's a complete 2D mesh
-                info.items[0].corners.push_back(CO::NW);
-                info.items[0].corners.push_back(CO::NE);
-                info.items[0].corners.push_back(CO::SW);
-                info.items[0].corners.push_back(CO::SE);
             }
         }
     }
@@ -335,112 +240,115 @@ AdjacencyGraph<uint32_t> build_custom_connections_graph(
     return AdjacencyGraph<uint32_t>(adj_map);
 }
 
-// Helper function to build adjacency graph from MGD mesh instance's device topology
-// Builds a row-major mesh graph based on the mesh's device_topology dims
-// This represents the topology at the ASIC level, which matches the flattened physical grouping graphs
-AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
-    const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId mesh_instance_id) {
-    const auto& mesh_instance = mesh_graph_descriptor.get_instance(mesh_instance_id);
-    TT_FATAL(mesh_instance.kind == NodeKind::Mesh, "build_mgd_mesh_instance_adjacency called on non-mesh instance");
+}  // namespace
 
-    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
-    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null");
+// Helper function to assign corner orientations to grouping items based on mesh dimensions
+// Implemented as a private static class method
+void PhysicalGroupingDescriptor::assign_corner_orientations_to_grouping(
+    GroupingInfo& info, const std::vector<int32_t>& dims) {
+    using CO = GroupingItemInfo::CornerOrientation;
 
-    // Get device topology dimensions (represents ASIC-level layout)
-    const auto& device_topology = mesh_desc->device_topology();
-    std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
-
-    if (device_dims.empty()) {
-        // No device topology - return empty graph
-        return AdjacencyGraph<uint32_t>();
+    if (dims.empty() || info.items.empty()) {
+        return;
     }
 
-    // Calculate number of ASICs
-    int32_t num_asics = 1;
-    for (int32_t dim : device_dims) {
-        num_asics *= dim;
-    }
+    size_t total_items = info.items.size();
 
-    // Create abstract ASIC node IDs (0, 1, 2, ..., num_asics-1)
-    std::vector<uint32_t> asic_ids;
-    asic_ids.reserve(num_asics);
-    for (uint32_t i = 0; i < static_cast<uint32_t>(num_asics); ++i) {
-        asic_ids.push_back(i);
-    }
+    if (dims.size() == 1) {
+        // 1D mesh: single dimension
+        int32_t length = dims[0];
+        if (total_items == static_cast<size_t>(length)) {
+            // First item: NW + SW (top-left + bottom-left)
+            if (total_items > 0) {
+                info.items[0].corners.push_back(CO::NW);
+                info.items[0].corners.push_back(CO::SW);
+            }
+            // Last item: NE + SE (top-right + bottom-right)
+            if (total_items > 1) {
+                size_t last_idx = total_items - 1;
+                info.items[last_idx].corners.push_back(CO::NE);
+                info.items[last_idx].corners.push_back(CO::SE);
+            }
+        }
+    } else if (dims.size() >= 2) {
+        int32_t rows = dims[0];
+        int32_t cols = dims[1];
 
-    // Build row-major mesh graph representing ASIC-level topology
-    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
-    auto result = build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
-
-    return result;
-}
-
-// Helper function to build adjacency graph from MGD graph instance
-// The graph instance's sub_instances become nodes, and connections between them become edges
-// Ensures no duplicate connections and all connections are bidirectional
-AdjacencyGraph<uint32_t> build_mgd_graph_instance_adjacency(
-    const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId graph_instance_id) {
-    const auto& graph_instance = mesh_graph_descriptor.get_instance(graph_instance_id);
-
-    // Get all sub-instances (these will be the nodes in our adjacency graph)
-    std::vector<uint32_t> sub_instance_ids(graph_instance.sub_instances.begin(), graph_instance.sub_instances.end());
-
-    // Build adjacency map from connections
-    std::map<uint32_t, std::vector<uint32_t>> adj_map;
-
-    // Initialize adjacency map for all sub-instances
-    for (uint32_t sub_id : sub_instance_ids) {
-        adj_map[sub_id] = std::vector<uint32_t>();
-    }
-
-    // Use a set to track processed edges to avoid duplicates
-    std::set<std::pair<uint32_t, uint32_t>> processed_edges;
-
-    // Get all connections for this graph instance
-    const auto& connection_ids = mesh_graph_descriptor.connections_by_instance_id(graph_instance_id);
-
-    // Build adjacency from connections
-    for (ConnectionId conn_id : connection_ids) {
-        const auto& conn = mesh_graph_descriptor.get_connection(conn_id);
-
-        // Connections have nodes array: [src, dst]
-        if (conn.nodes.size() >= 2) {
-            uint32_t src = conn.nodes[0];
-            uint32_t dst = conn.nodes[1];
-
-            // Only add edges if both nodes are sub-instances of this graph
-            if (graph_instance.sub_instances.contains(src) && graph_instance.sub_instances.contains(dst)) {
-                // Skip self-loops
-                if (src == dst) {
-                    continue;
+        if (rows == 1 && cols == 1) {
+            // 1x1 mesh: single item has all 4 orientations
+            if (total_items == 1) {
+                info.items[0].corners.push_back(CO::NW);
+                info.items[0].corners.push_back(CO::NE);
+                info.items[0].corners.push_back(CO::SW);
+                info.items[0].corners.push_back(CO::SE);
+            }
+        } else if (rows == 1) {
+            // 1D row mesh (1xN): first item has NW+SW, last item has NE+SE
+            if (total_items == static_cast<size_t>(cols)) {
+                if (total_items > 0) {
+                    info.items[0].corners.push_back(CO::NW);
+                    info.items[0].corners.push_back(CO::SW);
                 }
-
-                // Normalize edge pair to avoid duplicates (treat (A,B) and (B,A) as the same)
-                auto edge_pair = std::minmax(src, dst);
-
-                // Only add edge if not already processed (prevents duplicates)
-                if (processed_edges.insert(edge_pair).second) {
-                    // Add bidirectional edge (undirected graph)
-                    adj_map[src].push_back(dst);
-                    adj_map[dst].push_back(src);
+                if (total_items > 1) {
+                    size_t last_idx = total_items - 1;
+                    info.items[last_idx].corners.push_back(CO::NE);
+                    info.items[last_idx].corners.push_back(CO::SE);
                 }
+            }
+        } else if (cols == 1) {
+            // 1D column mesh (Nx1): first item has NW+NE, last item has SW+SE
+            if (total_items == static_cast<size_t>(rows)) {
+                if (total_items > 0) {
+                    info.items[0].corners.push_back(CO::NW);
+                    info.items[0].corners.push_back(CO::NE);
+                }
+                if (total_items > 1) {
+                    size_t last_idx = total_items - 1;
+                    info.items[last_idx].corners.push_back(CO::SW);
+                    info.items[last_idx].corners.push_back(CO::SE);
+                }
+            }
+        } else {
+            // 2D mesh: standard 4 corners
+            if (total_items == static_cast<size_t>(rows) * static_cast<size_t>(cols)) {
+                // Multiple items: assign corners to specific items based on position
+                size_t nw_idx = 0;
+                size_t ne_idx = static_cast<size_t>(cols) - 1;
+                size_t sw_idx = (static_cast<size_t>(rows) - 1) * static_cast<size_t>(cols);
+                size_t se_idx =
+                    ((static_cast<size_t>(rows) - 1) * static_cast<size_t>(cols)) + (static_cast<size_t>(cols) - 1);
+
+                // Set corner orientations based on row-major mesh position
+                if (nw_idx < total_items) {
+                    info.items[nw_idx].corners.push_back(CO::NW);
+                }
+                if (ne_idx < total_items && ne_idx != nw_idx) {
+                    info.items[ne_idx].corners.push_back(CO::NE);
+                }
+                if (sw_idx < total_items && sw_idx != nw_idx && sw_idx != ne_idx) {
+                    info.items[sw_idx].corners.push_back(CO::SW);
+                }
+                if (se_idx < total_items && se_idx != nw_idx && se_idx != ne_idx && se_idx != sw_idx) {
+                    info.items[se_idx].corners.push_back(CO::SE);
+                }
+            } else if (total_items == 1) {
+                // Single item representing entire mesh (e.g., MGD mesh instance)
+                // Assign all 4 corners to indicate it's a complete 2D mesh
+                info.items[0].corners.push_back(CO::NW);
+                info.items[0].corners.push_back(CO::NE);
+                info.items[0].corners.push_back(CO::SW);
+                info.items[0].corners.push_back(CO::SE);
             }
         }
     }
-
-    return AdjacencyGraph<uint32_t>(adj_map);
 }
-
-}  // namespace
-
-namespace tt::tt_fabric {
 
 GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::Grouping& grouping) const {
     GroupingInfo info;
 
     // Get grouping name (mandatory field) and type
-    info.name = get_grouping_name(grouping);
-    info.type = get_grouping_type_string(grouping);
+    info.name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
+    info.type = PhysicalGroupingDescriptor::get_grouping_type_string(grouping);
 
     // Collect instance IDs and build items list
     std::vector<uint32_t> instance_ids;
@@ -455,7 +363,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         GroupingItemInfo item_info;
         if (instance.has_asic_location()) {
             item_info.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
-            item_info.asic_location = tt::tt_metal::ASICLocation{static_cast<uint32_t>(instance.asic_location())};
+            item_info.asic_location = ::tt::tt_metal::ASICLocation{static_cast<uint32_t>(instance.asic_location())};
             info.items.push_back(item_info);
             asic_locations.push_back(*item_info.asic_location);
             has_asic_locations = true;
@@ -467,19 +375,19 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
                 switch (ref.preset_type()) {
                     case proto::TRAY_1:
                         item_info.grouping_name = "TRAY_1";
-                        item_info.tray_id = tt::tt_metal::TrayID{1};
+                        item_info.tray_id = ::tt::tt_metal::TrayID{1};
                         break;
                     case proto::TRAY_2:
                         item_info.grouping_name = "TRAY_2";
-                        item_info.tray_id = tt::tt_metal::TrayID{2};
+                        item_info.tray_id = ::tt::tt_metal::TrayID{2};
                         break;
                     case proto::TRAY_3:
                         item_info.grouping_name = "TRAY_3";
-                        item_info.tray_id = tt::tt_metal::TrayID{3};
+                        item_info.tray_id = ::tt::tt_metal::TrayID{3};
                         break;
                     case proto::TRAY_4:
                         item_info.grouping_name = "TRAY_4";
-                        item_info.tray_id = tt::tt_metal::TrayID{4};
+                        item_info.tray_id = ::tt::tt_metal::TrayID{4};
                         break;
                     case proto::HOSTS:
                         item_info.grouping_name = "HOSTS";
@@ -518,7 +426,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         // Corner positions are determined by the mesh dimensions, not ASIC locations
         // For 1D meshes, endpoints can have multiple orientations (e.g., 1x4: first item has NW+SW, last has NE+SE)
         // For 1x1 mesh, the single item has all 4 orientations
-        assign_corner_orientations_to_grouping(info, dims);
+        PhysicalGroupingDescriptor::assign_corner_orientations_to_grouping(info, dims);
     } else if (grouping.has_custom()) {
         const auto& custom = grouping.custom();
         info.adjacency_graph = build_custom_connections_graph(node_ids, custom);
@@ -530,7 +438,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
     return info;
 }
 
-namespace {
+}  // namespace tt::tt_fabric
 
 namespace {
 
@@ -598,7 +506,7 @@ enum class AdjacencyDirection { A_LEFT_OF_B, A_ABOVE_B, A_RIGHT_OF_B, A_BELOW_B 
 
 // Metadata for flattened mesh nodes
 struct NodeMetadata {
-    tt::tt_metal::TrayID tray_id{0};
+    ::tt::tt_metal::TrayID tray_id{0};
     std::vector<std::string> grouping_path;
 };
 
@@ -876,7 +784,7 @@ AdjacencyGraph<uint32_t> join_mesh_level(const std::vector<FlattenedMesh>& meshe
 }
 
 // Helper to extract tray ID from grouping name (e.g., "tray_1" -> TrayID{1}, "TRAY_2" -> TrayID{2})
-tt::tt_metal::TrayID extract_tray_id(const std::string& grouping_name) {
+::tt::tt_metal::TrayID extract_tray_id(const std::string& grouping_name) {
     const std::string lower_name = [&]() {
         std::string result = grouping_name;
         std::transform(result.begin(), result.end(), result.begin(), ::tolower);
@@ -885,26 +793,26 @@ tt::tt_metal::TrayID extract_tray_id(const std::string& grouping_name) {
 
     if (lower_name.starts_with("tray_")) {
         try {
-            return tt::tt_metal::TrayID{static_cast<uint32_t>(std::stoul(lower_name.substr(5)))};
+            return ::tt::tt_metal::TrayID{static_cast<uint32_t>(std::stoul(lower_name.substr(5)))};
         } catch (...) {
-            return tt::tt_metal::TrayID{0};
+            return ::tt::tt_metal::TrayID{0};
         }
     }
-    return tt::tt_metal::TrayID{0};
+    return ::tt::tt_metal::TrayID{0};
 }
 
 // Helper to extract ASIC location from grouping path string (e.g., "ASIC_LOCATION_1" -> ASICLocation{1})
-tt::tt_metal::ASICLocation extract_asic_location_from_path(const std::vector<std::string>& grouping_path) {
+::tt::tt_metal::ASICLocation extract_asic_location_from_path(const std::vector<std::string>& grouping_path) {
     for (const auto& path_elem : grouping_path) {
         if (path_elem.starts_with("ASIC_LOCATION_")) {
             try {
-                return tt::tt_metal::ASICLocation{static_cast<uint32_t>(std::stoul(path_elem.substr(14)))};
+                return ::tt::tt_metal::ASICLocation{static_cast<uint32_t>(std::stoul(path_elem.substr(14)))};
             } catch (...) {
-                return tt::tt_metal::ASICLocation{0};
+                return ::tt::tt_metal::ASICLocation{0};
             }
         }
     }
-    return tt::tt_metal::ASICLocation{0};
+    return ::tt::tt_metal::ASICLocation{0};
 }
 
 // Rebuild GroupingInfo.items from FlattenedMesh. Graph nodes are 0..n-1; items[i] is the item for node i.
@@ -916,8 +824,8 @@ void rebuild_items_from_flattened_mesh(GroupingInfo& info, const FlattenedMesh& 
     for (uint32_t node_id : node_ids) {
         GroupingItemInfo item;
         item.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
-        item.asic_location = tt::tt_metal::ASICLocation{0};
-        item.tray_id = tt::tt_metal::TrayID{0};
+        item.asic_location = ::tt::tt_metal::ASICLocation{0};
+        item.tray_id = ::tt::tt_metal::TrayID{0};
 
         auto metadata_it = mesh.node_metadata.find(node_id);
         if (metadata_it != mesh.node_metadata.end()) {
@@ -941,7 +849,7 @@ void rebuild_items_from_flattened_mesh(GroupingInfo& info, const FlattenedMesh& 
 std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     const GroupingItemInfo& item,
     uint32_t& next_global_id,
-    const std::unordered_map<std::string, std::vector<GroupingInfo>>& cache,
+    const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>& cache,
     const PhysicalGroupingDescriptor* desc,
     const std::vector<std::string>& grouping_path = {}) {
     constexpr int32_t SINGLE_NODE_ROWS = 1;
@@ -957,7 +865,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         // Extract tray ID from grouping path
         NodeMetadata metadata;
         for (const auto& path_elem : grouping_path) {
-            tt::tt_metal::TrayID tray_id = extract_tray_id(path_elem);
+            ::tt::tt_metal::TrayID tray_id = extract_tray_id(path_elem);
             if (*tray_id > 0) {
                 metadata.tray_id = tray_id;
                 break;
@@ -977,9 +885,25 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     }
 
     // Compound case: resolve grouping reference - iterate over ALL possible groupings
-    const auto cache_it = cache.find(item.grouping_name);
-    TT_FATAL(cache_it != cache.end() && !cache_it->second.empty(), "Unknown grouping: {}", item.grouping_name);
-    const std::vector<GroupingInfo>& possible_groupings = cache_it->second;
+    // Look up by name first; preset types (TRAY_1, HOSTS, MESH) may be keyed by type, so fall back to type lookup
+    std::vector<GroupingInfo> possible_groupings;
+    auto name_it = cache.find(item.grouping_name);
+    if (name_it != cache.end()) {
+        for (const auto& [type, groupings] : name_it->second) {
+            possible_groupings.insert(possible_groupings.end(), groupings.begin(), groupings.end());
+        }
+    }
+    if (possible_groupings.empty()) {
+        // Fallback: search by type (handles preset refs like TRAY_1, HOSTS where cache key is name "tray_1",
+        // "hosts_required")
+        for (const auto& [name, type_map] : cache) {
+            auto type_it = type_map.find(item.grouping_name);
+            if (type_it != type_map.end()) {
+                possible_groupings.insert(possible_groupings.end(), type_it->second.begin(), type_it->second.end());
+            }
+        }
+    }
+    TT_FATAL(!possible_groupings.empty(), "Unknown grouping: {}", item.grouping_name);
 
     std::vector<FlattenedMesh> all_results;
     for (const GroupingInfo& sub_grouping : possible_groupings) {
@@ -989,11 +913,13 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
         // Ensure tray_id is extractable in leaf nodes: add type (e.g. "TRAY_1") if it encodes tray
         // and the name didn't already provide it. This handles cases where name might not match "tray_N".
-        if (*extract_tray_id(sub_grouping.name) == 0 && *extract_tray_id(sub_grouping.type) > 0) {
+        ::tt::tt_metal::TrayID name_tray_id = extract_tray_id(sub_grouping.name);
+        ::tt::tt_metal::TrayID type_tray_id = extract_tray_id(sub_grouping.type);
+        if (*name_tray_id == 0 && *type_tray_id > 0) {
             new_path.push_back(sub_grouping.type);
         }
         // Fallback: ref item has tray_id (e.g. TRAY_1) but neither name nor type encodes it
-        if (*extract_tray_id(sub_grouping.name) == 0 && *extract_tray_id(sub_grouping.type) == 0 && *item.tray_id > 0) {
+        if (*name_tray_id == 0 && *type_tray_id == 0 && *item.tray_id > 0) {
             new_path.push_back("tray_" + std::to_string(*item.tray_id));
         }
 
@@ -1067,9 +993,9 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     return all_results;
 }
 
-}  // unnamed namespace
+}  // namespace
 
-}  // unnamed namespace
+namespace tt::tt_fabric {
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
