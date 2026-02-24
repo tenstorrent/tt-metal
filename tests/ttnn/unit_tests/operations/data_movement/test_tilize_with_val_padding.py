@@ -104,90 +104,6 @@ def test_run_tilize_large_row_input(device, input_shape):
     assert_equal(input, output)
 
 
-# nd_sharded_sweep_params = [
-#     pytest.param(
-#         [[1, 3, 50, 96]],
-#         {
-#             "dtype": [ttnn.bfloat16],
-#             "layout": [ttnn.ROW_MAJOR_LAYOUT],
-#             "input_mem_config": [
-#                 ttnn.MemoryConfig(
-#                     buffer_type=ttnn.BufferType.L1,
-#                     nd_shard_spec=ttnn.NdShardSpec(
-#                         shard_shape=[1, 1, 50, 96],
-#                         grid=ttnn.CoreRangeSet(
-#                             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}
-#                         ),
-#                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-#                     ),
-#                 )
-#             ],
-#             "output_mem_config": ttnn.MemoryConfig(
-#                 buffer_type=ttnn.BufferType.L1,
-#                 nd_shard_spec=ttnn.NdShardSpec(
-#                     shard_shape=[1, 1, 64, 96],
-#                     grid=ttnn.CoreRangeSet(
-#                         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}
-#                     ),
-#                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-#                 ),
-#             ),
-#             "output_tensor_shape": [1, 3, 64, 96],
-#             "pad_value": 0.0,
-#         },
-#     ),
-#     pytest.param(
-#         [[3, 100, 158]],
-#         {
-#             "dtype": [ttnn.bfloat16],
-#             "layout": [ttnn.ROW_MAJOR_LAYOUT],
-#             "input_mem_config": [
-#                 ttnn.MemoryConfig(
-#                     buffer_type=ttnn.BufferType.L1,
-#                     nd_shard_spec=ttnn.NdShardSpec(
-#                         shard_shape=[2, 64, 96],
-#                         grid=ttnn.CoreRangeSet(
-#                             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}
-#                         ),
-#                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-#                     ),
-#                 )
-#             ],
-#             "output_mem_config": ttnn.MemoryConfig(
-#                 buffer_type=ttnn.BufferType.L1,
-#                 nd_shard_spec=ttnn.NdShardSpec(
-#                     shard_shape=[3, 96, 96],
-#                     grid=ttnn.CoreRangeSet(
-#                         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}
-#                     ),
-#                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-#                 ),
-#             ),
-#             "output_tensor_shape": [4, 128, 160],
-#             "pad_value": 0.0,
-#         },
-#     ),
-# ]
-
-
-# @pytest.mark.parametrize("input_shapes, tilize_with_val_padding_args", nd_sharded_sweep_params)
-# def test_run_tilize_with_val_padding_nd_sharded_sweep(
-#     input_shapes, tilize_with_val_padding_args, device, function_level_defaults
-# ):
-#     datagen_func = [
-#         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
-#     ]
-#     comparison_func = comparison_funcs.comp_equal
-#     run_single_pytorch_test(
-#         "tilize_with_val_padding",
-#         input_shapes,
-#         datagen_func,
-#         comparison_func,
-#         device,
-#         tilize_with_val_padding_args,
-#    )
-
-
 @pytest.mark.parametrize(
     "tensor_shape, input_shard_shape, output_padded_shape, output_shard_shape, shard_core_grid",
     [
@@ -411,10 +327,6 @@ def test_tilize_with_val_padding_legacy_sharded_to_nd_sharded(
     block_shard_core_grid,
 ):
     """tilize_with_val_padding: legacy 2D sharded input -> nd_sharded output."""
-    # pytest.skip(
-    #     "Backend does not support legacy sharded input -> nd_sharded output "
-    #     "(output is forced to legacy layout when input is legacy sharded)."
-    # )
     torch.manual_seed(0)
     num_dims = len(tensor_shape)
     tensor_height = 1

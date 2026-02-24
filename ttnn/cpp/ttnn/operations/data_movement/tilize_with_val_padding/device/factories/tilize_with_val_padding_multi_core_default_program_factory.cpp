@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tilize_with_val_padding_multi_core_interleaved_program_factory.hpp"
+#include "tilize_with_val_padding_multi_core_default_program_factory.hpp"
 
 #include <cmath>
 
@@ -21,10 +21,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-TilizeWithValPaddingMultiCoreInterleavedFactory::cached_program_t
-TilizeWithValPaddingMultiCoreInterleavedFactory::create(
+TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddingMultiCoreDefaultFactory::create(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
-    std::cout << "Creating program for ND-sharded input\n";
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const Tensor& a = input_tensor;
     const Tensor& output = output_tensor;
@@ -73,26 +71,16 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
                         // can shift right by this to get number of tiles.
                         // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
     uint32_t elem_size = a.element_size();
-    uint32_t num_sticks_in_row = 1;                 // tt::div_up(a.padded_shape()[-1], tile_width);
-    uint32_t stick_size = unpadded_row_size_bytes;  // a.element_size() * tile_width;
-    uint32_t size_of_valid_data_in_last_stick_in_row =
-        unpadded_row_size_bytes;  // a.padded_shape()[-1] % tile_width * a.element_size();
+    uint32_t num_sticks_in_row = 1;
+    uint32_t stick_size = unpadded_row_size_bytes;
+    uint32_t size_of_valid_data_in_last_stick_in_row = unpadded_row_size_bytes;
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_sticks_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
         stick_size = a.element_size() * shard_width;
-        std::cout << "AAAA unpadded_row_size_bytes: " << unpadded_row_size_bytes << "\n";
-        std::cout << "AAAA stick_size: " << stick_size << "\n";
-        std::cout << "AAAA num_sticks_in_row: " << num_sticks_in_row << "\n";
         size_of_valid_data_in_last_stick_in_row = unpadded_row_size_bytes - (num_sticks_in_row - 1) * stick_size;
     }
-    std::cout << "num_sticks_in_row: " << num_sticks_in_row << "\n";
-    std::cout << "stick_size: " << stick_size << "\n";
-    std::cout << "size_of_valid_data_in_last_stick_in_row: " << size_of_valid_data_in_last_stick_in_row << "\n";
-    std::cout << "unpadded_row_size_bytes: " << unpadded_row_size_bytes << "\n";
-    std::cout << "elem_size: " << elem_size << "\n";
-    std::cout << "shift_bits: " << shift_bits << "\n";
 
     std::vector<uint32_t> reader_compile_time_args = {
         shift_bits,
@@ -210,7 +198,7 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
     return cached_program_t(std::move(program), std::move(shared_variables));
 }
 
-void TilizeWithValPaddingMultiCoreInterleavedFactory::override_runtime_arguments(
+void TilizeWithValPaddingMultiCoreDefaultFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const Tensor& input_tensor,
