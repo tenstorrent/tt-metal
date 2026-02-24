@@ -243,7 +243,7 @@ class PreSDPA:
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
 
-        assert semaphores is not None and len(semaphores) == 11 if skip_ccl else 14
+        assert semaphores is not None and len(semaphores) == (11 if skip_ccl else 14)
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
