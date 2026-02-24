@@ -128,9 +128,17 @@ protected:
     // Used when JitBuildSettings is not provided
     std::string default_linker_opt_level_;
 
+    // Hash of all effective compilation/linking parameters (including HAL-populated flags).
+    // Used to detect when build flags change between runs so that stale cached objects
+    // are not reused.  Written to a ".build_state" file in the output directory.
+    uint64_t build_state_hash_{};
+
     // Upper bound for compile objects.
     // Current max obj count is 2 -- very sufficient for now.
     static constexpr size_t kMaxBuildBitset = 64;
+
+    bool build_state_matches(const std::string& out_dir) const;
+    void write_build_state_hash(const std::string& out_dir) const;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
     std::bitset<kMaxBuildBitset> compile(const std::string& out_dir, const JitBuildSettings* settings) const;

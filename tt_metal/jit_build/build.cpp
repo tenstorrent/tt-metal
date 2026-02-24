@@ -395,6 +395,54 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
+
+    // Compute a hash of all effective compilation/linking parameters.
+    // This captures HAL-populated flags (defines, includes, common_flags, linker_flags, etc.)
+    // that are not part of the env-level build_key_.  When any of these change between runs
+    // (e.g. after a code change that modifies HAL output), the hash changes and cached
+    // objects are invalidated, preventing stale binaries from being reused.
+    {
+        tt::FNV1a hasher;
+        hasher.update(env_.gpp_);
+        hasher.update(cflags_);
+        hasher.update(defines_);
+        hasher.update(includes_);
+        hasher.update(lflags_);
+        hasher.update(linker_script_);
+        hasher.update(extra_link_objs_);
+        for (const auto& src : srcs_) {
+            hasher.update(src);
+        }
+        hasher.update(default_compile_opt_level_);
+        hasher.update(default_linker_opt_level_);
+        build_state_hash_ = hasher.digest();
+    }
+}
+
+static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
+
+bool JitBuildState::build_state_matches(const string& out_dir) const {
+    std::ifstream file(out_dir + string(BUILD_STATE_HASH_FILE));
+    if (!file.is_open()) {
+        return false;
+    }
+    uint64_t stored_hash{};
+    file >> stored_hash;
+    if (file.fail() || stored_hash != build_state_hash_) {
+        log_debug(
+            tt::LogBuildKernels,
+            "Build state hash mismatch in {}: stored={}, current={}",
+            out_dir,
+            stored_hash,
+            build_state_hash_);
+        return false;
+    }
+    return true;
+}
+
+void JitBuildState::write_build_state_hash(const string& out_dir) const {
+    std::ofstream file(out_dir + string(BUILD_STATE_HASH_FILE));
+    file << build_state_hash_;
 }
 
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
@@ -492,10 +540,14 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         this->srcs_.size(),
         kMaxBuildBitset);
 
+    // Check if build parameters (flags, defines, includes populated by HAL, etc.) have changed.
+    // If so, all objects in this directory must be recompiled regardless of file-level dependency status.
+    bool state_changed = !build_state_matches(out_dir);
+
     std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        if (need_compile(out_dir, this->objs_[i])) {
+        if (state_changed || need_compile(out_dir, this->objs_[i])) {
             compiled.set(i);
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
@@ -513,7 +565,8 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
 bool JitBuildState::need_link(const string& out_dir) const {
     std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !fs::exists(elf_path) || !build_state_matches(out_dir) ||
+           !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
@@ -647,6 +700,9 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             if (target->is_fw_) {
                 target->weaken(target_out_dir);
             }
+            // Record the build state used for linking so that future runs can detect
+            // when link-affecting flags (lflags, linker script, etc.) change.
+            target->write_build_state_hash(target_out_dir);
         }
     }
 
@@ -666,6 +722,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 fs::remove(src_path);
             }
         }
+    }
+
+    // Record the build state used for compilation so that future runs can detect
+    // when compile-affecting flags (cflags, defines, includes from HAL, etc.) change.
+    if (compiled.any()) {
+        write_build_state_hash(out_dir);
     }
 
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
