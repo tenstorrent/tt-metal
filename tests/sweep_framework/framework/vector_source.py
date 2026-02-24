@@ -322,19 +322,12 @@ class VectorExportSource(VectorSource):
                                         has_matching_hardware = True
                                         break
 
-                                    # TODO: Remove this N150/N300 compatibility workaround once CI
-                                    # runners are available on N300 hardware.
-                                    if (
-                                        "wormhole" in current_board
-                                        and current_series == "n150"
-                                        and "wormhole" in traced_board
-                                        and traced_series == "n300"
-                                        and traced_card_count == 1
-                                    ):
-                                        mesh_shape = _extract_mesh_shape(entry)
-                                        if mesh_shape in ((1, 1), (1, 2), (2, 1)):
-                                            has_matching_hardware = True
-                                            break
+                                    # TODO: Tighten this once CI runners cover more hardware variants.
+                                    # For now, allow any single-card traced vector to run since
+                                    # CI only has N150 and single-card workloads are compatible.
+                                    if traced_card_count == 1:
+                                        has_matching_hardware = True
+                                        break
 
                                 if not has_matching_hardware:
                                     logger.debug(
