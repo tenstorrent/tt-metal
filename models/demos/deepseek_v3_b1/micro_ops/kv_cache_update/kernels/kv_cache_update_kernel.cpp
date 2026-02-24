@@ -55,7 +55,6 @@ void kernel_main() {
     compute_kernel_hw_startup(0, 0, 0);
 #endif
 
-    DPRINT << " DONE SETTIN GUP ARGS" << ENDL();
     deepseek_b1_ops::KVCacheUpdate::Op<Core::is_nope_core, Core::is_rope_core> op;
     op(args);
 }

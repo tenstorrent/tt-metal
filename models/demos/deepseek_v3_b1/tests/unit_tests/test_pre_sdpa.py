@@ -490,9 +490,6 @@ def test_pre_sdpa(
         [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
     )
 
-    # sdpa_input_grid = ttnn.CoreRange(
-    #    ttnn.CoreCoord(0, 1), ttnn.CoreCoord(SDPA_INPUT_GRID_COLS - 1, 1 + SDPA_INPUT_GRID_ROWS - 1)
-    # )
     sdpa_tile = ttnn.Tile([8, 32])  # Tilize tile shape for CreateQHeads output
     sdpa_input_output_shape = (SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM)  # [64, 512] total
     sdpa_input_output_shard_shape = (HEADS_PER_ROW, QNOPE_OUT_DIM)  # [8, 512] per core

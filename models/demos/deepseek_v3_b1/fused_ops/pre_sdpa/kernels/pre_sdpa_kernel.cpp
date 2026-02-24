@@ -819,7 +819,6 @@ void kernel_main() {
         cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
     }
 #endif
-    DPRINT << " DONE SETTING UP ARGS" << ENDL();
 
     // ========================================================================
     // Input core: RMSNorm + Mcast send
@@ -1008,7 +1007,6 @@ void kernel_main() {
         // ========================================================================
         // Flash MLA: Compute
         // ========================================================================
-        DPRINT << " FLASH_MLA" << ENDL();
         {
             DeviceZoneScopedN("FLASH_MLA");
             deepseek_b1_ops::FlashMLADecode::
