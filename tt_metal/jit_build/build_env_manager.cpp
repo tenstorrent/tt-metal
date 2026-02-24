@@ -4,30 +4,18 @@
 
 #include "build_env_manager.hpp"
 
-#include <climits>
-#include <enchantum/enchantum.hpp>
-#include <cmath>
 #include <tracy/Tracy.hpp>
 #include <cstddef>
-#include <map>
 #include <string>
-#include <variant>
 
 #include <tt_stl/assert.hpp>
-#include "common/stable_hash.hpp"
-#include "core_coord.hpp"
-#include "core_descriptor.hpp"
-#include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/precompiled.hpp"
-#include "llrt/metal_soc_descriptor.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
-#include <llrt/tt_cluster.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "jit_build/jit_device_config.hpp"
+#include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 
 namespace tt::tt_metal {
 
@@ -36,11 +24,14 @@ BuildEnvManager& BuildEnvManager::get_instance() {
     return instance;
 }
 
-BuildEnvManager::BuildEnvManager() {
-    // Initialize build_state_indices_
+BuildEnvManager::BuildEnvManager() = default;
+
+void BuildEnvManager::init_build_state_indices(const Hal& hal) {
+    if (!kernel_build_state_indices_.empty()) {
+        return;
+    }
     uint32_t kernel_index = 0;
     uint32_t firmware_index = 0;
-    const auto& hal = MetalContext::instance().hal();
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     kernel_build_state_indices_.resize(programmable_core_type_count);
     firmware_build_state_indices_.resize(programmable_core_type_count);
@@ -65,74 +56,8 @@ BuildEnvManager::BuildEnvManager() {
 
 namespace {
 
-std::map<std::string, std::string> initialize_device_kernel_defines(ChipId device_id, uint8_t num_hw_cqs) {
-    std::map<std::string, std::string> device_kernel_defines;
-
-    const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-    const size_t num_dram_banks = static_cast<size_t>(soc_d.get_num_dram_views());
-    // # of L1 banks needs to match allocator. For L1BankingAllocator this is the # of storage cores. TODO: when
-    // allocator is pulled out of device, use it to get that info here.
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    const size_t num_l1_banks = tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
-
-    bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
-    bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
-
-    device_kernel_defines.emplace("NUM_DRAM_BANKS", std::to_string(num_dram_banks));
-    device_kernel_defines.emplace("NUM_L1_BANKS", std::to_string(num_l1_banks));
-
-    if (is_dram_pow2) {
-        device_kernel_defines.emplace(
-            "LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(num_dram_banks))));
-    } else {
-        device_kernel_defines.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
-    }
-    if (is_l1_pow2) {
-        device_kernel_defines.emplace(
-            "LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(num_l1_banks))));
-    } else {
-        device_kernel_defines.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
-    }
-
-    auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-    CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
-
-    device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
-    device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
-
-    return device_kernel_defines;
-}
-
-uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-
-    // Collect all the parameters that affect the build configuration
-    FNV1a hasher;
-
-    hasher.update(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()));
-    hasher.update(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis()));
-
-    // Hash the number of hardware command queues
-    hasher.update(static_cast<uint32_t>(num_hw_cqs));
-
-    // Hash the harvesting configuration based on whether coordinate virtualization is enabled
-    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
-        // devices with different cores harvested.
-        hasher.update(tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id));
-    }
-
-    hasher.update(MetalContext::instance().rtoptions().get_compile_hash_string());
-
-    return hasher.digest();
-}
-
-std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw) {
-    // Get the dispatch message address for this device
-    uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
-
-    // Prepare the container for build states
-    const auto& hal = MetalContext::instance().hal();
+std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitDeviceConfig& dev_config, bool is_fw) {
+    const auto& hal = *dev_config.hal;
     uint32_t total_num_build_states = 0;
     if (is_fw) {
         for (uint32_t programmable_core = 0; programmable_core < hal.get_programmable_core_type_count();
@@ -149,7 +74,6 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
     std::vector<JitBuildState> build_states;
     build_states.reserve(total_num_build_states);
 
-    // Loop through programmable core types and their processor classes/types.
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
         uint32_t processor_class_count =
@@ -159,7 +83,7 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
                 .core_type = static_cast<HalProgrammableCoreType>(programmable_core),
                 .processor_class = static_cast<HalProcessorClassType>(processor_class),
                 .is_fw = is_fw,
-                .dispatch_message_addr = dispatch_message_addr,
+                .dispatch_message_addr = dev_config.dispatch_message_addr,
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
 
@@ -168,7 +92,7 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
                       : hal.get_processor_types_count(programmable_core, processor_class);
             for (uint32_t build_state_idx = 0; build_state_idx < num_build_states; build_state_idx++) {
                 config.processor_id = build_state_idx;
-                build_states.emplace_back(build_env, config);
+                build_states.emplace_back(build_env, config, hal);
             }
         }
     }
@@ -181,14 +105,17 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
 
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
+
     auto& dev_build_env = device_id_to_build_env_[device_id];
+    auto dev_config = create_jit_device_config(device_id, num_hw_cqs);
+    const auto& rtoptions = MetalContext::instance().rtoptions();
 
-    uint64_t build_key = compute_build_key(device_id, num_hw_cqs);
-    auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
-    const uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
-    dev_build_env.build_env.init(
-        build_key, MetalContext::instance().get_cluster().arch(), max_cbs, device_kernel_defines);
+    init_build_state_indices(*dev_config.hal);
 
+    uint64_t build_key = compute_build_key(dev_config, rtoptions);
+    auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
+
+    dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
     auto precompiled_dir = precompiled::find_precompiled_dir(
         MetalContext::instance().rtoptions().get_root_dir(), dev_build_env.build_env.get_build_key());
     if (precompiled_dir.has_value()) {
@@ -197,8 +124,8 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
         log_info(tt::LogBuildKernels, "Using pre-compiled firmware from: {}", *precompiled_dir);
     }
 
-    dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, true);
-    dev_build_env.kernel_build_states = create_build_state(dev_build_env.build_env, false);
+    dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, dev_config, true);
+    dev_build_env.kernel_build_states = create_build_state(dev_build_env.build_env, dev_config, false);
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {

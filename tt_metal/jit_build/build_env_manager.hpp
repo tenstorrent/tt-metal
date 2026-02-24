@@ -83,6 +83,8 @@ private:
     ProgCoreMapping firmware_build_state_indices_;
     std::mutex lock;
 
+    void init_build_state_indices(const Hal& hal);
+
     BuildIndexAndTypeCount get_kernel_build_index_and_state_count(
         uint32_t programmable_core, uint32_t processor_class) const;
     BuildIndexAndTypeCount get_firmware_build_index_and_state_count(
