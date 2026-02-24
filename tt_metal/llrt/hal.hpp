@@ -331,6 +331,7 @@ private:
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     uint32_t operand_start_stream_{};
     bool has_stream_registers_{};
+    bool noc_is_torus_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
@@ -379,7 +380,7 @@ public:
     tt::ARCH get_arch() const { return arch_; }
 
     // Returns true if the NoC has a torus topology (supports wrap-around)
-    bool get_noc_is_torus() const { return (arch_ == tt::ARCH::WORMHOLE_B0 || arch_ == tt::ARCH::BLACKHOLE); }
+    bool get_noc_is_torus() const { return noc_is_torus_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
     uint32_t get_noc_node_id() const { return noc_node_id_; }
