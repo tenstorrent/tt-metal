@@ -905,6 +905,13 @@ void kernel_main() {
     constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
 
     auto moe_body = [&]() {
+#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+        {
+            constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
+            uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
+            unified_kernels::reconfig_cb_interfaces(cb_config);
+        }
+#endif  // RECONFIG_MOE_CBS && !UCK_CHLKC_MATH
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");

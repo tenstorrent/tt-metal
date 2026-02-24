@@ -413,7 +413,8 @@ def extract_routed_expert_output(
     "use_hardcoded_expert_index",
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
 )
-def test_moe_fused(device, use_hardcoded_expert_index):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
+def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
     device_grid = device.compute_with_storage_grid_size()
@@ -496,9 +497,10 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed")
+    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # Read back routed expert results
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
@@ -562,7 +564,8 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
-def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
+def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -719,6 +722,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
         # ReduceToOne parameters
         reduce_intermediate_tensors=intermediate_tensors,
         reduce_output_tensor=reduce_output_tensor,
@@ -726,7 +730,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed")
+    logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
     # Read gate scores/indices from device (needed for per-device golden)
@@ -809,7 +813,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 # ============================================================================
 # Test: Fused MoE with enable_routing=False (dense MLP mode)
 # ============================================================================
-def test_mlp(device):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
+def test_mlp(device, reconfig_moe_cbs):
     """Test MoeOp with enable_routing=False: same as MLP, no routing logic."""
 
     device_grid = device.compute_with_storage_grid_size()
@@ -886,9 +891,10 @@ def test_mlp(device):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"MoeOp no-routing: {num_iterations} iterations completed")
+    logger.info(f"MoeOp no-routing: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Read back and validate ──
     output_final_torch = ttnn.to_torch(ttnn_result_final)
@@ -931,7 +937,8 @@ def test_mlp(device):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-def test_mlp_with_reduce(bh_2d_mesh_device):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
+def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
 
@@ -1081,13 +1088,14 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
         reduce_intermediate_tensors=intermediate_tensors,
         reduce_output_tensor=reduce_output_tensor,
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed")
+    logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
     # Compute per-device golden with per-device TP shards of shared expert weights
