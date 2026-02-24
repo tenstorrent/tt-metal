@@ -171,7 +171,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     tt::DataFormat scaler_cb_data_format =
-        (cb_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        (in_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
