@@ -1841,10 +1841,10 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
 
     # Payload contracts
     token_page_size_bytes = 64
-    token_fifo_size = 512
+    token_fifo_size = 1024
     activation_dim = 7168
     activation_page_size_bytes = activation_dim * 2  # bf16
-    activation_fifo_size = activation_page_size_bytes * 2
+    activation_fifo_size = activation_page_size_bytes * 4
 
     # Stage-local constants used by LMHead stage (P2)
     M = 1
@@ -1856,7 +1856,7 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
     out_tile = ttnn.Tile([1, 32])
-    pipeline_core_coord = ttnn.CoreCoord(0, 0)
+    pipeline_core_coord = ttnn.CoreCoord(11, 0)
     lmhead_input_core = ttnn.CoreCoord(10, 9)
     argmax_final_core = ttnn.CoreCoord(0, 0)
 
@@ -1901,8 +1901,12 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
             )
         elif my_mesh_id == 1:
             # P2: receive activation, run LMHead+Sampling, send token downstream.
-            p2_entry_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, pipeline_core_coord)
-            p2_exit_upstream = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, argmax_final_core)
+            p2_entry_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, lmhead_input_core)
+            p2_exit_upstream = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, argmax_final_core)
+
+            print(f"p2_entry_core: {p2_entry_core}")
+            print(f"p2_exit_upstream: {p2_exit_upstream}")
+
             logger.info(f"Creating PipelineBlock for P{my_mesh_id}")
             pipeline_block = PipelineBlock(
                 mesh_device,
@@ -1925,9 +1929,6 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
                 upstream_d2d_socket_page_size=token_page_size_bytes,
                 downstream_d2d_socket_page_size=token_page_size_bytes,
             )
-
-        logger.info(f"Running PipelineBlock for P{my_mesh_id}")
-        pipeline_block.run()
 
         if my_mesh_id == 1:
             mesh_shape = mesh_device.shape
@@ -2044,29 +2045,65 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
                 memory_config=output_index_mem_config,
                 mesh_mapper=mesh_mapper,
             )
-
+            winner_page_bytes = 16
+            scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes) // 4)
+            scratch_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(argmax_final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            scratch_buffer = ttnn.from_torch(
+                torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=scratch_mem_config,
+                mesh_mapper=mesh_mapper,
+            )
             lmhead_input_socket = pipeline_block.get_downstream_socket()
             lmhead_output_socket = pipeline_block.get_upstream_socket()
+
             assert len(lmhead_input_socket.get_active_cores()) == 1
             assert len(lmhead_output_socket.get_active_cores()) == 1
 
+            device_grid_size = mesh_device.compute_with_storage_grid_size()
+            worker_crs = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+            )
+
+            out_ready_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 0)
+            barrier_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 0)
+            secondary_sync_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 0)
+            global_semaphore = ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0)
+            global_stage2_semaphore = ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0)
+
+        logger.info(f"Running PipelineBlock for P{my_mesh_id}")
+        pipeline_block.run()
+
+        if my_mesh_id == 1:
             logger.info(f"Running LMHeadSampling for P{my_mesh_id}")
+            print("LAUNCHING LM HEAD OP")
             LMHeadSampling.op(
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
                 ttnn_gamma,
                 ttnn_b,
                 ttnn_scores,
-                sender_coord=sender_coord,
+                sender_coord=pipeline_config[my_mesh_id].entry_node_coord,
                 indices_tensor=ttnn_indices,
                 output_index_tensor=ttnn_output_index,
                 argmax_final_core_coord=argmax_final_core,
-                argmax_final_mesh_coord=sender_coord,
+                argmax_final_mesh_coord=pipeline_config[my_mesh_id].exit_node_coord,
+                semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+                global_semaphore=global_semaphore,
+                global_stage2_semaphore=global_stage2_semaphore,
+                fabric_scratch_tensor=scratch_buffer,
                 fp32_dest_acc_en=use_fp32,
-                skip_ccl=True,
+                skip_ccl=False,
                 socket_input=lmhead_input_socket,
                 socket_output=lmhead_output_socket,
             )
+            print("LM HEAD OP LAUNCH COMPLETE")
 
         if my_mesh_id == 0:
             torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
@@ -2088,7 +2125,10 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
                 got, torch_expected_idx
             ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
 
+        logger.info(f"Barrier for P{my_mesh_id}")
         ttnn.distributed_context_barrier()
+        logger.info(f"Barrier completed for P{my_mesh_id}")
+
     finally:
         if pipeline_block is not None:
             pipeline_block.terminate()

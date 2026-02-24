@@ -179,11 +179,18 @@ void kernel_main() {
             sender_socket.downstream_fifo_addr);
     }
 
+    // DPRINT  << "H2D Event Loop Started" << ENDL();
+
+    // DPRINT  << "Sender Socket Page Size: " << embedding_page_size << ENDL();
+    // DPRINT  << "Receiver Socket Page Size: " << token_page_size << ENDL();
+
     while (true) {
         // Wait for pages in H2D socket
+        // DPRINT  << "Waiting for pages in H2D socket" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        // DPRINT  << "Pages available in H2D socket" << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -202,9 +209,14 @@ void kernel_main() {
         // Embedding CB is a scratch pad for now. We only read into the first slot of the CB.
         // TODO: Setup separate reader to pipeline reads.
         uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
+
+        // DPRINT  << "Got token ID: " << *token_id_ptr << ENDL();
+
         uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
         noc_async_read_barrier();
+
+        // DPRINT  << "Read embedding for token ID: " << *token_id_ptr << ENDL();
 
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
@@ -217,8 +229,9 @@ void kernel_main() {
         } else {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
-
+            // DPRINT  << "H2D Reserve Pages Downstream" << ENDL();
             socket_reserve_pages(sender_socket, 1);
+            // DPRINT  << "H2D Reserve Pages Downstream Completed" << ENDL();
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
@@ -228,10 +241,15 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 l1_read_addr,
                 dst_addr);
+            // DPRINT  << "H2D Send Pages Over Socket Completed" << ENDL();
         }
+        // DPRINT  << "H2D Pop Pages Receiver Socket" << ENDL();
         socket_pop_pages(receiver_socket, 1);
+        // DPRINT  << "H2D Pop Pages Receiver Socket Completed" << ENDL();
         // Notify Host that pages were popped from H2D socket
+        // DPRINT  << "H2D Notify Sender" << ENDL();
         socket_notify_sender(receiver_socket);
+        // DPRINT  << "H2D Notify Sender Completed" << ENDL();
         invalidate_l1_cache();
     }
 

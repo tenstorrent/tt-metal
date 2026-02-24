@@ -171,6 +171,8 @@ class LMHeadSampling:
             Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
+        # print("Checkpoint 1")
+
         enable_argmax = True
         socket_mode_none = 0
         socket_mode_d2h = 1
@@ -178,6 +180,8 @@ class LMHeadSampling:
         socket_page_size_bytes = 64
         input_socket_mode_none = 0
         input_socket_mode_d2d = 2
+
+        # print("Checkpoint 2")
         if socket_input is None:
             input_socket_mode_selected = input_socket_mode_none
         elif isinstance(socket_input, ttnn.MeshSocket):
@@ -187,6 +191,8 @@ class LMHeadSampling:
                 f"Unsupported socket_input type for lm_head_sampling: {type(socket_input)}. "
                 "Expected ttnn.MeshSocket."
             )
+        # print("Checkpoint 3")
+
         if input_socket_mode_selected == 1:
             raise AssertionError("lm_head_sampling input socket mode=1 is invalid (reserved for output d2h mode)")
         enable_socket_input = socket_input is not None
@@ -201,9 +207,12 @@ class LMHeadSampling:
                 f"Unsupported socket_output type for lm_head_sampling: {type(socket_output)}. "
                 "Expected ttnn.D2HSocket or ttnn.MeshSocket."
             )
+
+        # print("Checkpoint 4")
         enable_socket_output = socket_output is not None
         if indices_tensor is None or output_index_tensor is None:
             raise ValueError("indices_tensor and output_index_tensor are required for fused LM-head + sampling")
+        # print("Checkpoint 5")
 
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
@@ -229,7 +238,7 @@ class LMHeadSampling:
         # all clusters. Callers can still override explicitly if needed.
         if not skip_ccl and mesh_cols > 1 and secondary_cluster_axis is None:
             secondary_cluster_axis = 1
-
+        # print("Checkpoint 6")
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
 
@@ -244,7 +253,7 @@ class LMHeadSampling:
         scratch_tensors_per_device = (
             ttnn.get_device_tensors(fabric_scratch_tensor) if (enable_argmax and not skip_ccl) else None
         )
-
+        # print("Checkpoint 7")
         if enable_argmax and not skip_ccl:
             if global_semaphore is None or global_stage2_semaphore is None or fabric_scratch_tensor is None:
                 raise ValueError(
@@ -256,7 +265,7 @@ class LMHeadSampling:
                 )
             if argmax_final_mesh_coord is None:
                 raise ValueError("argmax_final_mesh_coord is required for mesh argmax")
-
+        # print("Checkpoint 8")
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
         barrier_sem_addr = 0
@@ -268,14 +277,14 @@ class LMHeadSampling:
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
-
+        # print("Checkpoint 9")
         global_sem_addr = (
             int(ttnn.get_global_semaphore_address(global_semaphore)) if (enable_argmax and not skip_ccl) else 0
         )
         global_stage2_sem_addr = (
             int(ttnn.get_global_semaphore_address(global_stage2_semaphore)) if (enable_argmax and not skip_ccl) else 0
         )
-
+        # print("Checkpoint 10")
         # Calculate packet size and page info for CCL broadcast
         packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
 
@@ -290,7 +299,7 @@ class LMHeadSampling:
         numel = int(input_shape[0]) * int(input_shape[1])
         scalar_packed = float_to_uint32(1.0 / math.sqrt(float(numel)))
         epsilon_packed = float_to_uint32(epsilon)
-
+        # print("Checkpoint 11")
         # CCL broadcast page info
         bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
         bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
@@ -298,7 +307,7 @@ class LMHeadSampling:
 
         # Matmul shape info from input and vocab tensors
         num_tiles_k = input_shape[1] // in0_tile.tile_shape[1]
-
+        # print("Checkpoint 12")
         # RMSNorm in this path must match broadcast_rms tile/page interpretation.
         full_32x32_tile = ttnn.Tile((32, 32))
         half_16x32_tile = ttnn.Tile((16, 32))
@@ -307,21 +316,21 @@ class LMHeadSampling:
         rms_tile_height, rms_tile_width = rms_interpreted_tile.tile_shape
         rms_tile_size = rms_interpreted_tile.get_tile_size(data_format)
         rms_num_tiles = (input_shape[0] * input_shape[1]) // (rms_tile_height * rms_tile_width)
-
+        # print("Checkpoint 13")
         # Get output tile info
         output_tensor_sample = output_tensors_per_device[0]
         out_tile = output_tensor_sample.get_tile()
-
+        # print("Checkpoint 14")
         # Get vocab weights info (per-core output width)
         vocab_tensor_sample = vocab_tensors_per_device[0]
         weights_shard_spec = vocab_tensor_sample.memory_config().shard_spec
         n_per_core = weights_shard_spec.shape[1]
         out_w_per_core = n_per_core // out_tile.tile_shape[1]
-
+        # print("Checkpoint 15")
         # Input tile size for mcast data
         input_tile_size = in0_tile.get_tile_size(data_format)
         mcast_data_size_bytes = num_tiles_k * input_tile_size
-
+        # print("Checkpoint 16")
         # ====================================================================
         # CB indices
         # ====================================================================
@@ -346,12 +355,13 @@ class LMHeadSampling:
         mcast_data_receiver_semaphore_id = 1
         argmax_receiver_semaphore_id = 2
         argmax_local_ready_semaphore_id = 3
-
+        # print("Checkpoint 17")
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-
+        # print("Checkpoint 18")
         for row in range(mesh_rows):
             for col in range(mesh_cols):
+                # print(f"Checkpoint 19 {row} {col}")
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
@@ -365,7 +375,7 @@ class LMHeadSampling:
                         secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
                     )
                     is_receiver = not is_sender and not is_secondary_sender
-
+                # print(f"Checkpoint 20 {row} {col} {is_sender} {is_secondary_sender} {is_receiver}")
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
@@ -385,7 +395,7 @@ class LMHeadSampling:
                 input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
                 shard_grid_start = input_shard_grid.bounding_box().start
                 worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
-
+                # print(f"Checkpoint 21 {worker_core}")
                 # Get physical core for NOC addressing
                 data_core_physical = device.worker_core_from_logical_core(worker_core)
                 core_noc_x = data_core_physical.x
@@ -407,7 +417,7 @@ class LMHeadSampling:
                 range_hops_forward = num_targets_forward
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
-
+                # print(f"Checkpoint 22 {start_distance_forward} {range_hops_forward} {start_distance_backward} {range_hops_backward}")
                 # ================================================================
                 # Core grid configuration (per-device)
                 # ================================================================
@@ -452,7 +462,7 @@ class LMHeadSampling:
                         max(matmul_bbox.end.y, mcast_sender_core.y),
                     ),
                 )
-
+                # print(f"Checkpoint 23 {mcast_grid}")
                 mcast_grid_set = ttnn.CoreRangeSet([mcast_grid])
                 num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
@@ -464,7 +474,7 @@ class LMHeadSampling:
                             continue
                         mcast_receiver_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(c, r), ttnn.CoreCoord(c, r)))
                 mcast_receiver_grid = ttnn.CoreRangeSet(mcast_receiver_ranges)
-
+                # print(f"Checkpoint 24 {mcast_receiver_grid}")
                 # All cores = mcast grid (sender is already included)
                 all_cores = mcast_grid_set
 
@@ -484,7 +494,7 @@ class LMHeadSampling:
                         raise ValueError(
                             "output_index_tensor must be singleton-prefix with last dim 1 (per-device logical shape (1,1))"
                         )
-
+                    # print(f"Checkpoint 25")
                     output_index_core = output_index_tensor_device.memory_config().shard_spec.grid.ranges()[0].start
                     argmax_final_core = (
                         output_index_core if argmax_final_core_coord is None else argmax_final_core_coord
@@ -519,8 +529,9 @@ class LMHeadSampling:
                     sender_link_idx = 0
                     dest_coord = ttnn.MeshCoordinate(row, col)
                     per_core_brisc_runtime_args = []
-
+                    # print(f"Checkpoint 26")
                     if not skip_ccl:
+                        # print(f"Checkpoint 27")
                         target_row = int(argmax_final_mesh_coord[0])
                         target_col = int(argmax_final_mesh_coord[1])
                         if not (0 <= target_row < mesh_rows and 0 <= target_col < mesh_cols):
@@ -561,8 +572,9 @@ class LMHeadSampling:
                         argmax_mesh_local_send_slot_offset = (
                             argmax_stage1_local_slot_offset if argmax_stage1_sender else argmax_stage2_local_slot_offset
                         )
-
+                        # print(f"Checkpoint 28")
                         if is_argmax_mesh_sender_core:
+                            # print(f"Checkpoint 29")
                             if argmax_stage1_sender:
                                 dest_coord = ttnn.MeshCoordinate(target_row, col)
                                 send_slot_offset = argmax_stage1_slot_base_offset + row * argmax_winner_page_bytes
@@ -588,7 +600,14 @@ class LMHeadSampling:
                                     ],
                                 )
                             )
+                            # print(f"Checkpoint 30")
                     if emit_socket_on_this_device:
+                        # print(f"Checkpoint 31")
+                        # print(f"Socket Core Device Coord: {socket_core.device_coord}")
+                        # print(f"Socket Core Core Coord: {socket_core.core_coord}")
+                        # print(f"Argmax Final Core: {argmax_final_core}")
+                        # print(f"Row: {row}")
+                        # print(f"Col: {col}")
                         if (
                             socket_core.device_coord != ttnn.MeshCoordinate(row, col)
                             or socket_core.core_coord.x != argmax_final_core.x
@@ -597,8 +616,9 @@ class LMHeadSampling:
                             raise ValueError(
                                 "socket output active core must match argmax final core and emitting mesh device for lm_head_sampling"
                             )
+                        # print(f"Checkpoint 32")
                     argmax_socket_mode = socket_mode_selected if emit_socket_on_this_device else socket_mode_none
-
+                    # print(f"Checkpoint 33")
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
 
@@ -606,6 +626,7 @@ class LMHeadSampling:
                 # - CCL path: packet CB
                 # - skip_ccl + socket path: rmsnorm input CB
                 # - otherwise BRISC broadcast path is idle
+                # print(f"Checkpoint 34")
                 if not skip_ccl:
                     brisc_bcast_cb = bcast_pkt_cb
                     brisc_bcast_num_pages_to_read = bcast_num_pages
@@ -621,7 +642,7 @@ class LMHeadSampling:
                 mcast_dest_noc_start = device.worker_core_from_logical_core(mcast_grid.start)
                 mcast_dest_noc_end = device.worker_core_from_logical_core(mcast_grid.end)
                 bcast_num_pages_to_read = bcast_num_pages
-
+                # print(f"Checkpoint 35")
                 # ================================================================
                 # NCRISC compile-time args
                 # ================================================================
@@ -738,7 +759,7 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                 ]
-
+                # print(f"Checkpoint 36")
                 # ================================================================
                 # CCL Broadcast common runtime args
                 # ================================================================
@@ -824,7 +845,7 @@ class LMHeadSampling:
                         packet_size_bytes if recv_socket_on_this_device else 0,
                         1 if recv_socket_on_this_device else 0,
                     ]
-
+                # print(f"Checkpoint 37")
                 # ================================================================
                 # Circular buffer descriptors
                 # ================================================================
@@ -974,7 +995,7 @@ class LMHeadSampling:
                             ),
                         ]
                     )
-
+                # print(f"Checkpoint 38")
                 # ================================================================
                 # Unified kernel descriptor
                 # ================================================================
@@ -1060,7 +1081,7 @@ class LMHeadSampling:
                     ),
                     defines=[("ENABLE_SOCKET_READER", "1")] if enable_socket_input else [],
                 )
-
+                # print(f"Checkpoint 39")
                 # ================================================================
                 # Program descriptor
                 # ================================================================
@@ -1163,12 +1184,12 @@ class LMHeadSampling:
                     )
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-
+        print(f"Checkpoint 40")
         # Execute generic op
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-
+        print(f"Checkpoint 41")
         return result
