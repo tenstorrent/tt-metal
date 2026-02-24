@@ -548,17 +548,13 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings) const {
+    const string& out_dir, const JitBuildSettings* settings, bool state_changed) const {
     // ZoneScoped;
     TT_FATAL(
         this->srcs_.size() <= kMaxBuildBitset,
         "Number of source files ({}) exceeds kMaxBuildBitset ({})",
         this->srcs_.size(),
         kMaxBuildBitset);
-
-    // Check if build parameters (flags, defines, includes populated by HAL, etc.) have changed.
-    // If so, all objects in this directory must be recompiled regardless of file-level dependency status.
-    bool state_changed = !build_state_matches(out_dir);
 
     std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
@@ -581,8 +577,7 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
 bool JitBuildState::need_link(const string& out_dir) const {
     std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !fs::exists(elf_path) || !build_state_matches(out_dir) ||
-           !jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
@@ -683,7 +678,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     const size_t num_objs = this->objs_.size();
 
     fs::create_directories(out_dir);
-    auto compiled = compile(out_dir, settings);
+
+    // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
+    // have changed, force full recompilation and relinking.
+    bool state_changed = !build_state_matches(out_dir);
+
+    auto compiled = compile(out_dir, settings, state_changed);
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -710,7 +710,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     for (const auto* target : link_targets) {
         string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
         fs::create_directories(target_out_dir);
-        if (compiled.any() || target->need_link(target_out_dir)) {
+        if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
             target->link(target_out_dir, settings, link_objs);
             if (target->is_fw_) {

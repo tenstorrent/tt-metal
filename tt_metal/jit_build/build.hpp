@@ -141,7 +141,8 @@ protected:
     void write_build_state_hash(const std::string& out_dir) const;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
-    std::bitset<kMaxBuildBitset> compile(const std::string& out_dir, const JitBuildSettings* settings) const;
+    std::bitset<kMaxBuildBitset> compile(
+        const std::string& out_dir, const JitBuildSettings* settings, bool state_changed) const;
     void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
