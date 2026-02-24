@@ -121,6 +121,16 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                     first_shard_shape.rank(),
                     curr_shard_shape.rank());
 
+                const tt::tt_metal::Shape& first_logical_shape = in_ref.logical_shape();
+                const tt::tt_metal::Shape& first_padded_shape = in_ref.padded_shape();
+                // TODO: should be rewritten later - but now it is for cool, rounded calculations
+                TT_FATAL(
+                    first_logical_shape == first_padded_shape,
+                    "ND Sharded tensors must have shard logical and padded shapes the same. "
+                    "First tensor shard rank: {}, Current tensor shard rank: {}",
+                    first_logical_shape,
+                    first_padded_shape);
+
                 // verify dimensions
                 for (uint32_t dim_idx = 0; dim_idx < first_shard_shape.rank(); ++dim_idx) {
                     if (dim_idx == args.dim) {

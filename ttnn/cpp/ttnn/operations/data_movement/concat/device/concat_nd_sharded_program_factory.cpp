@@ -70,6 +70,28 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         input_page_sizes[i] = buf->aligned_page_size();
     }
 
+    // some debug information about output tensor
+    {
+        const Buffer* out_buf = output.buffer();
+        const tt::tt_metal::Shape& output_logical_shape = output.logical_shape();
+        std::cout << "[concat_nd_sharded] Output tensor: total pages = " << out_buf->num_pages();
+        std::cout << ", logical_shape = " << output_logical_shape << ", padded_shape = " << output.padded_shape();
+        std::cout << ", rank = " << output_logical_shape.rank() << "\n";
+        // tt::stl::SmallVector<size_t> strides = in0.compute_strides(in0shape);
+        //  for (size_t sz : strides) {
+        //      " stride: " << sz;
+        //  }
+        //  std::cout << "\n";
+
+        const NdShardSpec& nd_spec = *output.nd_shard_spec();
+        std::cout << ", nd_shard_spec: shard_shape = " << nd_spec.shard_shape
+                  << ", grid num_cores = " << nd_spec.grid.num_cores();
+        std::cout << "\n";
+    }
+    // TODO: calculate strides for first input tensor - it will help for padded tensors
+    {
+    }
+
     // Host-allocated L1 scratch buffer (one page, max page size across all tensors) for copy_tensor_data.
     const uint32_t scratch_page_size =
         std::max(output_page_size, *std::max_element(input_page_sizes.begin(), input_page_sizes.end()));
