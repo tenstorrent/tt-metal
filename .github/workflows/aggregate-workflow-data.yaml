@@ -138,8 +138,8 @@ jobs:
     needs: fetch-data
     runs-on: ubuntu-latest
     outputs:
-      failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
-      regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
+      failed_workflows: ${{ steps.force_regression.outputs.failed_workflows }}
+      regressed_workflows: ${{ steps.force_regression.outputs.regressed_workflows }}
       alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
     steps:
       - uses: actions/checkout@v4
@@ -247,6 +247,52 @@ jobs:
           path: ${{ steps.analyze.outputs.status_changes_path }}
           retention-days: 1
 
+      # --- TESTING: Inject t3k_ttnn_tests as a forced regression so the parent
+      #     Slack message includes it (with an owner) for JOB OWNER testing ---
+      - name: Force test regression into outputs
+        id: force_regression
+        shell: bash
+        env:
+          ORIG_REGRESSIONS: ${{ steps.analyze.outputs.regressed_workflows }}
+          ORIG_FAILURES: ${{ steps.analyze.outputs.failed_workflows }}
+        run: |
+          set -euo pipefail
+
+          FORCED_ENTRY=$(jq -n '{
+            name: "t3000-unit-tests",
+            workflow_path: ".github/workflows/t3000-unit-tests.yaml",
+            workflow_url: "https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-unit-tests.yaml",
+            failing_jobs: [{
+              name: "t3k_ttnn_tests",
+              url: "",
+              owners: [{name: "metalinfra", id: "S0985AN7TC5"}]
+            }]
+          }')
+
+          if [ -z "$ORIG_REGRESSIONS" ] || [ "$ORIG_REGRESSIONS" = "[]" ] || [ "$ORIG_REGRESSIONS" = "null" ]; then
+            MODIFIED_REG="[$FORCED_ENTRY]"
+          else
+            MODIFIED_REG=$(echo "$ORIG_REGRESSIONS" | jq --argjson entry "$FORCED_ENTRY" '. + [$entry]')
+          fi
+
+          echo "Injected forced regression. Total regressions: $(echo "$MODIFIED_REG" | jq 'length')"
+
+          # Also ensure failed_workflows is non-empty so handle-failures runs
+          if [ -z "$ORIG_FAILURES" ] || [ "$ORIG_FAILURES" = "[]" ] || [ "$ORIG_FAILURES" = "null" ]; then
+            MODIFIED_FAIL="[$FORCED_ENTRY]"
+          else
+            MODIFIED_FAIL="$ORIG_FAILURES"
+          fi
+
+          {
+            echo "regressed_workflows<<FORCE_EOF"
+            echo "$MODIFIED_REG"
+            echo "FORCE_EOF"
+            echo "failed_workflows<<FORCE_EOF2"
+            echo "$MODIFIED_FAIL"
+            echo "FORCE_EOF2"
+          } >> "$GITHUB_OUTPUT"
+      # --- END TESTING ---
 
   handle-failures:
     needs: analyze-data
