@@ -6,7 +6,7 @@
 
 #include <optional>
 #include <cstdint>
-#include <string_view>
+#include <string>
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -25,29 +25,47 @@ class Hal;
 class MetalContext;
 class DeviceManager;
 
-class ContextDescriptor {
+class MetalliumObjectDescriptor {
+public:
+    MetalliumObjectDescriptor() = default;
+
+    explicit MetalliumObjectDescriptor(const std::string& mock_cluster_desc_path);
+
+    explicit MetalliumObjectDescriptor(std::optional<std::string> mock_cluster_desc_path);
+
+    bool is_mock_device() const { return mock_cluster_desc_path_.has_value(); }
+    const std::string& mock_cluster_desc_path() const { return *mock_cluster_desc_path_; }
+
+protected:
+    std::optional<std::string> mock_cluster_desc_path_ = std::nullopt;
+};
+
+class ContextDescriptor : public MetalliumObjectDescriptor {
 public:
     ContextDescriptor(
-        tt::tt_fabric::FabricConfig fabric_config,
-        tt::tt_fabric::FabricReliabilityMode reliability_mode,
-        tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
-        tt::tt_fabric::FabricUDMMode fabric_udm_mode,
-        tt::tt_fabric::FabricManagerMode fabric_manager,
-        tt::tt_fabric::FabricRouterConfig router_config = tt::tt_fabric::FabricRouterConfig{},
         int num_cqs = 1,
         int l1_small_size = 0,
         int trace_region_size = 0,
         int worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        std::string_view mock_cluster_desc_path = "") :
+        const std::string& mock_cluster_desc_path = "",
+        tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        tt::tt_fabric::FabricUDMMode fabric_udm_mode = tt::tt_fabric::FabricUDMMode::DISABLED,
+        tt::tt_fabric::FabricManagerMode fabric_manager = tt::tt_fabric::FabricManagerMode::DEFAULT,
+        tt::tt_fabric::FabricRouterConfig router_config = tt::tt_fabric::FabricRouterConfig{}) :
+        MetalliumObjectDescriptor(
+            mock_cluster_desc_path.empty() ? std::optional<std::string>(std::nullopt)
+                                           : std::optional<std::string>(mock_cluster_desc_path)),
         num_cqs_(num_cqs),
         l1_small_size_(l1_small_size),
         trace_region_size_(trace_region_size),
         worker_l1_size_(worker_l1_size),
         dispatch_core_config_(dispatch_core_config),
         l1_bank_remap_(l1_bank_remap),
-        mock_cluster_desc_path_(mock_cluster_desc_path),
         fabric_config_(fabric_config),
         reliability_mode_(reliability_mode),
         fabric_tensix_config_(fabric_tensix_config),
@@ -64,8 +82,6 @@ public:
     int trace_region_size() const { return trace_region_size_; }
     int worker_l1_size() const { return worker_l1_size_; }
     const DispatchCoreConfig& dispatch_core_config() const { return dispatch_core_config_; }
-    bool is_mock_device() const { return !mock_cluster_desc_path_.empty(); }
-    std::string_view mock_cluster_desc_path() const { return mock_cluster_desc_path_; }
     const tt::stl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
 
     tt::tt_fabric::FabricConfig fabric_config() const { return fabric_config_; }
@@ -76,9 +92,10 @@ public:
     tt::tt_fabric::FabricManagerMode fabric_manager() const { return fabric_manager_; }
     const tt::tt_fabric::FabricRouterConfig& router_config() const { return router_config_; }
 
-private:
+protected:
     friend class MetalContext;
     friend class DeviceManager;
+    friend class MetalliumObject;
 
     // Intended for internal use by MetalContext to pass in HAL/Cluster/RuntimeOptions dependencies for init
     ContextDescriptor(
@@ -97,7 +114,10 @@ private:
         int worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        std::string_view mock_cluster_desc_path = "") :
+        const std::string& mock_cluster_desc_path = "") :
+        MetalliumObjectDescriptor(
+            mock_cluster_desc_path.empty() ? std::optional<std::string>(std::nullopt)
+                                           : std::optional<std::string>(mock_cluster_desc_path)),
         hal_(&hal),
         cluster_(&cluster),
         rtoptions_(&rtoptions),
@@ -107,7 +127,6 @@ private:
         worker_l1_size_(worker_l1_size),
         dispatch_core_config_(dispatch_core_config),
         l1_bank_remap_(l1_bank_remap),
-        mock_cluster_desc_path_(mock_cluster_desc_path),
         fabric_config_(fabric_config),
         reliability_mode_(reliability_mode),
         fabric_tensix_config_(fabric_tensix_config),
@@ -129,7 +148,6 @@ private:
     int worker_l1_size_ = 0;
     DispatchCoreConfig dispatch_core_config_;
     tt::stl::Span<const std::uint32_t> l1_bank_remap_;
-    std::string_view mock_cluster_desc_path_;
 
     // Fabric
     tt::tt_fabric::FabricConfig fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
@@ -139,7 +157,7 @@ private:
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt::tt_fabric::FabricTensixConfig::DISABLED;
     tt::tt_fabric::FabricUDMMode fabric_udm_mode_ = tt::tt_fabric::FabricUDMMode::DISABLED;
     tt::tt_fabric::FabricManagerMode fabric_manager_ = tt::tt_fabric::FabricManagerMode::DEFAULT;
-    tt::tt_fabric::FabricRouterConfig router_config_;
+    tt::tt_fabric::FabricRouterConfig router_config_ = tt::tt_fabric::FabricRouterConfig{};
 };
 
 }  // namespace tt::tt_metal

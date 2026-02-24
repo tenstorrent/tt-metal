@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/mock_device.hpp>
 
+#include "mock_device_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <unordered_map>
@@ -56,11 +57,7 @@ bool is_mock_mode_registered() {
     return g_registered_mock_config.has_value();
 }
 
-std::optional<std::string> get_mock_cluster_desc() {
-    if (!g_registered_mock_config.has_value()) {
-        return std::nullopt;
-    }
-
+const std::unordered_map<tt::ARCH, std::unordered_map<uint32_t, std::string>>& get_mock_cluster_config_map() {
     static const std::unordered_map<tt::ARCH, std::unordered_map<uint32_t, std::string>> cluster_configs = {
         {tt::ARCH::WORMHOLE_B0,
          {{1, "wormhole_N150.yaml"},
@@ -69,20 +66,35 @@ std::optional<std::string> get_mock_cluster_desc() {
           {8, "t3k_cluster_desc.yaml"},
           {32, "tg_cluster_desc.yaml"}}},
         {tt::ARCH::BLACKHOLE, {{1, "blackhole_P150.yaml"}, {2, "blackhole_P300_both_mmio.yaml"}}}};
+    return cluster_configs;
+}
 
-    const auto& config = *g_registered_mock_config;
-    auto arch_it = cluster_configs.find(config.arch);
+std::optional<std::string> get_mock_cluster_desc_for_config(tt::ARCH arch, uint32_t num_chips) {
+    const auto& cluster_configs = get_mock_cluster_config_map();
+    auto arch_it = cluster_configs.find(arch);
     if (arch_it != cluster_configs.end()) {
-        auto chip_it = arch_it->second.find(config.num_chips);
+        auto chip_it = arch_it->second.find(num_chips);
         if (chip_it != arch_it->second.end()) {
             return std::string(chip_it->second);
         }
     }
+    return std::nullopt;
+}
 
-    TT_THROW(
-        "Unsupported mock device configuration: arch={}, num_chips={}",
-        static_cast<int>(config.arch),
-        config.num_chips);
+std::optional<std::string> get_mock_cluster_desc() {
+    if (!g_registered_mock_config.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto& config = *g_registered_mock_config;
+    auto path = get_mock_cluster_desc_for_config(config.arch, config.num_chips);
+    if (!path.has_value()) {
+        TT_THROW(
+            "Unsupported mock device configuration: arch={}, num_chips={}",
+            static_cast<int>(config.arch),
+            config.num_chips);
+    }
+    return path;
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -4,13 +4,15 @@
 
 #pragma once
 
+#include <tt_stl/indestructible.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
-#include "experimental/fabric/routing_table_generator.hpp"
-#include "llrt/hal/generated/dev_msgs.hpp"
+#include "tt_metal/impl/context/context_descriptor.hpp"
+#include "tt_metal/impl/context/metallium_object.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
@@ -210,9 +212,9 @@ private:
     // Mutex to protect reinitialization operations (switching between mock and real hardware)
     std::mutex reinitialization_mutex_;
 
-    llrt::RunTimeOptions rtoptions_;
-    std::unique_ptr<Cluster> cluster_;
-    std::unique_ptr<Hal> hal_;
+    std::shared_ptr<MetalliumObjectDescriptor> query_descriptor_;
+    tt::tt_metal::MetalliumObject query_;
+
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;
