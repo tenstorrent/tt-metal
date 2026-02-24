@@ -1840,7 +1840,7 @@ void sdpa_inner_loop_step(
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-        DeviceZoneScopedN("Softmax(Q@KT)");
+        // DeviceZoneScopedN("Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
         kt_index_offset = 0;
 
@@ -1852,7 +1852,7 @@ void sdpa_inner_loop_step(
             }
 
             {
-                DeviceZoneScopedN("Q@KT MM+Pack");
+                // DeviceZoneScopedN("Q@KT MM+Pack");
                 blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                     cb_q_in,
                     cb_kt_in,
@@ -1878,7 +1878,7 @@ void sdpa_inner_loop_step(
 
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
-            DeviceZoneScopedN("Reduce max");
+            // DeviceZoneScopedN("Reduce max");
             cb_reserve_back(cur_max, sbh);
             reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh>(
                 cb_qkt_im,
@@ -1923,7 +1923,7 @@ void sdpa_inner_loop_step(
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
-            DeviceZoneScopedN("Softmax(Q@KT)@V");
+            // DeviceZoneScopedN("Softmax(Q@KT)@V");
             static_assert(
                 kt_num_subblocks >= 1 && kt_num_subblocks <= 4,
                 "kt_num_subblocks must be 1-4 (sbh=1: Sk=8/16, sbh=2: Sk=4/8/16)");
@@ -1947,7 +1947,7 @@ void sdpa_inner_loop_step(
                     {
                         uint32_t v_index_offset = 0;
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            DeviceZoneScopedN("QKT@V MM+Pack");
+                            // DeviceZoneScopedN("QKT@V MM+Pack");
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -1976,7 +1976,7 @@ void sdpa_inner_loop_step(
                 {
                     uint32_t v_index_offset = 0;
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        DeviceZoneScopedN("QKT@V MM+Pack");
+                        // DeviceZoneScopedN("QKT@V MM+Pack");
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
@@ -1995,7 +1995,7 @@ void sdpa_inner_loop_step(
 
         // Per-row normalization lambda
         auto normalize_row = [&](uint32_t w_row, uint32_t& pushed) {
-            DeviceZoneScopedN("ROW_NORM");
+            // DeviceZoneScopedN("ROW_NORM");
             cb_push_back(cur_sum, sbh);
             cb_push_back(cur_out, sbh * vDHt);
             normalize_row_streaming<sbh, vDHt>(cur_sum, cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
@@ -2005,11 +2005,11 @@ void sdpa_inner_loop_step(
         // SALAD correction + optional normalization lambda
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
             {
-                DeviceZoneScopedN("S_SUM_CORR");
+                // DeviceZoneScopedN("S_SUM_CORR");
                 mul_bcast_cols_l1_acc<sbh>(prev_sum, cb_exp_max_diff, cur_sum, salad_row, w_salad);
             }
             {
-                DeviceZoneScopedN("S_OUT_CORR");
+                // DeviceZoneScopedN("S_OUT_CORR");
                 mul_block_bcast_cols_acc<sbh, vDHt>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
             }
             if (last_iter) {
@@ -2019,7 +2019,7 @@ void sdpa_inner_loop_step(
 
         // q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur)
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
-            DeviceZoneScopedN("Softmax(Q@KT)@V");
+            // DeviceZoneScopedN("Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
             uint32_t w_salad = salad_row - pushed_rows;
             uint32_t w_q = q_subblock - pushed_rows;
@@ -2125,7 +2125,7 @@ void sdpa_standard_v2(
         uint32_t alias_prev_out = cb_out_im_A, alias_cur_out = cb_out_im_B;
 
         for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; k_chunk++) {
-            DeviceZoneScopedN("sdpa_inner_loop_step");
+            // DeviceZoneScopedN("sdpa_inner_loop_step");
             bool is_first = (k_chunk == 0);
             bool is_last = (k_chunk == k_num_chunks - 1);
 
