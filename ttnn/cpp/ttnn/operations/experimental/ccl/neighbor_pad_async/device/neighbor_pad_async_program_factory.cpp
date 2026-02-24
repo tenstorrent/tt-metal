@@ -224,6 +224,37 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         }
     }
 
+    // Debug logging: device topology for H fabric
+    log_info(
+        tt::LogOp,
+        "NeighborPad H-fabric: mesh_coord=({},{}), device_index={}, src_node_id={}, "
+        "fwd_offset={}, bwd_offset={}, is_first={}, is_last={}, cluster_axis={}",
+        mesh_coordinate[0],
+        mesh_coordinate[1],
+        device_index,
+        mesh_device->get_fabric_node_id(mesh_coordinate),
+        forward_device_offset,
+        backward_device_offset,
+        is_first_device,
+        is_last_device,
+        operation_attributes.cluster_axis);
+    if (forward_coord.has_value()) {
+        log_info(
+            tt::LogOp,
+            "  forward_coord=({},{}), fwd_node_id={}",
+            (*forward_coord)[0],
+            (*forward_coord)[1],
+            mesh_device->get_fabric_node_id(forward_coord.value()));
+    }
+    if (backward_coord.has_value()) {
+        log_info(
+            tt::LogOp,
+            "  backward_coord=({},{}), bwd_node_id={}",
+            (*backward_coord)[0],
+            (*backward_coord)[1],
+            mesh_device->get_fabric_node_id(backward_coord.value()));
+    }
+
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
     const bool is_2d = operation_attributes.pad_dim2.has_value();
 
@@ -311,12 +342,27 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
         is_first_w_device = !w_backward_coord.has_value();
         is_last_w_device = !w_forward_coord.has_value();
+        // W neighbors are physically adjacent (same row, adjacent columns) = 1 physical hop.
+        // The fabric chain chip_id difference can be much larger (e.g., 4 on a 4x8 mesh),
+        // but the EDM routing uses physical hops along the selected direction, NOT chain hops.
+        // Using the chain distance would cause packets to overshoot the target.
         if (w_forward_coord.has_value()) {
             w_forward_device_offset = 1;
         }
         if (w_backward_coord.has_value()) {
             w_backward_device_offset = 1;
         }
+
+        log_info(
+            tt::LogOp,
+            "NeighborPad W-fabric: mesh_coord=({},{}), "
+            "w_fwd_offset={}, w_bwd_offset={}, is_first_w={}, is_last_w={}",
+            mesh_coordinate[0],
+            mesh_coordinate[1],
+            w_forward_device_offset,
+            w_backward_device_offset,
+            is_first_w_device,
+            is_last_w_device);
 
         // W fabric core coordinates (placed after H fabric cores in first row)
         for (uint32_t i = 0; i < num_w_fabric_cores; i++) {
@@ -348,6 +394,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         w_barrier_sem_addr = CreateSemaphore(program, w_fabric_core_range, 0);
         w_final_sem_addr = CreateSemaphore(program, w_fabric_core_range, 0);
     }
+
+    // Compute H fabric unicast route configuration (for compile-time args)
+    auto [h_unicast_forward_args, h_unicast_backward_args] =
+        ::ttnn::ccl::get_forward_backward_line_unicast_configuration(
+            ttnn::ccl::Topology::Linear, mesh_coordinate, forward_coord, backward_coord, mesh_device);
 
     // KERNEL CREATION
     std::vector<KernelHandle> reader_kernel_ids;
@@ -419,8 +470,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             writer_kernel_config.compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
             writer_kernel_config.compile_args.push_back(
                 is_2d ? 1 : 0);  // handle_incoming_writes (H writer: yes for 2D)
-            writer_kernel_config.compile_args.push_back(
-                0);  // sems_are_program_local (H writer: GlobalSemaphore addresses)
+            writer_kernel_config.compile_args.push_back(0);  // is_w_fabric_writer (H writer: false)
+            // Unicast route args: select forward or backward based on direction
+            const auto& h_unicast_args = direction ? h_unicast_backward_args : h_unicast_forward_args;
+            writer_kernel_config.compile_args.insert(
+                writer_kernel_config.compile_args.end(), h_unicast_args.begin(), h_unicast_args.end());
             auto worker_writer_kernel_id = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -456,9 +510,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 true,                                            // use_barrier_semaphore
                 virtual_opposite_core.x,                         // barrier_sem_noc0_x
                 virtual_opposite_core.y,                         // barrier_sem_noc0_y
-                operation_attributes.barrier_semaphore.address(),
-                direction ? backward_device_offset : forward_device_offset,
-                direction ? backward_device_offset : forward_device_offset};
+                operation_attributes.barrier_semaphore.address()};
             // Phase 2 signal targets (W fabric reader cores for 2D padding)
             writer_rt_args.push_back(is_2d ? num_w_fabric_cores : 0);
             for (uint32_t s = 0; s < 2; s++) {
@@ -615,21 +667,25 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::vector<KernelHandle> w_reader_kernel_ids;
     std::vector<KernelHandle> w_writer_kernel_ids;
     if (is_2d) {
-        // Count !is_first_chip H fabric writers that send an extra Phase 2 signal
-        // from handle_incoming_writes (after writing received H halo data to DRAM).
-        // Each H writer signals once after its main loop, and !is_first_chip writers signal
-        // a second time after handle_incoming_writes completes.
-        uint32_t extra_writer_signal_count = 0;
-        for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
-            for (uint32_t dir = 0; dir < 2; dir++) {
-                bool writer_is_first = dir ? is_last_device : is_first_device;
-                if (!writer_is_first) {
-                    extra_writer_signal_count++;
-                }
-            }
-        }
-        uint32_t barrier_count = static_cast<uint32_t>(
-            writer_kernel_ids.size() + local_writer_kernel_ids.size() + extra_writer_signal_count);
+        // Each H fabric writer and local copy writer signals Phase 2 exactly once,
+        // after ALL their work is complete (main loop + handle_incoming_writes).
+        uint32_t barrier_count = static_cast<uint32_t>(writer_kernel_ids.size() + local_writer_kernel_ids.size());
+        log_info(
+            tt::LogOp,
+            "NeighborPad2D: barrier_count={} (h_writers={} local_writers={}), "
+            "w_outer_dim_size={}, is_first_h={}, is_last_h={}, is_first_w={}, is_last_w={}, "
+            "output_row_width={}, num_interior_sticks={}, pad2_left={}",
+            barrier_count,
+            writer_kernel_ids.size(),
+            local_writer_kernel_ids.size(),
+            w_outer_dim_size,
+            is_first_device,
+            is_last_device,
+            is_first_w_device,
+            is_last_w_device,
+            output_num_sticks_per_halo_dim,
+            num_sticks_per_halo_dim,
+            operation_attributes.pad2_left);
 
         for (uint32_t w_link = 0; w_link < operation_attributes.pad2_num_links; w_link++) {
             for (uint32_t w_direction = 0; w_direction < 2; w_direction++) {
@@ -682,8 +738,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 w_writer_kernel_config.compile_args.push_back(1);              // use_l1_intermediate
                 w_writer_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
                 w_writer_kernel_config.compile_args.push_back(1);              // handle_incoming_writes (W writer: yes)
-                w_writer_kernel_config.compile_args.push_back(
-                    1);  // sems_are_program_local (W writer: CreateSemaphore IDs)
+                w_writer_kernel_config.compile_args.push_back(1);              // is_w_fabric_writer (W writer: true)
+                // W fabric unicast route args: manually constructed with actual hop distances
+                // (standard get_forward_backward_line_unicast_configuration hardcodes distance=1 for 1D)
+                uint32_t w_device_offset = w_direction ? w_backward_device_offset : w_forward_device_offset;
+                w_writer_kernel_config.compile_args.push_back(0);                // dst_mesh_id (unused for 1D)
+                w_writer_kernel_config.compile_args.push_back(w_device_offset);  // distance_in_hops
                 auto w_writer_kernel_id = CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -710,15 +770,14 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     false,                      // use_barrier_semaphore (disabled: barrier used for Phase 1→2 barrier)
                     w_opposite_virtual_core.x,  // barrier_sem_noc0_x
                     w_opposite_virtual_core.y,  // barrier_sem_noc0_y
-                    w_barrier_sem_addr,         // barrier_sem (program-local)
-                    w_direction ? w_backward_device_offset : w_forward_device_offset,
-                    w_direction ? w_backward_device_offset : w_forward_device_offset};
+                    w_barrier_sem_addr};        // barrier_sem (program-local)
                 // No Phase 3 signal targets
                 w_writer_rt_args.push_back(0);
                 for (uint32_t s = 0; s < 6; s++) {
                     w_writer_rt_args.push_back(0);
                 }
-                // Fabric connection args
+                // Fabric connection args: W neighbors are physically adjacent (1 hop via E/W
+                // ethernet), so append_fabric_connection_rt_args correctly finds them.
                 if (w_direction) {
                     w_writer_rt_args.push_back(false);
                     w_writer_rt_args.push_back(w_backward_coord.has_value());

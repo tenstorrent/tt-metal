@@ -12,7 +12,6 @@ import os
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_blackhole
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
@@ -297,9 +296,8 @@ def run_2d_neighbor_pad_test(
     return all_passed
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (4, 8)], ids=["2x4", "4x8"], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW",
     [
@@ -361,9 +359,8 @@ def test_fused_2d_neighbor_pad(
 
 
 # Also test 1D to make sure we didn't break it
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (4, 8)], ids=["2x4", "4x8"], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, pad_dim, other_dim, pad_axis, pH",
     [

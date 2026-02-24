@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 //
@@ -70,4 +71,5 @@ void kernel_main() {
     }
     // Ensure sem inc signals are delivered before kernel exits.
     noc_async_write_barrier();
+    DPRINT << "LC:ok" << ENDL();
 }
