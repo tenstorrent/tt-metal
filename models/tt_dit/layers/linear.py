@@ -96,6 +96,7 @@ class ColParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        chunks=None,
     ):
         super().__init__()
 
@@ -113,6 +114,7 @@ class ColParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        self.chunks = chunks
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -161,10 +163,11 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
         Return output fractured on columns.
+        If chunks is set, returns a list of tensors split along the output dimension.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -179,6 +182,20 @@ class ColParallelLinear(Module):
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
         matmul_config = get_matmul_config(M, K, N, core_grid)
+
+        if self.chunks is not None:
+            outputs = ttnn.experimental.minimal_matmul_split(
+                x,
+                weight,
+                chunks=self.chunks,
+                dim=-1,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                config=matmul_config,
+            )
+            return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=weight,
