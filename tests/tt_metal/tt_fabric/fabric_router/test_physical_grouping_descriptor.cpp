@@ -2314,9 +2314,9 @@ TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NestedGroupings) {
     )proto");
 
     PhysicalGroupingDescriptor desc(text_proto);
-    auto trays = desc.get_groupings_by_name("trays");
-    auto pods = desc.get_groupings_by_name("pods");
-    auto meshes = desc.get_groupings_by_name("meshes");
+    auto trays = desc.get_groupings_by_type("trays");
+    auto pods = desc.get_groupings_by_type("pods");
+    auto meshes = desc.get_groupings_by_type("meshes");
     ASSERT_EQ(trays.size(), 1);
     ASSERT_EQ(pods.size(), 1);
     ASSERT_EQ(meshes.size(), 1);
@@ -2465,7 +2465,7 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     )proto";
 
     PhysicalGroupingDescriptor desc_1x4(text_proto_1x4);
-    auto meshes_1x4 = desc_1x4.get_groupings_by_name("mesh");
+    auto meshes_1x4 = desc_1x4.get_groupings_by_type("mesh");
     ASSERT_EQ(meshes_1x4.size(), 1u) << "Should have one mesh grouping";
     const auto& mesh_1x4 = meshes_1x4[0];
 
@@ -2552,7 +2552,7 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     )proto";
 
     PhysicalGroupingDescriptor desc_4x1(text_proto_4x1);
-    auto meshes_4x1 = desc_4x1.get_groupings_by_name("mesh");
+    auto meshes_4x1 = desc_4x1.get_groupings_by_type("mesh");
     ASSERT_EQ(meshes_4x1.size(), 1u) << "Should have one mesh grouping";
     const auto& mesh_4x1 = meshes_4x1[0];
 
@@ -2627,7 +2627,7 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     )proto";
 
     PhysicalGroupingDescriptor desc_1x1(text_proto_1x1);
-    auto meshes_1x1 = desc_1x1.get_groupings_by_name("MESH");
+    auto meshes_1x1 = desc_1x1.get_groupings_by_type("MESH");
     ASSERT_EQ(meshes_1x1.size(), 1u) << "Should have one MESH grouping";
     const auto& mesh_1x1 = meshes_1x1[0];
 
@@ -2666,7 +2666,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8
     PhysicalGroupingDescriptor desc(text_proto_file_path);
 
     // Get one of the MESH grouping infos - "8x16_Mesh" which has 4 hosts in a 2x2 grid
-    auto mesh_groupings = desc.get_groupings_by_name("MESH");
+    auto mesh_groupings = desc.get_groupings_by_type("MESH");
     ASSERT_GT(mesh_groupings.size(), 0u) << "Expected at least one MESH grouping";
 
     // Find the "8x16_Mesh" grouping (has 4 hosts arranged in 2x2 grid)
@@ -2776,7 +2776,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
 
     GroupingInfo mesh_halftray;
     bool found = false;
-    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
+    for (const auto& mesh : desc.get_groupings_by_type("MESH")) {
         if (mesh.name == "2x2_Mesh_Halftray") {
             mesh_halftray = mesh;
             found = true;
@@ -2839,7 +2839,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
     )proto");
 
     PhysicalGroupingDescriptor desc(text_proto);
-    auto meshes = desc.get_groupings_by_name("MESH");
+    auto meshes = desc.get_groupings_by_type("MESH");
     ASSERT_GE(meshes.size(), 2u);
 
     GroupingInfo mesh_1x1, mesh_1x4;
@@ -2934,15 +2934,15 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
             << "Expected validation to pass: 4x4_Mesh grouping should map to single-galaxy PSD";
     }
 
-    // Test 2x8_Mesh - should pass (fits in single galaxy)
+    // Test 2x8_Mesh BH - should pass (fits in single galaxy; uses TRAY_1+TRAY_2 or TRAY_3+TRAY_4)
     {
-        const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh");
-        ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh grouping not found";
+        const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh BH");
+        ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh BH grouping not found";
 
         auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
         EXPECT_FALSE(asic_ids.empty())
-            << "Expected validation to pass: 2x8_Mesh grouping should map to single-galaxy PSD";
+            << "Expected validation to pass: 2x8_Mesh BH grouping should map to single-galaxy PSD";
     }
 
     // Test 4x8_Mesh - should pass (fits in single galaxy)
