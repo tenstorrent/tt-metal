@@ -205,7 +205,7 @@ void MetalContext::initialize(
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
     // Need DispatchMemMap for both dispatch core types
-    tt_metal::DispatchSettings::initialize(*cluster_);
+    tt_metal::DispatchSettings::initialize(*cluster_, hal());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =

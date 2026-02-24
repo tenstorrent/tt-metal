@@ -13,7 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include "fmt/base.h"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
+#include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -61,7 +61,8 @@ DispatchSettingsContainer& get_store() {
 }
 }  // namespace
 
-DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::worker_defaults(
+    const tt::Cluster& cluster, const uint32_t num_hw_cqs, const uint32_t l1_alignment) {
     uint32_t prefetch_q_entries;
     if (cluster.is_galaxy_cluster()) {
         prefetch_q_entries = 1532 / num_hw_cqs;
@@ -82,12 +83,13 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
+        .with_alignment(l1_alignment)
 
         .build();
 }
 
-DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::eth_defaults(
+    const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs, const uint32_t l1_alignment) {
     return DispatchSettings()
         .num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)
@@ -101,22 +103,22 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, 
         .dispatch_size(128_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
+        .with_alignment(l1_alignment)
 
         .build();
 }
 
 DispatchSettings DispatchSettings::defaults(
-    const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
+    const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs, const uint32_t l1_alignment) {
     if (!num_hw_cqs) {
         TT_THROW("0 CQs is invalid");
     }
 
     if (core_type == CoreType::WORKER) {
-        return worker_defaults(cluster, num_hw_cqs);
+        return worker_defaults(cluster, num_hw_cqs, l1_alignment);
     }
     if (core_type == CoreType::ETH) {
-        return eth_defaults(cluster, num_hw_cqs);
+        return eth_defaults(cluster, num_hw_cqs, l1_alignment);
     }
 
     TT_THROW("Default settings for core_type {} is not implemented", enchantum::to_string(core_type));
@@ -174,13 +176,14 @@ DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_
 }
 
 // Reset the settings
-void DispatchSettings::initialize(const tt::Cluster& cluster) {
+void DispatchSettings::initialize(const tt::Cluster& cluster, const Hal& hal) {
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     static constexpr std::array<CoreType, 2> k_SupportedCoreTypes{CoreType::ETH, CoreType::WORKER};
     auto& store = get_store();
     for (const auto& core_type : k_SupportedCoreTypes) {
         for (uint32_t hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
             DispatchSettingsContainerKey k{core_type, hw_cqs};
-            store[k] = DispatchSettings::defaults(core_type, cluster, hw_cqs);
+            store[k] = DispatchSettings::defaults(core_type, cluster, hw_cqs, l1_alignment);
         }
     }
 }
