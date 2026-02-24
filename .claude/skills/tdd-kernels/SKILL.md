@@ -29,7 +29,7 @@ python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py <command> [args]
 | `init <spec_path> --op-path <path>` | Initialize pipeline, create state file |
 | `add-stage '<json>' --op-path <path>` | Register a stage (must be done before any testing) |
 | `status --op-path <path>` | Show pipeline state: stages, pass/fail, current stage |
-| `test --op-path <path>` | Run current stage's test (uses dev-test.sh with watcher + hang detection) |
+| `test --op-path <path>` | Run current stage's test (uses tt-test.sh --dev with watcher + hang detection) |
 | `advance --op-path <path>` | Mark current stage as passed, move to next |
 | `parse-failure --op-path <path>` | Parse test failure into structured JSON |
 | `rollback --op-path <path>` | Restore kernels to last passing commit (on max retries) |
@@ -94,7 +94,7 @@ For Stage 1 (data pipeline): Specify which kernels need full implementation vs. 
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py test --op-path <path>
 ```
 
-This runs the stage test with `dev-test.sh` (watcher enabled, hang detection at 5s timeout, device reset on failure).
+This runs the stage test with `tt-test.sh --dev` (watcher enabled, hang detection at 5s timeout, device reset on failure).
 
 ### 4. Branch on Result
 

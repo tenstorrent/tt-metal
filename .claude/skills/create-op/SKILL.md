@@ -298,7 +298,7 @@ Use `void kernel_main() {}`. NOT the deprecated `namespace NAMESPACE { void MAIN
 - 24-31: intermediates
 
 ### Testing
-- Use `dev-test.sh` for TDD stages (real kernels can hang — needs watcher + timeout)
+- Use `tt-test.sh --dev` for TDD stages (real kernels can hang — needs watcher + timeout)
 - Use plain `pytest` for builder phases (stub kernels can't hang)
 - If pytest hangs: `pkill -9 -f pytest || true` then `tt-smi -r`
 

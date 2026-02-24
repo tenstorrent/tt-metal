@@ -15,7 +15,7 @@ Usage:
     python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py parse-failure [--op-path PATH]
 
 Called by: Orchestrator agent (via .claude/references/tdd-kernel-pipeline.md)
-Calls: dev-test.sh, failure_parser.py
+Calls: tt-test.sh, failure_parser.py
 State: {op_path}/.tdd_state.json
 """
 
@@ -31,7 +31,7 @@ from typing import Optional
 # Resolve paths relative to this script
 SCRIPT_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # .claude/scripts/tdd-pipeline -> repo root
-DEV_TEST_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "dev-test.sh"
+TT_TEST_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "tt-test.sh"
 TEMPLATE_PATH = SCRIPT_DIR / "test_stage_template.py.j2"
 
 # State file name (lives in the operation directory)
@@ -385,7 +385,7 @@ def cmd_add_stage(args):
 
 
 def cmd_test(args):
-    """Run the test for a stage via dev-test.sh."""
+    """Run the test for a stage via tt-test.sh --dev."""
     op_path = _resolve_op_path(args)
     state = _load_state(op_path)
 
@@ -429,7 +429,7 @@ def cmd_test(args):
         print(f"ERROR: Test file not found: {test_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Run dev-test.sh
+    # Run tt-test.sh --dev
     hard_attempts = stage["attempts"]
     free_retries = stage.get("free_retries", 0)
     print(
@@ -438,7 +438,7 @@ def cmd_test(args):
         f"free retries: {free_retries})..."
     )
     result = subprocess.run(
-        [str(DEV_TEST_SCRIPT), str(test_path)],
+        [str(TT_TEST_SCRIPT), "--dev", str(test_path)],
         capture_output=True,
         text=True,
         timeout=300,  # 5 minute overall timeout

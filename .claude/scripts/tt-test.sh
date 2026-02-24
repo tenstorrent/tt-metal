@@ -107,6 +107,11 @@ if [[ "$DEV_MODE" == true ]]; then
     # cores blocked waiting on the halted one.
     export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
 
+    # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
+    # Catches invalid hardware configurations, wrong unpack/pack parameters,
+    # and API misuse deep in the compute pipeline. Also compiles as ebreak.
+    export TT_METAL_LLK_ASSERTS=1
+
     # No-poll watcher: enables all device-side instrumentation (NoC sanitizer,
     # waypoints, ring buffer) WITHOUT the host polling thread. This avoids the
     # DMA disable and polling overhead (~1.5x vs ~22x with polling watcher).
@@ -117,7 +122,7 @@ if [[ "$DEV_MODE" == true ]]; then
     export TT_METAL_WATCHER_DISABLE_ASSERT=1
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
-    echo "TT_TEST: [dev] asserts=ebreak watcher=no-poll triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
+    echo "TT_TEST: [dev] asserts=ebreak llk_asserts=ON watcher=no-poll triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
 else
     echo "TT_TEST: dispatch_timeout=${DISPATCH_TIMEOUT}s safety_net=${SAFETY_NET_TIMEOUT}s" >&2
 fi
