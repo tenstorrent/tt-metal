@@ -66,8 +66,7 @@ void kernel_main() {
         .epsilon = get_common_arg_val<uint32_t>(0),  // epsilon
         .scalar = get_common_arg_val<float>(1),      // scalar (1/sqrt(num_elements))
     };
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

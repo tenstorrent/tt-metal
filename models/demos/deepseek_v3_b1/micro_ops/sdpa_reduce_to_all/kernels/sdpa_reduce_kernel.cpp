@@ -141,7 +141,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("final_reduction")>;
 
         // Initialize compute engine for unified kernel
-        compute_kernel_hw_startup(0, 0, 0);
+        deepseek_compute_kernel_init();
 
         Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
         op();

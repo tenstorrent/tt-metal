@@ -44,8 +44,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("act_total_tiles"),
     };
     deepseek_b1_ops::KNSlicedMatmul::Op<KNSlicedMatmulCTArgs, true, /*pop_act=*/true, /*pop_weights=*/false> matmul;
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
     matmul(matmul_args);
 }

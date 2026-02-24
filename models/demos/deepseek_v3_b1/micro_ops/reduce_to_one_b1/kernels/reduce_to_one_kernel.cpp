@@ -84,8 +84,7 @@ void kernel_main() {
 
     // Compute has no runtime args
     ReduceToOne::ComputeArgs rt_args{};
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // Execute the op (looped for testing iteration correctness)
