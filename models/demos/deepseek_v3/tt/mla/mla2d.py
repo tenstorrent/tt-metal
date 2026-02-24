@@ -59,7 +59,7 @@ class MLA2D(MLA1D):
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
         memory_config: ttnn.MemoryConfig,
-        padding_needed: tuple[int, int, int, int] = (0, 0, 0, 0),
+        padding_needed: tuple[int, int, int, int] = (0, 0, 0),
     ) -> SavedWeight:
         if dims[0] is not None:
             slices = torch.split(torch_metaweight, 1, dim=dims[0])
