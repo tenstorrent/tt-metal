@@ -119,7 +119,7 @@ decltype(auto) validate_and_get_reference_value(
 // Returns offset of the mesh device view in the system mesh.
 MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
     const auto origin_fabric_node_id = view.get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
-    const auto system_mesh_shape = SystemMesh::instance().shape();
+    const auto system_mesh_shape = MetalContext::instance().get_system_mesh().shape();
     for (const auto& coord : MeshCoordinateRange(system_mesh_shape)) {
         if (coord.to_linear_index(system_mesh_shape) == origin_fabric_node_id.chip_id) {
             return coord;
@@ -272,7 +272,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
-            auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            auto mapped_devices =
+                MetalContext::instance().get_system_mesh().get_mapped_devices(config.mesh_shape(), config.offset());
             // Validate that none of the fabric node IDs are on switch meshes
             for (const auto& fabric_node_id : mapped_devices.fabric_node_ids) {
                 TT_FATAL(
@@ -284,7 +285,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
             }
             auto mapped_devices_full_system_device_ids =
                 (*MetalContext::instance().global_distributed_context().size() > 1)
-                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                    ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
                     : mapped_devices.device_ids;
             return std::make_tuple(
                 std::make_shared<MeshDeviceImpl::ScopedDevices>(
@@ -315,7 +316,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         }
         auto mapped_devices_full_system_device_ids =
             (*MetalContext::instance().global_distributed_context().size() > 1)
-                ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
                 : wrap_to_maybe_remote(supplied_ids);
         return std::make_tuple(
             std::make_shared<ScopedDevices>(
@@ -406,7 +407,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     // Now create ScopedDevices after validation passes
     auto mapped_devices_full_system_device_ids =
         (*MetalContext::instance().global_distributed_context().size() > 1)
-            ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+            ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
             : wrap_to_maybe_remote(device_ids);
     auto scoped_devices = std::make_shared<MeshDeviceImpl::ScopedDevices>(
         mapped_devices_full_system_device_ids,
@@ -701,8 +702,8 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     } else {
         // Do our best at requesting a new set of mapped devices from system mesh, starting at the offset of the first
         // device in the original mesh.
-        auto new_mapped_devices =
-            SystemMesh::instance().get_mapped_devices(new_shape, compute_system_mesh_offset(*view_));
+        auto new_mapped_devices = MetalContext::instance().get_system_mesh().get_mapped_devices(
+            new_shape, compute_system_mesh_offset(*view_));
         for (int i = 0; i < new_mapped_devices.device_ids.size(); i++) {
             TT_FATAL(
                 current_fabric_nodes.contains(new_mapped_devices.fabric_node_ids[i]),

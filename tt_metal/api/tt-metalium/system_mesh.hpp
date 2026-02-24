@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <tt_stl/indestructible.hpp>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -13,6 +12,14 @@
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
+
+namespace tt::tt_metal {
+class MetalContext;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 
 // SystemMesh creates a virtualization over the physical devices in the system.
@@ -20,14 +27,18 @@ namespace tt::tt_metal::distributed {
 // It serves as a query interface between the logical coordinates to physical device IDs.
 class SystemMesh {
 private:
+    friend class tt::tt_metal::MetalContext;
+
     class Impl;  // Forward declaration only
 
     std::unique_ptr<Impl> pimpl_;
-    SystemMesh();
 
-    friend class tt::stl::Indestructible<SystemMesh>;
+    explicit SystemMesh(const tt::tt_fabric::ControlPlane& control_plane);
 
 public:
+    ~SystemMesh();
+    // Convenience accessor — delegates to MetalContext::instance().get_system_mesh().
+    // Retained because MetalContext is not part of the public API.
     static SystemMesh& instance();
     SystemMesh(const SystemMesh&) = delete;
     SystemMesh& operator=(const SystemMesh&) = delete;
