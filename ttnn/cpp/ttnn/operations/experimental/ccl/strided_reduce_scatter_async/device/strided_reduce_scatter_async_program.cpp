@@ -306,8 +306,8 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         N_full_block_wt,                // [19] N_full_block_wt
         chunk_width_in_tiles,           // [20] chunk_width_in_tiles
         chunks_per_mm_N_full_block,     // [21] chunks_per_mm_N_full_block
-        slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
-        slice_Ht,           // [23] slice_Ht (total height in tiles across all MM cores)
+        slice_Ht_per_core,              // [22] slice_Ht_per_core
+        slice_Ht,                       // [23] slice_Ht (unpadded; used for ghost-tile bounds checks)
         // [24+] fabric_mux CT args appended after (num_ct_args = 29 in writer kernel)
     };
 }
@@ -345,8 +345,8 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
         chunks_per_mm_N_full_block,  // [11] chunks_per_mm_N_full_block
         slice_Wt,                    // [12] slice_Wt
         N_full_block_wt,             // [13] mm_N_full_block_wt
-        slice_Ht_per_core,  // [14] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
-        slice_Ht,           // [15] slice_Ht (total height in tiles across all MM cores)
+        slice_Ht_per_core,           // [14] slice_Ht_per_core
+        slice_Ht,                    // [15] slice_Ht (unpadded; used for ghost-tile bounds checks)
     };
 }
 
@@ -569,6 +569,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     }
     const uint32_t mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt_val;
 
+
     // Pad slice_Ht to the next multiple of mm_cores_y_val so every core gets an equal number of
     // tile rows. The last core may receive ghost tiles (slice_row >= slice_Ht) which are skipped
     // by the reader/writer kernels via bounds checks.
@@ -697,7 +698,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunks_per_mm_N_full_block_val,
             mm_block_wt_val,
             slice_Ht_per_core,
-            false,
+            fuse_mm_op,
             slice_Ht,
             mm_blocks_sem_override);
 

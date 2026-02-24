@@ -641,6 +641,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
+    uint32_t max_defer_write_k_block = 0;
+    for (const auto& c : cores) {
+        uint32_t dwk = std::min(static_cast<uint32_t>(c.y) * k_blocks_per_core, K_blocks - 1);
+        max_defer_write_k_block = std::max(max_defer_write_k_block, dwk);
+    }
+
     // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links.
     // If neighboring cores along a forwarding chain iterate different (M,N) counts, the sender can wait
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
@@ -693,8 +699,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = core.y * k_blocks_per_core;
-        defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
+        uint32_t defer_write_k_block = std::min(static_cast<uint32_t>(core.y) * k_blocks_per_core, K_blocks - 1);
 
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
@@ -713,6 +718,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            max_defer_write_k_block,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -763,6 +769,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            max_defer_write_k_block,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
