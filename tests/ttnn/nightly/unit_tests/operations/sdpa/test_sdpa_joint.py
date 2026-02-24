@@ -20,7 +20,7 @@ def fa_rand(*shape):
 
 
 def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
+    return os.environ.get("TT_METAL_WATCHER") is not None or os.environ.get("TT_METAL_WATCHER_NO_POLL") is not None
 
 
 def run_test_joint_sdpa(

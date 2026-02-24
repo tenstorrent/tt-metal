@@ -160,6 +160,8 @@ class RunTimeOptions {
 
     bool lightweight_kernel_asserts = false;
 
+    bool watcher_no_poll = false;
+
     bool enable_llk_asserts = false;
 
     bool disable_sfploadmacro = false;
@@ -379,6 +381,9 @@ public:
     bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
+
+    bool get_watcher_no_poll() const { return watcher_no_poll; }
+    void set_watcher_no_poll(bool enabled) { watcher_no_poll = enabled; }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }

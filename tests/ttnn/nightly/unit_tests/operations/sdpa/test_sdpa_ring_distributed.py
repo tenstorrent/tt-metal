@@ -22,8 +22,8 @@ def fa_rand(*shape):
 
 
 def is_watcher_enabled():
-    """Check if TT_METAL_WATCHER is enabled"""
-    return os.environ.get("TT_METAL_WATCHER") is not None
+    """Check if TT_METAL_WATCHER or TT_METAL_WATCHER_NO_POLL is enabled"""
+    return os.environ.get("TT_METAL_WATCHER") is not None or os.environ.get("TT_METAL_WATCHER_NO_POLL") is not None
 
 
 def gather_and_reshuffle_ring_outputs(ring_outputs, ring_size, global_seq_len):

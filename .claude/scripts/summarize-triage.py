@@ -230,7 +230,57 @@ def parse_callstacks(section_text):
     return groups
 
 
-def format_summary(checks, op_info, callstack_groups, triage_path):
+def parse_lightweight_asserts(section_text):
+    """Parse dump_lightweight_asserts table into per-core entries, then group by pattern."""
+    if not section_text:
+        return {}
+
+    entries = []
+    current_entry = None
+
+    for line in section_text.split("\n"):
+        if "│" not in line:
+            continue
+        raw = [f.strip() for f in line.split("│")]
+        if len(raw) < 7:
+            continue
+
+        loc = raw[2]
+        riscv = raw[3]
+        kernel_name = raw[4]
+        assert_col = raw[5]
+        args_col = raw[6] if len(raw) > 6 else ""
+
+        if loc:  # New core entry
+            current_entry = {
+                "loc": loc,
+                "riscv": riscv,
+                "kernel_name": kernel_name,
+                "assert_expr": "",
+                "frames": [],
+            }
+            entries.append(current_entry)
+        elif current_entry:
+            # Continuation line — assert expression, callstack, or note
+            if assert_col.startswith("ASSERT("):
+                current_entry["assert_expr"] = assert_col
+            elif assert_col.startswith("#"):
+                current_entry["frames"].append(normalize_frame(assert_col))
+
+    # Group by (riscv, kernel_name, assert_expr)
+    groups = defaultdict(lambda: {"cores": [], "display_frames": None})
+    for entry in entries:
+        key = (entry["riscv"], entry["kernel_name"], entry["assert_expr"])
+        coord_match = re.search(r"\((\d+,\d+)\)", entry["loc"])
+        coord = coord_match.group(1) if coord_match else entry["loc"]
+        groups[key]["cores"].append(coord)
+        if groups[key]["display_frames"] is None and entry["frames"]:
+            groups[key]["display_frames"] = entry["frames"]
+
+    return groups
+
+
+def format_summary(checks, op_info, callstack_groups, triage_path, assert_groups=None):
     """Format everything into a compact summary."""
     lines = []
     lines.append("=== TRIAGE SUMMARY ===")
@@ -261,8 +311,27 @@ def format_summary(checks, op_info, callstack_groups, triage_path):
             lines.append(f"Checks: all passed ({', '.join(checks.keys())})")
         lines.append("")
 
+    # Lightweight asserts — show before callstacks since they're the primary signal
+    if assert_groups:
+        lines.append("Lightweight asserts tripped:")
+        sorted_groups = sorted(assert_groups.items(), key=lambda x: -len(x[1]["cores"]))
+        for (riscv, kernel_name, assert_expr), group_data in sorted_groups:
+            core_list = group_data["cores"]
+            display_frames = group_data["display_frames"] or []
+            count = len(core_list)
+            cores_str = _format_core_list(core_list)
+
+            lines.append(f"  {riscv} ({count} cores) — {kernel_name}")
+            lines.append(f"    {assert_expr}")
+            if display_frames:
+                for func, loc in display_frames:
+                    lines.append(f"    {func:40s} {loc}")
+            lines.append(f"    Cores: {cores_str}")
+            lines.append("")
+
     if not callstack_groups:
-        lines.append("No callstack data found.")
+        if not assert_groups:
+            lines.append("No callstack data found.")
         lines.append(f"Full triage: {triage_path}")
         lines.append("=== END TRIAGE SUMMARY ===")
         return "\n".join(lines)
@@ -344,8 +413,9 @@ def main():
     checks = parse_checks(sections)
     op_info = parse_op_info(sections.get("dump_running_operations", ""))
     callstack_groups = parse_callstacks(sections.get("dump_callstacks", ""))
+    assert_groups = parse_lightweight_asserts(sections.get("dump_lightweight_asserts", ""))
 
-    summary = format_summary(checks, op_info, callstack_groups, triage_path)
+    summary = format_summary(checks, op_info, callstack_groups, triage_path, assert_groups)
     print(summary)
 
 
