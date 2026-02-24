@@ -108,7 +108,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     AssignGlobalBufferToProgram(scratch_l1_buffer, program);
     const uint32_t scratch_l1_addr = static_cast<uint32_t>(scratch_l1_buffer->page_address(0, 0));
 
-    // Compile-time args: num_input_tensors, output_page_size, input_page_sizes[0..15],
+    // Compile-time args: num_input_tensors, concat dim, output_page_size, input_page_sizes[0..15],
     // then output TensorAccessorArgs, then 16 input TensorAccessorArgs (absent filled from first input).
     std::vector<uint32_t> reader_compile_time_args = {
         num_input_tensors,
