@@ -47,12 +47,6 @@ jobs:
           PLATFORM="${{ matrix.platform }}"
           UBUNTU_VERSION="${PLATFORM#ubuntu-}"
           echo "version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
-      - name: Parse platform
-        id: parse-platform
-        uses: ./.github/actions/parse-platform
-        with:
-          distro: ubuntu
-          version: ${{ steps.extract-version.outputs.version }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
@@ -69,7 +63,7 @@ jobs:
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          UBUNTU_VERSION="${{ steps.parse-platform.outputs.version }}"
+          UBUNTU_VERSION="${{ steps.extract-version.outputs.version }}"
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_ENV
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
           # Determine Python version based on Ubuntu version
