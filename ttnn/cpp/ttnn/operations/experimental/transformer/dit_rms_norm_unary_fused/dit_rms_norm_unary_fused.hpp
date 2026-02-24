@@ -13,9 +13,9 @@
 namespace ttnn {
 namespace operations::experimental::transformer {
 
-// Fused RMSNorm + unary activation (e.g. SiLU). Equivalent to:
+// Fused RMSNorm + unary activation (e.g. SiLU, GELU). Equivalent to:
 //   tensor = ttnn.rms_norm(input, ...)
-//   ttnn.silu(tensor)
+//   ttnn.<activation>(tensor)
 // but computed in a single kernel pass.
 struct ExecuteDitRmsNormUnaryFused {
     static ttnn::Tensor invoke(

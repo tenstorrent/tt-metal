@@ -26,8 +26,8 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
 
         Fused RMSNorm + unary activation for DiT transformer blocks.
 
-        Equivalent to ``ttnn.silu(ttnn.rms_norm(x, ...))`` but computed in a single kernel pass, avoiding
-        the intermediate tensor write and read between rms_norm and silu.
+        Equivalent to ``ttnn.<activation>(ttnn.rms_norm(x, ...))`` (e.g. ``ttnn.silu(...)`` or ``ttnn.gelu(...)``)
+        but computed in a single kernel pass, avoiding the intermediate tensor write/read.
 
         Parameters
         ----------
@@ -58,8 +58,12 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
             Compute kernel configuration. If not provided, defaults to HiFi4 with approx mode.
 
         activation : Optional[Union[str, ttnn.UnaryOpType, ttnn.UnaryWithParam]], default: None
-            Unary activation to apply after normalization. Supports string names (e.g. ``"silu"``, ``"gelu"``)
-            or ``ttnn.UnaryOpType`` / ``ttnn.UnaryWithParam`` objects.
+            Unary activation to apply after normalization. Supported forms:
+
+            * string: ``"silu"`` or ``"gelu"``
+            * ``ttnn.UnaryOpType``: e.g. ``ttnn.UnaryOpType.SILU``
+            * ``ttnn.UnaryWithParam``: for activations with additional parameters
+
             If ``None``, no activation is applied (equivalent to plain rms_norm).
 
         Returns

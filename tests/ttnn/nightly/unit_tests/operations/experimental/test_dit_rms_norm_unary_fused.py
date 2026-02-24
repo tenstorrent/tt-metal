@@ -181,9 +181,6 @@ def run_dit_rms_norm_unary_fused_sharded_test(
 
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    print(f"torch_expected: {torch_expected}")
-    print(f"tt_output_torch: {tt_output_torch}")
-
     return assert_quality(torch_expected, tt_output_torch)
 
 
@@ -333,11 +330,6 @@ def test_dit_rms_norm_unary_fused_sharded(device, activation):
     """
     Sharded path sanity check with a small block-sharded tensor.
     h=256, w=320, 2x5 core grid  ->  shard 128x64, block_ht=4, block_wt=2
-
-    NOTE: The fused SiLU activation in layernorm_sharded.cpp currently produces low PCC
-    (~0.73) while RMSE remains within bounds. This indicates a bug in the SFPU placement
-    in the sharded kernel that needs further investigation. The RMSE assertion is therefore
-    used as the primary quality gate here.
     """
     check_result = run_dit_rms_norm_unary_fused_sharded_test(
         device=device,
