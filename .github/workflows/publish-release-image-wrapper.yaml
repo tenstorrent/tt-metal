@@ -11,10 +11,10 @@ on:
       platform:
         required: false
         type: choice
-        default: "Ubuntu 22.04"
+        default: "ubuntu-22.04"
         options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
+          - "ubuntu-22.04"
+          - "ubuntu-24.04"
         description: "Platform to build and test"
 jobs:
   build-artifact:
@@ -25,30 +25,13 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
       enable-lto: false
   create-image-tag-name:
     runs-on: ubuntu-latest
     outputs:
       image-tag-name: ${{ steps.set-tag-name.outputs.image-tag-name }}
-      platform-string: ${{ steps.convert-platform.outputs.platform-string }}
     steps:
-      - name: Convert platform to string format
-        id: convert-platform
-        run: |
-          PLATFORM="${{ inputs.platform }}"
-          case "$PLATFORM" in
-            "Ubuntu 22.04")
-              PLATFORM_STRING="ubuntu-22.04"
-              ;;
-            "Ubuntu 24.04")
-              PLATFORM_STRING="ubuntu-24.04"
-              ;;
-            *)
-              PLATFORM_STRING="ubuntu-22.04"
-              ;;
-          esac
-          echo "platform-string=$PLATFORM_STRING" >> $GITHUB_OUTPUT
       - name: Set the tag name of the docker image
         id: set-tag-name
         run: |
@@ -66,4 +49,4 @@ jobs:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      platform: ${{ needs.create-image-tag-name.outputs.platform-string }}
+      platform: ${{ inputs.platform }}
