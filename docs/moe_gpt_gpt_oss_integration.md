@@ -81,11 +81,10 @@ This distribution applies to BOTH W0/W1 width and W2 width since K == N.
 
 | Metric | Value |
 |---|---|
-| Total kernel time (4 experts) | 272.7 μs |
-| Per expert | 68.2 μs |
-| DRAM data per core per expert | 1.24 MB |
-| DRAM theoretical minimum | 51.8 μs/expert |
-| DRAM BW utilization | 76% |
+| Total kernel time (4 experts) | 230.7 μs |
+| Per expert | 57.7 μs |
+| Realized DRAM bandwidth | 258 GB/s |
+| Useful DRAM bandwidth | 242 GB/s |
 | Accuracy (PCC) | ~0.990 (threshold 0.984) |
 
 ## File Inventory
