@@ -83,8 +83,6 @@ void CommandQueueInitializer::initialize_host(Device* dev) const {
     // queue (i.e. hugepage). Need to do this before FW init so we know what dispatch cores to reset.
     if (using_fast_dispatch()) {
         dev->init_command_queue_host();
-    } else {
-        TT_FATAL(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 }
 
