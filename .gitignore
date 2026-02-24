@@ -146,6 +146,3 @@ Testing
 .auto_triage/output
 .github/actions/*/node_modules/
 models/experimental/petr/resources/*.pth
-
-# tt_symbiote: clone Gr00t externally; do not commit groot/
-models/experimental/tt_symbiote/groot/
