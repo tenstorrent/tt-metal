@@ -54,6 +54,16 @@ struct SdpaReduceForwarder {
     };
 
     // ========================================================================
+    // Runtime args struct
+    // ========================================================================
+    struct ForwarderArgs {
+        uint32_t buffer_base;
+        uint32_t buffer_offset;
+        uint32_t r1_sem_addr;
+        uint32_t r2_sem_addr;
+    };
+
+    // ========================================================================
     // Op - unified forwarder operation
     //
     // CT: compile-time args for the forwarder
@@ -61,9 +71,9 @@ struct SdpaReduceForwarder {
     template <typename CT>
     class Op {
     public:
-        void operator()() {
+        void operator()(const ForwarderArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-            forwarder_impl();
+            forwarder_impl(args);
 #endif
             // TRISC: no-op
         }
@@ -101,25 +111,19 @@ struct SdpaReduceForwarder {
             return sent_mask;
         }
 
-        void forwarder_impl() {
+        void forwarder_impl(const ForwarderArgs& args) {
             static_assert(CT::slots_per_round <= 32, "forwarder supports at most 32 slots per round");
 
-            size_t arg_idx = 0;
+            const uint32_t my_buffer_base = args.buffer_base + args.buffer_offset;
 
-            const uint32_t buffer_base = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t buffer_offset = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-            const uint32_t r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-
-            const uint32_t my_buffer_base = buffer_base + buffer_offset;
-
+            size_t arg_idx = sizeof(ForwarderArgs) / sizeof(uint32_t);
             auto fabric_connection =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             fabric_connection.open();
 
             // Interleaved R1/R2 forwarding loop
-            volatile tt_l1_ptr uint32_t* r1_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_sem_addr);
-            volatile tt_l1_ptr uint32_t* r2_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
+            volatile tt_l1_ptr uint32_t* r1_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r1_sem_addr);
+            volatile tt_l1_ptr uint32_t* r2_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r2_sem_addr);
 
             const uint32_t r1_buffer_base = my_buffer_base;
             const uint32_t r2_buffer_base = my_buffer_base + CT::r2_buffer_offset;

@@ -67,9 +67,9 @@ struct CreateQHeads {
         uint32_t qrope_cb;
         uint32_t src_num_pages;
         // Semaphores (3 separate semaphores for race-free synchronization)
-        uint32_t nope_phase1_semaphore_id;  // QNOPE signals after first half
-        uint32_t nope_phase2_semaphore_id;  // QNOPE signals after second half
-        uint32_t rope_semaphore_id;         // QROPE signals after completion
+        uint32_t nope_phase1_semaphore_addr;  // QNOPE signals after first half
+        uint32_t nope_phase2_semaphore_addr;  // QNOPE signals after second half
+        uint32_t rope_semaphore_addr;         // QROPE signals after completion
         // Target NOC coordinates (8 rows, packed: lower 16 bits = x, upper 16 bits = y)
         uint32_t target_noc_coords[8];
         // Runtime arg - destination address
@@ -79,9 +79,9 @@ struct CreateQHeads {
     // Receiver args - multi-phase synchronization for tilization
     struct ReceiverArgs {
         // Semaphores (3 separate semaphores for race-free synchronization)
-        uint32_t nope_phase1_semaphore_id;  // Wait for QNOPE first halves
-        uint32_t nope_phase2_semaphore_id;  // Wait for QNOPE second halves
-        uint32_t rope_semaphore_id;         // Wait for QROPE
+        uint32_t nope_phase1_semaphore_addr;  // Wait for QNOPE first halves
+        uint32_t nope_phase2_semaphore_addr;  // Wait for QNOPE second halves
+        uint32_t rope_semaphore_addr;         // Wait for QROPE
         uint32_t num_nope_senders;          // Number of QNOPE senders (8)
         uint32_t num_rope_senders;          // Number of QROPE senders (4)
         uint32_t receiver_in_cb;            // Input CB where senders write row-major data
@@ -175,10 +175,8 @@ struct CreateQHeads {
                 //   First halves: cols 0-7 packed at offsets 0, 256, 512, ... (row-major [8, 256])
                 //   Second halves: cols 0-7 packed at offsets 2048, 2304, ... (row-major [8, 256])
 
-                uint32_t phase1_semaphore_addr = get_semaphore(args.nope_phase1_semaphore_id);
-                uint32_t phase2_semaphore_addr = get_semaphore(args.nope_phase2_semaphore_id);
-                uint64_t phase1_semaphore_noc_addr = dst_noc_coord | (uint64_t)phase1_semaphore_addr;
-                uint64_t phase2_semaphore_noc_addr = dst_noc_coord | (uint64_t)phase2_semaphore_addr;
+                uint64_t phase1_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.nope_phase1_semaphore_addr;
+                uint64_t phase2_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.nope_phase2_semaphore_addr;
 
                 // First half: tight row-major packing
                 uint32_t dst_offset_0 = my_col * half_qnope_data_size_bytes;
@@ -197,8 +195,7 @@ struct CreateQHeads {
             } else {
                 // QROPE core: Write 2 heads × 64 elements = 128 elements
                 // Memory layout: after all QNOPE data, QROPE is packed row-major [8, 64]
-                uint32_t rope_semaphore_addr = get_semaphore(args.rope_semaphore_id);
-                uint64_t rope_semaphore_noc_addr = dst_noc_coord | (uint64_t)rope_semaphore_addr;
+                uint64_t rope_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.rope_semaphore_addr;
                 uint32_t qrope_col = my_col - args.qnope_cols;
                 // Offset starts after full QNOPE region (8 cols × 512 elements each)
                 uint32_t dst_offset =
@@ -223,13 +220,11 @@ struct CreateQHeads {
             // We coordinate with compute via CB push/wait
 
             // Get semaphore addresses for all 3 phases
-            uint32_t phase1_semaphore_addr = get_semaphore(args.nope_phase1_semaphore_id);
-            uint32_t phase2_semaphore_addr = get_semaphore(args.nope_phase2_semaphore_id);
-            uint32_t rope_semaphore_addr = get_semaphore(args.rope_semaphore_id);
-
-            volatile tt_l1_ptr uint32_t* phase1_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)phase1_semaphore_addr;
-            volatile tt_l1_ptr uint32_t* phase2_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)phase2_semaphore_addr;
-            volatile tt_l1_ptr uint32_t* rope_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)rope_semaphore_addr;
+            volatile tt_l1_ptr uint32_t* phase1_semaphore_ptr =
+                (volatile tt_l1_ptr uint32_t*)args.nope_phase1_semaphore_addr;
+            volatile tt_l1_ptr uint32_t* phase2_semaphore_ptr =
+                (volatile tt_l1_ptr uint32_t*)args.nope_phase2_semaphore_addr;
+            volatile tt_l1_ptr uint32_t* rope_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)args.rope_semaphore_addr;
 
             if (args.num_nope_senders > 0) {
                 noc_semaphore_wait(phase1_semaphore_ptr, args.num_nope_senders);

@@ -101,7 +101,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather1_dest_noc_x"),
         get_named_compile_time_arg_val("gather1_dest_noc_y"),
         get_named_compile_time_arg_val("gather1_data_size_bytes"),
-        get_named_compile_time_arg_val("gather1_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather1_src_cb"),
         get_named_compile_time_arg_val("gather1_src_num_pages"),
         get_named_compile_time_arg_val("gather1_sender_grid_start_x"),
@@ -115,7 +115,7 @@ void kernel_main() {
     // Mcast receiver args
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_dst_cb"),
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
@@ -129,7 +129,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather2_dest_noc_x"),
         get_named_compile_time_arg_val("gather2_dest_noc_y"),
         get_named_compile_time_arg_val("gather2_data_size_bytes"),
-        get_named_compile_time_arg_val("gather2_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather2_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather2_src_cb"),
         get_named_compile_time_arg_val("gather2_src_num_pages"),
         get_named_compile_time_arg_val("gather2_sender_grid_start_x"),
@@ -180,8 +180,8 @@ void kernel_main() {
     deepseek_b1_ops::Gather::ReceiverArgs gather1_args{
         get_named_compile_time_arg_val("gather1_noc0_num_senders"),
         get_named_compile_time_arg_val("gather1_noc1_num_senders"),
-        get_named_compile_time_arg_val("gather1_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("gather1_noc1_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather1_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("gather1_noc1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather1_dst_cb"),
         get_named_compile_time_arg_val("gather1_dst_num_pages"),
     };
@@ -199,8 +199,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_data_size_bytes"),
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),
@@ -212,8 +212,8 @@ void kernel_main() {
     deepseek_b1_ops::Gather::ReceiverArgs gather2_args{
         get_named_compile_time_arg_val("gather2_noc0_num_senders"),
         get_named_compile_time_arg_val("gather2_noc1_num_senders"),
-        get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather2_dst_cb"),
         get_named_compile_time_arg_val("gather2_dst_num_pages"),
     };
@@ -362,8 +362,15 @@ void kernel_main() {
             using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
             using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
+            uint32_t per_core_rta_arg_idx = 0;
+            Worker::ReaderArgs reader_args{
+                .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            };
             Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
-            sdpa_worker();
+            sdpa_worker(reader_args);
 
 #elif defined(COMPILE_FOR_BRISC)
             // Dummy ReaderCT - not used by BRISC
@@ -389,14 +396,39 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_scatter_face_size"),
                 get_named_compile_time_arg_val("sdpa_scatter_row_face_size"),
                 get_named_compile_time_arg_val("sdpa_scatter_num_rows"),
-                1,  // scatter_arrival_enabled=1 (signal matmul1 cores after each scatter row)
-                get_named_compile_time_arg_val("scatter_arrival_semaphore_id")>;
+                1>;  // scatter_arrival_enabled=1 (signal matmul1 cores after each scatter row)
 
             // Dummy ComputeCT - not used by BRISC
             using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
+            uint32_t per_core_rta_arg_idx = 0;
+            Worker::WriterArgs writer_args{
+                .r1_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r1_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r1_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .current_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .current_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .fwd_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .fwd_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r1_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+                .r1_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+                .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
+                // scatter_arrival_enabled=1, so we need to pass the semaphore address
+                .scatter_arrival_sem_addr =
+                    get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
+            };
             Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
-            sdpa_worker();
+            sdpa_worker(writer_args);
 
 #elif defined(COMPILE_FOR_TRISC)
             // Dummy ReaderCT and WriterCT - not used by TRISC
@@ -422,8 +454,9 @@ void kernel_main() {
                 1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
 
             // Note: compute_kernel_hw_startup already called at top of TRISC block
+            Worker::ComputeArgs compute_args{};
             Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
-            sdpa_worker();
+            sdpa_worker(compute_args);
 #endif
         }
 
@@ -437,8 +470,15 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_fwd_slot_size"),
                 get_named_compile_time_arg_val("sdpa_fwd_r2_buffer_offset")>;
 
+            uint32_t per_core_rta_arg_idx = 0;
+            Fwd::ForwarderArgs fwd_args{
+                .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+                .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            };
             Fwd::Op<FwdCTArgs> sdpa_forwarder;
-            sdpa_forwarder();
+            sdpa_forwarder(fwd_args);
         }
 #endif
     }
