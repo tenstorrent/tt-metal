@@ -218,32 +218,35 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_full_block,
     const uint32_t chunk_width_in_mm_blocks,
-    const uint32_t mm_block_wt) {
+    const uint32_t mm_block_wt,
+    const bool fuse_mm_op) {
     // Strided reader compile args - include MM blocking parameters
+    // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
     return {
-        ring_index,                  // my_chip_id
-        ring_size,                   // ring_size
-        input_cb_index,              // cb_input_id
-        intermediate_cb_index,       // cb_intermediate_id
-        reader_output_cb_index,      // cb_reader_output_id
-        tile_granularity,            // tile_granularity
-        page_size,                   // page_size
-        input_batch_num_pages,       // input_batch_num_pages
-        input_channel_num_pages,     // input_channel_num_pages
-        input_tensor_B,              // input_tensor_B
-        input_tensor_Wt,             // input_tensor_Wt
-        slice_C,                     // slice_C
-        slice_Wt,                    // slice_Wt
-        normalized_dim,              // dim normalized to 4D
-        mm_M_unit_blocks_per_core,   // mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,  // mm_N_full_blocks_per_slice
-        mm_block_ht,                 // mm_block_ht
-        mm_cores_y,                  // mm_cores_y
-        N_full_block_wt,             // N_full_block_wt
-        chunk_width_in_tiles,        // chunk_width_in_tiles
-        chunks_per_mm_N_full_block,  // chunks_per_mm_N_full_block
-        chunk_width_in_mm_blocks,    // chunk_width_in_mm_blocks (used by FUSE_MM_OP_SIGNALER)
-        mm_block_wt,                 // mm_block_wt (used by FUSE_MM_OP_SIGNALER)
+        ring_index,                         // [0]  my_chip_id
+        ring_size,                          // [1]  ring_size
+        input_cb_index,                     // [2]  cb_input_id
+        intermediate_cb_index,              // [3]  cb_intermediate_id
+        reader_output_cb_index,             // [4]  cb_reader_output_id
+        tile_granularity,                   // [5]  tile_granularity
+        page_size,                          // [6]  page_size
+        input_batch_num_pages,              // [7]  input_batch_num_pages
+        input_channel_num_pages,            // [8]  input_channel_num_pages
+        input_tensor_B,                     // [9]  input_tensor_B
+        input_tensor_Wt,                    // [10] input_tensor_Wt
+        slice_C,                            // [11] slice_C
+        slice_Wt,                           // [12] slice_Wt
+        normalized_dim,                     // [13] dim normalized to 4D
+        mm_M_unit_blocks_per_core,          // [14] mm_M_unit_blocks_per_core
+        mm_N_full_blocks_per_slice,         // [15] mm_N_full_blocks_per_slice
+        mm_block_ht,                        // [16] mm_block_ht
+        mm_cores_y,                         // [17] mm_cores_y
+        N_full_block_wt,                    // [18] N_full_block_wt
+        chunk_width_in_tiles,               // [19] chunk_width_in_tiles
+        chunks_per_mm_N_full_block,         // [20] chunks_per_mm_N_full_block
+        chunk_width_in_mm_blocks,           // [21] chunk_width_in_mm_blocks (used by FUSE_MM_OP_SIGNALER)
+        mm_block_wt,                        // [22] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
+        static_cast<uint32_t>(fuse_mm_op),  // [23] fuse_mm_op: 1 if fused with matmul, 0 otherwise
     };
 }
 
@@ -269,31 +272,34 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t mm_cores_y,
     const uint32_t N_full_block_wt,
     const uint32_t chunk_width_in_tiles,
-    const uint32_t chunks_per_mm_N_full_block) {
+    const uint32_t chunks_per_mm_N_full_block,
+    const bool fuse_mm_op) {
     // Strided writer compile args - include MM blocking parameters
+    // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
     return {
-        ring_index,                     // my_chip_id
-        ring_size,                      // ring_size
-        compute_output_cb_index,        // cb_compute_output_id
-        reader_output_cb_index,         // cb_reader_output_id
-        tile_granularity,               // packet_size_in_pages
-        page_size,                      // page_size
-        num_tiles_to_write_per_packet,  // num_tiles_to_write_per_packet
-        output_batch_num_pages,         // output_batch_num_pages
-        input_channel_num_pages,        // input_channel_num_pages
-        output_channel_num_pages,       // output_channel_num_pages
-        input_tensor_B,                 // input_tensor_B
-        input_tensor_Wt,                // input_tensor_Wt
-        slice_C,                        // slice_C
-        slice_Wt,                       // slice_Wt
-        normalized_dim,                 // dim normalized to 4D
-        mm_M_unit_blocks_per_core,      // mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,     // mm_N_full_blocks_per_slice
-        mm_block_ht,                    // mm_block_ht
-        mm_cores_y,                     // mm_cores_y
-        N_full_block_wt,                // N_full_block_wt
-        chunk_width_in_tiles,           // chunk_width_in_tiles
-        chunks_per_mm_N_full_block,     // chunks_per_mm_N_full_block
+        ring_index,                         // [0]  my_chip_id
+        ring_size,                          // [1]  ring_size
+        compute_output_cb_index,            // [2]  cb_compute_output_id
+        reader_output_cb_index,             // [3]  cb_reader_output_id
+        tile_granularity,                   // [4]  packet_size_in_pages
+        page_size,                          // [5]  page_size
+        num_tiles_to_write_per_packet,      // [6]  num_tiles_to_write_per_packet
+        output_batch_num_pages,             // [7]  output_batch_num_pages
+        input_channel_num_pages,            // [8]  input_channel_num_pages
+        output_channel_num_pages,           // [9]  output_channel_num_pages
+        input_tensor_B,                     // [10] input_tensor_B
+        input_tensor_Wt,                    // [11] input_tensor_Wt
+        slice_C,                            // [12] slice_C
+        slice_Wt,                           // [13] slice_Wt
+        normalized_dim,                     // [14] dim normalized to 4D
+        mm_M_unit_blocks_per_core,          // [15] mm_M_unit_blocks_per_core
+        mm_N_full_blocks_per_slice,         // [16] mm_N_full_blocks_per_slice
+        mm_block_ht,                        // [17] mm_block_ht
+        mm_cores_y,                         // [18] mm_cores_y
+        N_full_block_wt,                    // [19] N_full_block_wt
+        chunk_width_in_tiles,               // [20] chunk_width_in_tiles
+        chunks_per_mm_N_full_block,         // [21] chunks_per_mm_N_full_block
+        static_cast<uint32_t>(fuse_mm_op),  // [22] fuse_mm_op: 1 if fused with matmul, 0 otherwise
     };
 }
 
@@ -667,7 +673,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunk_width_in_tiles_val,
             chunks_per_mm_N_full_block_val,
             chunk_width_in_mm_blocks_val,
-            mm_block_wt_val);
+            mm_block_wt_val,
+            fuse_mm_op);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -714,7 +721,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_cores_y_val,
             mm_N_full_block_wt_val,
             chunk_width_in_tiles_val,
-            chunks_per_mm_N_full_block_val);
+            chunks_per_mm_N_full_block_val,
+            fuse_mm_op);
 
     append_fabric_mux_connection_ct_args(
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
