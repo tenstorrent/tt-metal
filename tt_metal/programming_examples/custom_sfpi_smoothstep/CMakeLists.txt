@@ -7,4 +7,9 @@ target_sources(metal_example_custom_smoothstep PRIVATE custom_sfpi_smoothstep.cp
 if(NOT TARGET TT::Metalium)
     find_package(TT-Metalium REQUIRED)
 endif()
-target_link_libraries(metal_example_custom_smoothstep PUBLIC TT::Metalium)
+target_link_libraries(
+    metal_example_custom_smoothstep
+    PUBLIC
+        TT::Metalium
+        tt_metal_ez
+)

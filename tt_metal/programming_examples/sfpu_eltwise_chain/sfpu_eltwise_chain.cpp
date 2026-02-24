@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/experimental/ez/ez.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed.hpp>
 
 #include <cmath>
-#include <random>
 #include <cstdint>
+#include <random>
 #include <vector>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -19,6 +17,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental::ez;
 
 /**
  * @brief Computes the softplus activation function element-wise on input vector
@@ -92,124 +91,87 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
     y_stddev /= vec_b.size();
 
     // Calculate the correlation coefficient
-    float correlation_coefficient_ = covariance / (std::sqrt(x_stddev) * std::sqrt(y_stddev));
-    return correlation_coefficient_;
+    float correlation_coefficient = covariance / (std::sqrt(x_stddev) * std::sqrt(y_stddev));
+    return correlation_coefficient;
 }
 
 int main() {
-    // Device setup
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+    DeviceContext ctx(0);
 
-    // Device command queue and program setup
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
-
-    // Core range setup
     constexpr CoreCoord core = {0, 0};
 
-    // Input data preparation
+    // Input data preparation — fill one tile with random values in [0, 1).
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> dist(0.f, 1.0f);
 
-    // Fill the source vector with random values
     std::vector<bfloat16> src_vec(constants::TILE_HW);
     for (bfloat16& v : src_vec) {
         v = bfloat16(dist(rng));
     }
 
-    // Calculate golden function results on CPU
+    // Calculate golden function results on CPU for later comparison.
     std::vector<bfloat16> golden_vec(constants::TILE_HW, 0);
     golden_softplus(src_vec, golden_vec);
 
-    // Tilize the input vectors to match the expected tiled layout for the device
+    // Tilize the input vectors to match the expected tiled layout for the device.
     // The Tenstorrent hardware operates on data in 32x32 tiles rather than standard row-major format.
-    // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by the device.
-    // This transformation groups elements into 32x32 blocks and reorders them in memory so that each tile
-    // (32x32 elements) is stored contiguously. This matches the native data access patterns of the matrix engine
-    // and enables efficient operations on the accelerator.
+    // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by
+    // the device. This transformation groups elements into 32x32 blocks and reorders them in memory so
+    // that each tile (32x32 elements) is stored contiguously. This matches the native data access
+    // patterns of the matrix engine and enables efficient operations on the accelerator.
     src_vec = tilize_nfaces(src_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
 
-    // Dram buffer config
-    constexpr uint32_t single_tile_size = sizeof(bfloat16) * constants::TILE_HEIGHT * constants::TILE_WIDTH;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = sizeof(bfloat16) * src_vec.size()};
-    std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Input buffer
-    std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Output buffer
+    // DRAM buffer setup — allocate tile buffers for input and output.
+    auto src_dram_buffer = ctx.dram_tile_buffer(1);
+    auto dst_dram_buffer = ctx.dram_tile_buffer(1);
 
-    // DRAM transfer
-    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+    // Upload data from host to device DRAM.
+    ctx.write(src_dram_buffer, src_vec);
 
-    // L1 circular buffer setup
+    // Build the program with 3 kernels forming a pipeline:
+    //   Reader  → reads tile from DRAM into cb_0, also fills cb_1 with ones (for softplus computation)
+    //   Compute → applies softplus (exp → add_ones → log) via SFPU, writes result to cb_2
+    //   Writer  → writes result tile from cb_2 back to DRAM
+    //
+    // The CB indices are passed as compile-time args before the auto-generated TensorAccessorArgs.
+    // The compute kernel receives CB indices but does NOT need TensorAccessorArgs since it only
+    // operates on L1 circular buffers, not DRAM.
     constexpr uint32_t src_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src_config =
-        CircularBufferConfig(single_tile_size, {{src_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src_config);
-
     constexpr uint32_t ones_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_ones_config =
-        CircularBufferConfig(single_tile_size, {{ones_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ones_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_ones_config);
-
     constexpr uint32_t result_cb_index = CBIndex::c_2;
-    CircularBufferConfig cb_result_config =
-        CircularBufferConfig(single_tile_size, {{result_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(result_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_result_config);
 
-    // Kernels setup
-    // Data movement kernels
-    std::vector<uint32_t> reader_compile_time_args = {src_cb_index, ones_cb_index};
-    TensorAccessorArgs(*src_dram_buffer).append_to(reader_compile_time_args);
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/dataflow/reader.cpp",
-        core,
-        tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
-    std::vector<uint32_t> writer_compile_time_args = {result_cb_index};
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-    KernelHandle writer_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/dataflow/writer.cpp",
-        core,
-        tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
+    auto program =
+        ProgramBuilder(core)
+            .cb(tt::CBIndex::c_0, /*num_tiles=*/1)
+            .cb(tt::CBIndex::c_1, /*num_tiles=*/1)
+            .cb(tt::CBIndex::c_2, /*num_tiles=*/1)
+            .reader(
+                OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/dataflow/reader.cpp",
+                {src_dram_buffer},
+                {src_cb_index, ones_cb_index})
+            .runtime_args({src_dram_buffer->address()})
+            .writer(
+                OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/dataflow/writer.cpp",
+                {dst_dram_buffer},
+                {result_cb_index})
+            .runtime_args({dst_dram_buffer->address()})
+            .compute(
+                OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/compute/compute.cpp",
+                MathFidelity::HiFi4,
+                {src_cb_index, ones_cb_index, result_cb_index})
+            .build();
 
-    // Compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {src_cb_index, ones_cb_index, result_cb_index};
-    CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/compute/compute.cpp",
-        core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+    // Execute program and read result back to host.
+    ctx.run(std::move(program));
+    auto result_vec = ctx.read<bfloat16>(dst_dram_buffer);
 
-    // Runtime args setup
-    SetRuntimeArgs(program, reader_kernel_id, core, {src_dram_buffer->address()});
-    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer->address()});
-
-    // Program enqueue
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
-
-    // Data transfer back to host machine
-    std::vector<bfloat16> result_vec(constants::TILE_HW, 0);
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
-
-    // Reverse the tilization to get the result in the row-major format that the CPU expects
+    // Reverse the tilization to get the result in the row-major format that the CPU expects.
     result_vec = untilize_nfaces(result_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
 
-    // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
+    // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector.
     // This is a measure of how similar the two vectors are.
     // A PCC close to 1 indicates that the two vectors are very similar.
     const float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
     fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
     TT_FATAL(pearson > 0.999, "PCC not high enough. Result PCC: {}, Expected PCC: 0.999", pearson);
-
-    mesh_device->close();
 }

@@ -65,6 +65,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc_debugging)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ez)
 
 add_custom_target(
     metal_tests
@@ -85,6 +86,7 @@ add_custom_target(
         unit_tests_lightmetal
         unit_tests_sfpi
         unit_tests_misc
+        unit_tests_ez
 )
 
 add_library(metalium_test_files INTERFACE)

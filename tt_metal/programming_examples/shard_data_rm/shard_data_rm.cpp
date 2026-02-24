@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/ez/ez.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_align.hpp>
+
+#include <cstdint>
+#include <vector>
 
 using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental::ez;
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -25,14 +25,6 @@ int main() {
     // Here, a row-major matrix of shape (M, N) is sharded across 4 cores along the M dimension, resulting in 4 shards
     // of shape (M/4, N).
 
-    // Select device 0 and create a command queue and program object for kernel/buffer management.
-    int device_id = 0;
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();           // Encapsulates kernels and buffers
-
     const char* dprint_env = std::getenv("TT_METAL_DPRINT_CORES");
     if (!dprint_env || std::string(dprint_env).empty()) {
         fmt::print(stderr, "[WARNING] TT_METAL_DPRINT_CORES is not set.\n");
@@ -40,6 +32,8 @@ int main() {
         fmt::print(stderr, "          To enable output, run:\n");
         fmt::print(stderr, "              export TT_METAL_DPRINT_CORES='(0,0)-(0,3)'\n");
     }
+
+    DeviceContext ctx(0);
 
     // Create a vector of shape (16, 1) with values {2, 4, 6, ..., 32} in bfloat16 format.
     // See the following visualization of the data layout (transposed to make showing easier in text)
@@ -60,7 +54,7 @@ int main() {
     constexpr uint32_t M = 16;  // Number of columns
     constexpr uint32_t N = 1;   // Number of rows
     // Use 4 cores: (0,0), (0,1), (0,2), (0,3) for sharding.
-    constexpr uint32_t num_cores = 4;  // Number of cores
+    constexpr uint32_t num_cores = 4;
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {0, num_cores - 1};
     CoreRange cores(start_core, end_core);  // Rectangle of cores (note: end is inclusive)
@@ -79,57 +73,50 @@ int main() {
     // Shard height: number of rows per core (in units of uint32_t pages)
     // Shard width: number of columns per core
     // Shard size: total elements per core
-    // input_unit_size: size of a page (uint32_t, alignment requirement)
-    // shard_width_bytes: width in bytes for each shard
-    uint32_t shard_height = M / num_cores;                       // Height per shard (see note below)
+    uint32_t shard_height = M / num_cores;                       // Height per shard
     uint32_t shard_width = N;                                    // Width per shard
     uint32_t shard_size = shard_height * shard_width;            // Elements per shard
     constexpr uint32_t input_unit_size = sizeof(uint32_t);       // Page size for buffer (alignment need on core)
 
     // Note: Since bfloat16 is 2 bytes and uint32_t is 4 bytes, each page contains 2 bfloat16 values.
     // The division by data_size ensures correct mapping of values to pages.
-    uint32_t padded_offset_bytes = align(input_unit_size, mesh_device->allocator()->get_alignment(BufferType::DRAM));
+    uint32_t padded_offset_bytes =
+        align(input_unit_size, ctx.device().allocator()->get_alignment(BufferType::DRAM));
 
-    // configure and create interleaved DRAM buffer to insert source data into
+    // Create interleaved DRAM buffer to hold the source data.
     uint32_t src_buffer_size = num_values * data_size;
-    distributed::DeviceLocalBufferConfig input_dram_config{
-        .page_size = input_unit_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = src_buffer_size};
-    std::shared_ptr<distributed::MeshBuffer> src_buffer =
-        distributed::MeshBuffer::create(buffer_config, input_dram_config, mesh_device.get());
+    auto src_buffer = ctx.dram_buffer(src_buffer_size, input_unit_size);
     const uint32_t src_addr = src_buffer->address();
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
+    ctx.write(src_buffer, src_vec);
 
-    // configure and create circular buffers with the same address on each of the designated cores
-    // Create a circular buffer on each core to hold its shard of data
+    // Build the program: a reader kernel on each core that reads its shard from DRAM.
+    // The CB index is passed as a compile-time arg before the auto-generated TensorAccessorArgs,
+    // matching the convention used by the kernel (TensorAccessorArgs<1>() expects offset 1).
+    //
+    // A circular buffer on each core holds its shard of data. The per-core runtime args set each
+    // core's starting position in the DRAM buffer:
+    //   - src_addr: base address of the source DRAM buffer
+    //   - shard_size: number of elements this core will process
+    //   - padded_offset_bytes: DRAM page alignment
+    //   - stick_id: index of the first stick in this core's shard
+    //     (recall a stick is 2 bfloat16 values = 4 bytes in this example)
     uint32_t input_cb_index = CBIndex::c_0;
-    size_t cb_total_size = shard_size * input_unit_size;  // Total buffer size per core
-    CircularBufferConfig input_cb_config = CircularBufferConfig(cb_total_size, {{input_cb_index, cb_data_format}})
-                                               .set_page_size(input_cb_index, input_unit_size);
+    const uint32_t values_per_stick = input_unit_size / data_size; // Number of bfloat16 values per stick
 
-    CreateCircularBuffer(program, cores, input_cb_config);
-
-    // create data movement kernel to shard data
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index};
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    const uint32_t values_per_stick = input_unit_size / data_size;  // Number of bfloat16 values per stick
-    auto reader_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "shard_data_rm/kernels/reader_sharded_rm.cpp",
-        cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
-
-    // Set the parameters for each core to read its shard of data
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {0, i};
-        uint32_t idx_h = i * shard_height;
-        // stick_id is the index of the first stick in the shard (recall a stick is 2 bfloat16 values in this example)
-        uint32_t stick_id = idx_h * shard_width / values_per_stick;
-        tt_metal::SetRuntimeArgs(program, reader_id, core, {src_addr, shard_size, padded_offset_bytes, stick_id});
-    }
+    auto program =
+        ProgramBuilder(cores)
+            .cb(tt::CBIndex::c_0, cb_data_format, /*num_tiles=*/shard_size, /*page_size=*/input_unit_size)
+            .reader(
+                OVERRIDE_KERNEL_PREFIX "shard_data_rm/kernels/reader_sharded_rm.cpp",
+                {src_buffer},
+                {input_cb_index})
+            .runtime_args([&](const CoreCoord& core) -> std::vector<uint32_t> {
+                uint32_t i = core.y;
+                uint32_t idx_h = i * shard_height;
+                uint32_t stick_id = idx_h * shard_width / values_per_stick;
+                return {src_addr, shard_size, padded_offset_bytes, stick_id};
+            })
+            .build();
 
     fmt::print("Original tensor values: ");
     for (auto val : src_vec) {
@@ -137,17 +124,12 @@ int main() {
     }
     fmt::print("\n");
 
-    // start/finish program and close device
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    // Kernel prints to console. No need to print the output here.
-    //
-    // You should see the following output in the console:
+    // Execute the program. Kernel prints to console (with TT_METAL_DPRINT_CORES set).
+    // Expected output:
     // 0:(x=0,y=0):BR: Core (0,0): 2 4 6 8
     // 0:(x=0,y=1):BR: Core (0,1): 10 12 14 16
     // 0:(x=0,y=2):BR: Core (0,2): 18 20 22 24
     // 0:(x=0,y=3):BR: Core (0,3): 26 28 30 32
-    distributed::Finish(cq);
-    mesh_device->close();
+    ctx.run(std::move(program));
     fmt::print("Program finished successfully.\n");
 }

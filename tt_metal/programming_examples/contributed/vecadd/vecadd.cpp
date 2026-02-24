@@ -2,70 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <cstddef>
+#include <tt-metalium/experimental/ez/ez.hpp>
+
 #include <cstdint>
-#include <memory>
 #include <random>
 #include <string_view>
 #include <vector>
 
+using namespace tt;
 using namespace tt::tt_metal;
-using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
+using namespace tt::tt_metal::experimental::ez;
 
-constexpr uint32_t TILE_WIDTH = 32;
-constexpr uint32_t TILE_HEIGHT = 32;
-
-std::shared_ptr<distributed::MeshBuffer> MakeBuffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t /*page_size*/, bool sram) {
-    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    const uint32_t page_tiles = sram ? size : 1;
-    const distributed::DeviceLocalBufferConfig device_local_config{
-        .page_size = page_tiles * tile_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
-    const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * size};
-    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
-}
-
-// Allocate a buffer on DRAM or SRAM. Assuming the buffer holds BFP16 data.
-// A tile on Tenstorrent is 32x32 elements, given us using BFP16, we need 2 bytes per element.
-// Making the tile size 32x32x2 = 2048 bytes.
-// @param device: The device to allocate the buffer on.
-// @param n_tiles: The number of tiles to allocate.
-// @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on DRAM.
-std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
-    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    const uint32_t page_tiles = sram ? n_tiles : 1;
-    const distributed::DeviceLocalBufferConfig device_local_config{
-        .page_size = page_tiles * tile_size,
-        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM),
-        .bottom_up = false};
-    const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * n_tiles};
-    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
-}
-
-CBHandle MakeCircularBuffer(
-    Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t size, uint32_t page_size, tt::DataFormat format) {
-    CircularBufferConfig cb_config = CircularBufferConfig(size, {{cb, format}}).set_page_size(cb, page_size);
-    return CreateCircularBuffer(program, core, cb_config);
-}
-
-// Circular buffers are Tenstorrent's way of communicating between the data movement and the compute kernels.
-// kernels queue tiles into the circular buffer and takes them when they are ready. The circular buffer is
-// backed by SRAM. There can be multiple circular buffers on a single Tensix core.
-// @param program: The program to create the circular buffer on.
-// @param core: The core to create the circular buffer on.
-// @param cb: Which circular buffer to create (c_in0, c_in1, c_out0, c_out1, etc..). This is just an ID
-// @param n_tiles: The number of tiles the circular buffer can hold.
-CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
-    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    return MakeCircularBuffer(program, core, cb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
-}
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 
 std::string next_arg(int& i, int argc, char** argv) {
     if (i + 1 >= argc) {
@@ -85,9 +36,6 @@ void help(std::string_view program_name) {
     exit(0);
 }
 
-#ifndef OVERRIDE_KERNEL_PREFIX
-#define OVERRIDE_KERNEL_PREFIX ""
-#endif
 int main(int argc, char** argv) {
     int seed = std::random_device{}();
     int device_id = 0;
@@ -108,39 +56,24 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    distributed::MeshWorkload workload;
-    Program program = CreateProgram();
+    // DeviceContext wraps MeshDevice creation, command queue, and teardown in RAII.
+    DeviceContext ctx(device_id);
+
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
     CoreCoord core = {0, 0};
-    const auto device_coord = distributed::MeshCoordinate(0, 0);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     const uint32_t n_tiles = 64;
-    const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
-    // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the
-    // output buffer.
-    auto a = MakeBufferBFP16(mesh_device, n_tiles, false);
-    auto b = MakeBufferBFP16(mesh_device, n_tiles, false);
-    auto c = MakeBufferBFP16(mesh_device, n_tiles, false);
+    const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+
+    // Create 3 DRAM tile buffers: A and B are inputs, C is the output.
+    // A tile on Tenstorrent is 32x32 elements; with BFloat16, each tile occupies 2048 bytes.
+    auto a = ctx.dram_tile_buffer(n_tiles);
+    auto b = ctx.dram_tile_buffer(n_tiles);
+    auto c = ctx.dram_tile_buffer(n_tiles);
 
     std::mt19937 rng(seed);
     std::vector<uint32_t> a_data = create_random_vector_of_bfloat16(tile_size * n_tiles * 2, 10, rng());
     std::vector<uint32_t> b_data = create_random_vector_of_bfloat16(tile_size * n_tiles * 2, 10, rng());
-
-    const uint32_t tiles_per_cb = 4;
-    // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores
-    // and for the compute cores to stream data out.
-    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
-    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
-    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
-
-    // We're writing to a shard allocated on MeshCoordinate 0, 0, since this is a 1x1 MeshDevice
-    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    // The last argument indicates if the operation is blocking or not.
-    distributed::WriteShard(cq, a, a_data, device_coord, false);
-    distributed::WriteShard(cq, b, b_data, device_coord, false);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
     // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kerenl for
@@ -153,57 +86,45 @@ int main(int argc, char** argv) {
     // into 2 circular buffers. `add` reads tiles from the circular buffers, adds them together, and dumps the result
     // into a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the
     // output buffer C.
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*a).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*b).append_to(reader_compile_time_args);
-    auto reader = CreateKernel(
-        program,
+    //
+    // Circular buffers are Tenstorrent's way of communicating between the data movement and the compute kernels.
+    // Kernels queue tiles into the circular buffer and takes them when they are ready. The circular buffer is
+    // backed by SRAM. There can be multiple circular buffers on a single Tensix core.
+    constexpr uint32_t tiles_per_cb = 4;
+
+    auto builder = ProgramBuilder(core);
+    builder.cb(tt::CBIndex::c_0, tiles_per_cb)
+        .cb(tt::CBIndex::c_1, tiles_per_cb)
+        .cb(tt::CBIndex::c_16, tiles_per_cb);
+
+    // Reader kernel: reads tiles from A and B into circular buffers c_0 and c_1.
+    // The EZ API auto-generates TensorAccessorArgs from the buffer list {a, b}.
+    auto& reader_ref = builder.reader(
         OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
-    auto writer = CreateKernel(
-        program,
+        {a, b});
+    // Writer kernel: reads from c_16 and writes tiles to output buffer C.
+    auto& writer_ref = builder.writer(
         OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = writer_compile_time_args});
-    auto compute = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp",
-        core,
-        ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
+        {c});
+    // Compute kernel: reads from c_0 and c_1, adds tiles, writes result to c_16.
+    auto& compute_ref = builder.compute(
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp");
 
-    // Set the runtime arguments for the kernels. This also registers
-    // the kernels with the program.
-    SetRuntimeArgs(program, reader, core, {a->address(), b->address(), n_tiles});
-    SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
-    SetRuntimeArgs(program, compute, core, {n_tiles});
+    // Set the runtime arguments for the kernels.
+    reader_ref.runtime_args({a->address(), b->address(), n_tiles});
+    writer_ref.runtime_args({c->address(), n_tiles});
+    compute_ref.runtime_args({n_tiles});
 
-    // We have setup the program. Now we can add it to the workload and queue it for execution.
-    // The last argument to EnqueueMeshWorkload is a boolean that specifies whether
-    // we wait for the program to finish execution before returning. I've set
-    // it to true. But alternatively, you can set it to false and call
-    // `Finish(cq)` to wait for all programs to finish.
-    // But it shouldn't matter in this case since we block on reading the output
-    // buffer.
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-    // distributed::Finish(cq);
+    // Upload input data (non-blocking), execute program, then read back the result.
+    // The last write blocks to ensure data is ready before kernel execution.
+    ctx.write(a, a_data);
+    ctx.write(b, b_data);
+    ctx.run(builder.build());
+
     std::cout << "Kernel execution finished" << std::endl;
 
     // Read the output buffer.
-    std::vector<uint32_t> c_data;
-
-    // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
-    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
+    auto c_data = ctx.read<uint32_t>(c);
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
@@ -211,13 +132,11 @@ int main(int argc, char** argv) {
     bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
     bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(c_data.data());
-    for (int i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; i++) {
         std::cout << "  " << static_cast<float>(a_bf16[i]) << " + " << static_cast<float>(b_bf16[i]) << " = "
                   << static_cast<float>(c_bf16[i]) << "\n";
     }
     std::cout << std::flush;
 
-    // Finally, we close the device.
-    mesh_device->close();
     return 0;
 }

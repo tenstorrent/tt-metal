@@ -3,21 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <random>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/ez/ez.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <bmm_op.hpp>
-#include <tt-metalium/device.hpp>
-#include <fmt/core.h>
+
+#include <cstdint>
+#include <vector>
 
 using namespace tt::constants;
-using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental::ez;
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -33,27 +32,13 @@ void golden_matmul(
     uint32_t M,
     uint32_t N,
     uint32_t K) {
-    std::uint32_t idx_c = 0;
-    std::uint32_t idx_a = 0;
-    std::uint32_t idx_b = 0;
-
-    float c_f;
-    float float_tmp;
-    std::vector<bfloat16> c_bf(M * N, 0);
-
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            idx_c = j + (i * N);
-            idx_a = i * K;
-            idx_b = j;
-            c_f = 0;
-            for (int k_m = 0; k_m < K; k_m++) {
-                float_tmp = static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
-                c_f += float_tmp;
-                idx_a += 1;
-                idx_b += N;
+    for (uint32_t i = 0; i < M; i++) {
+        for (uint32_t j = 0; j < N; j++) {
+            float c_f = 0;
+            for (uint32_t k_m = 0; k_m < K; k_m++) {
+                c_f += static_cast<float>(a[i * K + k_m]) * static_cast<float>(b[k_m * N + j]);
             }
-            output.at(idx_c) = bfloat16(c_f);
+            output.at(j + i * N) = bfloat16(c_f);
         }
     }
 }
@@ -73,13 +58,13 @@ void golden_matmul(
  * Work distribution is handled automatically - if output tiles don't divide evenly
  * across cores, some cores get one extra tile to balance the workload.
  *
- * @param a Input matrix A in row-major format (bfloat16 elements)
- * @param b Input matrix B in row-major format (bfloat16 elements)
- * @param output Output matrix C to store A*B result (bfloat16 elements)
+ * @param a Input matrix A in tilized format (bfloat16 elements)
+ * @param b Input matrix B in tilized format (bfloat16 elements)
+ * @param output Output matrix C to store A*B result (bfloat16 elements, tilized)
  * @param M Number of rows in matrix A and output matrix C
  * @param N Number of columns in matrix B and output matrix C
  * @param K Number of columns in matrix A and rows in matrix B
- * @param mesh_device Target mesh device (1x1 or larger) for computation
+ * @param ctx DeviceContext providing device access, buffer allocation, and execution
  *
  * @note Matrix dimensions must be divisible by tile size (32x32) for this implementation
  * @note Uses circular buffers with 2 tiles for double-buffering to overlap compute and data movement
@@ -91,7 +76,7 @@ void matmul_multi_core(
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    DeviceContext& ctx) {
     // Check if the configuration is valid - matrices must be divisible by tile dimensions
     TT_ASSERT(
         (M * N) % TILE_HW == 0,
@@ -100,14 +85,8 @@ void matmul_multi_core(
         N,
         TILE_HW);
 
-    // Set up mesh command queue, workload, device range, and program for multi-core execution
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
-
     // Get the compute grid size to determine how many cores are available
-    auto core_grid = mesh_device->compute_with_storage_grid_size();
+    auto core_grid = ctx.device().compute_with_storage_grid_size();
     auto num_output_tiles_total = (M * N) / TILE_HW;
 
     // Use the split_work_to_cores utility function to distribute matrix multiplication work
@@ -128,87 +107,41 @@ void matmul_multi_core(
     const uint32_t Kt = K / TILE_WIDTH;   // Number of tiles in K dimension
     const uint32_t Nt = N / TILE_WIDTH;   // Number of tiles in N dimension
 
-    // Create DRAM buffers for input and output matrices (replicated per device across the mesh).
-    // We allocate DRAM buffers for the input matrices and output matrix.
+    // Create DRAM buffers for input and output matrices.
     // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
     // as it is generic, works for most cases and achieves good performance.
-    // Writing data from input vectors to source buffers.
-    constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
-
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
-
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
-
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
-
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
-    // Each handle is a mesh-wide replicated allocation; on a unit mesh this is a single device buffer
+    auto src0_dram_buffer = ctx.dram_tile_buffer(Mt * Kt);
+    auto src1_dram_buffer = ctx.dram_tile_buffer(Kt * Nt);
+    auto dst_dram_buffer = ctx.dram_tile_buffer(Mt * Nt);
 
     // Configure Circular Buffers
     // Circular buffers act as staging areas for data movement between DRAM and compute units.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
     // the compute kernel is using the other tile). This number can be adjusted based on the use case, but generally
     // diminishing returns are observed after several tiles.
-    // input tiles count is = 2 so one tile can be read while the other is being processed
-    const auto cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t num_input_tiles = 2;
-    tt_metal::CreateCircularBuffer(
-        program,
-        all_cores,  // create on all cores
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
-            .set_page_size(CBIndex::c_0, single_tile_size));
+    constexpr uint32_t num_input_tiles = 2;
 
-    tt_metal::CreateCircularBuffer(
-        program,
-        all_cores,  // create on all cores
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_1, cb_data_format}})
-            .set_page_size(CBIndex::c_1, single_tile_size));
-
-    tt_metal::CreateCircularBuffer(
-        program,
-        all_cores,  // create on all cores
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})
-            .set_page_size(CBIndex::c_16, single_tile_size));
+    auto builder = ProgramBuilder(all_cores);
+    builder.cb(tt::CBIndex::c_0, num_input_tiles)
+        .cb(tt::CBIndex::c_1, num_input_tiles)
+        .cb(tt::CBIndex::c_16, num_input_tiles);
 
     // Create Kernels (Reader, Writer, Compute)
     // - Reader kernel: Handles reading input data from DRAM into circular buffers
     // - Writer kernel: Handles writing output data from circular buffers back to DRAM
     // - Compute kernel: Performs the actual matrix multiplication computation
-    // All kernels run across all cores to enable parallel execution
+    // All kernels run across all cores to enable parallel execution.
+    // The EZ API auto-generates TensorAccessorArgs from the buffer lists.
     MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-    auto reader_id = tt_metal::CreateKernel(
-        program,
+    auto& reader_ref = builder.reader(
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
-
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-    auto writer_id = tt_metal::CreateKernel(
-        program,
+        {src0_dram_buffer, src1_dram_buffer});
+    auto& writer_ref = builder.writer(
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
-
-    auto compute_kernel_id = tt_metal::CreateKernel(
-        program,
+        {dst_dram_buffer});
+    auto& compute_ref = builder.compute(
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/compute/mm.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
+        math_fidelity);
 
     // Set Runtime Arguments for Kernels
     // Each core needs to know which portion of the work it's responsible for. We are parallelizing across output
@@ -222,9 +155,7 @@ void matmul_multi_core(
         for (const auto& range : ranges.ranges()) {
             for (const auto& core : range) {
                 // Set arguments for the reader kernel (data input)
-                tt_metal::SetRuntimeArgs(
-                    program,
-                    reader_id,
+                reader_ref.runtime_args_at(
                     core,
                     {src0_dram_buffer->address(),  // Address of matrix A in DRAM
                      src1_dram_buffer->address(),  // Address of matrix B in DRAM
@@ -235,16 +166,13 @@ void matmul_multi_core(
                      work_per_core});              // Amount of work for this core
 
                 // Set arguments for the writer kernel (data output)
-                tt_metal::SetRuntimeArgs(
-                    program, writer_id, core, {dst_dram_buffer->address(), work_per_core, work_offset});
+                writer_ref.runtime_args_at(core, {dst_dram_buffer->address(), work_per_core, work_offset});
 
                 // Set arguments for the compute kernel
-                tt_metal::SetRuntimeArgs(
-                    program,
-                    compute_kernel_id,
+                compute_ref.runtime_args_at(
                     core,
-                    {work_per_core,            // Amount of work for this core
-                     Kt});                     // Number of tiles in K dimension for dot product
+                    {work_per_core,  // Amount of work for this core
+                     Kt});           // Number of tiles in K dimension for dot product
                 work_offset += work_per_core;  // Update offset for next core
             }
         }
@@ -254,14 +182,10 @@ void matmul_multi_core(
     // 1. Upload input data to DRAM buffers
     // 2. Execute the program (all kernels run in parallel across cores)
     // 3. Read back the result from DRAM to host memory
-    // The 'true' parameter in EnqueueReadMeshBuffer ensures we wait for completion (so when the function
-    // returns, the output vector is fully populated).
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    // Blocking read waits for completion before returning and resizes 'output' as needed
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    ctx.write(src0_dram_buffer, a);
+    ctx.write(src1_dram_buffer, b);
+    ctx.run(builder.build());
+    output = ctx.read<bfloat16>(dst_dram_buffer);
 }
 
 ///////////////////////////////////////
@@ -271,7 +195,7 @@ int main() {
 
     try {
         constexpr int device_id = 0;
-        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+        DeviceContext ctx(device_id);
 
         // Create source data with specified matrix dimensions
         constexpr uint32_t M = 640;  // Number of rows in matrix A (user-defined)
@@ -283,21 +207,12 @@ int main() {
         static_assert(N % TILE_WIDTH == 0, "N must be divisible by TILE_WIDTH");
         static_assert(K % TILE_WIDTH == 0, "K must be divisible by TILE_WIDTH");
 
-        // Calculate matrix dimensions in tiles for the accelerator
-        uint32_t Mt = M / TILE_HEIGHT;
-        uint32_t Nt = N / TILE_WIDTH;
-
-        // Calculate buffer sizes needed for each matrix in bytes
-        constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
-        uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt;  // num_tiles of FP16_B
-
         // Create random input vectors for matrices A and B
         std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
 
         std::vector<bfloat16> src0_vec(M * K, 0);  // Matrix A (MxK)
         std::vector<bfloat16> src1_vec(K * N, 0);  // Matrix B (KxN)
-        // // Fill with random bfloat16 values
         for (bfloat16& v : src0_vec) {
             v = bfloat16(dist(rng));
         }
@@ -309,7 +224,7 @@ int main() {
         std::vector<bfloat16> golden_vec(M * N, 0);
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K);
 
-        // Input vector tilizing to match device expected tiled layout
+        // Input vector tilizing to match device expected tiled layout.
         // The Tenstorrent hardware operates on data in 32x32 tiles rather than standard row-major format.
         // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by the device.
         // This transformation groups elements into 32x32 blocks and reorders them in memory so that each tile
@@ -319,21 +234,22 @@ int main() {
         src1_vec = tilize_nfaces(src1_vec, K, N);
 
         /* Calling the MatMul host program. Read in result into a host vector */
+        uint32_t Mt = M / TILE_HEIGHT;
+        uint32_t Nt = N / TILE_WIDTH;
+        constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+        uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt;
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
-        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, mesh_device);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, ctx);
         // Reverse the tilization to get the result in the row-major format that the CPU expects
         result_vec = untilize_nfaces(result_vec, M, N);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
 
-        // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
-        // This is a measure of how similar the two vectors are.
+        // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector.
         // A PCC close to 1 indicates that the two vectors are very similar.
         float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
         fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
-
-        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");
