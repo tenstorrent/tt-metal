@@ -6,8 +6,8 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.sampling import LogProbsCalculator
 from models.common.utility_functions import comp_pcc
-from models.common.utils import LogProbsCalculator
 
 
 @pytest.mark.parametrize(

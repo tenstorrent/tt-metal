@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
@@ -376,6 +377,12 @@ class FlashMLADecode:
         assert device_grid.x >= 11, f"Device must have at least 11 columns, got {device_grid.x}"
         assert device_grid.y == 10, f"Device must have exactly 10 rows, got {device_grid.y}"
 
+        full_device_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))
+
+        full_grid_mcast_start_core = device.worker_core_from_logical_core(full_device_grid.start)
+        full_grid_mcast_end_core = device.worker_core_from_logical_core(full_device_grid.end)
+        full_grid_mcast_num_dests = device_grid.x * device_grid.y
+
         # Compute kernel config
         math_fidelity = compute_kernel_config.math_fidelity
         math_approx_mode = compute_kernel_config.math_approx_mode
@@ -531,7 +538,8 @@ class FlashMLADecode:
         # =========================================================================
         # CB IDs - used by both CB descriptors and kernel compile-time args
         # =========================================================================
-        cb_q_in = 0  # Q input
+        cb_q_in = 0  # Q  input
+        cb_compute_in = 9  # Compute input
         cb_k_in = 1  # K/V cache input
         cb_ms_in = 2  # m/s stats input (from sender in tree reduction)
         cb_out_in = 3  # output input for tree reduction
@@ -578,96 +586,107 @@ class FlashMLADecode:
         # Compile time args (simplified for Deepseek V3 B1)
         # Assumptions: PNHt=1, num_kv_heads=1, num_heads_per_core=1, Bkv=1
         # =========================================================================
-        # Q is always tilized (TILE_LAYOUT)
         assert input_tensor_q.layout == ttnn.TILE_LAYOUT, "Q tensor must be TILE_LAYOUT (tilized)"
         assert PNHt == 1, f"PNHt must be 1, got {PNHt}"
         assert num_kv_heads == 1, f"num_kv_heads must be 1, got {num_kv_heads}"
         assert num_heads_per_core == 1, f"num_heads_per_core must be 1, got {num_heads_per_core}"
         assert Bkv == 1, f"Bkv must be 1, got {Bkv}"
 
-        # Q chunk size bytes (PNHt=1, so q_tiles = DHt)
         q_chunk_size_bytes = q_tiles * q_tile_size
 
         # =========================================================================
-        # Semaphore IDs (used in both descriptors and compile-time args)
+        # Semaphore IDs
         # =========================================================================
         reducer_semaphore_id = 0
         output_semaphore_id = 1
         mcast_semaphore_id = 2
         ncrisc_brisc_sync_semaphore_id = 3
         receiver_ready_semaphore_id = 4
+        q_input_mcast_semaphore_id = 5
+        kv_cache_cur_pos_ready_semaphore_id = 6
 
-        # Reader compile time args (simplified - V is read from K by compute kernel)
-        reader_compile_time_args = [
-            St,  # 0: full sequence length in tiles
-            DHt,  # 1: head dim in tiles (K width, V read as first vDHt columns)
-            Sk_chunk_t,  # 2: tiles per K chunk
-            num_cores_per_head,  # 3: cores for seq len parallelism (8)
-            k_chunk_size,  # 4: K chunk size
-            q_chunk_size_bytes,  # 5: Q chunk size in bytes
-            num_mcast_dests,  # 6: multicast destinations (7)
-            mcast_semaphore_id,  # 7: mcast_semaphore_id
-            k_page_size,  # 8: page size for DRAM streaming
-            k_num_pages,  # 9: pages per K chunk
-            ncrisc_brisc_sync_semaphore_id,  # 10: ncrisc_brisc_sync_semaphore_id
-            receiver_ready_semaphore_id,  # 11: receiver_ready_semaphore_id (for double-buffer sync)
-            cb_q_in,  # 12: Q input CB index
-            cb_k_in,  # 13: K input CB index
+        # Value to wait on for KV cache cur pos, this is based on the number of cores that increment in the fused sdpa
+        kv_cache_cur_pos_ready_value = 3
+
+        # =========================================================================
+        # Named compile-time args per RISC (for UnifiedKernelDescriptor)
+        # =========================================================================
+        # NCRISC (reader) named compile-time args
+        ncrisc_named_compile_time_args = [
+            ("St", St),
+            ("DHt", DHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("num_cores_per_head", num_cores_per_head),
+            ("k_chunk_size", k_chunk_size),
+            ("num_mcast_dests", num_mcast_dests),
+            ("mcast_semaphore_id", mcast_semaphore_id),
+            ("k_page_size", k_page_size),
+            ("k_num_pages", k_num_pages),
+            ("q_chunk_size_bytes", q_chunk_size_bytes),
+            ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
+            ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
+            ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
+            ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
+            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests - 1),
+            ("q_input_mcast_semaphore_id", q_input_mcast_semaphore_id),
+            ("ncrisc_brisc_sync_semaphore_id", ncrisc_brisc_sync_semaphore_id),
+            ("receiver_ready_semaphore_id", receiver_ready_semaphore_id),
+            ("kv_cache_cur_pos_ready_semaphore_id", kv_cache_cur_pos_ready_semaphore_id),
+            ("kv_cache_cur_pos_ready_value", kv_cache_cur_pos_ready_value),
+            ("cb_k_in", cb_k_in),
+            ("cb_q_in", cb_q_in),
+            ("cb_compute_in", cb_compute_in),
         ]
-        # TensorAccessorArgs for K (KV cache) only - position is read directly from sharded L1
-        reader_compile_time_args.extend(get_tensor_accessor_args(kv_cache_tensor))  # K
+        # TensorAccessorArgs for K (indexed, starting at index 0)
+        ncrisc_compile_time_args = list(get_tensor_accessor_args(kv_cache_tensor))
 
-        # Writer compile time args (simplified)
-        writer_compile_time_args = [
-            vDHt,  # 0: V head dim in tiles
-            Sk_chunk_t,  # 1: tiles per K chunk
-            num_cores_per_head,  # 2: cores for seq len parallelism (8)
-            reducer_semaphore_id,  # 3: reducer_semaphore_id
-            k_chunk_size,  # 4: K chunk size
-            Q_TILE_HEIGHT,  # 5: Q tile height
-            DHt,  # 6: head dim in tiles
-            num_mcast_dests,  # 7: multicast destinations (7)
-            mcast_semaphore_id,  # 8: mcast_semaphore_id
-            ncrisc_brisc_sync_semaphore_id,  # 9: ncrisc_brisc_sync_semaphore_id
-            k_page_size,  # 10: page size for pipelining
-            k_num_pages,  # 11: pages per K chunk
-            grid.NUM_TREE_REDUCTION_STEPS,  # 12: tree reduction steps (3)
-            receiver_ready_semaphore_id,  # 13: receiver_ready_semaphore_id (for double-buffer sync)
-            cb_k_in,  # 14: K input CB index
-            cb_out_in,  # 15: output input CB index
-            cb_ms_in,  # 16: m/s stats input CB index
-            cb_out_o,  # 17: output O CB index
-            cb_out_ms,  # 18: output m/s stats CB index
-        ]
-
-        # Compute compile time args (keep existing interface for compute kernel)
-        compute_compile_time_args = [
-            St,  # 0
-            DHt,  # 1
-            vDHt,  # 2
-            PNHt,  # 3
-            Sk_chunk_t,  # 4
-            num_cores_per_batch,  # 5
-            k_chunk_size,  # 6
-            num_cores_per_head,  # 7
-            num_heads_per_core,  # 8 (always 1)
-            B,  # 9: q_heads_parallel_factor
-            Q_TILE_HEIGHT,  # 10: Q tile height
-            float_to_uint32(scale),  # 11: scale_fp32
-            grid.NUM_TREE_REDUCTION_STEPS,  # 12: tree reduction steps (3)
-            dst_size,  # 13: dst size
-            cb_q_in,  # 14: Q input CB index
-            cb_k_in,  # 15: K input CB index
-            cb_interm_out,  # 16: intermediate output CB index
-            cb_interm_ms,  # 17: intermediate m/s stats CB index
-            cb_out_in,  # 18: output input CB index
-            cb_ms_in,  # 19: m/s stats input CB index
-            cb_out_o,  # 20: output O CB index
-            cb_out_ms,  # 21: output m/s stats CB index
-            cb_out_final,  # 22: final sharded output CB index
+        # BRISC (writer) named compile-time args
+        brisc_named_compile_time_args = [
+            ("vDHt", vDHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("num_cores_per_head", num_cores_per_head),
+            ("reducer_semaphore_id", reducer_semaphore_id),
+            ("k_chunk_size", k_chunk_size),
+            ("q_tile_height", Q_TILE_HEIGHT),
+            ("DHt", DHt),
+            ("num_mcast_dests", num_mcast_dests),
+            ("mcast_semaphore_id", mcast_semaphore_id),
+            ("ncrisc_brisc_sync_semaphore_id", ncrisc_brisc_sync_semaphore_id),
+            ("k_page_size", k_page_size),
+            ("k_num_pages", k_num_pages),
+            ("num_tree_reduction_steps", grid.NUM_TREE_REDUCTION_STEPS),
+            ("receiver_ready_semaphore_id", receiver_ready_semaphore_id),
+            ("cb_k_in", cb_k_in),
+            ("cb_out_in", cb_out_in),
+            ("cb_ms_in", cb_ms_in),
+            ("cb_out_o", cb_out_o),
+            ("cb_out_ms", cb_out_ms),
         ]
 
-        # No compute defines needed for simplified kernel (no softmax)
+        # TRISC (compute) named compile-time args
+        trisc_named_compile_time_args = [
+            ("St", St),
+            ("DHt", DHt),
+            ("vDHt", vDHt),
+            ("PNHt", PNHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("k_chunk_size", k_chunk_size),
+            ("num_cores_per_head", num_cores_per_head),
+            ("q_heads_parallel_factor", B),
+            ("scale_fp32", float_to_uint32(scale)),
+            ("num_tree_reduction_steps", grid.NUM_TREE_REDUCTION_STEPS),
+            ("dst_size", dst_size),
+            ("cb_q_in", cb_q_in),
+            ("cb_compute_in", cb_compute_in),
+            ("cb_k_in", cb_k_in),
+            ("cb_interm_out", cb_interm_out),
+            ("cb_interm_ms", cb_interm_ms),
+            ("cb_out_in", cb_out_in),
+            ("cb_ms_in", cb_ms_in),
+            ("cb_out_o", cb_out_o),
+            ("cb_out_ms", cb_out_ms),
+            ("cb_out_final", cb_out_final),
+        ]
 
         # =========================================================================
         # Create CB descriptors (matching C++ lines 475-655)
@@ -675,11 +694,16 @@ class FlashMLADecode:
         cb_descriptors = []
 
         # cb_q_in: Q input (tiny tile)
+        q_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_q_in, input_tensor_q)
+        q_input_cb_descriptor.core_ranges = core_grid
+        cb_descriptors.append(q_input_cb_descriptor)
+
+        # cb_compute_in: Compute input (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=q_tiles * q_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_q_in, q_df, q_tile_size, q_tile_descriptor)],
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_compute_in, q_df, q_tile_size, q_tile_descriptor)],
             )
         )
 
@@ -750,6 +774,10 @@ class FlashMLADecode:
         # =========================================================================
         # Create semaphore descriptors (matching C++ lines 724-725)
         # =========================================================================
+        full_device_grid_crs = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))]
+        )
+
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(reducer_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # reducer_semaphore
             ttnn.SemaphoreDescriptor(output_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # output_semaphore
@@ -762,76 +790,71 @@ class FlashMLADecode:
             ttnn.SemaphoreDescriptor(
                 receiver_ready_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
             ),  # receiver_ready for double-buffer sync
+            ttnn.SemaphoreDescriptor(
+                q_input_mcast_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
+            ),  # q_input_mcast_semaphore for Q input mcast
+            ttnn.SemaphoreDescriptor(
+                kv_cache_cur_pos_ready_semaphore_id, ttnn.CoreType.WORKER, core_grid, kv_cache_cur_pos_ready_value
+            ),  # kv_cache_cur_pos_ready_semaphore for KV cache cur pos ready, start at the value that is being waited on
         ]
 
         # =========================================================================
-        # Create kernel descriptors (matching C++ lines 894-918)
+        # Build per-core runtime args for each RISC
         # =========================================================================
-        # Addresses for runtime args
-        q_addr = q_tensor.buffer_address()
         k_addr = kv_cache_tensor.buffer_address()
         pos_addr = cur_pos_tensor.buffer_address()
 
-        # Create single RuntimeArgs objects for all cores (matching C++ pattern)
-        reader_rtargs = ttnn.RuntimeArgs()
-        writer_rtargs = ttnn.RuntimeArgs()
-        compute_rtargs = ttnn.RuntimeArgs()
+        ncrisc_per_core_args = []
+        brisc_per_core_args = []
+        trisc_per_core_args = []
 
-        # Add runtime args for active cores (simplified for Deepseek V3 B1)
         for i in range(num_active_cores):
             core = core_group[i]
 
-            # Calculate per-core values
-            # Core layout: [S1[0], S2[0], ..., S8[0], S1[1], S2[1], ..., S8[1], ...]
             s_block_idx = i % num_s_blocks
             cur_batch = i // num_cores_per_batch
             core_num_in_reduce = i % num_cores_per_head
             core_num_in_output = i % num_cores_per_batch
 
-            # Tree reduction: do_reduce is true for any S block that receives from others
             do_reduce = 1 if grid.is_tree_reduction_receiver(s_block_idx) else 0
-            # S1 (s_block_idx == 0) is both the output core and the final reducer
             is_output_core = 1 if s_block_idx == 0 else 0
             is_mcast_sender = 1 if i < num_s_blocks else 0
 
-            # Get multicast coordinates for this core's S block
             mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, _ = s_block_mcast_coords[s_block_idx]
 
-            # Virtual channel for DRAM streaming
             if s_block_idx < 4:
                 vc = s_block_idx & 0x1
             else:
                 vc = 2 + ((s_block_idx - 4) & 0x1)
 
-            # Output core NOC coordinates (S1 core for this batch)
             output_core_noc_x = output_core_physical_xs[cur_batch] if cur_batch < len(output_core_physical_xs) else 0
             output_core_noc_y = output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
 
-            # Reader runtime args (simplified)
-            reader_runtime_args = [
-                q_addr,
-                k_addr,
-                pos_addr,
-                is_output_core,
-                cur_batch,
-                core_num_in_reduce,
-                is_mcast_sender,
-                mcast_start_x,
-                mcast_start_y,
-                mcast_end_x,
-                mcast_end_y,
-                vc,
-                output_core_noc_x,
-                output_core_noc_y,
-            ]
+            # NCRISC per-core runtime args (common args: k_addr, pos_addr)
+            ncrisc_per_core_args.append(
+                (
+                    core,
+                    [
+                        cur_batch,
+                        core_num_in_reduce,
+                        is_mcast_sender,
+                        is_output_core,
+                        output_core_noc_x,
+                        output_core_noc_y,
+                        mcast_start_x,
+                        mcast_start_y,
+                        mcast_end_x,
+                        mcast_end_y,
+                        vc,
+                    ],
+                )
+            )
 
             # Tree reduction partner coordinates
             tree_reduction_info = grid.get_tree_reduction_partner_coords(device, s_block_idx, cur_batch)
 
-            # Writer runtime args (simplified)
-            # pos_addr is the L1 shard address - same for all cores in height-sharded tensor
-            writer_runtime_args = [
-                pos_addr,
+            # BRISC per-core runtime args (common args: pos_addr)
+            brisc_args = [
                 cur_batch,
                 core_num_in_reduce,
                 is_mcast_sender,
@@ -840,16 +863,14 @@ class FlashMLADecode:
                 mcast_end_x,
                 mcast_end_y,
             ]
-            # Tree reduction info: 3 steps × 4 values
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                writer_runtime_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+                brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+            brisc_per_core_args.append((core, brisc_args))
 
-            # Is this core a sender after receiving? (intermediate node)
             is_sender_after_reduce = 1 if (do_reduce and grid.is_tree_reduction_sender(s_block_idx)) else 0
 
-            # Compute runtime args (updated to include position address)
-            compute_runtime_args = [
-                pos_addr,
+            # TRISC per-core runtime args (common args: pos_addr)
+            trisc_args = [
                 do_reduce,
                 is_output_core,
                 0,  # cur_head (always 0, num_heads_per_core=1)
@@ -859,54 +880,36 @@ class FlashMLADecode:
                 is_sender_after_reduce,
             ]
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                compute_runtime_args.extend([role_code, partner_s_block_idx])
+                trisc_args.extend([role_code, partner_s_block_idx])
+            trisc_per_core_args.append((core, trisc_args))
 
-            reader_rtargs.append(core, reader_runtime_args)
-            writer_rtargs.append(core, writer_runtime_args)
-            compute_rtargs.append(core, compute_runtime_args)
+        # =========================================================================
+        # Create unified kernel descriptor
+        # =========================================================================
+        unified_kernel = UnifiedKernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/flash_mla_kernel.cpp",
+            core_ranges=core_grid,
+            ncrisc_compile_time_args=ncrisc_compile_time_args,
+            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_named_compile_time_args=brisc_named_compile_time_args,
+            trisc_named_compile_time_args=trisc_named_compile_time_args,
+            ncrisc_common_runtime_args=[k_addr, pos_addr],
+            brisc_common_runtime_args=[pos_addr],
+            trisc_common_runtime_args=[pos_addr],
+            trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=math_fidelity,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+                math_approx_mode=math_approx_mode,
+            ),
+            per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                ncrisc_args=ncrisc_per_core_args,
+                brisc_args=brisc_per_core_args,
+                trisc_args=trisc_per_core_args,
+            ),
+        )
 
-        # Create 3 kernel descriptors covering ALL cores (not per-core)
-        kernel_descriptors = [
-            # Reader kernel (use NOC_0 explicitly for DRAM reads)
-            ttnn.KernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/dataflow/reader_decode_all.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_grid,
-                compile_time_args=reader_compile_time_args,
-                runtime_args=reader_rtargs,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1,
-                    noc=ttnn.NOC.NOC_0,
-                    noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC,
-                ),
-            ),
-            # Writer kernel (use NOC_1 to avoid conflict with reader on NOC_0)
-            ttnn.KernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/dataflow/writer_decode_all.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_grid,
-                compile_time_args=writer_compile_time_args,
-                runtime_args=writer_rtargs,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0,
-                    noc=ttnn.NOC.NOC_1,
-                    noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC,
-                ),
-            ),
-            # Compute kernel
-            ttnn.KernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/compute/sdpa_flash_decode.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_grid,
-                compile_time_args=compute_compile_time_args,
-                runtime_args=compute_rtargs,
-                config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=math_fidelity,
-                    fp32_dest_acc_en=fp32_dest_acc_en,
-                    math_approx_mode=math_approx_mode,
-                ),
-            ),
-        ]
+        kernel_result = unified_kernel.get_kernel_descriptors()
+        kernel_descriptors = kernel_result.kernels
 
         # =========================================================================
         # Create and execute program
