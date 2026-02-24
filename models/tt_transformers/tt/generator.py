@@ -70,6 +70,9 @@ class Generator(WarmupForwardMixin):
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
+        self.trace_id_prefill_sampling = defaultdict(lambda: None)
+        self.trace_input_prefill_sampling = defaultdict(lambda: None)
+        self.trace_output_prefill_sampling = defaultdict(lambda: None)
         self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
@@ -285,6 +288,45 @@ class Generator(WarmupForwardMixin):
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
             logger.info("Done Capturing Prefill Trace")
             return trace_id, tt_out_trace, *device_inputs
+
+    def _capture_trace_prefill_sampling(self, model_id, padded_batch):
+        """Capture a trace for batched prefill post-processing: norm + lm_head + sampling.
+
+        Input buffer: [1, 1, padded_batch, full_dim] host → column-sharded to [1, 1, padded_batch, dim_per_device].
+        Output: (tt_tokens, tt_log_probs) from sampling.
+        """
+        mesh_device = self.model_args[model_id].mesh_device
+        full_dim = self.model_args[model_id].dim
+
+        dummy_input = ttnn.from_torch(
+            torch.zeros(1, 1, padded_batch, full_dim, dtype=torch.bfloat16),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        )
+
+        logits = self.model[model_id]._apply_norm_and_lm_head(dummy_input)
+        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Done compiling prefill sampling")
+
+        trace_input = ttnn.from_torch(
+            torch.zeros(1, 1, padded_batch, full_dim, dtype=torch.bfloat16),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        )
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        logits = self.model[model_id]._apply_norm_and_lm_head(trace_input)
+        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Done capturing prefill sampling trace")
+
+        return trace_id, (tt_tokens, tt_log_probs), trace_input
 
     def _easy_trace_prefill(
         self,
@@ -577,45 +619,79 @@ class Generator(WarmupForwardMixin):
                     **local_kwargs,
                 )
             if use_batched_prefill:
-                # Model outputs logits as [1, 1, padded_batch * prefill_seq_len, vocab_size]
-                # Reshape to [padded_batch, 1, prefill_seq_len, vocab_size] for per-user extraction
-                vocab_size = logits.shape[-1]
-                logits = ttnn.reshape(logits, [padded_batch, 1, prefill_seq_len, vocab_size])
+                hidden_dim = logits.shape[-1]
+                logits = ttnn.reshape(logits, [padded_batch, 1, prefill_seq_len, hidden_dim])
 
-                for local_idx, slot in enumerate(empty_slots):
-                    user_logits = logits[slot : slot + 1, :, :, :]
-                    _logits = self.model[model_id].process_logits_after_prefill_trace(user_logits, last_token_idx[slot])
+                if sampling_enabled:
+                    sampling_executed = True
 
-                    if sampling_enabled:
-                        sampling_executed = True
-                        per_request_params = format_sampling_params(
-                            broadcast_sampling_params(sampling_params, local_idx, slot_len=32), 32
+                    combined_params = format_sampling_params(sampling_params, padded_batch)
+                    max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
+                    combined_prompt_tokens = torch.zeros(padded_batch, max_prompt_len, dtype=torch.long)
+                    for local_idx, slot in enumerate(empty_slots):
+                        plen = int(prompt_lens[local_idx])
+                        combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
+
+                    sampling_module = self.model[model_id].sampling
+                    sampling_module.reset_sampling_params(combined_params)
+                    if getattr(combined_params, "seed", None) is not None:
+                        sampling_module.seed_manager.reset_seed(combined_params.seed, empty_slots)
+                    sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=False)
+                    if combined_prompt_tokens is not None:
+                        sampling_module.reset_prompt_tokens(combined_prompt_tokens)
+                    sampling_module.reset_output_state()
+
+                    user_hidden = self.model[model_id].extract_last_tokens_batched_prefill(
+                        logits, last_token_idx, padded_batch, prefill_seq_len
+                    )
+
+                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}"
+                    if enable_trace_current_prompt:
+                        if self.trace_id_prefill_sampling[sampling_trace_key] is None:
+                            (
+                                s_trace_id,
+                                s_trace_output,
+                                s_trace_input,
+                            ) = self._capture_trace_prefill_sampling(model_id, padded_batch)
+                            self.trace_id_prefill_sampling[sampling_trace_key] = s_trace_id
+                            self.trace_output_prefill_sampling[sampling_trace_key] = s_trace_output
+                            self.trace_input_prefill_sampling[sampling_trace_key] = s_trace_input
+
+                        s_trace_input = self.trace_input_prefill_sampling[sampling_trace_key]
+                        user_hidden_host = user_hidden.cpu()
+                        ttnn.copy_host_to_device_tensor(user_hidden_host, s_trace_input)
+                        ttnn.execute_trace(
+                            self.model_args[model_id].mesh_device,
+                            self.trace_id_prefill_sampling[sampling_trace_key],
+                            cq_id=0,
+                            blocking=False,
                         )
-                        _apply_prefill_sampling_state(
-                            self.model[model_id],
-                            sampling_params=per_request_params,
-                            prompt_tokens=prefill_ids[slot : slot + 1, : int(prompt_lens[local_idx])].repeat(32, 1),
-                            empty_slots=[slot % 32],
-                        )
+                        tt_tokens, tt_log_probs = self.trace_output_prefill_sampling[sampling_trace_key]
+                    else:
+                        batched_logits = self.model[model_id]._apply_norm_and_lm_head(user_hidden)
                         tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
-                            _logits,
+                            batched_logits,
                             enable_trace=False,
                         )
-                        ttnn.synchronize_device(self.model[model_id].mesh_device)
-                        tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[
-                            last_token_idx[slot] % 32
-                        ]
-                        log_probs_host = (
-                            ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[
-                                last_token_idx[slot] % 32
-                            ]
-                            if tt_log_probs is not None
-                            else None
-                        )
-                        output_tokens[slot] = tokens_host
+
+                    ttnn.synchronize_device(self.model[model_id].mesh_device)
+
+                    tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)
+                    log_probs_host = (
+                        ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)
+                        if tt_log_probs is not None
+                        else None
+                    )
+                    for local_idx, slot in enumerate(empty_slots):
+                        output_tokens[slot] = tokens_host[slot]
                         if log_probs_host is not None:
-                            output_log_probs[slot] = log_probs_host
-                    else:
+                            output_log_probs[slot] = log_probs_host[slot]
+                else:
+                    for local_idx, slot in enumerate(empty_slots):
+                        user_logits = logits[slot : slot + 1, :, :, :]
+                        _logits = self.model[model_id].process_logits_after_prefill_trace(
+                            user_logits, last_token_idx[slot]
+                        )
                         _logits = ttnn.to_layout(_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                         output_tensor[slot] = self.model[model_id].process_output_prefill(
                             _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
@@ -2178,6 +2254,17 @@ class Generator(WarmupForwardMixin):
                             ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
                         except Exception:
                             pass  # Ignore errors during cleanup
+
+            # Release prefill sampling traces
+            if hasattr(self, "trace_id_prefill_sampling"):
+                for trace_key, trace_id in self.trace_id_prefill_sampling.items():
+                    if trace_id is not None:
+                        parts = trace_key.split("_")
+                        m_id = int(parts[-1]) if len(parts) >= 2 else 0
+                        try:
+                            ttnn.release_trace(self.model_args[m_id].mesh_device, trace_id)
+                        except Exception:
+                            pass
 
             # Release decode traces
             if hasattr(self, "trace_ids_decode"):

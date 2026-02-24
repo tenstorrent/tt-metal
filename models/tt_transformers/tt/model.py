@@ -159,8 +159,74 @@ class Transformer(LightweightModule):
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
-        logits = self.norm(
-            logits, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
+        logits = self._apply_norm_and_lm_head(logits)
+        return logits
+
+    def extract_last_tokens_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract each user's last-token hidden state from batched prefill output.
+
+        Reads hidden states to host, extracts the relevant row for each user,
+        and sends the combined tensor back to device with the correct column-sharded
+        mesh mapping (ShardTensorToMesh dim=-1) so the DistributedNorm all-gather
+        produces the correct full hidden dim.
+
+        Args:
+            hidden_states: [padded_batch, 1, prefill_seq_len, dim_per_device] on device (column-sharded, TILE_LAYOUT)
+            last_token_idx_list: list of length padded_batch with per-user last token positions
+            padded_batch: number of slots (typically 32)
+            prefill_seq_len: padded sequence length per user
+
+        Returns:
+            user_tokens: [1, 1, padded_batch, dim_per_device] per device, column-sharded, TILE_LAYOUT
+        """
+        active_indices = [lt for lt in last_token_idx_list if lt > 0]
+        all_same = len(set(active_indices)) <= 1
+
+        if all_same and active_indices:
+            common_last = active_indices[0]
+            get_last = (common_last // 32) * 32
+            R = common_last % 32
+            block = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last, 0),
+                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
+            )
+        else:
+            block = hidden_states
+            R = None
+
+        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
+        host_full = torch.cat(host_tensors, dim=-1)
+
+        if R is not None:
+            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
+        else:
+            rows = []
+            for slot in range(padded_batch):
+                lt_idx = last_token_idx_list[slot]
+                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
+            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+
+        user_tokens = ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+        )
+        return user_tokens
+
+    def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract last tokens and run norm + lm_head once for all users."""
+        user_tokens = self.extract_last_tokens_batched_prefill(
+            hidden_states, last_token_idx_list, padded_batch, prefill_seq_len
+        )
+        return self._apply_norm_and_lm_head(user_tokens)
+
+    def _apply_norm_and_lm_head(self, x):
+        """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
+        x = self.norm(
+            x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
         )
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
         if lm_head_input_mem_cfg.is_sharded():
