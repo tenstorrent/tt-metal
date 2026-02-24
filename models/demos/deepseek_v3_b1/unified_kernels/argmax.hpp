@@ -44,7 +44,10 @@ struct Sampling {
         uint32_t SenderIdx,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
-        uint32_t SocketPageSizeBytes = 0>
+        uint32_t SocketPageSizeBytes = 0,
+        uint32_t ScoresCBId = 0xFFFFFFFF,
+        uint32_t ScoresNumPages = 0,
+        uint32_t GatherCBId = 0xFFFFFFFF>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
@@ -70,6 +73,9 @@ struct Sampling {
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
+        static constexpr uint32_t scores_cb_id = ScoresCBId;
+        static constexpr uint32_t scores_num_pages = ScoresNumPages;
+        static constexpr uint32_t gather_cb_id = GatherCBId;
     };
 
     template <
@@ -327,13 +333,18 @@ struct Sampling {
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
-            const uint32_t gather_addr = args.gather_addr;
-
+            const uint32_t gather_addr =
+                (CTArgs::gather_cb_id != 0xFFFFFFFF) ? get_write_ptr(CTArgs::gather_cb_id) : args.gather_addr;
+            uint32_t scores_addr = args.scores_addr;
+            if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
+                cb_wait_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
+                scores_addr = get_read_ptr(CTArgs::scores_cb_id);
+            }
             invalidate_l1_cache();
 
             // Phase 1: per-core local argmax and delivery to the final core.
             if constexpr (IsActiveCore) {
-                auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.scores_addr);
+                auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);
                 auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.indices_addr);
                 uint16_t best_score = NEG_INF_BFLOAT16;
                 uint32_t best_index = 0xFFFFFFFF;
@@ -347,6 +358,9 @@ struct Sampling {
                     phase1_send_local_winner_to_final(
                         local_slot_addr, gather_addr + slot_offset, args.final_noc_x, args.final_noc_y);
                 }
+            }
+            if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
+                cb_pop_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
             }
 
             // Phase 2: final-core intra-device reduction across all active cores.

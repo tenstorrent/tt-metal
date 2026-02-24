@@ -144,21 +144,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_sender_idx"),
         get_named_compile_time_arg_val("argmax_socket_mode"),
         get_named_compile_time_arg_val("argmax_socket_cb"),
-        get_named_compile_time_arg_val("argmax_socket_page_size_bytes")>;
-
-    constexpr uint32_t gather_cb = get_named_compile_time_arg_val("argmax_gather_cb");
-
-    deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
-        0,
-        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        0,
-    };
+        get_named_compile_time_arg_val("argmax_socket_page_size_bytes"),
+        get_named_compile_time_arg_val("matmul_out"),
+        get_named_compile_time_arg_val("matmul_out_w"),
+        get_named_compile_time_arg_val("argmax_gather_cb")>;
 
     // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
     if constexpr (Core::is_matmul_core) {
@@ -167,8 +156,18 @@ void kernel_main() {
         constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
     }
-    constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
-    constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
+
+    deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
+        .scores_addr = 0,
+        .indices_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .output_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .final_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .final_noc_y = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .scratch_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .global_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .global_stage2_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .gather_addr = 0,
+    };
 
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
     // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
@@ -343,27 +342,12 @@ void kernel_main() {
         matmul(matmul_args);
     }
 
-#if defined(COMPILE_FOR_NCRISC)
-    uint32_t scores_addr = 0;
-    if constexpr (Core::is_matmul_core) {
-        // Matmul (TRISC) pushes matmul_out CB; wait before NCRISC consumes scores.
-        cb_wait_front(matmul_out_cb, out_w);
-        scores_addr = get_read_ptr(matmul_out_cb);
-    }
-    sampling_args.scores_addr = scores_addr;
-    sampling_args.gather_addr = get_write_ptr(gather_cb);
     // k=1 fast path: fused sampling invocation matches micro-op style.
-#endif
-        deepseek_b1_ops::Sampling::
-            Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
-                sampling_op;
-        {
-            DeviceZoneScopedN("ARGMAX");
-            sampling_op(sampling_args);
-        }
-#if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_matmul_core) {
-            cb_pop_front(matmul_out_cb, out_w);
-        }
-#endif
+    deepseek_b1_ops::Sampling::
+        Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
+            sampling_op;
+    {
+        DeviceZoneScopedN("ARGMAX");
+        sampling_op(sampling_args);
+    }
 }
