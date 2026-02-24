@@ -1038,8 +1038,9 @@ def is_wormhole_b0():
 
 def is_watcher_enabled():
     watcher = os.environ.get("TT_METAL_WATCHER")
+    watcher_no_poll = os.environ.get("TT_METAL_WATCHER_NO_POLL")
     lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
-    return (watcher is not None and watcher != "") or lightweight_asserts == "1"
+    return (watcher is not None and watcher != "") or watcher_no_poll is not None or lightweight_asserts == "1"
 
 
 def is_n300():
