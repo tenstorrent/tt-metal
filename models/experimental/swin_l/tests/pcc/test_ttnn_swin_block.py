@@ -70,8 +70,9 @@ def test_ttnn_swin_block_pcc(device, swin_l_ref, swin_l_ckpt_path, stage_idx, bl
     )
 
     ttnn_x = ttnn.from_torch(
-        x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
+
     ttnn_x = ttnn.to_layout(ttnn_x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn_out = ttnn_block(ttnn_x)
 
