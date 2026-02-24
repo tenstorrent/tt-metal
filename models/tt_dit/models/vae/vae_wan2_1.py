@@ -626,18 +626,17 @@ class WanMidBlock(Module):
 
     def forward(
         self,
-        x_BTHWC: ttnn.Tensor,
+        x_tile_BTHWC: ttnn.Tensor,
         logical_h: int,
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
-        assert x_BTHWC.layout == ttnn.TILE_LAYOUT
-        x_res_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
-        x_BTHWC = x_res_BTHWC
+        assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
+        x_tile_BTHWC = self.resnets[0](x_tile_BTHWC, logical_h, feat_cache, feat_idx)
         for i in range(len(self.attentions)):
-            x_attn_BTHWC = self.attentions[i](x_BTHWC, logical_h)
-            x_BTHWC = self.resnets[i + 1](x_attn_BTHWC, logical_h, feat_cache, feat_idx)
-        return x_BTHWC
+            x_tile_BTHWC = self.attentions[i](x_tile_BTHWC, logical_h)
+            x_tile_BTHWC = self.resnets[i + 1](x_tile_BTHWC, logical_h, feat_cache, feat_idx)
+        return x_tile_BTHWC
 
 
 class WanConv2d(Module):
@@ -735,6 +734,7 @@ class WanConv2d(Module):
         return self.mask_cache[key]
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         if logical_h % self.parallel_config.height_parallel.factor != 0:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
@@ -1430,22 +1430,24 @@ class WanEncoder3D(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         ## downsamples
         for down_block in self.down_blocks:
             if isinstance(down_block, WanResample):
-                x_BTHWC, logical_h = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+                x_tile_BTHWC, logical_h = down_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
             elif isinstance(down_block, WanResidualBlock):
-                x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+                x_tile_BTHWC = down_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
             elif isinstance(down_block, WanAttentionBlock):
-                x_BTHWC = down_block(x_BTHWC, logical_h)
+                x_tile_BTHWC = down_block(x_tile_BTHWC, logical_h)
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
 
         ## middle
-        x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+        x_tile_BTHWC = self.mid_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
-        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
         x_norm_tile_BTHWC = self.norm_out(x_tile_BTHWC)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
