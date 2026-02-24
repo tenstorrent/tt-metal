@@ -54,6 +54,7 @@ bool is_device_tensor(const Tensor& tensor);
  *   CBDescriptor cb = cb_descriptor_from_sharded_tensor(in_cb_id, device_input_tensor);
  * @endcode
  */
-CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor);
+CBDescriptor cb_descriptor_from_sharded_tensor(
+    uint8_t cb_index, const Tensor& tensor, uint32_t address_offset = 0, uint32_t total_size = 0);
 
 }  // namespace tt::tt_metal

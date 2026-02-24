@@ -429,6 +429,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_local_cb"),
         get_named_compile_time_arg_val("reduce_scratch_cb"),
         get_named_compile_time_arg_val("reduce_packet_cb"),
+        get_named_compile_time_arg_val("reduce_packet_header_cb"),
         get_named_compile_time_arg_val("reduce_num_hops"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
@@ -607,8 +608,7 @@ void kernel_main() {
     // Compute has no runtime args
     deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
 #endif
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ============================================================================
@@ -692,12 +692,13 @@ void kernel_main() {
 
     // ========================================================================
     // 7. up_proj Matmul: Expert computation on DRAM matmul cores (no SiLU)
-    //    PopIn0=true to release input after use
+    //    PopIn0=true to release input after use, WaitForOutput=true
     //    Writes to intermediate CB (up_proj_cb_mm_out)
     // ========================================================================
     {
         DeviceZoneScopedN("UP_PROJ");
-        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true> up_proj;
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true, false, 0, false, true>
+            up_proj;
         up_proj();
     }
 

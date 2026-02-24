@@ -87,6 +87,8 @@ enum class EnvVarID {
     TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE, // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,         // Path to channel trimming profile YAML for import
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
@@ -548,6 +550,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_FABRIC_PROFILE_RX_CH_FWD=1
         case EnvVarID::TT_FABRIC_PROFILE_RX_CH_FWD: this->fabric_profiling_settings.enable_rx_ch_fwd = true; break;
+
+        // TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE
+        // Enables channel trimming resource usage capture on fabric routers.
+        // Default: false
+        // Usage: export TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE=1
+        case EnvVarID::TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE: this->enable_channel_trimming_capture = true; break;
+
+        // TT_METAL_FABRIC_TRIMMING_PROFILE
+        // Path to a previously captured channel trimming YAML file. When set, fabric router
+        // construction uses the captured profile to disable unused sender/receiver channels.
+        // Default: empty (no profile import)
+        // Usage: export TT_METAL_FABRIC_TRIMMING_PROFILE=/path/to/channel_trimming_capture.yaml
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_PROFILE:
+            this->fabric_trimming_profile_path = std::string(value);
+            break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
@@ -1678,7 +1695,7 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
 }
 
-uint32_t RunTimeOptions::get_watcher_hash() const {
+std::string RunTimeOptions::get_watcher_hash() const {
     // These values will cause kernels / firmware to be recompiled if they change
     // Only the ones which have #define on the device side need to be listed here
     std::string hash_str;
@@ -1692,8 +1709,7 @@ uint32_t RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
-    std::hash<std::string> hash_fn;
-    return hash_fn(hash_str);
+    return hash_str;
 }
 
 // Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
