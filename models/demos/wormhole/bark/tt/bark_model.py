@@ -54,6 +54,10 @@ class TtBarkModel:
         self._load_model(model_name)
         print("Bark model loaded successfully!")
 
+    @property
+    def tokenizer(self):
+        return self.processor.tokenizer
+
     def _load_model(self, model_name):
         """Load all components from HuggingFace."""
         from transformers import AutoProcessor, BarkModel
@@ -141,6 +145,7 @@ class TtBarkModel:
         """
         inputs = self.processor(text, voice_preset=voice_preset, return_tensors="pt")
         input_ids = inputs["input_ids"].to(torch.long)
+        assert input_ids.shape[0] == 1, "Bark TTNN implementation currently only supports batch size 1"
 
         # Initial pre-fill (process entire prompt)
         logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True)
@@ -167,7 +172,7 @@ class TtBarkModel:
             next_token = torch.argmax(logits_torch[:, -1, :], dim=-1)
             tokens.append(next_token.unsqueeze(-1))
 
-            if next_token.item() == self.processor.tokenizer.eos_token_id:
+            if next_token.item() == self.tokenizer.eos_token_id:
                 break
 
         semantic_output = torch.cat(tokens, dim=-1)
@@ -182,9 +187,11 @@ class TtBarkModel:
         Returns:
             coarse_tokens: [batch, coarse_seq_len * 2] interleaved
         """
-        # Note: Bark semantic tokens are shifted/processed before coarse stage
-        # We simplify here for the optimization demonstration
+        # Note: Bark semantic tokens are normally shifted/processed before coarse stage.
+        # We simplify here for this bring-up demo to focus on transformer throughput.
+        # This may impact fine-grained correctness vs reference but is sufficient for demo.
         input_ids = semantic_tokens.to(torch.long)
+        assert input_ids.shape[0] == 1, "Bark TTNN implementation currently only supports batch size 1"
 
         # Initial pre-fill
         logits, layer_past = self.coarse_model(input_ids=input_ids, use_cache=True)
