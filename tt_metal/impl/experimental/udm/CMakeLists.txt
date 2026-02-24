@@ -23,5 +23,5 @@ target_link_libraries(
         tt_metal
 )
 
-# Install headers
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} DESTINATION include/tt_metal FILES_MATCHING PATTERN "*.hpp")
+# Headers are now part of the public API file set in tt_metal/CMakeLists.txt
+# at tt_metal/api/tt-metalium/experimental/udm/
