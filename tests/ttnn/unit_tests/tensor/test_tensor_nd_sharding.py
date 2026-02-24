@@ -7,11 +7,7 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import (
-    tt_dtype_to_torch_dtype,
-    assert_with_pcc,
-    TORCH_INTEGER_DTYPES,
-)
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -74,7 +70,7 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in TORCH_INTEGER_DTYPES:
+    if dtype in {torch.uint8, torch.int16, torch.int32}:
         py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, tensor_shape, dtype=dtype)
     else:
         py_tensor = torch.rand(tensor_shape, dtype=dtype)
