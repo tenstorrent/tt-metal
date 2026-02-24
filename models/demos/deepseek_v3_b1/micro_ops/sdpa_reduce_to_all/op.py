@@ -47,8 +47,8 @@ class SdpaReduceToAll:
         m_data_per_device,
         num_cores=8,
         scale_value=1.0,
-        position_mask=None,
-        final_reduction=True,
+        position_id=0,
+        per_device_chunk_size=0,
     ):
         """
         PyTorch reference implementation for SDPA reduce-to-all.
@@ -57,15 +57,12 @@ class SdpaReduceToAll:
             l_data_per_device: list of L tensors [batch, l_width * num_cores]
             s_data_per_device: list of S tensors [batch, num_cores]
             m_data_per_device: list of M tensors [batch, num_cores]
-            position_mask: optional tensor [num_devices] with 1.0 for valid devices, 0.0 for masked devices
+            position_id: scalar position id for validity computation
+            per_device_chunk_size: chunk size per device; when > 0, device d is valid iff position_id >= d * per_device_chunk_size
         """
 
         def compute_reduction(l1, s1, m1, l2, s2, m2, scale, valid1, valid2):
-            """Conditional reduction based on validity flags.
-
-            Args:
-                normalize: If True, normalize the output L by dividing by S
-            """
+            """Conditional reduction based on validity flags."""
             if not valid1 and not valid2:
                 l_out = l1
                 s_out = s1
@@ -90,8 +87,19 @@ class SdpaReduceToAll:
 
         num_devices = len(l_data_per_device)
 
-        # Default mask: all devices valid
-        if position_mask is None:
+        # Compute position mask from position_id and per_device_chunk_size
+        position_enabled = per_device_chunk_size > 0
+        # TODO: Only the reduction can currently perform untilize, so final_reduction
+        # (normalize / divide by s) is always enabled. When untilize is decoupled from
+        # normalization, this can revert to:
+        #   final_reduction = not position_enabled or (position_id >= per_device_chunk_size)
+        final_reduction = True
+        if position_enabled:
+            position_mask = torch.tensor(
+                [1.0 if position_id >= d * per_device_chunk_size else 0.0 for d in range(num_devices)],
+                dtype=torch.float32,
+            )
+        else:
             position_mask = torch.ones(num_devices, dtype=torch.float32)
 
         def split_by_cores(tensor_list, num_cores):
@@ -172,8 +180,8 @@ class SdpaReduceToAll:
         input_forwarder_cores=None,
         scatter_dest_tensor_mesh=None,
         scatter_dest_grid=None,
-        position_tensor_mesh=None,
-        final_reduction=True,
+        position_id_tensor_mesh=None,
+        per_device_chunk_size=0,
     ):
         mesh_device = input_tensor_l_mesh.device()
         mesh_shape = mesh_device.shape
@@ -187,7 +195,7 @@ class SdpaReduceToAll:
         forwarder_cores = input_forwarder_cores
         forwarder_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in forwarder_cores])
 
-        position_enabled = position_tensor_mesh is not None
+        position_enabled = position_id_tensor_mesh is not None and per_device_chunk_size > 0
 
         input_l_per_device = ttnn.get_device_tensors(input_tensor_l_mesh)
         input_ms_per_device = ttnn.get_device_tensors(input_tensor_ms_mesh)
@@ -196,9 +204,8 @@ class SdpaReduceToAll:
         r2_recv_per_device = ttnn.get_device_tensors(r2_recv_tensor_mesh)
         fwd_scratch_per_device = ttnn.get_device_tensors(forwarder_scratch_mesh)
         position_per_device = None
-
         if position_enabled:
-            position_per_device = ttnn.get_device_tensors(position_tensor_mesh)
+            position_per_device = ttnn.get_device_tensors(position_id_tensor_mesh)
 
         # Scatter destination setup (optional)
         scatter_enabled = scatter_dest_tensor_mesh is not None and scatter_dest_grid is not None
@@ -233,10 +240,10 @@ class SdpaReduceToAll:
                 r1_recv_device = r1_recv_per_device[device_idx]
                 r2_recv_device = r2_recv_per_device[device_idx]
                 fwd_scratch_device = fwd_scratch_per_device[device_idx]
-
-                position_device = None
+                pos_addr = 0
                 if position_enabled:
                     position_device = position_per_device[device_idx]
+                    pos_addr = position_device.buffer_address()
 
                 device = input_l_device.device()
 
@@ -309,7 +316,6 @@ class SdpaReduceToAll:
                 cb_l_out = 8
                 cb_ms_out = 9
                 cb_packet_slot = 10
-                cb_position = 11
 
                 # Scatter compile-time parameters
                 if scatter_enabled:
@@ -343,8 +349,8 @@ class SdpaReduceToAll:
                     ("l_chunk_size_bytes", l_chunk_size_bytes),
                     ("num_l_chunks", num_l_chunks),
                     ("tiles_per_l_chunk", tiles_per_l_chunk),
-                    ("cb_position", cb_position),
                     ("position_enabled", 1 if position_enabled else 0),
+                    ("per_device_chunk_size", per_device_chunk_size),
                 ]
 
                 writer_named_ct_args = [
@@ -383,9 +389,11 @@ class SdpaReduceToAll:
                     ("scale_fp32", scale_val),
                     ("tiles_per_l_chunk", tiles_per_l_chunk),
                     ("num_l_chunks", num_l_chunks),
-                    ("cb_position", cb_position),
                     ("position_enabled", 1 if position_enabled else 0),
-                    ("final_reduction", final_reduction),
+                    ("per_device_chunk_size", per_device_chunk_size),
+                    # When position_enabled, final_reduction is decided at runtime from the
+                    # position tensor; compile-time value is unused. Always pass 1 (normalize).
+                    ("final_reduction", 1),
                 ]
 
                 forwarder_named_ct_args = [
@@ -487,24 +495,6 @@ class SdpaReduceToAll:
                         )
                     ],
                 )
-
-                # Position CB (aliased from position tensor)
-                if position_enabled:
-                    cb_position_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_position, position_device)
-                else:
-                    # Dummy CB when position is disabled
-                    cb_position_desc = ttnn.CBDescriptor(
-                        total_size=aligned_page_size,
-                        core_ranges=shard_grid,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=cb_position,
-                                data_format=input_dtype,
-                                page_size=aligned_page_size,
-                                tile=tile_desc,
-                            )
-                        ],
-                    )
 
                 # Semaphores
                 forwarder_semaphores = [
@@ -647,6 +637,7 @@ class SdpaReduceToAll:
                                 (
                                     core,
                                     [
+                                        pos_addr,
                                         device_idx,
                                         r1_neighbor_device_idx,
                                         r2_neighbor_device_idx,
@@ -660,6 +651,7 @@ class SdpaReduceToAll:
                                 (
                                     core,
                                     [
+                                        pos_addr,
                                         r1_neighbor_device_idx,
                                         r2_neighbor_device_idx,
                                         r2_neighbor_r1_neighbor_idx,
@@ -759,7 +751,6 @@ class SdpaReduceToAll:
                         cb_l_out_desc,
                         cb_ms_out_desc,
                         cb_packet_slot_desc,
-                        cb_position_desc,
                     ],
                 )
 
@@ -804,7 +795,7 @@ class SdpaReduceToAll:
         if scatter_enabled:
             io_tensors.append(scatter_dest_tensor_mesh)
         if position_enabled:
-            io_tensors.append(position_tensor_mesh)
+            io_tensors.append(position_id_tensor_mesh)
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         return output_tensor_l_mesh

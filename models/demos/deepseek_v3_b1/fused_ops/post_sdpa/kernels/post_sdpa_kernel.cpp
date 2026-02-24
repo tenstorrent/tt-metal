@@ -282,8 +282,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
 #endif
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================
@@ -356,8 +355,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
-                0,
-                0>;  // cb_position=0, position_enabled=0 (not used in post_sdpa)
+                get_named_compile_time_arg_val("sdpa_position_enabled"),
+                get_named_compile_time_arg_val("sdpa_per_device_chunk_size")>;
 
             // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
             using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
@@ -418,9 +417,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_scale_fp32"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
-                0,
-                0,   // cb_position=0, position_enabled=0 (not used in post_sdpa)
-                1>;  // final_reduction=1 (always normalize in post_sdpa)
+                get_named_compile_time_arg_val("sdpa_position_enabled"),
+                get_named_compile_time_arg_val("sdpa_per_device_chunk_size"),
+                1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
 
             // Note: compute_kernel_hw_startup already called at top of TRISC block
             Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
