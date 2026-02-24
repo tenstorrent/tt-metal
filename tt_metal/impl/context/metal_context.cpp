@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <algorithm>
 #include <mutex>
 #include <future>
+#include <thread>
 #include <vector>
 #include <unordered_set>
 
@@ -1042,38 +1044,66 @@ void MetalContext::initialize_control_plane() {
 }
 
 void MetalContext::initialize_control_plane_impl() {
-    if (custom_mesh_graph_desc_path_.has_value()) {
-        log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
-        std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
-        TT_FATAL(
-            std::filesystem::exists(mesh_graph_desc_path),
-            "Custom mesh graph descriptor file not found: {}",
-            mesh_graph_desc_path.string());
+    constexpr int kMaxControlPlaneInitAttempts = 5;
+    constexpr std::chrono::seconds kInitialBackoff(1);
 
-        log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
-        this->construct_control_plane(mesh_graph_desc_path);
-        return;
-    }
-    // If no custom mesh graph descriptor use auto discovery to generate mesh graph
-    log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
+    for (int attempt = 1; attempt <= kMaxControlPlaneInitAttempts; attempt++) {
+        try {
+            control_plane_.reset();
+            if (custom_mesh_graph_desc_path_.has_value()) {
+                log_debug(
+                    tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
+                std::filesystem::path mesh_graph_desc_path =
+                    std::filesystem::path(custom_mesh_graph_desc_path_.value());
+                TT_FATAL(
+                    std::filesystem::exists(mesh_graph_desc_path),
+                    "Custom mesh graph descriptor file not found: {}",
+                    mesh_graph_desc_path.string());
 
-    if (*distributed_context_->size() == 1) {
-        this->construct_control_plane();
-    } else {
-        auto cluster_type = cluster_->get_cluster_type();
-        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
-        std::filesystem::path mesh_graph_desc_path =
-            tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-                cluster_type, rtoptions_.get_root_dir(), fabric_type);
+                log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
+                this->construct_control_plane(mesh_graph_desc_path);
+                return;
+            }
+            // If no custom mesh graph descriptor use auto discovery to generate mesh graph
+            log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
-        log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+            if (*distributed_context_->size() == 1) {
+                this->construct_control_plane();
+            } else {
+                auto cluster_type = cluster_->get_cluster_type();
+                auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
+                std::filesystem::path mesh_graph_desc_path =
+                    tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+                        cluster_type, rtoptions_.get_root_dir(), fabric_type);
 
-        TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
-        TT_FATAL(
-            std::filesystem::exists(mesh_graph_desc_path),
-            "Mesh graph descriptor file not found: {}",
-            mesh_graph_desc_path.string());
-        this->construct_control_plane(mesh_graph_desc_path);
+                log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+
+                TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+                TT_FATAL(
+                    std::filesystem::exists(mesh_graph_desc_path),
+                    "Mesh graph descriptor file not found: {}",
+                    mesh_graph_desc_path.string());
+                this->construct_control_plane(mesh_graph_desc_path);
+            }
+            return;
+        } catch (const tt::tt_fabric::ControlPlaneInitFailure& e) {
+            if (attempt == kMaxControlPlaneInitAttempts) {
+                TT_FATAL(
+                    false,
+                    "Control plane initialization failed after {} attempts: {}",
+                    kMaxControlPlaneInitAttempts,
+                    e.what());
+            }
+            auto backoff = kInitialBackoff * (1 << (attempt - 1));
+            log_warning(
+                tt::LogDistributed,
+                "Control plane init failed (attempt {}/{}): {}. Retrying in {}s...",
+                attempt,
+                kMaxControlPlaneInitAttempts,
+                e.what(),
+                backoff.count());
+            std::this_thread::sleep_for(backoff);
+        }
     }
 }
 

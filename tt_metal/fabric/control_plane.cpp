@@ -67,8 +67,6 @@ namespace tt::tt_fabric {
 
 namespace {
 
-constexpr ChipId INVALID_CHIP_ID = -1;
-
 // Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh corner nodes.
 // This is a performance optimization to ensure that MGD mapping does not bisect a device.
 //
@@ -739,9 +737,52 @@ void ControlPlane::initialize_fabric_context() {
     }
 }
 
+void ControlPlane::validate_fabric_node_mapping_complete() const {
+    if (this->cluster_.get().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    const auto& unique_chip_ids = this->cluster_.get().get_unique_chip_ids();
+    std::vector<std::string> missing_or_invalid;
+    for (const auto& mesh_id : this->mesh_graph_->get_mesh_ids()) {
+        if (!this->is_local_mesh(mesh_id)) {
+            continue;
+        }
+        const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
+        for (const auto& mesh_coord : mesh_coord_range) {
+            auto fabric_chip_id = this->mesh_graph_->coordinate_to_chip(mesh_id, mesh_coord);
+            FabricNodeId fabric_node_id(mesh_id, fabric_chip_id);
+            auto it = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+            if (it == this->logical_mesh_chip_id_to_physical_chip_id_mapping_.end()) {
+                missing_or_invalid.push_back(
+                    fmt::format("FabricNodeId M{}D{} not in mapping", *fabric_node_id.mesh_id, fabric_node_id.chip_id));
+                continue;
+            }
+            ChipId physical_chip_id = it->second;
+            if (unique_chip_ids.find(physical_chip_id) == unique_chip_ids.end()) {
+                missing_or_invalid.push_back(fmt::format(
+                    "FabricNodeId M{}D{} maps to physical chip {} which is not in cluster",
+                    *fabric_node_id.mesh_id,
+                    fabric_node_id.chip_id,
+                    physical_chip_id));
+            }
+        }
+    }
+    if (!missing_or_invalid.empty()) {
+        std::string msg = "Control plane mapping incomplete or invalid (retry may succeed if hardware is not ready): ";
+        for (size_t i = 0; i < missing_or_invalid.size(); i++) {
+            if (i > 0) {
+                msg += "; ";
+            }
+            msg += missing_or_invalid[i];
+        }
+        throw ControlPlaneInitFailure(msg);
+    }
+}
+
 void ControlPlane::load_physical_chip_mapping(
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
+    this->validate_fabric_node_mapping_complete();
     this->validate_mesh_connections();
 }
 
@@ -754,9 +795,6 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     auto validate_chip_connections = [&](const MeshCoordinate& mesh_coord, const MeshCoordinate& other_mesh_coord) {
         ChipId physical_chip_id = get_physical_chip_id(mesh_coord);
         ChipId physical_chip_id_other = get_physical_chip_id(other_mesh_coord);
-        if (physical_chip_id == INVALID_CHIP_ID || physical_chip_id_other == INVALID_CHIP_ID) {
-            return;  // Skip validation for unmapped coordinates
-        }
         auto eth_links = this->cluster_.get().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
         auto eth_links_to_other = eth_links.find(physical_chip_id_other);
         TT_FATAL(
@@ -1061,9 +1099,6 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
                         directional_eth_chans.at(direction).size());
                     bool trim = directional_eth_chans.at(direction).size() > num_available_routing_planes;
                     auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-                    if (physical_chip_id == INVALID_CHIP_ID) {
-                        continue;
-                    }
                     if (trim) {
                         log_warning(
                             tt::LogFabric,
@@ -1142,10 +1177,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     // This is a local chip, so we can use the logical chip id directly
                     auto physical_connected_chip_id = this->get_physical_chip_id_from_fabric_node_id(
                         FabricNodeId(mesh_id, logical_connected_chip_id));
-                    if (physical_connected_chip_id == INVALID_CHIP_ID) {
-                        continue;
-                    }
-
                     const auto& connected_chips_and_eth_cores =
                         this->cluster_.get().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
@@ -1272,12 +1303,10 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
     if (it == logical_mesh_chip_id_to_physical_chip_id_mapping_.end()) {
-        log_warning(
-            tt::LogFabric,
-            "FabricNodeId M{}D{} not found in physical chip mapping",
-            fabric_node_id.mesh_id,
-            fabric_node_id.chip_id);
-        return INVALID_CHIP_ID;
+        throw ControlPlaneInitFailure(fmt::format(
+            "FabricNodeId M{}D{} not found in physical chip mapping (retry may succeed if hardware is not ready)",
+            *fabric_node_id.mesh_id,
+            fabric_node_id.chip_id));
     }
     return it->second;
 }
@@ -1808,9 +1837,6 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
 void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id) const {
     FabricNodeId src_fabric_node_id{mesh_id, static_cast<uint32_t>(chip_id)};
     auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    if (physical_chip_id == INVALID_CHIP_ID) {
-        return;
-    }
 
     routing_l1_info_t routing_info = {};
     routing_info.state_manager.command = RouterCommand::RUN;
@@ -1923,9 +1949,6 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
     }
     FabricNodeId src_fabric_node_id{mesh_id, static_cast<uint32_t>(chip_id)};
     auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    if (physical_chip_id == INVALID_CHIP_ID) {
-        return;
-    }
 
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_worker_connections = {};
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_dispatcher_connections = {};
@@ -2030,9 +2053,6 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
 
 void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const {
     auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-    if (physical_chip_id == INVALID_CHIP_ID) {
-        return;
-    }
     auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
 
     const auto& factory =
@@ -2261,9 +2281,6 @@ std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId c
 void ControlPlane::assign_direction_to_fabric_eth_chan(
     const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction) {
     auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-    if (physical_chip_id == INVALID_CHIP_ID) {
-        return;
-    }
     // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
     auto fabric_router_channels_on_chip = this->cluster_.get().get_fabric_ethernet_channels(*this, physical_chip_id);
 
@@ -2283,9 +2300,6 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
 void ControlPlane::assign_direction_to_fabric_eth_core(
     const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
     auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-    if (physical_chip_id == INVALID_CHIP_ID) {
-        return;
-    }
     auto chan_id = this->cluster_.get().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
     this->assign_direction_to_fabric_eth_chan(fabric_node_id, chan_id, direction);
 }
@@ -3076,9 +3090,6 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         // Pair the exit nodes from the current mesh with the exit nodes from the neighboring meshes
         for (const auto& node : exit_nodes) {
             auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(node);
-            if (physical_chip_id == INVALID_CHIP_ID) {
-                continue;
-            }
             auto asic_id = this->cluster_.get().get_unique_chip_ids().at(physical_chip_id);
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 

@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/fabric/control_plane_init_failure.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -368,6 +369,7 @@ private:
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+    void validate_fabric_node_mapping_complete() const;
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,
