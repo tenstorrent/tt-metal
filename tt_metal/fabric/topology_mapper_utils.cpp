@@ -438,22 +438,6 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     PhysicalAdjacencyMap flat_adj;
 
-    // Build a set of all ASIC IDs for quick lookup
-    std::unordered_set<tt::tt_metal::AsicID> all_asics;
-    if (!asic_id_to_mesh_rank.empty()) {
-        // Filter to only ASICs in the mesh assignment
-        for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
-            for (const auto& [asic_id, _] : asic_map) {
-                all_asics.insert(asic_id);
-            }
-        }
-    } else {
-        // Include all ASICs from PSD
-        for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
-            all_asics.insert(asic_id);
-        }
-    }
-
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
