@@ -1243,11 +1243,10 @@ void kernel_main() {
             };
 
             // Uncomment this (or follow the pattern below) to profile specific iterations of the inner loop.
-            if (is_first) {
-                call_step(std::true_type{});
-            } else {
-                call_step(std::false_type{});
-            }
+            // if (is_first)
+            //     call_step(std::true_type{});
+            // else
+            call_step(std::false_type{});
 
             // Post-iteration cleanup: pop prev buffers (skip on first iter — they were never filled)
             if (!is_first) {
