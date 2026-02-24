@@ -118,7 +118,15 @@ def test_forward_pass(
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
 
     weight_config = get_test_weight_config(
-        TTExperts, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        TTExperts,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_moe_experts",
+        real_weights=weight_type == "real",
+        layer_id=module_path,
     )
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
     model_state = TTExperts.create_state(hf_config, mesh_device)

@@ -88,7 +88,14 @@ def test_embedding_forward_pass(
     # Generate module configs and state
     logger.info("Setting up TTNN configs")
     weight_config = get_test_weight_config(
-        EmbeddingClass, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        EmbeddingClass,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_embedding",
+        real_weights=not generate_reference_io,
     )
     model_config = get_model_config(EmbeddingClass, mode, hf_config, mesh_device)
     model_state = EmbeddingClass.create_state(hf_config, mesh_device, ccl)
