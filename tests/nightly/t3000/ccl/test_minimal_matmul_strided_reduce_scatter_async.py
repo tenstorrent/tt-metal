@@ -246,7 +246,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                     mm_cores_y=mm_core_grid.y,
                     mm_block_ht=mm_block_m // TILE_SIZE,
                     mm_block_wt=mm_block_n // TILE_SIZE,
-                    mm_N_block_wt=N // TILE_SIZE // mm_core_grid.x,
+                    mm_N_full_block_wt=N // TILE_SIZE // mm_core_grid.x,
                     chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
                 )
             elif rs_mode == "separate":
