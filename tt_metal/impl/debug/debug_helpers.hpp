@@ -90,7 +90,8 @@ inline std::string_view get_core_type_name(CoreType ct) {
 }
 
 // Returns the assert message portion for a given assert type
-// For DebugAssertTripped, line_num is used in the message.
+// Returns empty string for unknown types (callers must handle this)
+// For DebugAssertTripped, line_num is used in the message
 inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, uint16_t line_num = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped:
@@ -112,7 +113,7 @@ inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, 
                    "transactions (missing NOC posted writes sent barrier).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
-        default: return "";  // Unknown type
+        default: return "";
     }
 }
 

@@ -24,6 +24,7 @@ void kernel_main() {
     constexpr uint32_t dm_id = get_compile_time_arg_val(0);
     uint64_t cpu_index = 0;
     asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
+    // On Quasar since all 8 kernels are launched: execute only the processor matching dm_id ; skip others
     if(dm_id != cpu_index)
         return;
 #endif
@@ -31,10 +32,10 @@ void kernel_main() {
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
     (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
-    (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_DM))
+    (defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM))
     WATCHER_RING_BUFFER_PUSH(a);
     WATCHER_RING_BUFFER_PUSH(b);
-#if defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_DM)
+#if defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_ERISC) or defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM)
     //For Erisc do a dummy increment since there is no worker kernel that would increment dispatch message addr to signal compute kernel completion.
     if (a == b) {
         //We will assert later. This kernel will hang.
@@ -46,7 +47,7 @@ void kernel_main() {
         notify_dispatch_core_done(dispatch_addr, noc_index);
 
         // TODO: SD is only used for Quasar watcher assert tests. Remove once FD is enabled on quasar
-#if !defined(COMPILE_FOR_ERISC) && defined(COMPILE_FOR_DM)
+#if !defined(COMPILE_FOR_ERISC) and (defined(COMPILE_FOR_DM) or defined(COMPILE_FOR_IDLE_ERISC))
         go_message_in->signal = RUN_MSG_DONE;
 #endif
     }

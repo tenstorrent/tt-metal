@@ -79,6 +79,8 @@ static void RunTest(
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM:
                     if (is_quasar) {
+                        // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
+                        // others exit early. This lets us verify assert works on each DM individually
                         uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
                         assert_kernel = experimental::quasar::CreateKernel(
                             program_,
@@ -108,6 +110,7 @@ static void RunTest(
                         logical_core,
                         ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
                     break;
+                default: TT_THROW("Unsupported processor class type for TENSIX");
             }
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
@@ -126,6 +129,8 @@ static void RunTest(
                 eth_config.eth_mode = Eth::IDLE;
             }
             assert_kernel = CreateKernel(program_, kernel, logical_core, eth_config);
+            // TODO: replace string literal "erisc" with hal.get_processor_class_name() after
+            // unifying all tests + watcher_device_reader::get_riscv_name() with same method
             risc = "erisc";
             break;
         }
@@ -169,8 +174,10 @@ static void RunTest(
     const std::string_view core_str =
         (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker";
 
-    // Use dummy line number 0, then replace with \d+ for regex matching
-    const std::string msg = get_debug_assert_message(assert_type, 0);
+    // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
+    // can shift as code changes. Use regex to match any line number for DebugAssertTripped
+    // (get_debug_assert_message defaults to line 0, which we replace with \d+ below)
+    const std::string msg = get_debug_assert_message(assert_type);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
     std::string expected = fmt::format(
@@ -186,9 +193,8 @@ static void RunTest(
         kernel);
 
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        // For the assert tripped, use regex to match any line number instead of hardcoding
+        // Build regex pattern from string expected, replacing "on line 0" with "on line \d+"
         std::string pattern = regex_escape(expected);
-        // Replace dummy "on line 0" with "on line \d+" to match any number
         const std::string placeholder = "on line 0";
         size_t pos = pattern.find(placeholder);
         if (pos != std::string::npos) {
@@ -197,6 +203,7 @@ static void RunTest(
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
+        // Other assert types have fixed messages, exact match
         EXPECT_EQ(expected, exception);
     }
 }
@@ -231,8 +238,9 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
         GTEST_SKIP();
     }
     // TODO: SD is only used for Quasar watcher assert tests. Remove once FD is enabled on quasar
-    if (this->slow_dispatch_ && (tt::tt_metal::MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR)) {
-        GTEST_SKIP() << "Slow dispatch watcher assert tests only run on Quasar";
+    if (this->slow_dispatch_ && (tt::tt_metal::MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) &&
+        params.processor.core_type != HalProgrammableCoreType::IDLE_ETH) {
+        GTEST_SKIP() << "Slow dispatch watcher assert tests only run on Quasar (except IDLE_ETH)";
     }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
