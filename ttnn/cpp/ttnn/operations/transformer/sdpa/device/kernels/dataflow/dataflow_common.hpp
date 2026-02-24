@@ -859,10 +859,7 @@ void write_block(
 
     uint32_t barrier_count = 0;
 
-    DPRINT << "CB wait in write_block, num_tiles: " << num_tiles << ENDL();
-
     cb_wait_front(cb_id, num_tiles);
-    DPRINT << "CB wait in write_block, num_tiles: " << num_tiles << ENDL();
 
     for (uint32_t row = 0; row < dst_rows; ++row) {
         uint32_t read_ptr = base_read_ptr + row * outer_ptr_stride;
@@ -889,9 +886,7 @@ void write_block(
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
 
-    DPRINT << "CB_OUT wait in write_block" << ENDL();
     cb_wait_front(cb_out, out_chunk_tiles);
-    DPRINT << "CB_OUT waited in write_block" << ENDL();
 
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t row = 0; row < rows; ++row) {
@@ -984,7 +979,6 @@ void generate_mask(
     const uint32_t unpadded_Sk_mask_0,
     const uint32_t unpadded_Sk_mask_1,
     const bool is_causal) {
-    DPRINT << "Is_Causal in mask gen: " << (uint32_t)is_causal << ENDL();
     if (is_causal || sliding_window_size > 0) {
         // DPRINT << "ENTERED CAUSALITY BRANCH" << ENDL();
         uint32_t offset_q_chunk = q_chunk;
@@ -1013,14 +1007,10 @@ void generate_mask(
         }
     } else if constexpr (padded_or_joint_masks) {
         if (generate_mask_0) {
-            DPRINT << "Generating padded mask 0" << ENDL();
             generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_0);
-            DPRINT << "Generated padded mask 0" << ENDL();
         }
         if (generate_mask_1) {
-            DPRINT << "Generating padded mask 1" << ENDL();
             generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_1);
-            DPRINT << "Generated padded mask 1" << ENDL();
         }
     }
 }

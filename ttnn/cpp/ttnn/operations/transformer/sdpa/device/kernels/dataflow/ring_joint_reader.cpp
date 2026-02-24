@@ -102,8 +102,8 @@ void kernel_main() {
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-    // fix this
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
+    constexpr uint32_t q_heads_per_k = NH / NHK;
 
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto local_k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -115,9 +115,9 @@ void kernel_main() {
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr, v_tile_bytes);
 
     const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
-    const auto input_k_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
+    const auto input_k_tile_logical = TensorTileShape(B, NHK, local_padded_Nt, DHt);
     const auto input_v_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
-    const auto gathered_k_input_tile_logical = TensorTileShape(B, NH, padded_Nt, DHt);
+    const auto gathered_k_input_tile_logical = TensorTileShape(B, NHK, padded_Nt, DHt);
     const auto gathered_v_input_tile_logical = TensorTileShape(B, NH, padded_Nt, vDHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
 
@@ -224,27 +224,26 @@ void kernel_main() {
                 uint32_t
                     end_seq_tile;  // further information to `read_block` to determine whether it should pad with zeros.
 
+                const uint32_t nk = nq / q_heads_per_k;
                 if (kv_chunk_is_joint) {
                     const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
                     const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
-                    k_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+
+                    k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
                     v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
                     end_seq_tile = Lt;
                 } else {
                     if (ring_iter == 0) {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                        // DPRINT << "Q CHUNK: " << q_chunk << " K: [" << nb << ", " << nq << ", "
-                        //        << local_k_row_start_tile << ", " << local_k_row_start_tile + Sk_chunk_t << "]"
-                        //        << ENDL();
-                        k_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
                         // Gathered KV
                         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                        k_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                        k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
                         v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
                     }

@@ -55,12 +55,9 @@ void write_output_and_lse(
     const uint32_t cb_lse_out,
     const uint32_t tile_bytes,
     const uint32_t lse_tile_bytes) {
-    DPRINT << "Write output and LSE begin" << ENDL();
     write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
 
-    DPRINT << "CB_LSE_OUT wait in write_output_and_lse" << ENDL();
     cb_wait_front(cb_lse_out, Sq_chunk_t);
-    DPRINT << "CB_LSE_OUT waited in write_output_and_lse" << ENDL();
     uint32_t lse_addr = get_read_ptr(cb_lse_out);
     for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
         noc_async_write_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
