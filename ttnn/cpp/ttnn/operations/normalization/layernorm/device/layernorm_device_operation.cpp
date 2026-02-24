@@ -185,6 +185,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
     }
+    if (operation_attributes.fused_activation.has_value()) {
+        TT_FATAL(
+            operation_attributes.norm_type == LayerNormType::RMSNORM,
+            "Fused activation only supported for fused rms norm + unary");
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "Fused activation is not supported for distributed layernorm");
+    }
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;

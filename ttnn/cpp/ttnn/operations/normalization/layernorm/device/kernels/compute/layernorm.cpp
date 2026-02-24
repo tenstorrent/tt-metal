@@ -18,7 +18,7 @@
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
-#include "api/compute/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;

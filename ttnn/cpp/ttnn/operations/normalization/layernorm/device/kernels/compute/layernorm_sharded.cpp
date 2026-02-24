@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
