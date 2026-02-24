@@ -9,8 +9,7 @@ training_config:
   use_clip_grad_norm: false # TODO: fix clip grad norm when TP is enabled
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/llama8b_galaxy_tp_dp.yaml"
-
-optimizer_config: "configs/optimizer_configs/adamw.yaml"
+  optimizer_config: "configs/optimizer_configs/adamw.yaml"
 
 device_config:
   enable_tp: true

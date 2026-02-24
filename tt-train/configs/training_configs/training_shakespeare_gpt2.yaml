@@ -10,9 +10,8 @@ training_config:
   gradient_accumulation_steps: 1
   data_path: "data/tokenized_shakespeare.csv"
   model_config: "configs/model_configs/gpt2s.yaml"
+  optimizer_config: "configs/optimizer_configs/adamw.yaml"
   tokenizer_type: "bpe"
-
-optimizer_config: "configs/optimizer_configs/adamw.yaml"
 
 device_config:
   enable_ddp: false

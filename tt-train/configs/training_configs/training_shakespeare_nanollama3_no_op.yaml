@@ -8,8 +8,7 @@ training_config:
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/nanollama3.yaml"
-
-optimizer_config: "configs/optimizer_configs/no_op.yaml"
+  optimizer_config: "configs/optimizer_configs/no_op.yaml"
 
 device_config:
   enable_ddp: false

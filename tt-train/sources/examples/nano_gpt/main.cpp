@@ -155,12 +155,12 @@ struct TrainingConfig {
     uint32_t max_steps = 5000;
     uint32_t gradient_accumulation_steps = 1;
     std::string model_config;
+    std::string optimizer_config;
     std::string data_path;
     std::string scheduler_type = "identity";
     std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    OptimizerConfig optimizer;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -175,13 +175,13 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_config = training_config["model_config"].as<std::string>("");
+    config.optimizer_config = training_config["optimizer_config"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
-    config.optimizer = parse_optimizer_config(yaml_config);
 
     return config;
 }
@@ -343,8 +343,8 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string training_config_name = std::filesystem::current_path().string() +
-                                       "/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml";
+    std::string training_config_name =
+        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -373,6 +373,11 @@ int main(int argc, char **argv) {
     std::string model_config_path =
         (training_config_path.parent_path().parent_path() / training_config.model_config).string();
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
+
+    std::string optimizer_config_path =
+        (training_config_path.parent_path().parent_path() / training_config.optimizer_config).string();
+    OptimizerConfig optimizer_config = parse_optimizer_config(YAML::LoadFile(optimizer_config_path));
+
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
@@ -676,13 +681,12 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded\n");
     }
 
-    const auto &opt_config = training_config.optimizer;
-    if (opt_config.type == "NoOp") {
+    if (optimizer_config.type == "NoOp") {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
     } else if (!is_three_tier_training(multihost_config)) {
-        fmt::print("Optimizer: {}\n", opt_config.type);
-        fmt::print("    Learning rate: {}\n", opt_config.lr);
-        fmt::print("    Weight decay: {}\n", opt_config.weight_decay);
+        fmt::print("Optimizer: {}\n", optimizer_config.type);
+        fmt::print("    Learning rate: {}\n", optimizer_config.lr);
+        fmt::print("    Weight decay: {}\n", optimizer_config.weight_decay);
     } else {
         fmt::println("Remote optimizer configured!");
     }
@@ -690,12 +694,12 @@ int main(int argc, char **argv) {
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer =
-        [&model, &training_config, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+        [&model, &optimizer_config, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (is_three_tier_training(multihost_config)) {
             return std::make_unique<ttml::optimizers::RemoteOptimizer>(
                 get_model_parameters(model), multihost_config.num_mh_workers);
         }
-        return create_optimizer(training_config.optimizer, get_model_parameters(model));
+        return create_optimizer(optimizer_config, get_model_parameters(model));
     };
 
     auto optimizer = select_optimizer();

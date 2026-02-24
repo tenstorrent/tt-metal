@@ -4,18 +4,12 @@
 
 #include "utils.hpp"
 
-#include <filesystem>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "ops/binary_ops.hpp"
 
-OptimizerConfig parse_optimizer_config(const YAML::Node &yaml_config) {
+OptimizerConfig parse_optimizer_config(const YAML::Node &optimizer_node) {
     OptimizerConfig config;
-    auto optimizer_config_rel = yaml_config["optimizer_config"].as<std::string>();
-    auto base_path = std::filesystem::path(std::string(CONFIGS_FOLDER)).parent_path();
-    auto full_path = (base_path / optimizer_config_rel).string();
-    auto optimizer_node = YAML::LoadFile(full_path);
     config.type = optimizer_node["type"].as<std::string>(config.type);
     config.lr = optimizer_node["lr"].as<float>(config.lr);
     config.beta1 = optimizer_node["beta1"].as<float>(config.beta1);

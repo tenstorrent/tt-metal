@@ -24,7 +24,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.optimizer = parse_optimizer_config(yaml_config);
+    config.optimizer_config = training_config["optimizer_config"].as<std::string>("");
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
@@ -37,7 +37,8 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
     if (!yaml_config["model_config"]) {
-        throw std::runtime_error("Missing required field: model_config\n Please specify the path to the model configuration YAML file.");
+        throw std::runtime_error(
+            "Missing required field: model_config\n Please specify the path to the model configuration YAML file.");
     }
 
     auto model_yaml = YAML::LoadFile(yaml_config["model_config"].as<std::string>())["transformer_config"];
@@ -73,8 +74,6 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 }
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
-
-
     auto sequence_length = std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.max_sequence_length; }) {
@@ -105,22 +104,20 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     auto create_dataset =
         [](const auto &data_source, const auto seq_len, const auto &tokenizer_type, auto &train_config) {
             if (tokenizer_type == "char") {
-                auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<std::string>(data_source), seq_len);
+                auto [dataset, tokenizer] =
+                    ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                        std::get<std::string>(data_source), seq_len);
 
                 return std::make_tuple(dataset, tokenizer->get_vocab_size());
-            }
-            else if (tokenizer_type == "bpe") {
-
-                auto& yaml_node = std::get<YAML::Node>(data_source);
+            } else if (tokenizer_type == "bpe") {
+                auto &yaml_node = std::get<YAML::Node>(data_source);
 
                 auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
 
                 uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
 
                 return std::make_tuple(dataset, vocab_size);
-            }
-            else {
+            } else {
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }
         };
