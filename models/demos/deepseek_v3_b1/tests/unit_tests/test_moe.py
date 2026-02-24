@@ -1340,7 +1340,7 @@ def test_moe_fused_with_bcast(bh_2d_mesh_device, use_hardcoded_expert_index):
     logger.info("Created reduce tensors and semaphores")
 
     # ── Run fused MoE op with broadcast + reduce ──
-    num_iterations = 4
+    num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r["ttnn_rmsnorm_output"],
         r["ttnn_mcast_output"],

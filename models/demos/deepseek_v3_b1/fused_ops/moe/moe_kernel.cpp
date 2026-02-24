@@ -1253,7 +1253,30 @@ void kernel_main() {
             deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
             reduce_op(moe.routed.reduce_rt_args);
         }
+#if defined(ENABLE_BCAST) && defined(ENABLE_REDUCE_TO_ONE)
+        // Reduce fabric cores signal sender core that fabric sends are done.
+        // Sender core NCRISC waits before starting next iteration's bcast.
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_reduce_fabric_core) {
+            constexpr uint32_t sync_sem_id = get_named_compile_time_arg_val("bcast_reduce_sync_sem_id");
+            constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("bcast_reduce_sync_noc_x");
+            constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("bcast_reduce_sync_noc_y");
+            uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, get_semaphore(sync_sem_id));
+            noc_semaphore_inc(sync_sem_noc_addr, 1);
+        }
+#elif defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t sync_sem_id = get_named_compile_time_arg_val("bcast_reduce_sync_sem_id");
+            constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("bcast_reduce_sync_num_fabric_cores");
+            volatile tt_l1_ptr uint32_t* sync_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sync_sem_id));
+            noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
+            noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
+        }
 #endif
+#endif
+#endif
+
     };
 
     for (uint32_t i = 0; i < num_iterations; i++) {

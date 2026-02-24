@@ -2586,6 +2586,7 @@ class MoeOp:
     INDEX_MCAST_RECEIVER_SEM = 6
     DOWN_PROJ_MCAST_RECEIVER_SEM = 7
     REDUCE_WORKER_FABRIC_SEM_BASE = 8  # on fabric cores only (8, 9, 10, 11 per worker slot)
+    BCAST_REDUCE_SYNC_SEM = 12  # on sender core: reduce fabric cores signal done
 
     # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
@@ -3604,6 +3605,28 @@ class MoeOp:
                             break
                     ncrisc_common_rt_args.extend(bcast_ncrisc_common_rt_args)
 
+                    # Bcast-reduce sync CT args (reduce fabric cores → sender core NCRISC)
+                    if enable_reduce_to_one:
+                        bcast_data_core_physical = routed_ctx.device.worker_core_from_logical_core(
+                            routed_ctx.sender_core
+                        )
+                        num_reduce_fabric_cores = len(reduce_params["fabric_cores"])
+                        ncrisc_args.extend(
+                            [
+                                ("bcast_reduce_sync_sem_id", MoeOp.BCAST_REDUCE_SYNC_SEM),
+                                ("bcast_reduce_sync_num_fabric_cores", num_reduce_fabric_cores),
+                                ("bcast_reduce_sync_noc_x", bcast_data_core_physical.x),
+                                ("bcast_reduce_sync_noc_y", bcast_data_core_physical.y),
+                            ]
+                        )
+                        brisc_args.extend(
+                            [
+                                ("bcast_reduce_sync_sem_id", MoeOp.BCAST_REDUCE_SYNC_SEM),
+                                ("bcast_reduce_sync_noc_x", bcast_data_core_physical.x),
+                                ("bcast_reduce_sync_noc_y", bcast_data_core_physical.y),
+                            ]
+                        )
+
                     # Per-core NCRISC runtime args for sender core (fabric args appended after program creation)
                     if bcast_num_connections > 0:
                         bcast_ncrisc_per_core = [(routed_ctx.sender_core, [])]
@@ -3661,6 +3684,15 @@ class MoeOp:
                             initial_value=0,
                         )
                         device_semaphore_descriptors.append(sem_desc)
+
+                # Bcast-reduce sync semaphore on all cores
+                if enable_bcast and enable_reduce_to_one:
+                    sync_sem_desc = ttnn.SemaphoreDescriptor(
+                        id=MoeOp.BCAST_REDUCE_SYNC_SEM,
+                        core_ranges=routed_ctx.full_device_grid,
+                        initial_value=0,
+                    )
+                    device_semaphore_descriptors.append(sync_sem_desc)
 
                 # Create program
                 program = ttnn.ProgramDescriptor(
