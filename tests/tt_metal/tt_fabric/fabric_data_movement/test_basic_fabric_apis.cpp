@@ -45,12 +45,6 @@
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-// hack to let topology.cpp to know the binary is a unit test
-// https://github.com/tenstorrent/tt-metal/issues/20000
-// TODO: delete this once tt_fabric_api.h fully support low latency feature
-extern "C" bool isFabricUnitTest();
-bool isFabricUnitTest() { return true; }
-
 using tt::tt_metal::HalProgrammableCoreType;
 using tt::tt_metal::KernelHandle;
 using tt::tt_metal::ShardOrientation;

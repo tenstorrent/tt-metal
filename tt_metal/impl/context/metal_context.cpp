@@ -21,6 +21,7 @@
 #include "hal_types.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "fabric/fabric_init.hpp"
 #include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/dprint_server.hpp"
@@ -826,9 +827,6 @@ void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
-    //     rtoptions_.set_erisc_iram_enabled(false);
-    // }
     // Stub control plane for mock devices will make this a no-op
     this->get_control_plane().clear_fabric_context();
 }
@@ -984,63 +982,6 @@ std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
         rtoptions_.get_mock_cluster_desc_path()));
 }
 
-void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
-    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
-        log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-            *this->cluster_,
-            this->rtoptions_,
-            *hal_,
-            *distributed_context_,
-            mesh_graph_desc_path.string(),
-            logical_mesh_chip_id_to_physical_chip_id_mapping_,
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_,
-            this->fabric_udm_mode_,
-            this->fabric_router_config_,
-            this->fabric_manager_);
-    } else {
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-            *this->cluster_,
-            this->rtoptions_,
-            *hal_,
-            *distributed_context_,
-            mesh_graph_desc_path.string(),
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_,
-            this->fabric_udm_mode_,
-            this->fabric_router_config_,
-            this->fabric_manager_);
-    }
-}
-
-void MetalContext::construct_control_plane() {
-    // Use auto-discovery to generate mesh graph from physical system descriptor
-    // This uses MeshGraph::generate_from_physical_system_descriptor which internally
-    // uses map_mesh_to_physical to find a valid mapping
-    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
-        log_warning(
-            tt::LogDistributed,
-            "Custom Fabric Node Id to physical chip mapping provided but no mesh graph descriptor path. "
-            "Mapping will be ignored. Please provide a custom mesh graph descriptor path for custom logical to "
-            "physical mapping.");
-    }
-    log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
-    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-        *this->cluster_,
-        this->rtoptions_,
-        *hal_,
-        *distributed_context_,
-        this->fabric_config_,
-        this->fabric_reliability_mode_,
-        this->fabric_tensix_config_,
-        this->fabric_udm_mode_,
-        this->fabric_router_config_,
-        this->fabric_manager_);
-}
-
 void MetalContext::initialize_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     initialize_control_plane_impl();
@@ -1056,14 +997,37 @@ void MetalContext::initialize_control_plane_impl() {
             mesh_graph_desc_path.string());
 
         log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
-        this->construct_control_plane(mesh_graph_desc_path);
+        control_plane_ = tt::tt_fabric::construct_control_plane(
+            mesh_graph_desc_path,
+            *cluster_,
+            rtoptions_,
+            *hal_,
+            *distributed_context_,
+            fabric_config_,
+            fabric_reliability_mode_,
+            fabric_tensix_config_,
+            fabric_udm_mode_,
+            fabric_router_config_,
+            fabric_manager_,
+            logical_mesh_chip_id_to_physical_chip_id_mapping_);
         return;
     }
     // If no custom mesh graph descriptor use auto discovery to generate mesh graph
     log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
     if (*distributed_context_->size() == 1) {
-        this->construct_control_plane();
+        control_plane_ = tt::tt_fabric::construct_control_plane(
+            *cluster_,
+            rtoptions_,
+            *hal_,
+            *distributed_context_,
+            fabric_config_,
+            fabric_reliability_mode_,
+            fabric_tensix_config_,
+            fabric_udm_mode_,
+            fabric_router_config_,
+            fabric_manager_,
+            logical_mesh_chip_id_to_physical_chip_id_mapping_);
     } else {
         auto cluster_type = cluster_->get_cluster_type();
         auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
@@ -1078,7 +1042,19 @@ void MetalContext::initialize_control_plane_impl() {
             std::filesystem::exists(mesh_graph_desc_path),
             "Mesh graph descriptor file not found: {}",
             mesh_graph_desc_path.string());
-        this->construct_control_plane(mesh_graph_desc_path);
+        control_plane_ = tt::tt_fabric::construct_control_plane(
+            mesh_graph_desc_path,
+            *cluster_,
+            rtoptions_,
+            *hal_,
+            *distributed_context_,
+            fabric_config_,
+            fabric_reliability_mode_,
+            fabric_tensix_config_,
+            fabric_udm_mode_,
+            fabric_router_config_,
+            fabric_manager_,
+            logical_mesh_chip_id_to_physical_chip_id_mapping_);
     }
 }
 

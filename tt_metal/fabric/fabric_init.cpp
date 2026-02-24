@@ -17,12 +17,6 @@
 #include "llrt/rtoptions.hpp"
 #include "llrt/hal.hpp"
 
-// hack for test_basic_fabric_apis.cpp
-// https://github.com/tenstorrent/tt-metal/issues/20000
-// TODO: delete this once tt_fabric_api.h fully support low latency feature
-extern "C" bool isFabricUnitTest() __attribute__((weak));
-bool isFabricUnitTest() { return false; }
-
 namespace tt::tt_fabric {
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> construct_control_plane(
@@ -91,6 +85,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> construct_control_plane(
             "Mapping will be ignored. Please provide a custom mesh graph descriptor path for custom logical to "
             "physical mapping.");
     }
+    log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     return std::make_unique<tt::tt_fabric::ControlPlane>(
         cluster,
         rtoptions,

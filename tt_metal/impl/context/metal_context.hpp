@@ -169,8 +169,6 @@ private:
     void clear_l1_state(ChipId device_id);
     void clear_dram_state(ChipId device_id);
     void clear_launch_messages_on_eth_cores(ChipId device_id);
-    void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
-    void construct_control_plane();
 
     // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
     // This updates cached dispatch/compute core allocations to match current dispatch mode
