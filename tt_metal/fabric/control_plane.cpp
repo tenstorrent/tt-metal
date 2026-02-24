@@ -2619,7 +2619,6 @@ void ControlPlane::generate_intermesh_connectivity() {
                                                         : requested_intermesh_ports.size();
     };
 
-    const auto& requested_intermesh_connections = this->mesh_graph_->get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = this->mesh_graph_->get_requested_intermesh_ports();
     const bool using_port_based_requests = !requested_intermesh_ports.empty();
     log_debug(
