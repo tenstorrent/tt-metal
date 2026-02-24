@@ -338,6 +338,16 @@ Tensor Softplus::invoke(
         input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
 }
 
+Tensor Xielu::invoke(
+    const Tensor& input,
+    const float alpha_p,
+    const float alpha_n,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::XIELU, {alpha_p, alpha_n}}}, memory_config, optional_output_tensor);
+}
+
 // tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)
 Tensor Tanh::invoke(
     const Tensor& input_tensor,

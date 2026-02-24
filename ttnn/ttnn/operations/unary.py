@@ -267,6 +267,25 @@ def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.pow, golden_function=_golden_function_pow)
 
 
+def _golden_function_xielu(x, *args, alpha_p=0.8, alpha_n=0.8, **kwargs):
+    import torch
+
+    dtype = x.dtype
+    if dtype == torch.bfloat16:
+        # Compute the golden reference in float32 and convert to bf16 only once after evaluation for a more reliable comparison.
+        x = x.to(torch.float32)
+    beta = 0.5
+    eps = -1e-6
+    pos_part = alpha_p * x * x + beta * x
+    x_clipped = torch.minimum(x, torch.full_like(x, eps))
+    neg_part = alpha_n * torch.expm1(x_clipped) - alpha_n * x + beta * x
+    out = torch.where(x > 0, pos_part, neg_part)
+    return out.to(dtype)
+
+
+ttnn.attach_golden_function(ttnn.xielu, golden_function=_golden_function_xielu)
+
+
 def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
     import torch
 
