@@ -118,7 +118,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     {
         auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
 
-        // helper lambda to transform TensorSpec to DeviceTensor
+        // helper lambda to transform TensorSpec to MeshTensor
         auto transform_arg = [device](auto&& arg) {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
                 return create_device_tensor(arg, device);

@@ -543,7 +543,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     TT_THROW("Unreachable");
 }
 
-HostTensor to_host(distributed::MeshCommandQueue& queue, const DeviceTensor& tensor, bool blocking) {
+HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.get_storage();
     const auto& mesh_buffer = storage.mesh_buffer;
@@ -610,7 +610,7 @@ DeviceStorage write_to_mesh_buffer(
 
 }  // namespace
 
-DeviceTensor to_device_mesh_buffer(
+MeshTensor to_device_mesh_buffer(
     distributed::MeshCommandQueue& queue,
     const HostStorage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
@@ -622,7 +622,7 @@ DeviceTensor to_device_mesh_buffer(
         host_storage_shape == distributed::MeshShape(1, 1)) {
         // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
         const auto device_buffer = host_storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
-        return DeviceTensor(
+        return MeshTensor(
             replicate_to_mesh_buffer(queue, *device_buffer, mesh_buffer, tensor_spec),
             tensor_spec,
             TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape));
@@ -632,10 +632,10 @@ DeviceTensor to_device_mesh_buffer(
         "Distributed host buffer has different shape {} than the mesh device {}",
         host_storage_shape,
         mesh_device_shape);
-    return DeviceTensor(write_to_mesh_buffer(queue, host_storage.buffer(), mesh_buffer), tensor_spec, tensor_topology);
+    return MeshTensor(write_to_mesh_buffer(queue, host_storage.buffer(), mesh_buffer), tensor_spec, tensor_topology);
 }
 
-DeviceTensor to_device(
+MeshTensor to_device(
     distributed::MeshCommandQueue& queue,
     const HostTensor& tensor,
     ttsl::optional_reference<const MemoryConfig> memory_config) {
@@ -652,7 +652,7 @@ DeviceTensor to_device(
 }
 
 void copy_to_host(
-    distributed::MeshCommandQueue& queue, const DeviceTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
+    distributed::MeshCommandQueue& queue, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
     TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
 
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
@@ -717,7 +717,7 @@ void copy_to_host(
     queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
 }
 
-void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, DeviceTensor& device_tensor) {
+void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor) {
     TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
 
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
@@ -1142,8 +1142,8 @@ HostTensor view(const HostTensor& tensor, const Shape& new_logical_shape, const 
 }
 
 // TODO (#25340): Review tensor topology logic for reshape
-// TODO: We should force DeviceTensor to be moved in. This essentially copies the DeviceTensor.
-DeviceTensor view(const DeviceTensor& tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
+// TODO: We should force MeshTensor to be moved in. This essentially copies the MeshTensor.
+MeshTensor view(const MeshTensor& tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
     // Just edit shape if shape has a 0 dimension
     if (tensor.logical_volume() == 0) {
         TT_FATAL(new_logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
@@ -1182,13 +1182,13 @@ DeviceTensor view(const DeviceTensor& tensor, const Shape& new_logical_shape, co
 
     auto device_storage = tensor.get_storage();
     if (tensor.layout() != Layout::ROW_MAJOR || !changing_last_dim) {
-        return DeviceTensor(std::move(device_storage), new_spec, tensor.tensor_topology());
+        return MeshTensor(std::move(device_storage), new_spec, tensor.tensor_topology());
     }
     if (!tensor.memory_config().is_sharded()) {
         auto* device_buffer = device_storage.get_buffer();
         auto page_size_bytes = new_spec.compute_page_size_bytes();
         device_buffer->set_page_size(page_size_bytes);
-        return DeviceTensor(std::move(device_storage), new_spec, tensor.tensor_topology());
+        return MeshTensor(std::move(device_storage), new_spec, tensor.tensor_topology());
     }
 
     ShardSpec new_shard_spec = output_memory_config.shard_spec().value();
@@ -1223,7 +1223,7 @@ DeviceTensor view(const DeviceTensor& tensor, const Shape& new_logical_shape, co
     DeviceStorage view_storage(
         view_mesh_buffer, device_storage.coords, device_storage.get_root_mesh_buffer());
 
-    return DeviceTensor(view_storage, new_spec, tensor.tensor_topology());
+    return MeshTensor(view_storage, new_spec, tensor.tensor_topology());
 }
 
 // ======================================================================================
@@ -1602,7 +1602,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 //                                  Runtime Tensor Creation Functions
 // ======================================================================================
 
-DeviceTensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+MeshTensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto mesh_buffer = allocate_device_buffer(device, tensor_spec);
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(device->shape().mesh_size());
@@ -1617,7 +1617,7 @@ DeviceTensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distribute
     }
 
     auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    return DeviceTensor(std::move(device_storage), tensor_spec, tensor_topology);
+    return MeshTensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 
 HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value) {

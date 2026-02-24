@@ -28,14 +28,14 @@ namespace tt::tt_metal {
 
 /**
  * HostTensor represents a Tensor in host memory.
- * Different from DeviceTensor, HostTensor can be copied.
+ * Different from MeshTensor, HostTensor can be copied.
  * It has limited transformation operations supported (via tensor_apis.hpp).
- * It is intended to be used with DeviceTensor for host <-> device communication.
+ * It is intended to be used with MeshTensor for host <-> device communication.
  *
  * Invariants of HostTensor:
  * - Default constructed: Acts like a nullptr, any access to any member function outside of assignment and move
  *   construction will be UB, this is checked by TT_ASSERT (enabled at debug build) in accessors. This is similar to
- *   DeviceTensor.
+ *   MeshTensor.
  * - Engaged: The HostTensor has shared ownership of the underlying host side storage.
  */
 class HostTensor {

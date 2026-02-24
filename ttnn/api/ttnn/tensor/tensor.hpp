@@ -23,7 +23,7 @@
 #include <tt-metalium/device.hpp>
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/device_tensor.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -41,7 +41,7 @@ public:
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::DeviceTensor>> tensor_attributes = nullptr;
+    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::MeshTensor>> tensor_attributes = nullptr;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -76,7 +76,7 @@ public:
 
     // Metal Tensor constructors
     explicit Tensor(tt::tt_metal::HostTensor host_tensor);
-    explicit Tensor(tt::tt_metal::DeviceTensor device_tensor);
+    explicit Tensor(tt::tt_metal::MeshTensor device_tensor);
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
@@ -242,11 +242,11 @@ public:
     const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
     HostTensor& host_tensor() &;
 
-    // Returns underlying DeviceTensor.
+    // Returns underlying MeshTensor.
     // Throws if the tensor is not on device.
-    const DeviceTensor& device_tensor() const&;
-    const DeviceTensor& device_tensor() const&& = delete;  // prevents dangling reference to temporaries.
-    DeviceTensor& device_tensor() &;
+    const MeshTensor& device_tensor() const&;
+    const MeshTensor& device_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+    MeshTensor& device_tensor() &;
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
