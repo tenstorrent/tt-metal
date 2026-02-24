@@ -424,6 +424,62 @@ void mul_block_bcast_cols_acc(
 }
 
 /**
+ * Fused SALAD rescale: prev_sum * exp_max_diff → cur_sum (L1 acc) and
+ *                      prev_out * exp_max_diff → cur_out (L1 acc) in one DST pass.
+ * Both multiplications share the same bcast operand and format, so we do one
+ * init, one acquire/commit/wait/release cycle, saving DST round-trips.
+ * Requires SBH + SBH*SBW <= 8 (DST capacity). Falls back to two-pass for sbh=2.
+ */
+template <uint32_t SBH, uint32_t SBW>
+void salad_rescale_fused(
+    uint32_t prev_sum_cb,
+    uint32_t prev_out_cb,
+    uint32_t bcast_cb,
+    uint32_t cur_sum_cb,
+    uint32_t cur_out_cb,
+    uint32_t read_q_subblock,
+    uint32_t write_q_subblock) {
+    constexpr uint32_t total_dst_tiles = SBH + SBH * SBW;
+    static_assert(total_dst_tiles <= 8, "Fused SALAD requires SBH + SBH*SBW <= 8 DST tiles");
+
+    const uint32_t read_row_base = read_q_subblock * SBH;
+    const uint32_t write_row_base = write_q_subblock * SBH;
+
+    mul_bcast_cols_init_short(prev_sum_cb, bcast_cb);
+
+    cb_wait_front(prev_sum_cb, (read_q_subblock + 1) * SBH);
+    cb_wait_front(prev_out_cb, (read_q_subblock + 1) * SBH * SBW);
+    cb_wait_front(bcast_cb, (read_q_subblock + 1) * SBH);
+
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    tile_regs_acquire();
+
+    uint32_t dst_index = 0;
+    for (uint32_t i = 0; i < SBH; i++) {
+        mul_tiles_bcast_cols(prev_sum_cb, bcast_cb, read_row_base + i, read_row_base + i, dst_index++);
+    }
+    for (uint32_t i = 0; i < SBH; i++) {
+        for (uint32_t j = 0; j < SBW; j++) {
+            mul_tiles_bcast_cols(prev_out_cb, bcast_cb, (read_row_base + i) * SBW + j, read_row_base + i, dst_index++);
+        }
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    dst_index = 0;
+    for (uint32_t i = 0; i < SBH; i++) {
+        pack_tile<true>(dst_index++, cur_sum_cb, write_row_base + i);
+    }
+    for (uint32_t i = 0; i < SBH; i++) {
+        for (uint32_t j = 0; j < SBW; j++) {
+            pack_tile<true>(dst_index++, cur_out_cb, (write_row_base + i) * SBW + j);
+        }
+    }
+    tile_regs_release();
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
+/**
  * sub_exp_block_bcast_cols: reads from row buffer, subtracts max, applies exp.
  * Reads from read_cb (row buffer), subtracts max_cb, applies exp, writes to write_cb (sequential),
  * and accumulates row sums into reduce_cb (absolute position with L1 accumulate).
@@ -989,18 +1045,17 @@ void sdpa_inner_loop_step(
             pushed++;
         };
 
-        // SALAD correction for one completed row: sum/out L1-accumulate, then
-        // optionally push + normalize on the last K iteration.
+        // SALAD correction for one completed row: sum/out L1-accumulate in one DST pass,
+        // then optionally push + normalize on the last K iteration.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
-            mul_bcast_cols_init_short(prev_sum, cb_exp_max_diff);
-            {
-                MATH(DPRINT << "SALAD sum correction for Q[" << salad_row << "]" << ENDL());
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
+            MATH(DPRINT << "SALAD fused correction for Q[" << salad_row << "]" << ENDL());
+            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_FUSED");
+            if constexpr (sbh + sbh * head_dim_t <= 8) {
+                salad_rescale_fused<sbh, head_dim_t>(
+                    prev_sum, prev_out, cb_exp_max_diff, cur_sum, cur_out, salad_row, w_salad);
+            } else {
+                mul_bcast_cols_init_short(prev_sum, cb_exp_max_diff);
                 mul_bcast_cols_l1_acc<sbh, true>(prev_sum, cb_exp_max_diff, cur_sum, salad_row, w_salad);
-            }
-            {
-                MATH(DPRINT << "SALAD out correction for Q[" << salad_row << "]" << ENDL());
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
                 mul_block_bcast_cols_acc<sbh, head_dim_t, true>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
             }
             if (last_iter) {
