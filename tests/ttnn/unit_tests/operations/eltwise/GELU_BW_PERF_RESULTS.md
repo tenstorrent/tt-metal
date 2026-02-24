@@ -1,80 +1,77 @@
 # GELU Backward Performance Results
 
-## 1. Refactoring Impact (-02 vs -03)
+## 1. Three-State Performance Comparison
 
-Branch `-03` vs `-02`: Review feedback refactoring (PolynomialEvaluator, recip_init, BF16 rounding).
-
-No performance regression from the review feedback changes.
-
-**Test: `GeluBwPolyTest.ComprehensiveULPAnalysis`** (65,026 BF16 values through polynomial gelu_derivative)
-
-| Run   | -02 (before) | -03 (after) |
-|-------|-------------|-------------|
-| Cold  | 3245 ms     | 3182 ms     |
-| Warm 1| 639 ms      | 624 ms      |
-| Warm 2| 640 ms      | 644 ms      |
-| Warm 3| (reconfirm) | 640 ms      |
-
-**Test: `GeluBwPolyTest.CompareWithStandard`** (runs both standard and polynomial paths)
-
-| Run   | -02 (before) | -03 (after) |
-|-------|-------------|-------------|
-| Cold  | 2196 ms     | 2190 ms     |
-| Warm 1| 506 ms      | 505 ms      |
-| Warm 2| 506 ms      | 507 ms      |
-| Warm 3| (reconfirm) | 515 ms      |
-
-**Conclusion:** Warm-cache timings are identical within noise. The `-03` refactoring
-(PolynomialEvaluator::eval, recip_init, float_to_fp16b) is **performance-neutral**.
-
-## 2. Polynomial vs Formula: Apples-to-Apples Comparison
-
-Both implementations are compared through the same dispatch path:
+Three code states measured through the same dispatch path:
 `ttnn::experimental::gelu_bw(grad, input, approximate=mode)` which routes
 through `GeluBackwardDeviceOperation` to a single fused compute kernel.
 
-- `approximate="none"` dispatches `eltwise_bw_gelu_approx_none.cpp` (erf+exp formula)
-- `approximate="poly"` dispatches `eltwise_bw_gelu_poly.cpp` (polynomial)
+| State | `approximate=` | Compute kernel | SFPU math |
+|-------|---------------|----------------|-----------|
+| Original (main) | `"none"` | `eltwise_bw_gelu_approx_none.cpp` | inline erf+exp formula |
+| -02 (pre-review) | `"poly"` | `eltwise_bw_gelu_poly.cpp` | POLYVAL macros |
+| -03 (post-review) | `"poly"` | `eltwise_bw_gelu_poly.cpp` | PolynomialEvaluator, recip_init, float_to_fp16b |
 
 Tensor shape: (1, 1, 2048, 32) = 65,536 BF16 values = 64 tiles.
 
-### 2a. Wall-Clock Timing (host-side, 10 runs, warm cache)
+### 1a. Wall-Clock Timing (host-side, 10 runs after 3 warmup)
 
-| Implementation           | Avg    | Min    | Max    |
-|-------------------------|--------|--------|--------|
-| experimental "none"     | 0.25ms | 0.24ms | 0.30ms |
-| experimental "poly"     | 0.27ms | 0.23ms | 0.36ms |
-| composite gelu_bw "none"| 2.08ms | 1.98ms | 2.59ms |
+| State              | Avg    | Min    | Max    | Median |
+|--------------------|--------|--------|--------|--------|
+| Original (erf+exp) | 0.25ms | 0.23ms | 0.29ms | 0.25ms |
+| -02 (polynomial)   | 0.24ms | 0.23ms | 0.26ms | 0.24ms |
+| -03 (polynomial)   | 0.25ms | 0.23ms | 0.27ms | 0.25ms |
 
-The polynomial kernel and the formula kernel are **the same speed** through
-the experimental (fused) dispatch path. The composite `ttnn::gelu_bw` is ~8x
-slower because it decomposes into ~130 sub-kernel dispatches per tile.
+Wall-clock times are dominated by dispatch overhead and are within noise
+across all three states.
 
-### 2b. Device Profiler (cycle-level, TRISC_1 = math kernel)
+### 1b. Device Profiler (TRISC_1 kernel cycles, 2 warmup + 1 profiled)
 
-`TT_METAL_DEVICE_PROFILER=1`, profiled run after 2 warmup iterations:
+`TT_METAL_DEVICE_PROFILER=1`, last run (run_host_id 3072):
 
-| Implementation        | Kernel Calls | Avg Cycles/Call | Total Kernel Cycles | Total Time  |
-|----------------------|-------------|-----------------|---------------------|-------------|
-| experimental "none"  | 64          | 11,728          | 750,595             | 0.556 ms    |
-| experimental "poly"  | 64          | 11,726          | 750,455             | 0.556 ms    |
+| State              | Kernel Calls | Avg Cycles/Tile | Total Kernel Cycles | Time @ 1350MHz |
+|--------------------|-------------|-----------------|---------------------|----------------|
+| Original (erf+exp) | 64          | 11,743          | 751,551             | 0.557 ms       |
+| -02 (polynomial)   | 64          | 7,799           | 499,131             | 0.370 ms       |
+| -03 (polynomial)   | 64          | 7,843           | 501,926             | 0.372 ms       |
 
-Both kernels dispatch exactly 64 calls (one per 32x32 tile) with virtually
-identical cycle counts. The polynomial evaluation is **cycle-neutral** compared
-to the erf+exp formula.
+The polynomial kernel is **33% faster** in compute cycles than the original
+erf+exp formula (7,843 vs 11,743 cycles/tile). This is expected: the
+polynomial uses a compact Horner evaluation while the formula requires
+separate erf() and exp() SFPU calls.
+
+### 1c. Validation
+
+The cycle count difference (11,743 vs 7,843) proves that the "poly" and
+"none" paths dispatch genuinely different kernels. Our previous measurement
+(before host rebuild) showed 11,728 vs 11,726 — essentially identical —
+because both paths ran the same "none" kernel due to a stale host binary.
+
+## 2. Refactoring Impact (-02 vs -03)
+
+Branch `-03` vs `-02`: review feedback refactoring (PolynomialEvaluator,
+recip_init, BF16 rounding).
+
+| Metric              | -02 (before) | -03 (after) | Delta |
+|---------------------|-------------|-------------|-------|
+| Avg cycles/tile     | 7,799       | 7,843       | +0.6% |
+| Total kernel cycles | 499,131     | 501,926     | +0.6% |
+
+Within measurement noise. The `-03` refactoring is **performance-neutral**.
 
 ## 3. Summary
 
-| Metric                          | Formula ("none") | Polynomial ("poly") | Delta       |
-|--------------------------------|------------------|---------------------|-------------|
-| Max ULP error                   | 32,460           | 1                   | 32,460x     |
-| Wall-clock (64 tiles, warm)    | 0.25 ms          | 0.27 ms             | ~same       |
-| Total TRISC_1 cycles (profiler)| 750,595          | 750,455             | ~same       |
-| Cycles per tile                 | 11,728           | 11,726              | ~same       |
+| Metric                          | Original (erf+exp) | Polynomial (-03) | Improvement  |
+|--------------------------------|---------------------|-------------------|--------------|
+| Max ULP error                   | 32,460              | 1                 | 32,460x      |
+| Kernel cycles/tile (TRISC_1)   | 11,743              | 7,843             | 33% faster   |
+| Total kernel cycles (64 tiles) | 751,551             | 501,926           | 33% faster   |
+| Wall-clock (warm, 64 tiles)    | 0.25 ms             | 0.25 ms           | ~same        |
 
 The polynomial implementation achieves **Max ULP = 1** (vs 32,460 for the
-formula) with **no measurable performance cost**. The compute kernel runs
-in the same number of cycles regardless of the approximation method.
+formula) while being **33% faster** in kernel compute cycles. Wall-clock
+times are equivalent because they are dominated by dispatch overhead at
+this tensor size.
 
 ## Environment
 
@@ -82,4 +79,5 @@ in the same number of cycles regardless of the approximation method.
 - Chip freq: 1350 MHz
 - Build: Debug
 - Date: 2026-02-24
-- Kernel cache cleared before cold runs
+- Host rebuilt with `build_metal.sh --debug --build-all --enable-ccache`
+- Kernel cache cleared before each state measurement
