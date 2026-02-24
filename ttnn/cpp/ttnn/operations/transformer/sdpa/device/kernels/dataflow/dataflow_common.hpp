@@ -114,7 +114,10 @@ uint32_t read_chunk_with_padding(
       rows or cols of the DST CB.
     */
     const uint32_t num_tiles = dst_rows * dst_cols;
-    cb_reserve_back(cb_id, num_tiles);
+    {
+        DeviceZoneScopedN("Reserve CB");
+        cb_reserve_back(cb_id, num_tiles);
+    }
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
@@ -128,6 +131,7 @@ uint32_t read_chunk_with_padding(
             write_ptr += inner_ptr_stride;
 
             if (++barrier_count == barrier_threshold) {
+                DeviceZoneScopedN("Noc Barrier Threshold");
                 noc_async_read_barrier();
                 barrier_count = 0;
             }
@@ -135,18 +139,23 @@ uint32_t read_chunk_with_padding(
         start_tile_id += skip_src_cols;
     }
 
-    // Zero out the padding
-    for (uint32_t row = 0; row < dst_rows; ++row) {
-        for (uint32_t col = 0; col < dst_cols; ++col) {
-            if (row < src_rows && col < src_cols) {
-                continue;
+    {
+        DeviceZoneScopedN("Zero Padding");
+        // Zero out the padding
+        for (uint32_t row = 0; row < dst_rows; ++row) {
+            for (uint32_t col = 0; col < dst_cols; ++col) {
+                if (row < src_rows && col < src_cols) {
+                    continue;
+                }
+                uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
+                fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
             }
-            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
         }
     }
-    noc_async_read_barrier();
-
+    {
+        DeviceZoneScopedN("Noc Barrier");
+        noc_async_read_barrier();  // Why **after** the padding?
+    }
     if constexpr (push_num_tiles) {
         cb_push_back(cb_id, num_tiles);
         return 0;
@@ -170,7 +179,10 @@ FORCE_INLINE void read_q_subblock(
     const uint32_t dst_cols,
     const uint32_t barrier_threshold) {
     const uint32_t sb_tiles = subblock_h * dst_cols;
-    cb_reserve_back(cb_id, sb_tiles);
+    {
+        DeviceZoneScopedN("Reserve CB");
+        cb_reserve_back(cb_id, sb_tiles);
+    }
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
 
     uint32_t barrier_count = 0;
@@ -183,23 +195,30 @@ FORCE_INLINE void read_q_subblock(
                 noc_async_read_tile(start_tile_id++, reader, write_ptr);
                 write_ptr += tile_bytes;
                 if (++barrier_count == barrier_threshold) {
+                    DeviceZoneScopedN("Noc Barrier");
                     noc_async_read_barrier();
                     barrier_count = 0;
                 }
             }
-            // Zero-pad extra columns (src_cols < dst_cols case)
-            for (uint32_t col = src_cols; col < dst_cols; ++col) {
-                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+            {
+                DeviceZoneScopedN("Zero Padding");
+                // Zero-pad extra columns (src_cols < dst_cols case)
+                for (uint32_t col = src_cols; col < dst_cols; ++col) {
+                    fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+                }
             }
         } else {
+            DeviceZoneScopedN("Zero Padding");
             // Entire row is padding
             for (uint32_t col = 0; col < dst_cols; ++col) {
                 fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
             }
         }
     }
-
-    noc_async_read_barrier();
+    {
+        DeviceZoneScopedN("Noc Barrier");
+        noc_async_read_barrier();
+    }
     cb_push_back(cb_id, sb_tiles);
 }
 
@@ -219,7 +238,10 @@ void read_paged_chunk_with_padding(
     const bool transpose = false,
     const uint32_t skip_src_cols = 0) {
     const uint32_t num_tiles = dst_rows * dst_cols;
-    cb_reserve_back(cb_id, num_tiles);
+    {
+        DeviceZoneScopedN("Reserve CB");
+        cb_reserve_back(cb_id, num_tiles);
+    }
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
 
     // Stride calculation based on transpose flag
@@ -245,7 +267,10 @@ void read_paged_chunk_with_padding(
         }
         physical_tile_id += skip_src_cols;  // Skip src cols if needed
     }
-    noc_async_read_barrier();
+    {
+        DeviceZoneScopedN("Noc Barrier");
+        noc_async_read_barrier();
+    }
     cb_push_back(cb_id, num_tiles);
 }
 
@@ -790,8 +815,8 @@ struct PaddedAddrGenerator {
 };
 
 struct Slice {
-    uint32_t d0;        // batch dimension
-    uint32_t d1;        // head dimension
+    uint32_t d0;  // batch dimension
+    uint32_t d1;  // head dimension
 
     uint32_t d2_start;  // sequence start
     uint32_t d2_end;    // sequence end

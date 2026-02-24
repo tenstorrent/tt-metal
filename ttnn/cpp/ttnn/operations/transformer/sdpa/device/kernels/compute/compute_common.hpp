@@ -21,6 +21,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -1209,46 +1210,78 @@ ALWI void matmul_blocks(
     uint32_t in0_wait_tiles = in0_subblock_num_tiles;
 
     reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
-    cb_reserve_back(out_cb, output_num_tiles);
-
+    {
+        DeviceZoneScopedN("Wait IN1");
+        cb_wait_front(in1_cb, K * N);
+    }
+    {
+        DeviceZoneScopedN("Reserve OUT");
+        cb_reserve_back(out_cb, output_num_tiles);
+    }
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        cb_wait_front(in0_cb, in0_wait_tiles);
+        {
+            DeviceZoneScopedN("Wait IN0");
+            cb_wait_front(in0_cb, in0_wait_tiles);
+        }
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
+            {
+                DeviceZoneScopedN("Wait PACKER");
+                tile_regs_acquire();
+            }
 
             uint32_t dst_index = 0;
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
 
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                in1_index += N;
+            {
+                DeviceZoneScopedN("@");
+                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                    matmul_block(
+                        in0_cb,
+                        in1_cb,
+                        in0_index,
+                        in1_index,
+                        dst_index,
+                        transpose,
+                        subblock_w,
+                        subblock_h,
+                        in0_block_w);
+                    in0_index++;
+                    in1_index += N;
+                }
             }
+
             if (add_mask) {
-                cb_wait_front(mask_cb, out_subblock_num_tiles);
-                cb_wait_front(zero_cb, 1);
+                {
+                    DeviceZoneScopedN("Wait MASK");
+                    cb_wait_front(mask_cb, out_subblock_num_tiles);
+                    cb_wait_front(zero_cb, 1);
+                }
                 add_tiles_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
             }
             tile_regs_commit();
-            tile_regs_wait();
-            uint32_t dst_idx = 0;
-            uint32_t out_col_offset = in1_subblock * subblock_w;
-            for (uint32_t r = 0; r < subblock_h; r++) {
-                uint32_t out_row_offset = r * N;
-                for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
-                    dst_idx++;
-                }
+            {
+                DeviceZoneScopedN("Wait MATH");
+                tile_regs_wait();
             }
-            tile_regs_release();
-            in1_index_offset += subblock_w;
+            {
+                DeviceZoneScopedN("Packer");
+                uint32_t dst_idx = 0;
+                uint32_t out_col_offset = in1_subblock * subblock_w;
+                for (uint32_t r = 0; r < subblock_h; r++) {
+                    uint32_t out_row_offset = r * N;
+                    for (uint32_t c = 0; c < subblock_w; c++) {
+                        pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                        dst_idx++;
+                    }
+                }
+                tile_regs_release();
+                in1_index_offset += subblock_w;
+            }
         }
         in0_index_offset += subblock_h * in0_block_w;
         in0_wait_tiles += in0_subblock_num_tiles;
@@ -1531,27 +1564,29 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
-            /**
-             * QK = Q_CHUNK @ K_CHUNK
-             *
-             * matmul_blocks internally waits on both inputs
-             */
-            pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks(
-                cb_q_in,
-                cb_k_in,
-                cb_qk_im,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                qk_num_blocks,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                qk_in0_block_w,
-                qk_subblock_h,
-                qk_subblock_w,
-                true /*transpose*/);
-
+            {
+                DeviceZoneScopedN("SDPA_Q@K");
+                /**
+                 * QK = Q_CHUNK @ K_CHUNK
+                 *
+                 * matmul_blocks internally waits on both inputs
+                 */
+                pack_reconfig_data_format(cb_qk_im);
+                matmul_blocks(
+                    cb_q_in,
+                    cb_k_in,
+                    cb_qk_im,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    DHt,
+                    qk_num_blocks,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    qk_in0_block_w,
+                    qk_subblock_h,
+                    qk_subblock_w,
+                    true /*transpose*/);
+            }
             /**
              * Note
              * Typically, scores is multiplied by a scalar here. We employed an optimization
@@ -1585,6 +1620,7 @@ void sdpa_inner_loop(
             }
 
             if (apply_mask) {
+                DeviceZoneScopedN("SDPA_QK+=MASK");
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
@@ -1597,9 +1633,12 @@ void sdpa_inner_loop(
              * else:
              *  cur_max = max(qk, dim=-1)
              */
-            reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+            {
+                DeviceZoneScopedN("SDPA_REDUCE_MAX");
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
+                    alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+            }
 
             /**
              * sub_exp fuses a few operations.
@@ -1611,53 +1650,62 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
-            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            {
+                DeviceZoneScopedN("SDPA_SUB_EXP");
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            }
 
-            /* OUT_IM = QK @ V_CHUNK */
-            matmul_blocks(
-                cb_qk_im,
-                cb_v_in,
-                alias_mm2_cur_out,
-                Sq_chunk_t,
-                vDHt,
-                Sk_chunk_t,
-                out_num_blocks,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                out_in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                false /*transpose*/);
+            {
+                DeviceZoneScopedN("SDPA_QK@V");
+                /* OUT_IM = QK @ V_CHUNK */
+                matmul_blocks(
+                    cb_qk_im,
+                    cb_v_in,
+                    alias_mm2_cur_out,
+                    Sq_chunk_t,
+                    vDHt,
+                    Sk_chunk_t,
+                    out_num_blocks,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_in0_block_w,
+                    out_subblock_h,
+                    out_subblock_w,
+                    false /*transpose*/);
+            }
 
             cb_pop_front(cb_qk_im, qk_chunk_tiles);
-            reconfig_data_format(alias_prev_max, alias_cur_max);
+            {
+                DeviceZoneScopedN("SDPA_out_acc");
+                reconfig_data_format(alias_prev_max, alias_cur_max);
 
-            /* OUT_ACC += OUT_IM */
-            if (processed_k_chunks > 0) {
-                /**
-                 * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
-                 * Scale is fused into exp again since max is the max of unscaled scores.
-                 */
-                sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                cb_pop_front(alias_prev_max, Sq_chunk_t);
+                /* OUT_ACC += OUT_IM */
+                if (processed_k_chunks > 0) {
+                    /**
+                     * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
+                     * Scale is fused into exp again since max is the max of unscaled scores.
+                     */
+                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    cb_pop_front(alias_prev_max, Sq_chunk_t);
 
-                /**
-                 * cb_prev_sum *= cb_exp_max_diff
-                 * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
-                 * reduction, containing the sum of tiles in dim=-1 of QK.
-                 */
-                mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    /**
+                     * cb_prev_sum *= cb_exp_max_diff
+                     * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
+                     * reduction, containing the sum of tiles in dim=-1 of QK.
+                     */
+                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
-                /* cb_cur_sum += cb_prev_sum */
-                add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                    /* cb_cur_sum += cb_prev_sum */
+                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
-                /**
-                 * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
-                 * This uses L1 accumulation to accumulate onto mm2_cur_out.
-                 */
-                mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                    alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+                    /**
+                     * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
+                     * This uses L1 accumulation to accumulate onto mm2_cur_out.
+                     */
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
+                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+                }
             }
 
             // Swap CB handles to prepare for next iteration

@@ -9,6 +9,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "compute_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -93,7 +94,10 @@ void kernel_main() {
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
-            cb_wait_front(cb_chunk_start_idx, 1);
+            {
+                DeviceZoneScopedN("Wait ChunkStartIdx");
+                cb_wait_front(cb_chunk_start_idx, 1);
+            }
             uint32_t chunk_start_idx = ckernel::read_tile_value(cb_chunk_start_idx, 0, 0);
             cb_pop_front(cb_chunk_start_idx, 1);
             const uint32_t q_chunk_size = Sq_chunk_t * TILE_HEIGHT;

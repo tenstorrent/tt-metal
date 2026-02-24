@@ -251,19 +251,33 @@ void kernel_main() {
     uint32_t chunked_q_chunk_offset = 0;
     if constexpr (is_chunked) {
         if (chunk_start_idx_addr != 0) {
-            cb_reserve_back(cb_id_chunk_start_idx_compute, 1);
-            uint32_t chunk_start_write_ptr = get_write_ptr(cb_id_chunk_start_idx_compute);
-            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr, 4);
-            noc_async_read_barrier();
-            uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
-            cb_push_back(cb_id_chunk_start_idx_compute, 1);
+            uint32_t chunk_start_idx;
+            {
+                DeviceZoneScopedN("ChunkStartIdx_Wait");
+                cb_reserve_back(cb_id_chunk_start_idx_compute, 1);
+            }
 
-            cb_reserve_back(cb_id_chunk_start_idx_writer, 1);
-            uint32_t chunk_start_write_ptr_2 = get_write_ptr(cb_id_chunk_start_idx_writer);
-            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr_2, 4);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_chunk_start_idx_writer, 1);
+            {
+                DeviceZoneScopedN("ChunkStartIdx_Read");
+                uint32_t chunk_start_write_ptr = get_write_ptr(cb_id_chunk_start_idx_compute);
+                noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr, 4);
+                noc_async_read_barrier();
 
+                chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
+                cb_push_back(cb_id_chunk_start_idx_compute, 1);
+            }
+
+            {
+                DeviceZoneScopedN("ChunkStartIdx_Writer_Wait");
+                cb_reserve_back(cb_id_chunk_start_idx_writer, 1);
+            }
+            {
+                DeviceZoneScopedN("ChunkStartIdx_Writer_Read");
+                uint32_t chunk_start_write_ptr_2 = get_write_ptr(cb_id_chunk_start_idx_writer);
+                noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr_2, 4);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_chunk_start_idx_writer, 1);
+            }
             const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
             chunked_q_chunk_offset_phase_1_local = chunk_start_idx / q_chunk_size;
             if (num_phases == 2) {
@@ -291,6 +305,7 @@ void kernel_main() {
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
+                DeviceZoneScopedN("Read Page Table");
                 // Chunked means that we have paged attention
                 cb_reserve_back(cb_id_page_table, 1);
                 page_table_ptr = read_page_table_for_batch(
@@ -314,6 +329,7 @@ void kernel_main() {
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 // Read attention sink for this Q chunk if enabled
                 if constexpr (use_attention_sink) {
+                    DeviceZoneScopedN("Read Attention Sink");
                     cb_reserve_back(cb_attention_sink, Sq_chunk_t);
                     uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
 
@@ -409,6 +425,7 @@ void kernel_main() {
                         uint32_t cb_k_start_address = 0;
 
                         if (should_receive) {
+                            DeviceZoneScopedN("Receive K Chunk");
                             // Receive forwarded K chunk from previous core
                             cb_reserve_back(cb_k_in, k_chunk_tiles);
                             cb_k_start_address = get_write_ptr(cb_k_in);
@@ -419,6 +436,7 @@ void kernel_main() {
                         } else {
                             // Read K chunk from DRAM
                             if constexpr (is_chunked) {
+                                DeviceZoneScopedN("Read Paged K Chunk");
                                 // Use page table to read K chunk (forwarding not supported for paged mode)
                                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
                                 read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
@@ -437,9 +455,11 @@ void kernel_main() {
                                 );
                             } else {
                                 if (should_forward) {
+                                    DeviceZoneScopedN("Read K Chunk for Forwarding");
                                     cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
                                         k_reader, cb_k_in, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
                                 } else {
+                                    DeviceZoneScopedN("Read K Chunk with Padding");
                                     read_chunk_with_padding<k_tile_bytes>(
                                         k_reader,
                                         cb_k_in,
@@ -461,6 +481,7 @@ void kernel_main() {
                         // any noc_async_read_barrier() between them deadlocks (the read barrier
                         // blocks while a linked write awaits its companion).
                         if (should_forward) {
+                            DeviceZoneScopedN("Forward K Chunk");
                             noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                             noc_semaphore_set(sender_semaphore_addr_ptr, 0);
                             if constexpr (mcast_enabled) {
@@ -481,6 +502,7 @@ void kernel_main() {
 
                         // Mask read — safe after linked write pair is complete
                         if constexpr (use_provided_mask) {
+                            DeviceZoneScopedN("Read Mask Chunk");
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                             uint32_t barrier_count = 0;
@@ -521,6 +543,7 @@ void kernel_main() {
                         // Complete K forward: flush write and signal receiver(s)
                         // (mcast path already completed above — companion sent with linked write)
                         if (should_forward) {
+                            DeviceZoneScopedN("Flush K Chunk");
                             if constexpr (!mcast_enabled) {
                                 noc_async_writes_flushed();
                                 noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
@@ -536,6 +559,7 @@ void kernel_main() {
                         // when NOC writes are in-flight).
                         if constexpr (use_q_subblock_push) {
                             if (k_chunk == 0) {
+                                DeviceZoneScopedN("Read Q Subblocks");
                                 for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                                     read_q_subblock<q_tile_bytes>(
                                         q_reader,
@@ -555,6 +579,7 @@ void kernel_main() {
                         uint32_t cb_v_start_address = 0;
 
                         if (should_receive) {
+                            DeviceZoneScopedN("Receive V Chunk");
                             // Receive forwarded V chunk from previous core
                             cb_reserve_back(cb_v_in, v_chunk_tiles);
                             cb_v_start_address = get_write_ptr(cb_v_in);
@@ -565,6 +590,7 @@ void kernel_main() {
                         } else {
                             // Read V chunk from DRAM
                             if constexpr (is_chunked) {
+                                DeviceZoneScopedN("Read V Paged Chunk Padding");
                                 // Use page table to read V chunk (forwarding not supported for paged mode)
                                 const uint32_t kv_chunk_start_row_num = k_chunk * Sk_chunk_t;
                                 constexpr uint32_t head_dim = (use_mla && !mla_kv_overlap) ? vDHt : DHt;
@@ -584,6 +610,7 @@ void kernel_main() {
                                     skip_src_cols);
                             } else {
                                 if (should_forward) {
+                                    DeviceZoneScopedN("Read V Chunk Forwarding");
                                     cb_v_start_address = read_chunk_for_forwarding<v_tile_bytes, false>(
                                         v_reader,
                                         cb_v_in,
@@ -594,6 +621,7 @@ void kernel_main() {
                                         vDHt,
                                         skip_src_cols);
                                 } else {
+                                    DeviceZoneScopedN("Read V Chunk Padding");
                                     read_chunk_with_padding<v_tile_bytes>(
                                         v_reader,
                                         cb_v_in,
@@ -611,6 +639,7 @@ void kernel_main() {
 
                         // Forward V chunk to next core(s) if applicable
                         if (should_forward) {
+                            DeviceZoneScopedN("Forward V Chunk");
                             noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                             noc_semaphore_set(sender_semaphore_addr_ptr, 0);
                             if constexpr (mcast_enabled) {
