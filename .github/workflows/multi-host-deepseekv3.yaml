@@ -109,10 +109,12 @@ jobs:
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
 
-      - name: Ensure cache directory is writable
+      - name: Ensure cache directories are writable
         run: |
           sudo mkdir -p /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/Matmul_Integration_Cache/tests_cache
+          sudo mkdir -p /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/Matmul_Integration_Cache/test_io_cache
           sudo chmod -R 777 /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/Matmul_Integration_Cache/tests_cache
+          sudo chmod -R 777 /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/Matmul_Integration_Cache/test_io_cache
 
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────
       - name: Run dual DeepSeek V3 unit tests
