@@ -163,6 +163,7 @@ struct KVCacheUpdate {
                 noc_semaphore_inc_multicast(
                     kv_cache_cur_pos_ready_sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
                 cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
+                noc_async_atomic_barrier(MCAST_NOC);
             }
 #elif defined(COMPILE_FOR_TRISC)
             if constexpr (IsNopeCore || IsRopeCore) {

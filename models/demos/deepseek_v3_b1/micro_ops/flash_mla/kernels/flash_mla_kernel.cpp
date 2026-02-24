@@ -139,6 +139,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_out_o"),
         get_named_compile_time_arg_val("cb_out_ms"),
         get_named_compile_time_arg_val("cb_out_final")>;
+
+    deepseek_compute_kernel_init();
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
