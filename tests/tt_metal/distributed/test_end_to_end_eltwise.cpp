@@ -255,7 +255,7 @@ protected:
         MeshDeviceFixtureBase(Config{
             .mesh_shape = MeshShape{2, 4},
             .num_cqs = 2,
-            .trace_region_size = 12288,  // 1024 per workload necessary
+            .trace_region_size = 3072,  // 1024 per workload necessary
         }) {}
 };
 
