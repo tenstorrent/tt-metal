@@ -442,4 +442,9 @@ class ReluConfig(Enum):
     ZeroRelu = 1
 
 
+class TopKSortDirection(Enum):
+    Descending = 0
+    Ascending = 1
+
+
 # *********************************

@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
+from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
@@ -27,6 +29,7 @@ from .llk_params import (
     StableSort,
     StochasticRounding,
     Tilize,
+    TopKSortDirection,
     Transpose,
     UnpackerEngine,
 )
@@ -284,6 +287,31 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
     def covert_to_cpp(self) -> str:
         return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
+
+
+@dataclass
+class TOPK(TemplateParameter):
+    topk_k: int = 0
+    topk_matrix_width: int = 0
+    topk_sort_direction: TopKSortDirection = TopKSortDirection.Descending
+
+    def covert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOPK_K = {self.topk_k};",
+            f"constexpr std::uint32_t TOPK_LOGK = {int(math.log2(self.topk_k))};",
+            f"constexpr std::uint32_t TOPK_NUM_ITERATIONS = {int(math.log2(self.topk_matrix_width // TILE_DIMENSIONS[1] // 2))};",
+            f"constexpr std::uint32_t TOPK_SORT_DIRECTION = {self.topk_sort_direction.value};",
+        ]
+        return "\n".join(lines)
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        lines: list[str] = [
+            "std::uint32_t TOPK_K;",
+            "std::uint32_t TOPK_LOGK;",
+            "std::uint32_t TOPK_SORT_DIRECTION;",
+            "std::uint32_t TOPK_NUM_ITERATIONS;",
+        ]
+        return "\n".join(lines), "IV"
 
 
 @dataclass

@@ -15,6 +15,7 @@ from helpers.llk_params import (
     PackerReluType,
     ReduceDimension,
     ReducePool,
+    TopKSortDirection,
     format_dict,
 )
 from helpers.pack import pack_mxfp8p, pack_mxfp8r
@@ -2199,3 +2200,111 @@ class PackRowsGolden:
         result = extracted_elements.flatten()
 
         return result.to(format_dict[data_format])
+
+
+@register_golden
+class TopKGolden:
+    """
+    Golden generator for TopK operation.
+
+    """
+
+    def __call__(
+        self,
+        operand,
+        data_format,
+        K=32,
+        sort_direction: TopKSortDirection = TopKSortDirection.Descending,
+        input_dimensions=[32, 128],
+    ):
+        """
+        Perform per-row topk on a tensor.
+
+        Args:
+            operand: Input tensor (flattened).
+            data_format: Data format for the result.
+            k: Number of top elements to extract per row (default: 32).
+            sort_direction: Direction to sort top-k values (default: Descending).
+            input_dimensions: Input dimensions [rows, cols] (default: [32, 128]).
+        Constraint:
+            In LLK api, we perform topk with k >= 32, so input tensor must always have at least 2 tiles for values and
+            of course 2 tiles for indices since we need to reorder them based on the topk results.
+            Therefore input_dimensions must contain at least 4 tiles.
+        Returns:
+            Tensor with topk applied per row. One Tile of values followed by one tile of indices.
+        """
+        torch_format = format_dict[data_format]
+
+        num_stages = 2  # One stage for values and one stage for indices.
+
+        minimal_number_of_tiles_required = 4
+
+        # Convert to tensor if needed.
+        if not isinstance(operand, torch.Tensor):
+            operand = torch.tensor(operand, dtype=torch_format)
+        else:
+            operand = operand.to(torch_format)
+
+        num_rows_tensor, num_cols_tensor = input_dimensions
+        num_tiles_in_input = (num_rows_tensor * num_cols_tensor) // ELEMENTS_PER_TILE
+
+        if num_tiles_in_input < minimal_number_of_tiles_required:
+            raise ValueError(
+                f"Expected at least 2 tiles for values and 2 tiles for indices (total 4 tiles), but got {num_tiles_in_input} tiles."
+            )
+
+        # Create a new zeroed tensor with dimensions [num_rows_tensor, num_stages * K cols].
+        result_num_cols = num_stages * K
+        result_num_rows = num_rows_tensor
+
+        result = torch.zeros(result_num_rows * result_num_cols, dtype=torch_format)
+
+        for row in range(num_rows_tensor):
+            # Create uint16 indices and view as the operand's dtype to preserve bits.
+            uint16_indices = torch.arange(
+                0, num_cols_tensor // num_stages, dtype=torch.int16
+            ).to(torch.uint16)
+
+            # Perform Topk On Row - use operand indices
+            operand_values_start_idx = row * num_cols_tensor
+            operand_values_end_idx = (
+                operand_values_start_idx + num_cols_tensor // num_stages
+            )
+
+            values = operand[operand_values_start_idx:operand_values_end_idx]
+
+            # Get top-k values and their positions in the original array.
+            # largest=True means we want the largest k values.
+            # sorted=True means results are sorted in descending order.
+            topk_values, topk_positions = torch.topk(
+                values,
+                K,
+                largest=(sort_direction == TopKSortDirection.Descending),
+                sorted=True,
+            )
+
+            # Convert uint16 to int32 for indexing (PyTorch doesn't support uint16 indexing)
+            topk_indices = uint16_indices.to(torch.int32)[topk_positions].to(
+                torch.uint16
+            )
+
+            # Write to result tensor - use result indices
+            result_values_start_idx = row * result_num_cols
+            result_indices_start_idx = (
+                result_values_start_idx + result_num_cols // num_stages
+            )
+
+            result[result_values_start_idx : result_values_start_idx + K] = topk_values
+            result[result_indices_start_idx : result_indices_start_idx + K] = (
+                topk_indices.view(operand.dtype)
+            )
+
+        # Tilize to match hardware layout.
+        result_tilizer = TilizeGolden()
+        result = result_tilizer(
+            result,
+            dimensions=[result_num_rows, result_num_cols],
+            data_format=data_format,
+        )
+
+        return result
