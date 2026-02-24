@@ -408,9 +408,9 @@ DispatchTopology::DispatchTopology(
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs());
+        std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs(), descriptor_.hal());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, descriptor_.num_cqs());
+        std::make_unique<DispatchMemMap>(CoreType::ETH, descriptor_.num_cqs(), descriptor_.hal());
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
