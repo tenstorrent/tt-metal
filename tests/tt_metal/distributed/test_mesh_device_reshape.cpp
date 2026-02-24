@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 #include <cstdlib>
-#include <tt_stl/indestructible.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <memory>
@@ -23,6 +22,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -56,7 +56,7 @@ TEST_P(MeshConfigurationTest, MeshConfigurations) { EXPECT_EQ(mesh_device_->shap
 TEST_P(MeshConfigurationTest, GetMappedDevices) {
     const auto& shape = GetParam();
 
-    auto& system_mesh = SystemMesh::instance();
+    auto& system_mesh = MetalContext::instance().get_system_mesh();
     EXPECT_THAT(system_mesh.get_mapped_devices(shape).device_ids, SizeIs(shape.mesh_size()));
     EXPECT_THAT(system_mesh.get_mapped_devices(shape).fabric_node_ids, SizeIs(shape.mesh_size()));
 }
@@ -118,7 +118,7 @@ public:
 };
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
-    auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
+    auto& system_mesh = tt::tt_metal::MetalContext::instance().get_system_mesh();
 
     // Shape too big.
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(9)));
