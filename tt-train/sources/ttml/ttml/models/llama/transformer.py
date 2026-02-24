@@ -122,15 +122,13 @@ class LlamaBlock(AbstractModuleBase):
     ) -> None:
         super().__init__()
 
-        num_groups = num_attention_heads // num_key_value_heads
-
         self.mlp = LlamaMLP(hidden_size, intermediate_size, mlp_dropout)
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,
-            num_groups=num_groups,
+            num_groups=num_key_value_heads,
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,

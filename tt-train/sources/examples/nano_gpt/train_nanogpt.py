@@ -124,7 +124,7 @@ class ModelConfig:
         default_factory=ModelExperimentalConfig
     )
     # Llama-specific fields (universal naming matching YAML/C++ conventions)
-    num_groups: int = 3  # GQA: num_heads / num_key_value_heads
+    num_groups: int = 3  # GQA: num_key_value_heads
     theta: float = 500000.0  # RoPE theta parameter
     intermediate_dim: Optional[int] = None  # MLP intermediate dimension
     # RoPE NTK-aware scaling (nested under rope_scaling in YAML, matching C++ LlamaConfig)
@@ -787,7 +787,6 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             raise ValueError(
                 "model_config.num_heads must be divisible by model_config.num_groups."
             )
-        num_key_value_heads = model_config.num_heads // model_config.num_groups
         rope_scaling_config = LlamaRopeScalingConfig(
             scaling_factor=model_config.scaling_factor,
             high_freq_factor=model_config.high_freq_factor,
@@ -799,7 +798,7 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             intermediate_size=model_config.intermediate_dim,
             num_hidden_layers=model_config.num_blocks,
             num_attention_heads=model_config.num_heads,
-            num_key_value_heads=num_key_value_heads,
+            num_key_value_heads=model_config.num_groups,
             vocab_size=model_config.vocab_size,
             max_position_embeddings=model_config.max_sequence_length,
             rope_theta=model_config.theta,
