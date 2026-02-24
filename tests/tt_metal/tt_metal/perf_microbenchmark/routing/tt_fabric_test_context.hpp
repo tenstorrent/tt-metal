@@ -47,6 +47,7 @@ using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
 using TestFabricSetup = tt::tt_fabric::fabric_tests::TestFabricSetup;
 using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using PerformanceTestMode = tt::tt_fabric::fabric_tests::PerformanceTestMode;
+using ChannelTrimmingMode = tt::tt_fabric::fabric_tests::ChannelTrimmingMode;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
@@ -121,7 +122,10 @@ public:
 
     void process_traffic_config(TestConfig& config);
 
-    bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
+    bool open_devices(const TestFabricSetup& fabric_setup,
+                      ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
+        return fixture_->open_devices(fabric_setup, channel_trimming_mode);
+    }
 
     void compile_programs();
 
