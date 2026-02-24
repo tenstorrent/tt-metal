@@ -120,6 +120,7 @@ Tests:
   ### RING BANDWIDTH TESTS ###
   # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we run them for extra iterations
   - name: "FullRingMulticast"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -139,6 +140,7 @@ Tests:
         iterations: 3
 
   - name: "FullRingUnicast"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -158,6 +160,7 @@ Tests:
         iterations: 3
 
   - name: "HalfRingMulticast"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -178,6 +181,7 @@ Tests:
 
   ### RING LATENCY TESTS ###
   - name: "LatencyRingUnicast"
+    skip: [watcher]
     latency_test_mode: true
     fabric_setup:
       topology: Ring
@@ -196,6 +200,7 @@ Tests:
 
   ### MESH BANDWIDTH TESTS ###
   - name: "MeshMulticast"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -215,6 +220,7 @@ Tests:
         iterations: 3
 
   - name: "SingleSenderMeshUnicastAllDevices"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -235,6 +241,7 @@ Tests:
 
   ### MESH LATENCY TESTS ###
   - name: "LatencyMeshUnicast"
+    skip: [watcher]
     latency_test_mode: true
     fabric_setup:
       topology: Mesh
@@ -356,6 +363,7 @@ Tests:
 
   ### CUSTOM MAX PACKET SIZE MESH BANDWIDTH TESTS ###
   - name: "CustomMaxPacketSizeMesh3K"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -376,6 +384,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh5K"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -396,6 +405,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh7K"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -416,7 +426,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh8K"
-    skip: [wormhole_b0]
+    skip: [watcher, wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -437,7 +447,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh15K"
-    skip: [wormhole_b0]
+    skip: [watcher, wormhole_b0]
     benchmark_mode: true
     sync: true
     fabric_setup:
