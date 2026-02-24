@@ -14,10 +14,7 @@ from loguru import logger
 
 def generate_tray_to_pcie_device_mapping(mapping_file):
     # Use absolute path to the test executable
-    test_executable = (
-        Path(__file__).resolve().parents[4] / "build" / "test" / "tt_metal" / "tt_fabric" / "test_physical_discovery"
-    ).resolve()
-    # test_executable = Path("build/test/tt_metal/tt_fabric/test_physical_discovery")
+    test_executable = Path("build/test/tt_metal/tt_fabric/test_physical_discovery")
 
     if not test_executable.exists():
         logger.error(f"Test executable not found at {test_executable}")
