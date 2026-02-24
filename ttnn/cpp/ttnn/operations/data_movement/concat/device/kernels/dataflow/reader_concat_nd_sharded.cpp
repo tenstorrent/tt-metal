@@ -94,6 +94,16 @@ void kernel_main() {
     DPRINT << "output: shards=" << output_accessor.dspec().num_banks()
            << " pages=" << output_accessor.dspec().tensor_volume() << " page_size=" << output_page_size
            << " tile_size=" << output_page_size << ENDL();
+    {
+        const uint32_t out_rank = output_accessor.dspec().rank();
+        DPRINT << "output dimensions: rank=" << out_rank;
+        for (uint32_t d = 0; d < out_rank; ++d) {
+            DPRINT << " dim" << d << "_ts=" << output_accessor.dspec().tensor_shape()[d]
+                   << "_ss=" << output_accessor.dspec().shard_shape()[d]
+                   << "_sg=" << output_accessor.dspec().shard_grid()[d];
+        }
+        DPRINT << ENDL();
+    }
 
     // Copy each input to output sequentially; initial offset 0, then use offset returned from previous copy.
 #define CONCAT_ND_DPRINT_INPUT(n)                                                                            \
@@ -104,6 +114,16 @@ void kernel_main() {
         DPRINT << "input " << (n) << " source: shards=" << in##n##_accessor.dspec().num_banks()              \
                << " pages=" << in##n##_accessor.dspec().tensor_volume() << " page_size=" << in_page_size_##n \
                << " tile_size=" << in_page_size_##n << ENDL();                                               \
+        {                                                                                                    \
+            const uint32_t in_rank_##n = in##n##_accessor.dspec().rank();                                    \
+            DPRINT << "input " << (n) << " dimensions: rank=" << in_rank_##n;                                \
+            for (uint32_t d = 0; d < in_rank_##n; ++d) {                                                     \
+                DPRINT << " dim" << d << "_ts=" << in##n##_accessor.dspec().tensor_shape()[d]                \
+                       << "_ss=" << in##n##_accessor.dspec().shard_shape()[d]                                \
+                       << "_sg=" << in##n##_accessor.dspec().shard_grid()[d];                                \
+            }                                                                                                \
+            DPRINT << ENDL();                                                                                \
+        }                                                                                                    \
         offset = copy_tensor_data(output_accessor, in##n##_accessor, offset);                                \
         const uint32_t bytes_copied_##n = offset - initial_offset_##n;                                       \
         DPRINT << "input " << (n) << ": copied " << bytes_copied_##n << " bytes to initial offset "          \

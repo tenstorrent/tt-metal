@@ -362,8 +362,10 @@ def test_concat_1d(device, layout, dim, input_shapes):
     "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
     [
         # 2 tensors - basic ND sharding concat
+        # (3, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # -
         #        (2, [3, 128, 160], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (2, [3, 128, 160], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on height dim
+        # (2, [3, 128, 160], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on height dim
         #        (2, [3, 128, 160], [3, 128, 32], 2, ttnn.TILE_LAYOUT),  # concat on width dim
         #        (2, [3, 4, 5], [1, 1, 5], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on batch
         #        (2, [3, 4, 5], [3, 1, 5], 1, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on height
