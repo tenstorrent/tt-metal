@@ -8,8 +8,7 @@ Generates speech audio from text using the Bark Small model
 running on Tenstorrent Wormhole hardware via TTNN APIs.
 
 Usage:
-    pytest models/demos/wormhole/bark/demo/demo.py -v
-    # Or standalone:
+    # Standalone demo:
     python models/demos/wormhole/bark/demo/demo.py
 """
 
