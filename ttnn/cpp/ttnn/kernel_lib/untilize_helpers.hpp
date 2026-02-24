@@ -16,10 +16,10 @@ constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
 
 // Register datatype reconfiguration — use when switching data formats between operations.
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
-    NoReconfigure,            // No reconfiguration
+    NoReconfigure,            // Default — no reconfiguration
     UnpackReconfigure,        // Reconfigure unpack registers (srcA)
     PackReconfigure,          // Reconfigure pack registers (output)
-    UnpackAndPackReconfigure  // Default — reconfigure both unpack and pack
+    UnpackAndPackReconfigure  // Reconfigure both unpack and pack
 };
 
 // Controls whether untilize_init/untilize_uninit are called.
@@ -44,12 +44,6 @@ enum class WaitMode : uint8_t {
 
 // Standalone init/uninit wrappers for manual lifecycle control.
 // Prefer using the unified untilize() with InitUninitMode enums instead.
-//
-// NOTE: When using standalone init/uninit,
-// the caller must NOT pass UnpackReconfigure or UnpackAndPackReconfigure to the
-// untilize() reconfig_mode — use NoReconfigure or PackReconfigure only.
-// If you need unpacker reconfiguration, call unpacker and packer reconfiguration manually
-// before untilize_init(), or use the unified untilize() which handles it automatically.
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 ALWI void untilize_init();
 
@@ -78,7 +72,7 @@ ALWI void untilize_uninit();
  *   output_cb         — Output circular buffer index (0–31, row-major output, must differ from input_cb).
  *   init_uninit_mode  — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode         — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   reconfig_mode     — Register datatype reconfiguration (default: NoReconfigure).
  *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
@@ -123,7 +117,7 @@ template <
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

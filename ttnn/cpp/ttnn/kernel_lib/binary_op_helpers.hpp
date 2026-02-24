@@ -72,6 +72,16 @@ enum class BinaryDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, INPUT_AND
  * - WaitUpfrontPopAtEnd: Wait for all tiles upfront, pop all at end (consume after processing)
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB)
  * - NoWaitPopAtEnd: Caller manages wait, pop all at end (preloaded, consume after processing)
+ *
+ * WARNING - NoWait Policies (NoWaitNoPop, NoWaitPopAtEnd):
+ * These policies are DANGEROUS when used incorrectly and can cause data hazards:
+ * - DO NOT use directly after other operations without prior cb_wait_front() calls
+ * - ONLY use when:
+ *   1. Paired with explicit cb_wait_front() before the operation, OR
+ *   2. As the FIRST operation in a chain (no prior data movement or compute operations), OR
+ *   3. With sharded tensors where data is pre-loaded in CB
+ * - Failure to follow these rules can result in reading stale/invalid data from CB
+ * - When in doubt, use WaitAndPopPerTile or WaitUpfrontNoPop for safety
  */
 enum class BinaryInputPolicy {
     WaitAndPopPerTile,    // Wait/process/pop one tile at a time (streaming)
@@ -310,14 +320,20 @@ ALWI void binary_op(
                 cb_reserve_back(ocb, chunk_size);
             }
 
-            tile_regs_acquire();
+            // Per-tile path: each tile gets its own acquire/commit/wait/release cycle
+            // Per-chunk path: one acquire/commit/wait/release cycle for the whole chunk
+            if constexpr (!waits_per_tile(input_a_policy)) {
+                tile_regs_acquire();
+            }
 
             // Accumulator reload if needed
             if constexpr (is_accumulator_enabled<AccumT>()) {
-                cb_wait_front(accum.cb_accumulator, 1);
-                copy_tile(accum.cb_accumulator, 0, accum.dst_index);
-                cb_pop_front(accum.cb_accumulator, 1);
-                binary_init<op_type, bcast_dim>(icb_a, icb_b);
+                if constexpr (!waits_per_tile(input_a_policy)) {
+                    cb_wait_front(accum.cb_accumulator, 1);
+                    copy_tile(accum.cb_accumulator, 0, accum.dst_index);
+                    cb_pop_front(accum.cb_accumulator, 1);
+                    binary_init<op_type, bcast_dim>(icb_a, icb_b);
+                }
             }
 
             for (uint32_t wt = 0; wt < chunk_size; ++wt) {
@@ -363,10 +379,18 @@ ALWI void binary_op(
                     }
                 }
 
+                // Per-tile: acquire DEST for this tile
+                if constexpr (waits_per_tile(input_a_policy)) {
+                    tile_regs_acquire();
+                }
+
                 // Execute (unified LLK call)
                 binary_exec<op_type, bcast_dim>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
-                // Per-tile streaming
+                // Post-operation callback (e.g., rsqrt, recip)
+                post_op(dst_idx);
+
+                // Per-tile streaming: commit, wait, pack, release — complete handshake per tile
                 if constexpr (waits_per_tile(input_a_policy)) {
                     tile_regs_commit();
                     tile_regs_wait();
@@ -391,7 +415,7 @@ ALWI void binary_op(
                         }
                     }
 
-                    tile_regs_acquire();
+                    tile_regs_release();
                     tiles_processed++;
                 }
             }
@@ -432,7 +456,10 @@ ALWI void binary_op(
                 }
             }
 
-            tile_regs_release();
+            // Per-chunk: release after all tiles packed
+            if constexpr (!waits_per_tile(input_a_policy)) {
+                tile_regs_release();
+            }
         }
 
         // COL broadcast: pop input_b once per row (ht iteration).

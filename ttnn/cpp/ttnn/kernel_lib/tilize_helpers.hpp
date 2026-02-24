@@ -19,10 +19,10 @@ constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
 
 // Register datatype reconfiguration — use when switching data formats between operations.
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
-    NoReconfigure,            // No reconfiguration
+    NoReconfigure,            // Default — no reconfiguration
     UnpackReconfigure,        // Reconfigure unpack registers (srcA/srcB)
     PackReconfigure,          // Reconfigure pack registers (output)
-    UnpackAndPackReconfigure  // Default — reconfigure both unpack and pack
+    UnpackAndPackReconfigure  // Reconfigure both unpack and pack
 };
 
 // Controls whether tilize_init/tilize_uninit are called.
@@ -63,7 +63,7 @@ enum class WaitMode : uint8_t {
  *   output_cb        — Output circular buffer index (0–31, tiled output, must differ from input_cb).
  *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode    — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   reconfig_mode    — Register datatype reconfiguration (default: NoReconfigure).
  *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
@@ -115,7 +115,7 @@ template <
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
 ALWI void tilize(
     uint32_t block_width_tiles, uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
