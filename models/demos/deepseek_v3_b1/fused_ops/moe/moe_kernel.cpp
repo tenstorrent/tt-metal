@@ -60,6 +60,9 @@
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
+#ifdef ENABLE_BCAST
+#include "../../unified_kernels/broadcast.hpp"
+#endif
 
 // Compile-time role flags for dead code elimination via if constexpr.
 // Mirrors Python-side MoeRoutedExpertOp / MoeSharedExpertOp split.
