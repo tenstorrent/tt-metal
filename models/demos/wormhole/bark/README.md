@@ -67,7 +67,7 @@ The implementation has been fully optimized for Tenstorrent hardware:
 - **On-Device KV Caching**: Integrated persistent KV caches for stages 1 and 2, drastically reducing the compute requirements for autoregressive generation.
 - **On-Device Loops**: Generation loops for all stages run mostly on-device (logits-to-token decoding currently occurs on host).
 - **Stage 3 Persistent Tokens**: The fine acoustics stage maintains all 8 codebooks on-device as a list of tensors, eliminating host-side synchronization during the codebook expansion process.
-- **Compute Grid Tuning**: Configured to utilize the full **8x7 (56-core) compute grid** on Wormhole B0.
+- **Compute Grid Tuning**: Configured to utilize the available compute grid on Wormhole (e.g., 8x8 on N150).
 - **LoFi Math Fidelity**: Optimized math fidelity settings for increased throughput with negligible accuracy loss.
 - **Operator Fusion**: Fused MLP projections and GELU activations using `ttnn.linear(activation="gelu")`.
 

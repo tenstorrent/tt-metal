@@ -38,6 +38,8 @@ class BarkConfig:
     n_codes_total: int = 8
     n_codes_given: int = 2
 
+    layer_norm_epsilon: float = 1e-5
+
     # Optimization config (Stage 3)
     use_lofi: bool = True
     use_sharding: bool = False
@@ -92,7 +94,7 @@ class TtBarkMLP:
     def __call__(self, hidden_states: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
         """Forward pass through MLP block with fused activation."""
         # Linear projection: hidden -> 4*hidden with fused GELU
-        hidden_states = ttnn.linear(
+        intermediate = ttnn.linear(
             hidden_states,
             self.in_proj_weight,
             bias=self.in_proj_bias,
@@ -102,15 +104,16 @@ class TtBarkMLP:
         )
 
         # Linear projection: 4*hidden -> hidden
-        hidden_states = ttnn.linear(
-            hidden_states,
+        output = ttnn.linear(
+            intermediate,
             self.out_proj_weight,
             bias=self.out_proj_bias,
             memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
         )
+        ttnn.deallocate(intermediate)
 
-        return hidden_states
+        return output
 
 
 class TtBarkAttention:
@@ -221,7 +224,9 @@ class TtBarkAttention:
             ttnn.deallocate(value)
 
         # Merge heads
-        attn_output = ttnn.transformer.concatenate_heads(attn_output, memory_config=memory_config)
+        temp_attn = attn_output
+        attn_output = ttnn.transformer.concatenate_heads(temp_attn, memory_config=memory_config)
+        ttnn.deallocate(temp_attn)
 
         # Output projection
         output = ttnn.linear(
@@ -354,6 +359,10 @@ class TtBarkGPT:
 
         # LM head
         self.lm_head_weight = preprocess_linear_weight(parameters["lm_head"]["weight"], device)
+        if self.lm_head_weight.shape[2] != config.output_vocab_size:
+            raise ValueError(
+                f"LM head weight shape mismatch: expected {config.output_vocab_size}, got {self.lm_head_weight.shape[2]}"
+            )
 
         # Optimization config (Stage 3)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
