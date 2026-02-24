@@ -12,7 +12,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
-    DstSync,
+    DestSync,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -61,7 +61,7 @@ unary_ops = [
 ]
 
 # DST SYNC OPTIONS TO TEST
-dst_sync_options = [DstSync.SyncHalf, DstSync.SyncFull]
+dst_sync_options = [DestSync.Half, DestSync.Full]
 
 # Generate format combinations (both same and mixed format combinations)
 test_formats = input_output_formats(supported_formats, same=False)

@@ -12,11 +12,10 @@ if TYPE_CHECKING:
 
 from .fused_fpu import Fpu, MatmulFpu, ReduceFpu
 from .fused_sfpu import Sfpu
-from .fused_unpacker import MatmulUnpacker, Unpacker, UnpackerA
+from .fused_unpacker import MatmulUnpacker, Unpacker
 from .llk_params import (
     BroadcastType,
     DataCopyType,
-    DestSync,
     EltwiseBinaryReuseDestType,
     PerfRunType,
     Transpose,
@@ -42,15 +41,6 @@ class ComputeNode:
             raise ValueError("Compute unit can be only fpu or sfpu")
         if sfpu is not None and unpacker is not None:
             raise ValueError("Sfpu unit does not support unpacker")
-        if (
-            fpu is not None
-            and unpacker is not None
-            and unpacker not in fpu.supported_unpackers()
-        ):
-            raise ValueError(f"{fpu} does not support {unpacker}")
-
-        if reuse_dest != EltwiseBinaryReuseDestType.NONE and unpacker != UnpackerA:
-            raise ValueError("Reuse dest is only supported with UnpackerA")
 
         self.unpacker = unpacker
         self.fpu = fpu
@@ -339,13 +329,13 @@ class ComputePipeline:
         stage = operation.stage_id
         unpa_tile_size = operation.tile_size_unpack_a
         unpb_tile_size = operation.tile_size_unpack_b
-        dest_acc = config.dest_acc.value
+        dest_acc = config.dest_acc.cpp_enum_value
         unpa_face_r_dim = operation.face_r_dim
         unpb_face_r_dim = operation.face_r_dim
         unpa_num_faces = operation.num_faces_A
         unpb_num_faces = operation.num_faces_B
 
-        if stage == 0:
+        if stage == 1:
             code = (
                 f"_llk_unpack_hw_configure_<{dest_acc}, false>(\n"
                 f"    unpack_a_src_format{stage}, unpack_b_src_format{stage}, unpack_a_dst_format{stage}, unpack_b_dst_format{stage},\n"
@@ -368,7 +358,7 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> str:
-        if operation.stage_id > 0:
+        if operation.stage_id > 1:
             return (
                 "t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);\n"
                 "t6_semaphore_get<>(semaphore::PACK_DONE);\n"
@@ -380,8 +370,8 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        dest_acc = config.dest_acc.value
-        if stage == 0:
+        dest_acc = config.dest_acc.cpp_enum_value
+        if stage == 1:
             code = f"_llk_math_hw_configure_<{dest_acc}>(math_format{stage}, math_format{stage});\n"
         else:
             code = f"_llk_math_reconfig_data_format_<{dest_acc}, false>(math_format{stage}, math_format{stage});\n"
@@ -414,7 +404,7 @@ class ComputePipeline:
         ):
             return ""
 
-        return f"_llk_math_dest_section_done_<dest_sync{operation.stage_id}, {config.dest_acc.value}>();\n"
+        return f"_llk_math_dest_section_done_<dest_sync{operation.stage_id}, {config.dest_acc.cpp_enum_value}>();\n"
 
     def _batch_loop(
         self, operation: "FusedOperation", config: "GlobalConfig", body_fn
@@ -444,17 +434,11 @@ class ComputePipeline:
     ) -> str:
         stage = operation.stage_id
         math_format = operation.output.data_format
-        dest_sync = operation.dest_sync
-
-        dest_sync_map = {
-            DestSync.Half: "SyncHalf",
-            DestSync.Full: "SyncFull",
-        }
-        dest_sync_str = dest_sync_map.get(dest_sync, "SyncHalf")
+        dest_sync = operation.dest_sync.cpp_enum_value
 
         code = f"// Operation {stage}: Math Setup\n"
         code += f"const std::uint32_t math_format{stage} = ckernel::to_underlying(DataFormat::{math_format.name});\n"
-        code += f"constexpr DstSync dest_sync{stage} = DstSync::{dest_sync_str};\n"
+        code += f"constexpr DstSync dest_sync{stage} = {dest_sync};\n"
 
         return code
 
@@ -560,9 +544,9 @@ class ComputePipeline:
         ]
 
     def __str__(self):
-        str = ""
+        str = "Math:"
         for op in self.operations:
-            str += "\n  "
+            str += "\n    "
             str += op.__str__()
 
         return str

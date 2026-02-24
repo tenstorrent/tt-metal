@@ -142,12 +142,13 @@ class UnarySfpu(Sfpu):
         compute_unit: "ComputeNode",
     ) -> str:
         stage = operation.stage_id
-        dest_acc = config.dest_acc.value
+        dest_acc = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
             f"    _llk_math_eltwise_unary_sfpu_start_<dest_sync{stage}>({self.dest_idx});\n"
-            f"    test_utils::call_sfpu_operation<{self.approx_mode.value}, {dest_acc}, {self.iterations}>({op}, math_format{stage}, {self.fill_const_value});\n"
+            f"    test_utils::call_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, math_format{stage}, {self.fill_const_value});\n"
             f"    _llk_math_eltwise_unary_sfpu_done_();\n"
         )
 
@@ -233,7 +234,7 @@ class BinarySfpu(Sfpu):
     ) -> str:
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
-        approx_mode = self.approx_mode.value
+        approx_mode = self.approx_mode.cpp_enum_value
         iterations = self.iterations
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1

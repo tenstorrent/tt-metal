@@ -1,4 +1,5 @@
-dest_acc: "Yes"
+dest_acc: true
+loop_factor: 16
 
 operations:
   - src_a: "input_A"
@@ -13,10 +14,10 @@ operations:
       - type: "Fpu"
         operation: "Datacopy"
         unpacker: "UnpackerA"
-        broadcast_type: "Scalar"
+        broadcast_type: "SCALAR"
       - type: "UnarySfpu"
         operation: "Fill"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
         fill_const_value: 1.0
@@ -25,8 +26,6 @@ operations:
         unpacker: "UnpackerAB"
     packer: "Packer"
     math_fidelity: "LoFi"
-    unpack_transpose_within_face: "No"
-    unpack_transpose_faces: "No"
     batch_size: 3
 
   - src_a: "datacopy_output"
@@ -43,15 +42,15 @@ operations:
         unpacker: "UnpackerTilizeA"
       - type: "UnarySfpu"
         operation: "Exp"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 128
       - type: "UnarySfpu"
         operation: "Celu"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 128
       - type: "BinarySfpu"
         operation: "SfpuElwadd"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 32
         src1_dest_tile_index: 0
         src2_dest_tile_index: 1
@@ -72,19 +71,19 @@ operations:
     math:
       - type: "Fpu"
         operation: "ReduceColumn"
-        reduce_pool: "Max"
+        reduce_pool: "MAX"
         unpacker: "UnpackerAB"
       - type: "Fpu"
         operation: "ReduceColumn"
-        reduce_pool: "Sum"
+        reduce_pool: "SUM"
         unpacker: "UnpackerAB"
       # - type: "Fpu"
       #   operation: "ReduceColumn"
-      #   reduce_pool: "Average"
+      #   reduce_pool: "AVG"
       #   unpacker: "UnpackerAB"
       - type: "BinarySfpu"
         operation: "SfpuElwadd"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 8
         src1_dest_tile_index: 0
         src2_dest_tile_index: 0
@@ -105,15 +104,15 @@ operations:
       - type: "Fpu"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
+        unpack_transpose_within_face: true
+        unpack_transpose_faces: true
       - type: "UnarySfpu"
         operation: "Neg"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 128
     packer: "Packer"
     math_fidelity: "HiFi3"
-    dest_sync: "Full"
-    unpack_transpose_within_face: "Yes"
-    unpack_transpose_faces: "Yes"
+    dest_sync: "SyncFull"
 
   - src_a: "elwadd1"
     src_b: "datacopy_output"
@@ -129,15 +128,15 @@ operations:
         unpacker: "MatmulUnpacker"
       - type: "UnarySfpu"
         operation: "Abs"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 128
       - type: "UnarySfpu"
         operation: "Sqrt"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 128
     packer: "Packer"
     math_fidelity: "HiFi2"
-    batch_size: 1
+    batch_size: 2
 
   - src_a: "matmul_result"
     src_b: "input_C"
@@ -153,16 +152,14 @@ operations:
         unpacker: "MatmulUnpacker"
       - type: "UnarySfpu"
         operation: "Sqrt"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 32
       - type: "BinarySfpu"
         operation: "SfpuElwadd"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 32
         src1_dest_tile_index: 0
         src2_dest_tile_index: 0
         dst_dest_tile_index: 0
     packer: "Packer"
     math_fidelity: "LoFi"
-    unpack_transpose_within_face: "Yes"
-    unpack_transpose_faces: "Yes"

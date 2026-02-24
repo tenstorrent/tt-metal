@@ -42,7 +42,7 @@ operations:
       - type: "Fpu"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        broadcast_type: "Column"
+        broadcast_type: "COL"
     packer: "Packer"
     math_fidelity: "LoFi"
   - src_a: "input_A"

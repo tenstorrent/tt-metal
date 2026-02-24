@@ -9,7 +9,6 @@ import torch
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat
-from .fused_fpu import MatmulFpu
 from .fused_math import ComputePipeline
 from .fused_operand import Operand, OperandMapping
 from .fused_packer import Packer
@@ -112,13 +111,8 @@ class FusedOperation:
         else:
             self.bh_tilize = Tilize.No
 
-        if self.batch_size <= 0 or self.batch_size > self.output.tile_count:
+        if self.batch_size <= 0:
             self.batch_size = self.output.tile_count
-
-        if self.math.has_fpu(MatmulFpu):
-            tile_count = self.output.tile_count
-            if self.batch_size != self.ct_dim and self.batch_size != tile_count:
-                self.batch_size = tile_count
 
     @property
     def src_a(self) -> Operand:
@@ -178,7 +172,7 @@ class FusedOperation:
 
     def __str__(self):
         return (
-            f"\n{'='*60}\n"
+            f"{'='*60}\n"
             f"Operation {self.stage_id}\n"
             f"{'='*60}\n"
             f"  {self.math}\n"
@@ -188,4 +182,5 @@ class FusedOperation:
             f"  Output: {self.output}\n"
             f"  Math Fidelity: {self.math_fidelity}\n"
             f"  Batch Size: {self.batch_size}\n"
+            f"  Dest Sync: {self.dest_sync}"
         )

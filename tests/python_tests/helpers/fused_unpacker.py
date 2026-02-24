@@ -152,12 +152,8 @@ class MatmulUnpacker(Unpacker):
         kt_dim = operation.kt_dim
         batch_size = operation.batch_size
 
-        transpose_faces = (
-            "true" if compute_unit.unpack_transpose_faces.value else "false"
-        )
-        transpose_within_face = (
-            "true" if compute_unit.unpack_transpose_within_face.value else "false"
-        )
+        transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
+        transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
 
         if transpose_within_face != transpose_faces:
             raise ValueError(
@@ -325,7 +321,7 @@ class UnpackerAB(Unpacker):
     ) -> str:
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
-        broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
 
         if (
             compute_unit.broadcast_type == BroadcastType.Scalar
@@ -333,12 +329,8 @@ class UnpackerAB(Unpacker):
         ):
             raise ValueError("SrcA transpose is not supported with scalar broadcast")
 
-        transpose_faces = (
-            "true" if compute_unit.unpack_transpose_faces.value else "false"
-        )
-        transpose_within_face = (
-            "true" if compute_unit.unpack_transpose_within_face.value else "false"
-        )
+        transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
+        transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
 
         if isinstance(compute_unit.fpu, ReduceFpu):
             if compute_unit.broadcast_type != BroadcastType.None_:
@@ -367,7 +359,7 @@ class UnpackerAB(Unpacker):
         tile_idx_expr: str,
     ) -> str:
         stage = operation.stage_id
-        broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS(buffer_A{stage}[{tile_idx_expr}]), L1_ADDRESS(buffer_B{stage}[{tile_idx_expr}]));\n"
 
 
@@ -485,16 +477,12 @@ class UnpackerA(Unpacker):
     ) -> str:
         stage = operation.stage_id
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
-        broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
-        reuse_dest = f"EltwiseBinaryReuseDestType::{compute_unit.reuse_dest.value}"
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+        reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
-        transpose_faces = (
-            "true" if compute_unit.unpack_transpose_faces.value else "false"
-        )
-        transpose_within_face = (
-            "true" if compute_unit.unpack_transpose_within_face.value else "false"
-        )
+        transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
+        transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
 
         return (
             f"    _llk_unpack_A_init_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
@@ -511,8 +499,8 @@ class UnpackerA(Unpacker):
     ) -> str:
         stage = operation.stage_id
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
-        broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
-        reuse_dest = f"EltwiseBinaryReuseDestType::{compute_unit.reuse_dest.value}"
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+        reuse_dest = compute_unit.reuse_dest.cpp_enum_value
 
         return (
             f"_llk_unpack_A_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
@@ -650,7 +638,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: "ComputeNode",
     ) -> str:
         ct_dim = operation.ct_dim
-        dest_acc = config.dest_acc.value
+        dest_acc = config.dest_acc.cpp_enum_value
         if ct_dim > 4:
             raise ValueError("ct_dim must be at most 4 when using Reduce Block Max")
         return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"

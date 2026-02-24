@@ -38,10 +38,9 @@ class Packer:
     def _dest_section_done(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
-        return (
-            f"_llk_pack_dest_section_done_<{dest_sync}, {config.dest_acc.value}>();\n"
-        )
+        dest_sync = operation.dest_sync.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
+        return f"_llk_pack_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
 
     def _batch_loop(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         batch_size = operation.batch_size
@@ -142,13 +141,13 @@ class Packer:
 
     def hw_configure(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         stage = operation.stage_id
-        bh_tilize = "true" if operation.bh_tilize.value else "false"
-        dest_acc = config.dest_acc.value
+        bh_tilize = operation.bh_tilize.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
         pack_size = operation.tile_size_pack
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
 
-        if stage == 0:
+        if stage == 1:
             if config.architecture == ChipArchitecture.BLACKHOLE:
                 code = (
                     f"    _llk_pack_hw_configure_<{dest_acc}, false, {bh_tilize}>(\n"
@@ -172,8 +171,8 @@ class Packer:
 
     def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         stage = operation.stage_id
-        dest_acc = config.dest_acc.value
-        bh_tilize = "true" if operation.bh_tilize.value else "false"
+        dest_acc = config.dest_acc.cpp_enum_value
+        bh_tilize = operation.bh_tilize.cpp_enum_value
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
@@ -211,7 +210,7 @@ class Packer:
         l1_idx,
     ) -> str:
         stage = operation.stage_id
-        dest_acc = config.dest_acc.value
+        dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({dest_idx}, L1_ADDRESS(buffer_Res{stage}[{l1_idx}]));\n"
 
@@ -230,7 +229,7 @@ class Packer:
         num_stages = operation.num_stages
         code = ""
 
-        if stage < num_stages - 1:
+        if stage < num_stages:
             code += "    t6_semaphore_post<>(semaphore::PACK_DONE);\n\n"
 
         return code

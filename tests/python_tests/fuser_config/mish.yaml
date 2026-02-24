@@ -13,17 +13,17 @@ operations:
         unpacker: "UnpackerA"
       - type: "UnarySfpu"
         operation: "Exp"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "UnarySfpu"
         operation: "Log1p"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "UnarySfpu"
         operation: "Tanh"
-        approximation_mode: "No"
+        approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "Fpu"
@@ -32,6 +32,4 @@ operations:
         reuse_dest: "DEST_TO_SRCB"
     packer: "Packer"
     math_fidelity: "LoFi"
-    unpack_transpose_within_face: "No"
-    unpack_transpose_faces: "No"
     batch_size: 1

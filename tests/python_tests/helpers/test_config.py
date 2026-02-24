@@ -690,7 +690,9 @@ class TestConfig:
             dest_acc = DestAccumulation.Yes
 
         # Dest accumulation
-        header_content.append(f"constexpr bool is_fp32_dest_acc_en = {dest_acc.value};")
+        header_content.append(
+            f"constexpr bool is_fp32_dest_acc_en = {dest_acc.cpp_enum_value};"
+        )
 
         # L1 accumulation
         header_content.append(f"constexpr bool l1_acc_en = {l1_acc.value};")

@@ -28,6 +28,7 @@ pandas==2.3.3
 plotly==6.5.0
 pluggy==1.6.0
 pre-commit==4.5.0
+pydantic==2.12.5
 pygments==2.19.2
 pytest==8.4.2
 pytest-cov==6.1.1

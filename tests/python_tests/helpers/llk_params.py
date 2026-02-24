@@ -177,10 +177,21 @@ class ReducePool(Enum):
     Sum = "SUM"
     Average = "AVG"
 
+    @property
+    def cpp_enum_value(self):
+        return f"PoolType::{self.value}"
+
 
 class DestAccumulation(Enum):
-    Yes = "true"
-    No = "false"
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class L1Accumulation(Enum):
@@ -220,18 +231,39 @@ class PackerReluType(Enum):
 
 
 class Haloize(Enum):
-    Yes = "true"
-    No = "false"
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class ApproximationMode(Enum):
-    Yes = "true"
-    No = "false"
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class Transpose(Enum):
     Yes = True
     No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class MathFidelity(Enum):
@@ -245,29 +277,61 @@ class MathFidelity(Enum):
         return f"ckernel::MathFidelity::{self.name}"
 
 
+class DestSync(Enum):
+    Half = "SyncHalf"
+    Full = "SyncFull"
+
+    @property
+    def cpp_enum_value(self):
+        return f"DstSync::{self.value}"
+
+
 class NarrowTile(Enum):
     Yes = True
     No = False
 
-
-class DestSync(Enum):
-    Half = 0
-    Full = 1
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class Tilize(Enum):
     Yes = True
     No = False
 
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
+
 
 class FastMode(Enum):
-    Yes = "true"
-    No = "false"
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class StableSort(Enum):
-    Yes = "true"
-    No = "false"
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class MailboxesPerf(Enum):
@@ -300,13 +364,6 @@ format_tile_sizes = {
 }
 
 
-class DstSync(Enum):
-    """Destination synchronization mode for LLK operations."""
-
-    SyncHalf = "SyncHalf"
-    SyncFull = "SyncFull"
-
-
 class BroadcastType(Enum):
     """
     Enum for broadcast types in LLK kernels.
@@ -316,6 +373,10 @@ class BroadcastType(Enum):
     Column = "COL"
     Row = "ROW"
     Scalar = "SCALAR"
+
+    @property
+    def cpp_enum_value(self):
+        return f"BroadcastType::{self.value}"
 
 
 class EltwiseBinaryReuseDestType(Enum):
@@ -327,10 +388,18 @@ class EltwiseBinaryReuseDestType(Enum):
     DEST_TO_SRCA = "DEST_TO_SRCA"
     DEST_TO_SRCB = "DEST_TO_SRCB"
 
+    @property
+    def cpp_enum_value(self):
+        return f"EltwiseBinaryReuseDestType::{self.value}"
+
 
 class DataCopyType(Enum):
     A2D = "A2D"
     B2D = "B2D"
+
+    @property
+    def cpp_enum_value(self):
+        return f"DataCopyType::{self.value}"
 
 
 class BlocksCalculationAlgorithm(Enum):

@@ -13,7 +13,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
-    DstSync,
+    DestSync,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -72,7 +72,7 @@ all_params = [
     for dest_acc in [DestAccumulation.Yes, DestAccumulation.No]
     for approx_mode in [ApproximationMode.No, ApproximationMode.Yes]
     for un_op in unary_ops
-    for dst_sync in [DstSync.SyncHalf, DstSync.SyncFull]
+    for dst_sync in [DestSync.Half, DestSync.Full]
     for fidelity in [
         MathFidelity.LoFi,
         MathFidelity.HiFi2,

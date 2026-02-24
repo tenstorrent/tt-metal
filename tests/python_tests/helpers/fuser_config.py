@@ -53,11 +53,13 @@ class FuserConfig:
                 self.global_config.dest_acc,
                 None,  # No src_b in fuser operations yet
             ):
-                self.global_config.dest_acc = DestAccumulation.Yes
+                raise ValueError(
+                    f"Dest Accumulation must be enabled for {operation.src_a.data_format} input and {operation.output.data_format} output"
+                )
 
         num_stages = len(self.pipeline)
 
-        for i, operation in enumerate(self.pipeline):
+        for i, operation in enumerate(self.pipeline, start=1):
             formats_config = data_formats(
                 input_format=operation.src_a.data_format,
                 output_format=operation.output.data_format,
@@ -85,19 +87,20 @@ class FuserConfig:
                     8 if self.global_config.dest_acc == DestAccumulation.Yes else 16
                 )
 
-            output_tile_count = operation.output.tile_count
+            if operation.math.has_fpu(MatmulFpu):
+                if operation.ct_dim > dest_capacity:
+                    raise ValueError(
+                        f"Matmul ct_dim ({operation.ct_dim}) exceeds dest capacity ({dest_capacity}). "
+                    )
+                if operation.batch_size != operation.ct_dim:
+                    raise ValueError(
+                        f"Batch size ({operation.batch_size}) for matmul must be same as ct_dim ({operation.ct_dim})"
+                    )
 
-            if output_tile_count > dest_capacity:
-                if operation.math.has_fpu(MatmulFpu):
-                    if operation.ct_dim > dest_capacity:
-                        raise ValueError(
-                            f"Matmul ct_dim ({operation.ct_dim}) exceeds dest capacity ({dest_capacity}). "
-                        )
-                    operation.batch_size = operation.ct_dim
-                else:
-                    operation.batch_size = min(operation.batch_size, dest_capacity)
-
-            operation.batch_size = min(operation.batch_size, output_tile_count)
+            if operation.batch_size > dest_capacity:
+                raise ValueError(
+                    f"Batch size ({operation.batch_size}) cannot fit inside dest ({dest_capacity})"
+                )
 
             if (
                 self.global_config.architecture == ChipArchitecture.BLACKHOLE

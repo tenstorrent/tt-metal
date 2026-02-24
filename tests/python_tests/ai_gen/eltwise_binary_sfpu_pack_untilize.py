@@ -13,7 +13,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    DstSync,
+    DestSync,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -61,7 +61,7 @@ unary_ops = [
     MathOperation.Sqrt,
 ]
 
-dst_sync_options = [DstSync.SyncHalf, DstSync.SyncFull]
+dst_sync_options = [DestSync.Half, DestSync.Full]
 
 # Generate format combinations (same input/output) and add a few mixed cases
 _test_formats = input_output_formats(supported_formats, same=False)
