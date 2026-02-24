@@ -1658,25 +1658,34 @@ void mul_block_bcast_cols_acc(
 }
 
 /**
- * L1-accumulate mask tiles from mask_cb onto cb_qkt_im for one row group.
- * Uses the full padded mask from the writer (c_3). For each sub-row, accumulates
- * mask tiles at the absolute position in cb_qkt_im.
+ * L1-accumulate only the padded K-position tiles from mask_cb onto cb_qkt_im.
+ * Only copies -inf tiles (padded columns), skipping zero tiles entirely to avoid
+ * Bfp4_b→Float16_b round-trip artifacts in L1 accumulate.
+ *
+ * @tparam padded_k_tiles  Number of padded K tiles per row (must be > 0)
+ * @tparam Sk_chunk_t      Total K tiles per row
+ * @tparam SBH             Sub-rows per row group (subblock_h)
+ *
  * Caller must cb_wait_front(mask_cb, Sq_chunk_t * Sk_chunk_t) before calling.
  * Caller must cb_pop_front(mask_cb, Sq_chunk_t * Sk_chunk_t) after all row groups.
  */
-template <uint32_t SBH, uint32_t Sk_chunk_t, uint32_t Sq_chunk_t>
-void apply_mask_to_row_buffer(uint32_t mask_cb, uint32_t out_cb, uint32_t q_subblock) {
+template <uint32_t padded_k_tiles, uint32_t Sk_chunk_t, uint32_t SBH, uint32_t Sq_chunk_t>
+void apply_mask_padded_k(uint32_t mask_cb, uint32_t out_cb, uint32_t q_subblock) {
+    static_assert(padded_k_tiles > 0, "padded_k_tiles must be > 0");
+    static_assert(padded_k_tiles < Sk_chunk_t, "padded_k_tiles must be less than Sk_chunk_t");
+    constexpr uint32_t start = Sk_chunk_t - padded_k_tiles;  // First padded column
     constexpr uint32_t row_tiles = SBH * Sk_chunk_t;
     const uint32_t mask_offset = q_subblock * row_tiles;
 
-    sdpa_reduce_copy_tile_to_dst_init_short(mask_cb);
+    // Read -inf tiles from mask_cb and L1-accumulate onto padded positions in out_cb
+    copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     constexpr uint32_t DST_BATCH = 8;
     for (uint32_t row = 0; row < SBH; row++) {
-        uint32_t row_offset = (q_subblock * SBH + row) * Sk_chunk_t;
+        uint32_t out_row_offset = (q_subblock * SBH + row) * Sk_chunk_t;
         uint32_t mask_row_offset = mask_offset + row * Sk_chunk_t;
-        for (uint32_t base = 0; base < Sk_chunk_t; base += DST_BATCH) {
+        for (uint32_t base = start; base < Sk_chunk_t; base += DST_BATCH) {
             uint32_t batch = (Sk_chunk_t - base < DST_BATCH) ? (Sk_chunk_t - base) : DST_BATCH;
             tile_regs_acquire();
             for (uint32_t i = 0; i < batch; i++) {
@@ -1685,7 +1694,7 @@ void apply_mask_to_row_buffer(uint32_t mask_cb, uint32_t out_cb, uint32_t q_subb
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < batch; i++) {
-                pack_tile<true>(i, out_cb, row_offset + base + i);
+                pack_tile<true>(i, out_cb, out_row_offset + base + i);
             }
             tile_regs_release();
         }
@@ -1767,6 +1776,7 @@ void normalize_row_streaming(
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t Skt,
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32,
@@ -1794,6 +1804,8 @@ void sdpa_inner_loop_step(
     constexpr uint32_t sbh = subblock_h;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t qkt_subblock_w = 8 / sbh;
+    // Compute padded K tiles from compile-time Skt and Sk_chunk_t
+    constexpr uint32_t padded_k_tiles = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / sbh;
     constexpr uint32_t kt_num_subblocks = Sk_chunk_t / qkt_subblock_w;
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
@@ -1817,7 +1829,7 @@ void sdpa_inner_loop_step(
     cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
-    // Wait for mask tiles if needed
+    // Wait for mask tiles if writer generates them (Q or K padding)
     if constexpr (use_padded_mask) {
         if (is_last_iter) {
             cb_wait_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
@@ -1853,10 +1865,11 @@ void sdpa_inner_loop_step(
             kt_index_offset += qkt_subblock_w;
         }
 
-        // Apply mask on last K chunk
-        if constexpr (use_padded_mask) {
+        // Apply mask on last K chunk: only accumulate -inf onto padded K positions.
+        // Skips zero-valued tiles to avoid Bfp4_b→Float16_b L1 acc round-trip artifacts.
+        if constexpr (padded_k_tiles > 0) {
             if (is_last_iter) {
-                apply_mask_to_row_buffer<sbh, Sk_chunk_t, Sq_chunk_t>(cb_mask_in, cb_qkt_im, q_subblock);
+                apply_mask_padded_k<padded_k_tiles, Sk_chunk_t, sbh, Sq_chunk_t>(cb_mask_in, cb_qkt_im, q_subblock);
             }
         }
 
@@ -1883,7 +1896,7 @@ void sdpa_inner_loop_step(
 
     cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);
 
-    // Pop mask after all rows processed
+    // Pop mask after all rows processed (must match writer's generate_mask push)
     if constexpr (use_padded_mask) {
         if (is_last_iter) {
             cb_pop_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
@@ -2081,6 +2094,7 @@ void sdpa_inner_loop_step(
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t Skt,
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32,
@@ -2118,6 +2132,7 @@ void sdpa_standard_v2(
             sdpa_inner_loop_step<
                 Sq_chunk_t,
                 Sk_chunk_t,
+                Skt,
                 DHt,
                 vDHt,
                 scale_fp32,

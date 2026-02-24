@@ -116,6 +116,7 @@ void kernel_main() {
                     sdpa_standard_v2<
                         Sq_chunk_t,
                         Sk_chunk_t,
+                        Skt,
                         DHt,
                         vDHt,
                         scale_fp32,

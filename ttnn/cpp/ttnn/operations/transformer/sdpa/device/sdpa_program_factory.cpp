@@ -320,14 +320,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming compute: use row-by-row streaming SDPA for non-causal cases.
-    // Constraints:
     // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr), sbh=1 and sbh=2.
-    // Constraints:
-    // - subblock_h * vDHt <= dst_size (SALAD output correction must fit in DST)
-    // - subblock_h <= 2 (sbh=1 and sbh=2 validated; sbh=3+ excluded by DST or divisibility)
-    // - Sk_chunk_t % (8/subblock_h) == 0 (K tiles divide evenly into DST batches)
-    // - vDHt <= 8 (normalize_row_streaming requires head_dim in single DST batch)
+    // Mask stays Bfp4_b — streaming path only reads -inf tiles (skips zero tiles to avoid
+    // Bfp4_b→Float16_b round-trip artifacts in L1 accumulate).
+    // cb_qkt_im must be reserved fully upfront (Sq_chunk_t * Sk_chunk_t tiles), which
+    // can cause CB deadlock if too large. Limit to 64 tiles (~128 KB in Float16_b).
     const bool use_streaming_compute = !is_causal && !use_provided_mask && !use_attention_sink &&
                                        sliding_window_size.value_or(0) == 0 && !is_chunked &&
                                        qk_out_subblock_h * vDHt <= dst_size && qk_out_subblock_h <= 2 &&
@@ -536,9 +533,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    tt::DataFormat mask_df = attn_mask.has_value()
-                                 ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
-                                 : tt::DataFormat::Bfp4_b;
+    tt::DataFormat mask_df =
+        attn_mask.has_value()
+            ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
+            : tt::DataFormat::Bfp4_b;  // Bfp4_b is fine for standard path; streaming path only reads -inf tiles
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
