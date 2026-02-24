@@ -5,6 +5,7 @@
 #include <tt_stl/reflection.hpp>
 #include "tensor/tensor_ops.hpp"
 
+#include "tt-metalium/experimental/tensor/host_tensor.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
