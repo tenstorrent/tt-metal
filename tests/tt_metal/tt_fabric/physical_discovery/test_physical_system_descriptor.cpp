@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
@@ -209,13 +210,28 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
         cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
     auto my_host = physical_system_desc.my_host_name();
-    // Generate a YAML File with the tray to pcie device mapping
+
+    // Build PCI device ID -> logical ID mapping. UMD now interprets TT_VISIBLE_DEVICES integers as
+    // logical IDs (BDF-sorted indices), not PCI device IDs. The cluster descriptor's chip_id is the
+    // logical ID; chips_with_mmio maps chip_id (logical) -> pci_device_id.
+    std::unordered_map<uint32_t, uint32_t> pcie_id_to_logical_id;
+    for (const auto& [logical_id, pcie_id] : cluster.get_cluster_desc()->get_chips_with_mmio()) {
+        pcie_id_to_logical_id[static_cast<uint32_t>(pcie_id)] = static_cast<uint32_t>(logical_id);
+    }
+
+    // Generate a YAML File with the tray to device mapping (using logical IDs for TT_VISIBLE_DEVICES)
     YAML::Node tray_to_pcie_device_mapping;
     YAML::Node device_mapping;  // Create a separate node for the device mapping
     for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray.at(my_host)) {
-        // Convert unordered_set to vector for YAML serialization
-        std::vector<uint32_t> pcie_devices_vec(pcie_devices.begin(), pcie_devices.end());
-        device_mapping[tray_id] = pcie_devices_vec;
+        std::vector<uint32_t> logical_devices_vec;
+        for (uint32_t pcie_id : pcie_devices) {
+            auto it = pcie_id_to_logical_id.find(pcie_id);
+            if (it != pcie_id_to_logical_id.end()) {
+                logical_devices_vec.push_back(it->second);
+            }
+        }
+        std::sort(logical_devices_vec.begin(), logical_devices_vec.end());
+        device_mapping[tray_id] = logical_devices_vec;
     }
     tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
     tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
