@@ -44,7 +44,7 @@ on:
         default: ""
         description: "Commit SHA to test (default: HEAD)"
       wheel-artifact-name:
-        required: true
+        required: false
         type: string
 
 jobs:
@@ -56,6 +56,9 @@ jobs:
       matrix:
         test-group: [
           {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+        ]
+        test-group-py: [
+          {name: tt-train, cmd: pytest tests/python},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
@@ -99,25 +102,32 @@ jobs:
           auto-triage: ${{ !inputs.enable-watcher }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: ${{ matrix.test-group.name }} tests
+      - name: Install ttml module
+        timeout-minutes: 10
+        if: ( inputs.wheel-artifact-name )
+        run: |
+          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
+          echo $SITE_PACKAGES
+          #if [ -d "/work/build/ttml" ] && [ ! -e "$SITE_PACKAGES/ttml" ]; then
+            ln -s /work/build/ttml "${SITE_PACKAGES}/ttml"
+          #fi
+          ls -l "${SITE_PACKAGES}"
+          uv pip install ml_dtypes
+
+      # - name: ${{ matrix.test-group.name }} tests
+      #   timeout-minutes: ${{ inputs.timeout }}
+      #   run: |
+      #     cd /work/build/tt-train
+      #     mkdir -p generated/test_reports
+      #     ldd tests/ttml_tests || true
+      #     ${{ matrix.test-group.cmd }}
+
+      - name: ${{ matrix.test-group-py.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          # cd /work/build/tt-train
-          # mkdir -p generated/test_reports
-          # ldd tests/ttml_tests || true
-          # ${{ matrix.test-group.cmd }}
-          which python
-          which pytest
-          export -p
-          pip list
-          uv pip list
-          export CC=clang-20 CXX=clang++-20
           export PYTHONPATH=/work
           cd /work/tt-train
-          uv pip install .
-          export TT_METAL_HOME=/work
-          export TT_METAL_RUNTIME_ROOT=/work
-          pytest tests/python
+          ${{ matrix.test-group-py.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
