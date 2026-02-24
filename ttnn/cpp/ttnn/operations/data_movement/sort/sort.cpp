@@ -163,7 +163,7 @@ std::vector<Tensor> ExecuteSort::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
-    auto rank = input_tensor.padded_shape().rank();
+    const auto rank = input_tensor.logical_shape().rank();
 
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
