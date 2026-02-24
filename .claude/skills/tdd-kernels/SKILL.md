@@ -1,6 +1,6 @@
 ---
 name: tdd-kernels
-description: Stage-gated TDD pipeline for TTNN kernel implementation. Use after generic-op-builder and kernel-designer have produced stubs and a design document. Invoked by /create-op at Phase 4, or standalone. Args = operation path.
+description: Stage-gated TDD pipeline for TTNN kernel implementation. Use after operation-architect and generic-op-builder have produced a design document and stubs. Invoked by /create-op at Phase 4, or standalone. Args = operation path.
 ---
 
 # TDD Kernel Pipeline
@@ -10,12 +10,11 @@ Stage-gated test-driven development for TTNN kernels. Each stage is tested indep
 ## Prerequisites
 
 Before using this pipeline, the operation directory MUST contain:
-1. A functional spec (`*_spec.md`)
-2. A kernel design document (`kernel_design.md`)
-3. Stub kernel files from the generic-op-builder (reader, compute, writer)
-4. A working `__init__.py` that exports the operation function
-5. A program descriptor that configures CBs and kernel args
-6. A `.tdd_state.json` with pre-registered stages (from the kernel designer)
+1. An operation design document (`op_design.md`) — from the architect
+2. Stub kernel files from the generic-op-builder (reader, compute, writer)
+3. A working `__init__.py` that exports the operation function
+4. A program descriptor that configures CBs and kernel args
+5. A `.tdd_state.json` with pre-registered stages (from the architect)
 
 ## CLI Reference
 
@@ -38,17 +37,17 @@ python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py <command> [args]
 
 ## Stage Discovery
 
-**Stages are pre-registered by the kernel designer.** The designer has already:
+**Stages are pre-registered by the operation architect.** The architect has already:
 1. Applied H1/H2 heuristics to determine stage ordering and granularity
 2. Registered all stages via `tdd_orchestrator.py add-stage`
-3. Documented stages in `kernel_design.md` Part 1 (TDD Stage Plan)
+3. Documented stages in `op_design.md` Part 2 (TDD Stage Plan)
 
 Verify stages exist:
 ```bash
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py status --op-path <path>
 ```
 
-If `.tdd_state.json` is missing or has no stages, the kernel designer phase did not complete — go back and run it.
+If `.tdd_state.json` is missing or has no stages, the architect phase did not complete — go back and run it.
 
 Test files are located at `tests/ttnn/unit_tests/operations/{op_name}/test_stage_*.py`.
 
@@ -77,7 +76,7 @@ This applies across both retries and new stages. The agent only knows what the c
 
 ```
 Implement TDD stage '{stage_name}' for {op_name}.
-Design: {op_path}/kernel_design.md
+Design: {op_path}/op_design.md
 
 Stage description: {stage_description}
 Kernel files to modify: {kernel_files}

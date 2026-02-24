@@ -4,7 +4,7 @@
 #
 # Example:
 #   init_breadcrumbs.sh ttnn/ttnn/operations/my_op ttnn-generic-op-builder my_op "" spec.md
-#   init_breadcrumbs.sh ttnn/ttnn/operations/my_op ttnn-kernel-writer my_op ttnn-kernel-designer spec.md
+#   init_breadcrumbs.sh ttnn/ttnn/operations/my_op ttnn-kernel-writer my_op ttnn-operation-architect op_design.md
 
 set -e
 

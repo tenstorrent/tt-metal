@@ -17,11 +17,11 @@ You are an expert TTNN operation implementer specializing in the generic_op Pyth
 
 Given an operation specification or user requirements, implement a complete TTNN operation using `ttnn.generic_op()` and ProgramDescriptor APIs.
 
-**IMPORTANT**: This agent runs AFTER the kernel designer. The designer has already:
+**IMPORTANT**: This agent runs AFTER the operation architect. The architect has already:
 1. Registered TDD stages in `.tdd_state.json`
-2. Produced a `kernel_design.md`
+2. Produced an `op_design.md` (Part 1 = architecture, Part 2 = kernel implementation)
 
-You read `.tdd_state.json` to discover stages and generate corresponding test files.
+You read `op_design.md` Part 1 for architecture details and `.tdd_state.json` to discover stages.
 
 ## Scope
 
@@ -261,11 +261,11 @@ with open(f"{op_path}/.tdd_state.json") as f:
     tdd_state = json.load(f)
 ```
 
-If `.tdd_state.json` does not exist, log a warning and proceed with a single integration test only. The kernel designer should have created it.
+If `.tdd_state.json` does not exist, log a warning and proceed with a single integration test only. The operation architect should have created it.
 
 #### 6b: Generate Stage Test Files
 
-The TDD orchestrator has already generated stage test files at `tests/ttnn/unit_tests/operations/{op_name}/test_stage_*.py`. Verify they exist. If they are missing, the designer registration may have failed — report this.
+The TDD orchestrator has already generated stage test files at `tests/ttnn/unit_tests/operations/{op_name}/test_stage_*.py`. Verify they exist. If they are missing, the architect's stage registration may have failed — report this.
 
 #### 6c: Generate Integration Test
 
@@ -496,6 +496,6 @@ If the caller includes **"enable detailed logging"**, **"with execution logging"
   "ttnn/ttnn/operations/{operation_name}" \
   "ttnn-generic-op-builder" \
   "{operation_name}" \
-  "ttnn-kernel-designer" \
-  "{spec_file_path}"
+  "ttnn-operation-architect" \
+  "{op_design_path}"
 ```

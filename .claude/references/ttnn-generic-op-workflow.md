@@ -37,8 +37,7 @@ ttnn/ttnn/operations/{operation_name}/
 ├── agent_logs/                             # Execution logs (if logging enabled)
 │   ├── {agent_name}_breadcrumbs.jsonl
 │   └── {agent_name}_execution_log.md
-├── {operation_name}_spec.md                # Functional spec (from planner)
-├── kernel_design.md                        # Kernel design doc (from designer)
+├── op_design.md                            # Operation design doc (from architect)
 └── .tdd_state.json                         # TDD pipeline state
 ```
 
@@ -59,8 +58,7 @@ ttnn/ttnn/operations/row_centralize/
 │   ├── row_centralize_reader.cpp
 │   ├── row_centralize_compute.cpp
 │   └── row_centralize_writer.cpp
-├── row_centralize_spec.md
-├── kernel_design.md
+├── op_design.md
 └── .tdd_state.json
 
 tests/ttnn/unit_tests/operations/row_centralize/
@@ -76,11 +74,11 @@ pytest tests/ttnn/unit_tests/operations/row_centralize/test_row_centralize.py -v
 ## Pipeline Structure
 
 ```
-analyzer → planner → kernel_designer → generic_op_builder → kernel_writer
-                     (+ TDD stages)    (reads .tdd_state)   (per stage)
+analyzer → architect → generic_op_builder → kernel_writer
+           (+ TDD stages)  (reads .tdd_state)   (per stage)
 ```
 
-**Key difference from standard workflow**: The `kernel_designer` runs first (determines TDD stages and registers them), then `generic_op_builder` runs (reads `.tdd_state.json` to discover stages). The `kernel_writer` is invoked per TDD stage after both are complete.
+**Key sequencing**: The `architect` runs first (determines TDD stages and registers them), then `generic_op_builder` runs (reads `.tdd_state.json` to discover stages). The `kernel_writer` is invoked per TDD stage after both are complete.
 
 ---
 
@@ -164,25 +162,19 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
 ### Step 6: Execute Workflow
 
 1. **Phase 1**: Run `ttnn-operation-analyzer` on EACH confirmed reference
-2. **Phase 2**: Run `ttnn-operation-planner` with all analyzer outputs
-3. **USER REVIEW** (MANDATORY): Present the generated `{new_op}_spec.md` to the user
-   - User approves → proceed to Phase 3
-   - User requests changes → refine spec, re-present for approval
-   - Do NOT proceed without explicit user approval
-4. **Phase 3a** — Run `ttnn-kernel-designer` with the spec:
-   - Produces: `kernel_design.md` (helper vs raw call decisions)
+2. **Phase 2**: Run `ttnn-operation-architect` with all analyzer outputs
+   - Produces: `op_design.md` (architecture + kernel implementation + helper mapping)
    - Registers TDD stages in `.tdd_state.json` via `tdd_orchestrator.py add-stage`
-   - **Wait for designer to complete** before launching builder
-5. **Phase 3b** — Run `ttnn-generic-op-builder` with the spec:
+3. **USER REVIEW** (MANDATORY): Present the generated `op_design.md` to the user
+   - User approves → proceed to Phase 3
+   - User requests changes → refine, re-present for approval
+   - Do NOT proceed without explicit user approval
+4. **Phase 3** — Run `ttnn-generic-op-builder` with `op_design.md`:
    - Reads `.tdd_state.json` to discover registered stages
    - Produces: Python orchestration, ProgramDescriptor, stub kernels
    - Writes tests to `tests/ttnn/unit_tests/operations/{op_name}/`
-6. **USER REVIEW**: Present outputs from both agents:
-   - Kernel design summary (stages, helper vs raw decisions, CB flow)
-   - Generic op structure (CBs, runtime args, kernel paths)
-   - User approves → proceed to Phase 4
-   - User requests changes → refine, re-present
-7. **Phase 4**: Run `ttnn-kernel-writer` per TDD stage (stages are pre-registered)
+5. **USER REVIEW**: Present builder outputs
+6. **Phase 4**: Run `ttnn-kernel-writer` per TDD stage (stages are pre-registered)
 
 ---
 
@@ -216,40 +208,31 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
                                                    │
                                                    ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Phase 2: Planner                                                             │
+│ Phase 2: Architect                                                           │
 │ (Opus)                                                                       │
 │                                                                              │
-│  Run ttnn-operation-planner with all analyzer outputs                        │
-│  Output: {new_op}_spec.md                                                    │
+│  Run ttnn-operation-architect with all analyzer outputs + helper headers      │
+│  Output: op_design.md + .tdd_state.json (with registered stages)             │
 └──────────────────────────────────────────────────┬──────────────────────────┘
                                                    │
-                                         ▼ [USER REVIEW SPEC]
+                                         ▼ [USER REVIEW DESIGN]
                                                    │
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Phase 3a: Kernel Designer                                                    │
+│ Phase 3: Generic Op Builder                                                  │
 │ (Opus)                                                                       │
 │                                                                              │
-│  Input: spec.md + helper headers                                             │
-│  Output: kernel_design.md + .tdd_state.json (with registered stages)         │
-└──────────────────────────────────────────────────┬──────────────────────────┘
-                                                   │
-                                                   ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Phase 3b: Generic Op Builder                                                 │
-│ (Opus)                                                                       │
-│                                                                              │
-│  Input: spec.md + .tdd_state.json                                            │
+│  Input: op_design.md + .tdd_state.json                                       │
 │  Output: Python orchestration, ProgramDescriptor, stub kernels, tests        │
 └──────────────────────────────────────────────────┬──────────────────────────┘
                               │
-                    ▼ [USER REVIEW BOTH OUTPUTS]
+                    ▼ [USER REVIEW BUILDER OUTPUT]
                               │
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ Phase 4: Kernel Writer (per TDD stage)                                       │
 │ (Opus)                                                                       │
 │                                                                              │
 │  Input:                                                                      │
-│  - kernel_design.md (from designer, with TDD Stage Plan)                     │
+│  - op_design.md Part 2 (from architect, with TDD Stage Plan)                 │
 │  - Stub kernels (from generic_op_builder)                                    │
 │  - Pre-registered stages in .tdd_state.json                                  │
 │                                                                              │
@@ -287,22 +270,20 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
 - Memory access patterns
 - Core distribution strategy
 
-### ttnn-operation-planner
-**Purpose**: Design the new operation, producing a functional specification.
+### ttnn-operation-architect
+**Purpose**: Design the new operation end-to-end — architecture + kernel implementation strategy.
 
-**Input**: Analyzer outputs + requirements
+**Input**: Analyzer outputs + requirements + kernel helper library headers
 
-**Output**: `{new_operation}_spec.md` containing:
-- Mathematical definition and API specification
-- Input/output tensor requirements
-- CB layout decisions
-- Core distribution strategy
-- Test criteria
+**Output**: `op_design.md` containing:
+- Part 1: Architecture (API, CB layout, work distribution, data flow, test criteria)
+- Part 2: Kernel Implementation (helper mappings, TDD stages, per-phase details)
+- Also registers TDD stages in `.tdd_state.json`
 
 ### ttnn-generic-op-builder
 **Purpose**: Create Python-based operation infrastructure using generic_op.
 
-**Input**: Functional spec (`{operation}_spec.md`)
+**Input**: `op_design.md` (Part 1) + `.tdd_state.json`
 
 **Output**:
 - Python orchestration code using `ttnn.generic_op()`
@@ -312,25 +293,12 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
 
 **Key Feature**: Python-based for rapid iteration.
 
-### ttnn-kernel-designer
-**Purpose**: Design kernel implementation strategy by mapping computation phases to helpers or raw calls.
-
-**Input**:
-- Functional spec (`{operation}_spec.md`)
-- Kernel helper library headers (`ttnn/cpp/ttnn/kernel_lib/*.hpp`)
-
-**Output**: `kernel_design.md` containing:
-- Per-kernel breakdown (reader, compute, writer)
-- For each phase: "USE HELPER: `function()`" or "NO HELPER: use raw calls"
-- CB synchronization summary
-
 ### ttnn-kernel-writer
-**Purpose**: Implement kernels following the Kernel Design Document.
+**Purpose**: Implement kernels following the Operation Design Document.
 
 **Input**:
-- Kernel Design Document (`kernel_design.md`) - MANDATORY
+- Operation Design Document (`op_design.md` Part 2) - MANDATORY
 - Stub kernels from generic_op_builder
-- Functional spec
 
 **Output**: Working kernels that:
 - Call helpers for phases marked "USE HELPER"
@@ -341,27 +309,21 @@ A `SubagentStart` hook automatically injects breadcrumb instructions into every 
 
 ## Sequential Execution Requirements
 
-### Phase 3 Orchestration
+### Phase 2 → Phase 3 Sequencing
 
-Phase 3 is **sequential** (designer → builder):
-
-1. **Launch `ttnn-kernel-designer` first** with the spec. Wait for it to complete.
-   - Designer produces `kernel_design.md` and registers TDD stages in `.tdd_state.json`
-2. **Then launch `ttnn-generic-op-builder`** with the spec.
-   - Builder reads `.tdd_state.json` to discover stages
-   - Produces Python infrastructure, stub kernels, and tests
+The architect (Phase 2) must complete before the builder (Phase 3) starts. The architect registers TDD stages in `.tdd_state.json` that the builder reads.
 
 ### Dependency Graph
 
 ```
 analyzer_1 ─┐
-analyzer_2 ─┼──► planner ──► spec.md ──► kernel_designer ──► kernel_design.md + .tdd_state.json
-analyzer_n ─┘                                                        │
-                                                                     ▼
-                                              generic_op_builder ──► stubs + Python + tests
-                                                                     │
-                                                                     ▼
-                                              kernel_writer (invoked per TDD stage)
+analyzer_2 ─┼──► architect ──► op_design.md + .tdd_state.json
+analyzer_n ─┘                          │
+                                       ▼
+                    generic_op_builder ──► stubs + Python + tests
+                                       │
+                                       ▼
+                    kernel_writer (invoked per TDD stage)
 ```
 
 ---
@@ -371,25 +333,18 @@ analyzer_n ─┘                                                        │
 | Checkpoint | Location | What to Review |
 |------------|----------|----------------|
 | Reference Selection | After Step 4 | Confirm reference operations are appropriate |
-| Spec Approval | After Phase 2 | Review API, tensor requirements, CB layout |
-| Parallel Output Review | After Phase 3 | Review generic_op structure + kernel design |
+| Design Approval | After Phase 2 | Review architecture, helpers, TDD stages |
+| Builder Output Review | After Phase 3 | Review generic_op structure, CB config, stubs |
 | Final Validation | After Phase 4 | E2E test passes with correct values |
 
 ---
 
 ## Troubleshooting
 
-### Phase 3 Sync Issues
-
-If one agent completes much faster than the other:
-- Do NOT start kernel_writer with partial inputs
-- Wait for both agents to finish
-- If one agent fails, debug that agent before proceeding
-
 ### Kernel Writer Dependency Issues
 
 If kernel_writer cannot find required inputs:
-- Verify `kernel_design.md` exists from designer
+- Verify `op_design.md` exists from architect
 - Verify stub kernels exist from generic_op_builder
 - Check paths match expected locations
 

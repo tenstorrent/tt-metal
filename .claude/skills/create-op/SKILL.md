@@ -1,6 +1,6 @@
 ---
 name: create-op
-description: Full pipeline for creating TTNN operations using generic_op workflow with TDD kernel implementation. Orchestrates discovery, analysis, planning, build+design, TDD kernels, and reporting. Args = operation requirements.
+description: Full pipeline for creating TTNN operations using generic_op workflow with TDD kernel implementation. Orchestrates discovery, analysis, design, build, TDD kernels, and reporting. Args = operation requirements.
 ---
 
 # TTNN Operation Creation Pipeline
@@ -10,16 +10,12 @@ End-to-end workflow for creating new TTNN operations using the Python-based gene
 ## Overview
 
 ```
-Phase 0: Discovery ─► Phase 1: Analysis ─► Phase 2: Planning
-                      (parallel analyzers)
+Phase 0: Discovery ─► Phase 1: Analysis ─► Phase 2: Design
+                      (parallel analyzers)    (architect)
 
-─► Phase 3: Design → Build ─► Phase 4: TDD Kernels ─► Phase 5: Report
-   (sequential)                (stage-gated loop)
+─► Phase 3: Build ─► Phase 4: TDD Kernels ─► Phase 5: Report
+   (generic-op-builder)  (stage-gated loop)
 ```
-
-This skill replaces the following reference documents:
-- `.claude/references/ttnn-generic-op-workflow.md` — phases 0-3
-- `.claude/references/tdd-kernel-pipeline.md` — phase 4
 
 ---
 
@@ -48,8 +44,8 @@ Two modes, determined by the user's message:
 
 Checkpoints affected by mode:
 - Phase 0: Reference confirmation
-- Phase 2: Spec approval
-- Phase 3: Builder + Designer output review
+- Phase 2: Design approval
+- Phase 3: Builder output review
 
 ---
 
@@ -87,8 +83,7 @@ ttnn/ttnn/operations/{op_name}/
 │   ├── {op_name}_reader.cpp
 │   ├── {op_name}_compute.cpp
 │   └── {op_name}_writer.cpp
-├── {op_name}_spec.md                       # Functional spec (Phase 2)
-├── kernel_design.md                        # Kernel design doc (Phase 3)
+├── op_design.md                            # Operation design doc (Phase 2)
 ├── .tdd_state.json                         # TDD pipeline state
 ├── REPORT.md                               # Build report (Phase 5)
 └── agent_logs/                             # Breadcrumbs (if logging enabled)
@@ -98,7 +93,7 @@ ttnn/ttnn/operations/{op_name}/
 ```
 tests/ttnn/unit_tests/operations/{op_name}/
 ├── test_{op_name}.py                       # Integration test (Phase 3)
-└── test_stage_*.py                         # TDD stage tests (registered by designer)
+└── test_stage_*.py                         # TDD stage tests (registered by architect)
 ```
 
 ---
@@ -162,61 +157,53 @@ Launch `ttnn-operation-analyzer` on EACH reference operation. Run all analyzers 
 ```
 Task: ttnn-operation-analyzer
   Input: program factory path
-  Output: {op_path}/agent_logs/{ref_name}_analysis.md
+  Output: {ref_dir}/{ref_name}_analysis.md
 ```
 
 Wait for ALL analyzers to complete before proceeding.
 
 ---
 
-## Phase 2: Planning
+## Phase 2: Design
 
-**Goal**: Produce a functional specification.
+**Goal**: Produce a complete operation design — architecture + kernel implementation strategy + TDD stages.
 
-Launch `ttnn-operation-planner` with:
+Launch `ttnn-operation-architect` with:
 - All analyzer output paths
 - Operation requirements (name, math definition, tensor requirements, parameters)
 - Mode (derivative/hybrid) and role assignments
-- Target path: `{op_path}/{op_name}_spec.md`
+- Target path: `{op_path}/op_design.md`
 
 ```
-Task: ttnn-operation-planner
+Task: ttnn-operation-architect
   Input: analyzer outputs + requirements
-  Output: {op_path}/{op_name}_spec.md
+  Output: {op_path}/op_design.md + .tdd_state.json (with registered stages)
 ```
+
+The architect:
+1. **Pass 1 (Architecture)**: Defines CB layout, work distribution, data flow, tensor requirements
+2. **Pass 2 (Implementation)**: Maps phases to helpers, validates architecture against helper requirements, determines TDD stages
+3. Registers ALL TDD stages via `tdd_orchestrator.py add-stage`
 
 ### Interactive Checkpoint
 
-Present the spec summary: API, tensor requirements, CB layout, design decisions. User approves or requests changes.
+Present the design summary: API, CB layout, helper decisions, TDD stages. User approves or requests changes.
 
 In automated mode, proceed directly.
 
 ---
 
-## Phase 3: Design → Build (Sequential)
+## Phase 3: Build
 
-**Goal**: Create kernel design with TDD stages, then Python infrastructure.
+**Goal**: Create Python infrastructure with stub kernels.
 
-### 3.1 Kernel Designer (runs first)
-
-```
-Task: ttnn-kernel-designer
-  Input: {op_path}/{op_name}_spec.md + kernel helper headers
-  Output: {op_path}/kernel_design.md + .tdd_state.json (with registered stages)
-```
-
-The designer:
-1. Determines TDD stages using H1/H2 heuristics
-2. Registers ALL stages via `tdd_orchestrator.py add-stage`
-3. Produces `kernel_design.md` with Part 1 (TDD Stage Plan) and Part 2 (implementation details)
-
-**Wait for designer to complete** before launching the builder.
-
-### 3.2 Generic Op Builder (runs after designer)
+Launch `ttnn-generic-op-builder` with:
+- `{op_path}/op_design.md` (reads Part 1 for architecture)
+- `.tdd_state.json` (reads to discover registered stages)
 
 ```
 Task: ttnn-generic-op-builder
-  Input: {op_path}/{op_name}_spec.md + .tdd_state.json
+  Input: {op_path}/op_design.md + .tdd_state.json
   Output: Python files + stub kernels + integration test
 ```
 
@@ -224,13 +211,13 @@ The builder:
 1. Reads `.tdd_state.json` to discover registered stages
 2. Creates Python orchestration, program descriptor, stub kernels
 3. Writes integration test to `tests/ttnn/unit_tests/operations/{op_name}/`
-4. Verifies stage test files exist (generated by orchestrator during designer's registration)
+4. Verifies stage test files exist (generated by orchestrator during architect's registration)
 
 ### Interactive Checkpoint
 
-Present outputs from both agents:
-- Kernel design summary (stages, helper vs raw decisions, CB flow)
+Present builder outputs:
 - Generic op structure (CBs, runtime args, kernel paths)
+- Test validation results
 
 In automated mode, proceed directly.
 
@@ -240,7 +227,7 @@ In automated mode, proceed directly.
 
 **Goal**: Implement kernels incrementally with test verification.
 
-**Stages are pre-registered** by the kernel designer in Phase 3. Read `.tdd_state.json` to discover them.
+**Stages are pre-registered** by the architect in Phase 2. Read `.tdd_state.json` to discover them.
 
 ### 4.1 Verify Pipeline State
 
@@ -248,7 +235,7 @@ In automated mode, proceed directly.
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py status --op-path {op_path}
 ```
 
-Confirm stages are registered. If `.tdd_state.json` is missing or has no stages, Phase 3 failed — go back and fix it.
+Confirm stages are registered. If `.tdd_state.json` is missing or has no stages, Phase 2 failed — go back and fix it.
 
 ### 4.2 Stage Loop
 
@@ -275,7 +262,7 @@ Generate `{op_path}/REPORT.md` containing:
 4. **TDD pipeline results**: Table of stages with pass/fail, attempt counts, failure classifications
 5. **Files produced**: Directory listing
 6. **Git history**: Relevant commits
-7. **Decisions and deviations**: Assumptions made, deviations from spec, pain points
+7. **Decisions and deviations**: Assumptions made, deviations from design, pain points
 
 Commit the report.
 
@@ -315,21 +302,20 @@ When a helper uses `NoWaitNoPop`, it does NOT pop the input CB. The caller MUST 
 | Agent | Type | Purpose |
 |-------|------|---------|
 | `ttnn-operation-analyzer` | Opus | Deep analysis of existing operations |
-| `ttnn-operation-planner` | Opus | Design new operation, produce spec |
+| `ttnn-operation-architect` | Opus | Design new operation (architecture + kernel implementation) |
 | `ttnn-generic-op-builder` | Opus | Python infrastructure + stub kernels |
-| `ttnn-kernel-designer` | Opus | Map phases to helpers vs raw calls |
 | `ttnn-kernel-writer` | Opus | Implement kernels following design |
 | `ttnn-riscv-debugger` | Sonnet | Debug kernel issues (hangs, wrong output) |
 
 ### Dependency Graph
 ```
-analyzer(s) ──► planner ──► spec ──► kernel_designer ──► kernel_design.md + .tdd_state.json
-                                                                │
-                                                                ▼
-                                          generic_op_builder ──► stubs + Python + tests
-                                                                │
-                                                                ▼
-                                          kernel_writer (invoked per TDD stage)
+analyzer(s) ──► architect ──► op_design.md + .tdd_state.json
+                                      │
+                                      ▼
+                    generic_op_builder ──► stubs + Python + tests
+                                      │
+                                      ▼
+                    kernel_writer (invoked per TDD stage)
 ```
 
 ### When to use the debugger

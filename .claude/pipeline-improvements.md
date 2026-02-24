@@ -27,24 +27,25 @@ The design itself is generally fine. The writer doesn't need escalation back to 
 ---
 
 ### 2. Too many planning stages before touching kernel code ("long leash")
-**Status**: IN PROGRESS
+**Status**: DONE
 
-The pipeline goes through Analyzer → Planner → Designer before kernel code is ever touched. That's three agents producing ~1500+ lines of planning artifacts (analysis.md, spec.md, kernel_design.md), none of which engage with the actual hard part — writing correct kernel code. The kernel writer then has to reconcile all of that with reality.
+Merged Planner + Designer into a single **Architect** agent (`ttnn-operation-architect`). The pipeline now goes Analyzer → Architect → Builder → Kernel Writer.
 
-The Planner is explicitly forbidden from reading helpers or kernel code. The Designer maps to helpers but doesn't write code. By the time the writer starts, it's working from a chain of abstractions that may not reflect kernel-level reality.
-
-**Core question**: How do we shorten the distance between planning and kernel code?
-
-**Proposal**: TBD — working on this now
+**What changed**:
+- Planner and Designer agent files removed
+- New architect produces single `op_design.md` (Part 1: Architecture, Part 2: Kernel Implementation)
+- Architect has full visibility into both architecture AND helper library — validates CB decisions against helper requirements immediately
+- One fewer agent launch, one fewer handoff, one fewer document
+- Builder reads `op_design.md` Part 1, kernel-writer reads Part 2
 
 ---
 
-### 3. `.tdd_state.json` coupling between designer and builder is fragile
+### 3. `.tdd_state.json` coupling between architect and builder is fragile
 **Status**: Proposed
 
-File-based IPC between two agents. If the designer's format drifts, the builder breaks silently. If the orchestrator script has a bug, stages get lost.
+File-based IPC between two agents. If the architect's format drifts, the builder breaks silently. If the orchestrator script has a bug, stages get lost.
 
-**Proposal**: Add schema + version validation. Designer produces structured artifact, builder validates on read. Or have the orchestrator be the source of truth (designer reports stages to orchestrator, orchestrator writes the file for builder).
+**Proposal**: Add schema + version validation. Architect produces structured artifact, builder validates on read. Or have the orchestrator be the source of truth (architect reports stages to orchestrator, orchestrator writes the file for builder).
 
 ---
 
@@ -82,12 +83,12 @@ Phase 0 pattern-matches on strings like "row-major input" and "sharded" to deter
 
 ---
 
-### 9. No validation between designer output and builder output
+### 9. No validation between architect output and builder output
 **Status**: Proposed
 
-After Phase 3b, nobody checks that the builder's CB allocation matches the designer's CB spec. If the builder allocates CB 0 with 2 pages but the designer's kernel code expects 4, you don't find out until Phase 4 fails at runtime.
+After Phase 3 (Build), nobody checks that the builder's CB allocation matches the architect's design. If the builder allocates CB 0 with 2 pages but the architect's kernel design expects 4, you don't find out until Phase 4 fails at runtime.
 
-**Proposal**: Static cross-check between `kernel_design.md` CB table and `program_descriptor.py` before any kernel runs.
+**Proposal**: Static cross-check between `op_design.md` CB table and `program_descriptor.py` before any kernel runs.
 
 ---
 
@@ -106,11 +107,11 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 
 | # | Issue | Impact | Effort | Priority |
 |---|-------|--------|--------|----------|
-| 1 | No feedback loops | | | |
-| 2 | Planner/Designer gap | | | |
+| 1 | Numerical debugging burns context | | | |
+| 2 | Long leash (planner/designer gap) | | | DONE |
 | 3 | `.tdd_state.json` fragility | | | |
 | 4 | No fast path | | | |
 | 6 | Builder model choice | | | |
 | 7 | Discovery keyword matching | | | |
-| 9 | No designer/builder cross-validation | | | |
+| 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |

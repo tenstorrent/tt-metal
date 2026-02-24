@@ -110,10 +110,10 @@ Reference when you need to understand how tensors could be sharded between cores
 
 Use the `/create-op` skill to create new TTNN operations using the Python-based generic_op infrastructure with `ttnn.generic_op()` and ProgramDescriptor APIs.
 
-Pipeline: analyzer → planner → kernel-designer → generic_op_builder → TDD kernel-writer
+Pipeline: analyzer → architect → generic_op_builder → TDD kernel-writer
 
 Key features:
-- `kernel-designer` runs first (determines TDD stages via H1/H2 heuristics, registers them in `.tdd_state.json`), then `generic_op_builder` runs (reads `.tdd_state.json` to discover stages)
+- `architect` combines planning + kernel design into a single agent (determines CB layout, maps helpers, registers TDD stages in `.tdd_state.json`), then `generic_op_builder` runs (reads `.tdd_state.json` to discover stages)
 - Kernel implementation uses stage-gated TDD (see `/tdd-kernels` skill) — kernel-writer implements one stage at a time, forbidden from implementing future stages
 - Supports interactive (default) and fully automated modes
 

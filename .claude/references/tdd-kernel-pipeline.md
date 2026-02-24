@@ -7,10 +7,10 @@ This reference enables the orchestrator agent to run a stage-gated TDD pipeline 
 ## PREREQUISITES
 
 Before using this pipeline, you MUST have:
-1. A functional spec (`*_spec.md`) in the operation directory
-2. A kernel design document (`kernel_design.md`) in the operation directory
-3. Stub kernel files created by the generic-op-builder
-4. A working `__init__.py` that exports the operation function
+1. An operation design document (`op_design.md`) in the operation directory
+2. Stub kernel files created by the generic-op-builder
+3. A working `__init__.py` that exports the operation function
+4. A `.tdd_state.json` with pre-registered stages (from the architect)
 
 ## CLI TOOL
 
@@ -25,11 +25,11 @@ Run these steps exactly, in order:
 
 ### Step 1: Initialize
 ```bash
-python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init {spec_path} --op-path {op_path}
+python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init {op_path}/op_design.md --op-path {op_path}
 ```
 
 ### Step 2: Read the kernel design document
-Read `{op_path}/kernel_design.md` to determine TDD stages. Stages follow this ordering heuristic:
+Read `{op_path}/op_design.md` to determine TDD stages. Stages follow this ordering heuristic:
 - Stage 1: Data pipeline (reader + writer + passthrough compute)
 - Stage 2: Bookend phases together (e.g., tilize + untilize as identity roundtrip)
 - Stage 3+: Compute phases in pipeline order
@@ -61,7 +61,7 @@ Invoke kernel-writer with a stage-scoped prompt:
 
 ```
 Implement TDD stage '{stage_name}' for {op_name}.
-Design: {op_path}/kernel_design.md
+Design: {op_path}/op_design.md
 Stage description: {stage_description}
 Kernel files to modify: {kernel_files}
 Previous failure: {failure_json or 'None — first attempt'}
@@ -190,7 +190,7 @@ Each kernel-writer invocation must ONLY implement what the current stage require
 ### Prompt template for per-stage invocation
 ```
 Implement TDD stage '{stage_name}' for {op_name}.
-Design: {op_path}/kernel_design.md
+Design: {op_path}/op_design.md
 
 Stage description: {stage_description}
 Kernel files to modify: {kernel_files}

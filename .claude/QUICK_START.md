@@ -7,8 +7,8 @@ This guide walks through the `/create-op` pipeline end-to-end.
 ```
 Phase 0: Discovery     — find reference operations
 Phase 1: Analysis      — deep-dive into references (parallel)
-Phase 2: Planning      — produce functional spec (~250 lines)
-Phase 3: Design→Build  — kernel designer THEN generic-op-builder (sequential)
+Phase 2: Design        — architect produces op_design.md + registers TDD stages
+Phase 3: Build         — generic-op-builder creates Python infra + stubs
 Phase 4: TDD Kernels   — stage-gated kernel implementation
 Phase 5: Report        — summary markdown
 ```
@@ -33,10 +33,9 @@ Phase 5: Report        — summary markdown
 
 **Phase 1 — Analysis**: Runs `ttnn-operation-analyzer` on each reference in parallel.
 
-**Phase 2 — Planning**: Runs `ttnn-operation-planner` to produce `row_centralize_spec.md` (~250 lines, no agent names, includes HW constraints checklist).
-
-**Phase 3a — Kernel Designer** (runs first):
-- Reads the spec and helper library headers
+**Phase 2 — Design**: Runs `ttnn-operation-architect` to produce `op_design.md`:
+- **Pass 1 (Architecture)**: Defines CB layout, work distribution, tensor requirements
+- **Pass 2 (Implementation)**: Reads helper library headers, maps phases to helpers, validates architecture against helper requirements
 - Determines TDD stages using H1/H2 heuristics:
 
   | Stage | Name | What's Added |
@@ -45,16 +44,16 @@ Phase 5: Report        — summary markdown
   | 2 | `reduce_mean` | Add row-wise mean reduction |
   | 3 | `subtract_mean` | Subtract mean from input (full operation) |
 
-- Registers all stages:
+- Writes `op_design.md` with Part 1 (Architecture) and Part 2 (Kernel Implementation)
+- Then registers all TDD stages:
   ```bash
-  python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init row_centralize_spec.md --op-path ttnn/ttnn/operations/row_centralize
+  python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init op_design.md --op-path ttnn/ttnn/operations/row_centralize
   python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py add-stage '{"name":"data_pipeline", ...}' --op-path ...
   python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py add-stage '{"name":"reduce_mean", ...}' --op-path ...
   python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py add-stage '{"name":"subtract_mean", ...}' --op-path ...
   ```
-- Writes `kernel_design.md` with Part 1 (TDD Stage Plan) and Part 2 (implementation details)
 
-**Phase 3b — Generic Op Builder** (runs after designer):
+**Phase 3 — Build** (runs after architect):
 - Reads `.tdd_state.json` to discover the 3 registered stages
 - Creates Python orchestration, program descriptor, stub kernels
 - Writes tests to `tests/ttnn/unit_tests/operations/row_centralize/`
@@ -77,8 +76,7 @@ Phase 5: Report        — summary markdown
 │   ├── row_centralize_reader.cpp
 │   ├── row_centralize_compute.cpp
 │   └── row_centralize_writer.cpp
-├── row_centralize_spec.md               # Functional spec
-├── kernel_design.md                     # Kernel design doc
+├── op_design.md                         # Operation design doc
 ├── .tdd_state.json                      # TDD pipeline state
 └── REPORT.md                            # Build report
 ```
@@ -106,9 +104,9 @@ python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py status --op-path ttnn/t
 
 ## Key Design Decisions
 
-### Why sequential Phase 3?
+### Why does the architect run before the builder?
 
-The kernel designer registers TDD stages in `.tdd_state.json`. The generic-op-builder reads that file to discover stages and generate test files. Running them in parallel meant the builder couldn't see the designer's stages.
+The architect registers TDD stages in `.tdd_state.json`. The generic-op-builder reads that file to discover stages and generate test files. The architect must complete first so the builder can see the registered stages.
 
 ### Why separate test directories?
 
@@ -116,19 +114,19 @@ Tests at `tests/ttnn/unit_tests/operations/{op_name}/` instead of colocated with
 
 ### Who determines TDD stages?
 
-The **kernel designer** owns stage determination using two heuristics:
+The **architect** owns stage determination using two heuristics:
 - **H1 (Kernel Complexity Ordering)**: Which kernel to finalize first
 - **H2 (Semantic Goal Progression)**: How to break a kernel into testable milestones
 
 The kernel writer implements exactly one assigned stage at a time. It is forbidden from implementing future stages.
 
-### What does the planner spec look like?
+### What does the design document look like?
 
-~250 lines, two sections:
-- **Section A**: API + Validation (parameters, input/output requirements, edge cases)
-- **Section B**: CB Config + Data Flow (component sources, work distribution, CB table, kernel args, HW constraints checklist)
+~400-550 lines, two parts:
+- **Part 1 (Architecture)**: API, validation, CB layout, work distribution, data flow, test criteria
+- **Part 2 (Kernel Implementation)**: TDD stages, helper mappings, per-phase details, critical notes
 
-No agent names, no implementation strategies — just the contract.
+Part 2 validates Part 1 decisions against actual helper requirements, fixing conflicts immediately.
 
 ## Automation Modes
 
@@ -148,7 +146,7 @@ Example automated invocation:
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `.tdd_state.json` missing | Designer didn't run | Re-run Phase 3a (kernel designer) |
+| `.tdd_state.json` missing | Architect didn't run | Re-run Phase 2 (architect) |
 | No stage test files | Orchestrator registration failed | Check `tdd_orchestrator.py add-stage` output |
 | Test hangs | CB sync mismatch in kernels | `pkill -9 -f pytest && tt-smi -r`, check watcher log |
-| Builder can't find stages | Phase 3 ran in parallel | Ensure designer completes before builder starts |
+| Builder can't find stages | Architect didn't complete | Ensure architect finishes before builder starts |
