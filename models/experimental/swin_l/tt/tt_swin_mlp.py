@@ -27,23 +27,24 @@ class TtSwinMLP:
             bias=self.parameters["fc1"]["bias"],
             activation="gelu",
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
 
         # fc2
-        output = ttnn.linear(
+        return ttnn.linear(
             output,
             self.parameters["fc2"]["weight"],
             bias=self.parameters["fc2"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-        return output
