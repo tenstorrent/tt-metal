@@ -476,9 +476,35 @@ class MoE(SharedStateAddOn, AbstractModule):
         return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_prefill(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
+    ) -> ttnn.Tensor:
+        # Handle all_gather if tensor parallel is enabled
+        if handle_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
+
+        # Run the forward pass
+        output = cls.forward(x, cfg)
+
+        # Handle reduce_scatter if tensor parallel is enabled
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+
+        return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
+        # Handle all_gather if tensor parallel is enabled
+        if handle_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
+
+        # Run the forward pass
+        output = cls.forward(x, cfg)
+
+        # Handle reduce_scatter if tensor parallel is enabled
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+
+        return output

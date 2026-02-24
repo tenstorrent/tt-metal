@@ -116,31 +116,14 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass - handle collective operations at test level
+    # TTNN forward pass - collective operations handled inside forward functions
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
 
-    # Perform all_gather before forward pass
-    ccl = run_config["ccl"]
-    tt_input_gathered = ttnn.experimental.all_gather_async(
-        tt_input, **ccl.populate_all_gather_runtime_args(run_config["revert_tp"])
-    )
-
-    # Run MoE forward with gathered input
+    # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
     if mode == "prefill":
-        tt_output = MoE.forward_prefill(tt_input_gathered, run_config)
+        tt_output = MoE.forward_prefill(tt_input, run_config, handle_tensor_parallel=True)
     else:  # decode
-        tt_output = MoE.forward_decode(tt_input_gathered, run_config)
-
-    # Perform reduce_scatter after forward pass
-    pre_scatter_output = tt_output
-    tt_output = ttnn.experimental.reduce_scatter_minimal_async(
-        pre_scatter_output, **ccl.populate_reduce_scatter_runtime_args(run_config["final_output_reduce_scatter"])
-    )
-    # Deallocate pre-scatter tensor to prevent memory leak
-    ttnn.deallocate(pre_scatter_output)
-
-    # Cleanup gathered input
-    ttnn.deallocate(tt_input_gathered)
+        tt_output = MoE.forward_decode(tt_input, run_config, handle_tensor_parallel=True)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
