@@ -686,7 +686,7 @@ def get_test_weight_config(
         weight_config_id = "/".join(parts)
     else:
         weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
-    per_test_weight_cache_path = cache_path / "new_tests_cache" / weight_config_id
+    per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )
