@@ -468,6 +468,26 @@ class TtTransformer(LightweightModule):
 
         return logits_list
 
+    def process_output_prefill_logits_batched(self, tt_out, last_token_idx_list):
+        """
+        Batched version: norm once, extract all users' last tokens, lm_head once.
+        Returns a single [1, 1, padded_batch, vocab_shard] tensor ready for sampling
+        instead of a list of per-user logits.
+        """
+        x, _ = self.norm(tt_out, res=None, mode="prefill")
+        batch_size = len(last_token_idx_list)
+        x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
+
+        user_tokens = []
+        for i, x_i in enumerate(x_split):
+            tok = x_i[:, :, last_token_idx_list[i] : last_token_idx_list[i] + 1, :]
+            user_tokens.append(tok)
+
+        combined = ttnn.concat(user_tokens, dim=2)
+
+        tt_logits = self.lm_head(combined, None, mode="prefill")
+        return tt_logits[0]
+
     def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
         """
         Input is ttnn device tensor of logits. Output is torch logits or tokens tensor.

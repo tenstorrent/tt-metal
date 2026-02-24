@@ -76,7 +76,7 @@ class Generator(WarmupForwardMixin):
             )
             for _ in range(self.model_args.max_batch_size)
         ]
-        self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
+        self.tt_logits_accumulated_batched = []  # Kept for backward compatibility
         self.prev_page_table = None
         self.prefill_traces_warmup = False
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
@@ -266,10 +266,6 @@ class Generator(WarmupForwardMixin):
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:
-                # For batched prefill, reset to empty list since we use extend()
-                # For non-batched prefill with device sampling, use persistent buffer from __init__
-                if use_batched_prefill and do_device_sampling:
-                    self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
@@ -288,25 +284,22 @@ class Generator(WarmupForwardMixin):
                 if tt_out_logits_all_users is not None and tt_out_logits_saved is not None:
                     tt_out_logits_all_users[id] = tt_out_logits_saved
             else:
-                # Process prefill output to get logits (before all-gather) for on-device sampling
-                # Returns list of logits in sharded format (same as decode)
-                tt_logits_list = self.model.process_output_prefill_logits(tt_tok, last_token_idx=last_token_idx)
                 if use_batched_prefill:
-                    # Batched prefill: logits list has 32 entries ordered by slot position
-                    self.tt_logits_accumulated_batched.extend(tt_logits_list)
+                    tt_logits_batch_direct = self.model.process_output_prefill_logits_batched(
+                        tt_tok, last_token_idx=last_token_idx
+                    )
                 else:
-                    # Single user: logits list has 1 entry, copy into persistent buffer
+                    tt_logits_list = self.model.process_output_prefill_logits(tt_tok, last_token_idx=last_token_idx)
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
         prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
             padded_batch = 32
 
-            # Use batched list for batched prefill, persistent buffer for non-batched
-            logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
-
-            # Concatenate along slot dimension -> [1, 1, 1[32], vocab_shard]
-            tt_logits_batch = ttnn.concat(logits_source, dim=2)
+            if use_batched_prefill:
+                tt_logits_batch = tt_logits_batch_direct
+            else:
+                tt_logits_batch = ttnn.concat(self.tt_logits_accumulated, dim=2)
             # Sample using the sampling module
             # Logits are in sharded format (before all-gather), same as decode
             # sampling_params are already padded to 32 by format_sampling_params
