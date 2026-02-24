@@ -1252,10 +1252,10 @@ void TestDevice::set_local_runtime_args_for_core(
 }
 
 size_t TestDevice::get_latency_send_buffer_address() const {
-    // Send buffer starts after the latency result buffer and send benchmark buffer
+    // Send buffer starts after the latency result buffer and all 4 benchmark buffers
     // Results are stored as uint32_t elapsed times (1 per sample)
-    // Send benchmark buffer also stores uint32_t elapsed times (1 per sample)
-    return sender_memory_map_->get_result_buffer_address() + (2 * TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+    // Each of the 4 benchmark buffers also stores uint32_t elapsed times (1 per sample)
+    return sender_memory_map_->get_result_buffer_address() + (5 * TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
 }
 
 size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) const {
@@ -1269,6 +1269,21 @@ size_t TestDevice::get_latency_send_benchmark_buffer_address() const {
     // Send benchmark buffer stores timing measurements for send_payload_packet calls
     // It comes right after the latency result buffer (before send buffer)
     return sender_memory_map_->get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+}
+
+size_t TestDevice::get_latency_wait_for_slot_benchmark_buffer_address() const {
+    // Wait for slot benchmark buffer stores timing measurements for wait_for_empty_write_slot calls
+    return sender_memory_map_->get_result_buffer_address() + (2 * TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+}
+
+size_t TestDevice::get_latency_send_payload_benchmark_buffer_address() const {
+    // Send payload benchmark buffer stores timing measurements for send_payload_without_header calls
+    return sender_memory_map_->get_result_buffer_address() + (3 * TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+}
+
+size_t TestDevice::get_latency_send_header_benchmark_buffer_address() const {
+    // Send header benchmark buffer stores timing measurements for send_payload_flush calls
+    return sender_memory_map_->get_result_buffer_address() + (4 * TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
 }
 
 void TestDevice::create_latency_sender_kernel(
@@ -1310,11 +1325,21 @@ void TestDevice::create_latency_sender_kernel(
         dest_node);
     uint32_t link_idx = available_links[0];  // Use first available link
 
-    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric
+    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric, measure_wait_for_slot, measure_send_payload,
+    // measure_send_header
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
+    // Set all detailed benchmarks to false by default to minimize overhead
+    bool measure_wait_for_slot = true;
+    bool measure_send_payload = true;
+    bool measure_send_header = true;
     std::vector<uint32_t> ct_args = {
-        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
+        enable_fused_payload_with_sync ? 1u : 0u,
+        sem_inc_only ? 1u : 0u,
+        is_2d_fabric ? 1u : 0u,
+        measure_wait_for_slot ? 1u : 0u,
+        measure_send_payload ? 1u : 0u,
+        measure_send_header ? 1u : 0u};
 
     // Runtime args
     // Calculate send and receive buffer addresses after timestamp storage
@@ -1328,6 +1353,9 @@ void TestDevice::create_latency_sender_kernel(
     uint32_t send_buffer_address = get_latency_send_buffer_address();
     uint32_t receive_buffer_address = get_latency_receive_buffer_address(payload_size);
     uint32_t send_benchmark_buffer_address = get_latency_send_benchmark_buffer_address();
+    uint32_t wait_for_slot_benchmark_buffer_address = get_latency_wait_for_slot_benchmark_buffer_address();
+    uint32_t send_payload_benchmark_buffer_address = get_latency_send_payload_benchmark_buffer_address();
+    uint32_t send_header_benchmark_buffer_address = get_latency_send_header_benchmark_buffer_address();
 
     // responder_virtual_core is passed as parameter from TestContext
     // Build runtime args - routing parameters differ between 1D and 2D
@@ -1339,6 +1367,9 @@ void TestDevice::create_latency_sender_kernel(
         send_buffer_address,                              // sender's send buffer (to write before sending)
         receive_buffer_address,                           // sender's receive buffer (to wait on)
         send_benchmark_buffer_address,                    // buffer to store send_payload_packet timing measurements
+        wait_for_slot_benchmark_buffer_address,  // buffer to store wait_for_empty_write_slot timing measurements
+        send_payload_benchmark_buffer_address,   // buffer to store send_payload_without_header timing measurements
+        send_header_benchmark_buffer_address,    // buffer to store send_payload_flush timing measurements
         static_cast<uint32_t>(responder_virtual_core.x),  // responder's virtual NOC X coordinate
         static_cast<uint32_t>(responder_virtual_core.y),  // responder's virtual NOC Y coordinate
     };
@@ -1357,8 +1388,14 @@ void TestDevice::create_latency_sender_kernel(
     tt::tt_fabric::append_fabric_connection_rt_args(
         fabric_node_id_, dest_node, link_idx, program_handle_, {core}, rt_args);
 
+    uint32_t benchmark_buffer_size = num_samples * sizeof(uint32_t);
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
-        {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
+        {semaphore_address, sender_memory_map_->get_local_sync_region_size()},
+        {sender_memory_map_->get_result_buffer_address(), benchmark_buffer_size},  // Result buffer
+        {send_benchmark_buffer_address, benchmark_buffer_size},                    // Send benchmark buffer
+        {wait_for_slot_benchmark_buffer_address, benchmark_buffer_size},           // Wait for slot benchmark buffer
+        {send_payload_benchmark_buffer_address, benchmark_buffer_size},            // Send payload benchmark buffer
+        {send_header_benchmark_buffer_address, benchmark_buffer_size}};            // Send header benchmark buffer
 
     senders_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, addresses_and_size_to_clear);
 

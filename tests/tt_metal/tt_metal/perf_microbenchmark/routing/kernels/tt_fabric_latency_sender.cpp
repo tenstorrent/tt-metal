@@ -18,6 +18,9 @@
 constexpr bool enable_fused_payload_with_sync = get_compile_time_arg_val(0) != 0;
 constexpr bool sem_inc_only = get_compile_time_arg_val(1) != 0;
 constexpr bool is_2d_fabric = get_compile_time_arg_val(2) != 0;
+constexpr bool measure_wait_for_slot = get_compile_time_arg_val(3) != 0;
+constexpr bool measure_send_payload = get_compile_time_arg_val(4) != 0;
+constexpr bool measure_send_header = get_compile_time_arg_val(5) != 0;
 
 void kernel_main() {
     set_l1_data_cache<false>();
@@ -35,6 +38,12 @@ void kernel_main() {
         get_arg_val<uint32_t>(arg_idx++);  // Sender's receive buffer (wait for response)
     const size_t send_benchmark_buffer_address =
         get_arg_val<uint32_t>(arg_idx++);  // Buffer to store send_payload_packet timing measurements
+    const size_t wait_for_slot_benchmark_buffer_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Buffer to store wait_for_empty_write_slot timing measurements
+    const size_t send_payload_benchmark_buffer_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Buffer to store send_payload_without_header timing measurements
+    const size_t send_header_benchmark_buffer_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Buffer to store send_payload_flush timing measurements
     const uint8_t responder_noc_x =
         static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Responder's virtual NOC X
     const uint8_t responder_noc_y =
@@ -92,6 +101,16 @@ void kernel_main() {
         sem_inc_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1});
     }
 
+    // Store elapsed time (cycles) as uint32_t in result buffer
+    volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(result_buffer_address);
+    volatile uint32_t* send_benchmark_ptr = reinterpret_cast<volatile uint32_t*>(send_benchmark_buffer_address);
+    volatile uint32_t* wait_for_slot_benchmark_ptr =
+        reinterpret_cast<volatile uint32_t*>(wait_for_slot_benchmark_buffer_address);
+    volatile uint32_t* send_payload_benchmark_ptr =
+        reinterpret_cast<volatile uint32_t*>(send_payload_benchmark_buffer_address);
+    volatile uint32_t* send_header_benchmark_ptr =
+        reinterpret_cast<volatile uint32_t*>(send_header_benchmark_buffer_address);
+
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_non_blocking_from_address(
@@ -99,6 +118,7 @@ void kernel_main() {
     };
 
     auto send_payload_packet = [&fabric_connection, payload_packet_header, send_buffer_address, payload_size_bytes]() {
+        __asm__ volatile("# abouto to wait for slot");
         fabric_connection.wait_for_empty_write_slot();
         if (payload_size_bytes > 0) {
             __asm__ volatile("# sending payload");
@@ -123,29 +143,30 @@ void kernel_main() {
         wait_for_semaphore_then_reset(1);
     }
 
-    // Store elapsed time (cycles) as uint32_t in result buffer
-    volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(result_buffer_address);
-    volatile uint32_t* send_benchmark_ptr = reinterpret_cast<volatile uint32_t*>(send_benchmark_buffer_address);
-
     // Clear result buffer before writing elapsed times to avoid reading stale data
     uint32_t result_buffer_size = num_samples * sizeof(uint32_t);
     for (uint32_t i = 0; i < num_samples; i++) {
         result_ptr[i] = 0;
         send_benchmark_ptr[i] = 0;
+        wait_for_slot_benchmark_ptr[i] = 0;
+        send_payload_benchmark_ptr[i] = 0;
+        send_header_benchmark_ptr[i] = 0;
     }
 
     // Main latency measurement loop
     // Use separate send and receive buffers to avoid race conditions
     // Use the last word of the buffer for synchronization, indicating the entire rest of the payload has arrived before it
 
-    const size_t payload_end_offset = payload_size_bytes - sizeof(uint32_t);
-    volatile uint32_t* send_buffer_ptr =
-        reinterpret_cast<volatile uint32_t*>(send_buffer_address + payload_end_offset);
-    volatile uint32_t* receive_buffer_ptr =
-        reinterpret_cast<volatile uint32_t*>(receive_buffer_address + payload_end_offset);
+    volatile uint32_t* send_buffer_ptr = nullptr;
+    volatile uint32_t* receive_buffer_ptr = nullptr;
 
-    // Initialize receive buffer to 0
-    *receive_buffer_ptr = 0;
+    if (payload_size_bytes > 0) {
+        const size_t payload_end_offset = payload_size_bytes - sizeof(uint32_t);
+        send_buffer_ptr = reinterpret_cast<volatile uint32_t*>(send_buffer_address + payload_end_offset);
+        receive_buffer_ptr = reinterpret_cast<volatile uint32_t*>(receive_buffer_address + payload_end_offset);
+        // Initialize receive buffer to 0
+        *receive_buffer_ptr = 0;
+    }
 
     for (size_t sample_idx = 0; sample_idx < num_samples; sample_idx++) {
         if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
@@ -153,6 +174,11 @@ void kernel_main() {
             *send_buffer_ptr = sample_idx + 1;
             *receive_buffer_ptr = 0;
         }
+
+        // Initialize detailed benchmarks to 0 (in case they're not measured in this code path)
+        wait_for_slot_benchmark_ptr[sample_idx] = 0;
+        send_payload_benchmark_ptr[sample_idx] = 0;
+        send_header_benchmark_ptr[sample_idx] = 0;
 
         // Send one message per sample
         auto send_start = get_timestamp();
@@ -162,8 +188,274 @@ void kernel_main() {
             if constexpr (sem_inc_only) {
                 send_seminc_packet();
             } else {
-                __asm__ volatile("# about to send paylod");
-                send_payload_packet();
+                __asm__ volatile("# about to send payload");
+
+                // Time wait_for_empty_write_slot (inlined)
+                if constexpr (measure_wait_for_slot) {
+                    auto wait_start = get_timestamp();
+                    // Inlined: fabric_connection.wait_for_empty_write_slot()
+                    {
+                        WAYPOINT("FWSW");
+                        // Inlined: edm_has_space_for_packet<1>()
+                        while (true) {
+                            invalidate_l1_cache();
+                            auto used_slots = fabric_connection.buffer_slot_write_counter.counter -
+                                              *fabric_connection.edm_buffer_local_free_slots_read_ptr;
+                            if (used_slots < fabric_connection.num_buffers_per_channel) {
+                                break;
+                            }
+                        }
+                        WAYPOINT("FWSD");
+                    }
+                    auto wait_end = get_timestamp();
+                    wait_for_slot_benchmark_ptr[sample_idx] = static_cast<uint32_t>(wait_end - wait_start);
+                } else {
+                    // Inlined: fabric_connection.wait_for_empty_write_slot()
+                    {
+                        WAYPOINT("FWSW");
+                        // Inlined: edm_has_space_for_packet<1>()
+                        while (true) {
+                            invalidate_l1_cache();
+                            auto used_slots = fabric_connection.buffer_slot_write_counter.counter -
+                                              *fabric_connection.edm_buffer_local_free_slots_read_ptr;
+                            if (used_slots < fabric_connection.num_buffers_per_channel) {
+                                break;
+                            }
+                        }
+                        WAYPOINT("FWSD");
+                    }
+                }
+                uint64_t buffer_address = get_noc_addr(
+                    fabric_connection.edm_noc_x,
+                    fabric_connection.edm_noc_y,
+                    fabric_connection.edm_buffer_addr,
+                    get_fabric_worker_noc());
+                const uint8_t noc = get_fabric_worker_noc();
+
+                // Track how many writes we issue so we can update counters after timing
+                uint32_t num_writes_issued = 0;
+                uint32_t total_num_dests = 0;
+
+                // FULLY INLINED send_payload_without_header - includes loops and all NOC register writes
+                if (payload_size_bytes > 0) {
+                    if constexpr (measure_send_payload) {
+                        auto payload_start = get_timestamp();
+                        {
+                            // Fully inline ncrisc_noc_fast_write_any_len loop
+                            uint32_t src_addr = send_buffer_address;
+                            uint64_t dest_addr = buffer_address + sizeof(PACKET_HEADER_TYPE);
+                            uint32_t len_bytes = payload_size_bytes;
+                            const uint32_t vc = 0;
+
+                            // Split into NOC_MAX_BURST_SIZE chunks if needed
+                            while (len_bytes > NOC_MAX_BURST_SIZE) {
+                                while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+
+                                // Fully inline ncrisc_noc_fast_write (no counter update)
+                                uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                                         NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CTRL, noc_cmd_field);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+                                NOC_CMD_BUF_WRITE_REG(
+                                    noc,
+                                    write_reg_cmd_buf,
+                                    NOC_RET_ADDR_MID,
+                                    (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+                                NOC_CMD_BUF_WRITE_REG(
+                                    noc,
+                                    write_reg_cmd_buf,
+                                    NOC_RET_ADDR_COORDINATE,
+                                    (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+                                // Skip counter update here - will do batch update after timing
+
+                                num_writes_issued++;
+                                total_num_dests += 1;
+                                src_addr += NOC_MAX_BURST_SIZE;
+                                dest_addr += NOC_MAX_BURST_SIZE;
+                                len_bytes -= NOC_MAX_BURST_SIZE;
+                            }
+
+                            // Final chunk
+                            while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+                            uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                                     NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CTRL, noc_cmd_field);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+                            NOC_CMD_BUF_WRITE_REG(
+                                noc, write_reg_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+                            NOC_CMD_BUF_WRITE_REG(
+                                noc,
+                                write_reg_cmd_buf,
+                                NOC_RET_ADDR_COORDINATE,
+                                (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, len_bytes);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+                            // Skip counter update here
+
+                            num_writes_issued++;
+                            total_num_dests += 1;
+                        }
+                        auto payload_end = get_timestamp();
+                        send_payload_benchmark_ptr[sample_idx] = static_cast<uint32_t>(payload_end - payload_start);
+                    } else {
+                        {
+                            // Same fully inlined code for non-measured path
+                            uint32_t src_addr = send_buffer_address;
+                            uint64_t dest_addr = buffer_address + sizeof(PACKET_HEADER_TYPE);
+                            uint32_t len_bytes = payload_size_bytes;
+                            const uint32_t vc = 0;
+
+                            while (len_bytes > NOC_MAX_BURST_SIZE) {
+                                while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+                                uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                                         NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CTRL, noc_cmd_field);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+                                NOC_CMD_BUF_WRITE_REG(
+                                    noc,
+                                    write_reg_cmd_buf,
+                                    NOC_RET_ADDR_MID,
+                                    (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+                                NOC_CMD_BUF_WRITE_REG(
+                                    noc,
+                                    write_reg_cmd_buf,
+                                    NOC_RET_ADDR_COORDINATE,
+                                    (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+                                NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+                                num_writes_issued++;
+                                total_num_dests += 1;
+                                src_addr += NOC_MAX_BURST_SIZE;
+                                dest_addr += NOC_MAX_BURST_SIZE;
+                                len_bytes -= NOC_MAX_BURST_SIZE;
+                            }
+
+                            while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+                            uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                                     NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CTRL, noc_cmd_field);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+                            NOC_CMD_BUF_WRITE_REG(
+                                noc, write_reg_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+                            NOC_CMD_BUF_WRITE_REG(
+                                noc,
+                                write_reg_cmd_buf,
+                                NOC_RET_ADDR_COORDINATE,
+                                (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, len_bytes);
+                            NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+                            num_writes_issued++;
+                            total_num_dests += 1;
+                        }
+                    }
+                }
+
+                // FULLY INLINED send_payload_flush (header write)
+                if constexpr (measure_send_header) {
+                    auto header_start = get_timestamp();
+                    {
+                        // Header is always small (64 bytes), single packet
+                        while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+
+                        const uint32_t vc = 0;
+                        uint32_t noc_cmd_field =
+                            NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CTRL, noc_cmd_field);
+                        NOC_CMD_BUF_WRITE_REG(
+                            noc, write_reg_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)payload_packet_header);
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)buffer_address);
+                        NOC_CMD_BUF_WRITE_REG(
+                            noc, write_reg_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(buffer_address >> 32) & NOC_PCIE_MASK);
+                        NOC_CMD_BUF_WRITE_REG(
+                            noc,
+                            write_reg_cmd_buf,
+                            NOC_RET_ADDR_COORDINATE,
+                            (uint32_t)(buffer_address >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, sizeof(PACKET_HEADER_TYPE));
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+                        // Skip counter update here
+
+                        num_writes_issued++;
+                        total_num_dests += 1;
+                    }
+
+                    // Inlined: update_edm_buffer_free_slots() - this signal to EDM is still in critical path
+                    __asm__ volatile("# update edm buffer ");
+                    auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+                    const uint64_t noc_sem_addr = get_noc_addr(
+                        fabric_connection.edm_noc_x,
+                        fabric_connection.edm_noc_y,
+                        fabric_connection.edm_buffer_remote_free_slots_update_addr,
+                        noc);
+                    noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
+                    // NOW do bookkeeping BEFORE the EDM signal (which is also critical path)
+                    // Inlined: advance_buffer_slot_write_index()
+                    fabric_connection.buffer_slot_write_counter.counter++;
+                    fabric_connection.buffer_slot_index = BufferIndex{wrap_increment(
+                        fabric_connection.buffer_slot_index.get(), fabric_connection.num_buffers_per_channel)};
+                    fabric_connection.edm_buffer_addr =
+                        fabric_connection.edm_buffer_base_addr +
+                        (fabric_connection.buffer_slot_index.get() * fabric_connection.buffer_size_bytes);
+                    auto header_end = get_timestamp();
+                    send_header_benchmark_ptr[sample_idx] = static_cast<uint32_t>(header_end - header_start);
+                } else {
+                    {
+                        // Same fully inlined header write for non-measured path
+                        while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+
+                        const uint32_t vc = 0;
+                        uint32_t noc_cmd_field =
+                            NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CTRL, noc_cmd_field);
+                        NOC_CMD_BUF_WRITE_REG(
+                            noc, write_reg_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)payload_packet_header);
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)buffer_address);
+                        NOC_CMD_BUF_WRITE_REG(
+                            noc, write_reg_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(buffer_address >> 32) & NOC_PCIE_MASK);
+                        NOC_CMD_BUF_WRITE_REG(
+                            noc,
+                            write_reg_cmd_buf,
+                            NOC_RET_ADDR_COORDINATE,
+                            (uint32_t)(buffer_address >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, sizeof(PACKET_HEADER_TYPE));
+                        NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+                        num_writes_issued++;
+                        total_num_dests += 1;
+                    }
+
+                    // Bookkeeping BEFORE the EDM signal
+                    // Inlined: advance_buffer_slot_write_index()
+                    fabric_connection.buffer_slot_write_counter.counter++;
+                    fabric_connection.buffer_slot_index = BufferIndex{wrap_increment(
+                        fabric_connection.buffer_slot_index.get(), fabric_connection.num_buffers_per_channel)};
+                    fabric_connection.edm_buffer_addr =
+                        fabric_connection.edm_buffer_base_addr +
+                        (fabric_connection.buffer_slot_index.get() * fabric_connection.buffer_size_bytes);
+
+                    // Inlined: update_edm_buffer_free_slots()
+                    __asm__ volatile("# update edm buffer ");
+                    auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+                    const uint64_t noc_sem_addr = get_noc_addr(
+                        fabric_connection.edm_noc_x,
+                        fabric_connection.edm_noc_y,
+                        fabric_connection.edm_buffer_remote_free_slots_update_addr,
+                        noc);
+                    noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
+                }
+
+                // NOW update the bookkeeping counters AFTER all critical timing is done
+                // This moves the counter updates out of the critical path
+                noc_nonposted_writes_num_issued[noc] += num_writes_issued;
+                noc_nonposted_writes_acked[noc] += total_num_dests;
             }
         }
         auto send_end = get_timestamp();

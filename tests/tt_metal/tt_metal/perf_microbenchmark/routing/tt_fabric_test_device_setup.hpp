@@ -380,6 +380,9 @@ public:
     size_t get_latency_send_buffer_address() const;
     size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
     size_t get_latency_send_benchmark_buffer_address() const;
+    size_t get_latency_wait_for_slot_benchmark_buffer_address() const;
+    size_t get_latency_send_payload_benchmark_buffer_address() const;
+    size_t get_latency_send_header_benchmark_buffer_address() const;
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);

@@ -502,6 +502,7 @@ struct WorkerToFabricEdmSenderImpl {
 private:
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
+        __asm__ volatile("# update edm buffer ");
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
                 noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
@@ -574,7 +575,6 @@ private:
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
-
         // skip past the first part of the buffer which will be occupied by the packet header
         send_chunk_from_address<blocking_mode>(
             source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
