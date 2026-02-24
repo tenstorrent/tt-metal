@@ -388,6 +388,26 @@ def test_kv_cache_dram_shard(device, position_id):
         tile=rope_input_tile,
     )
 
+    # pass in address of position_id tensor
+    grid_size = device.compute_with_storage_grid_size()
+    position_ids = torch.ones(1, dtype=torch.int32) * position_id
+    position_replicated = torch.full((grid_size.x * grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=pos_mem_config,
+    )
+
     # Create TTNN input tensor with WIDTH_SHARDED memory and tiny tile
     ttnn_output = ttnn.from_torch(
         torch_nope_cache,
@@ -439,7 +459,7 @@ def test_kv_cache_dram_shard(device, position_id):
         memory_config=kv_mem_config,
     )
 
-    _ = KVCacheUpdate.op(ttnn_nope_cache, ttnn_rope_cache, ttnn_kv_cache, ttnn_output, position_id)
+    _ = KVCacheUpdate.op(ttnn_nope_cache, ttnn_rope_cache, ttnn_kv_cache, ttnn_position_ids, output_tensor=ttnn_output)
 
     torch_kv_cache_output = ttnn.to_torch(ttnn_kv_cache)
     compare_kv_cache = torch_kv_cache_output[:, :, position_id]

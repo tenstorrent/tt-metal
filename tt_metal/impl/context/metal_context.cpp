@@ -42,6 +42,7 @@
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
+#include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -229,6 +230,7 @@ void MetalContext::initialize(
     }
 
     if (rtoptions_.get_profiler_enabled()) {
+        TT_FATAL(cluster_->arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
@@ -402,6 +404,7 @@ void MetalContext::teardown() {
     // Deinitialize inspector
     inspector_data_.reset();
 
+    system_mesh_.reset();
     control_plane_.reset();
 
     noc_debug_state_.reset();
@@ -534,6 +537,7 @@ void MetalContext::reinitialize_for_real_hardware() {
 
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    system_mesh_.reset();
     control_plane_.reset();
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
@@ -774,6 +778,17 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     return *control_plane_;
 }
 
+distributed::SystemMesh& MetalContext::get_system_mesh() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    if (!system_mesh_) {
+        if (!control_plane_) {
+            this->initialize_control_plane_impl();
+        }
+        system_mesh_ = std::unique_ptr<distributed::SystemMesh>(new distributed::SystemMesh(*control_plane_));
+    }
+    return *system_mesh_;
+}
+
 void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
@@ -790,7 +805,8 @@ void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
         !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
-    // Reset the control plane, since it was initialized with custom parameters.
+    // Reset the system mesh and control plane, since they were initialized with custom parameters.
+    system_mesh_.reset();
     control_plane_.reset();
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
@@ -897,6 +913,7 @@ void MetalContext::set_fabric_config(
             "Fabric config changed from {} to {}, reinitializing control plane",
             this->get_control_plane().get_fabric_config(),
             this->fabric_config_);
+        system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
 }
