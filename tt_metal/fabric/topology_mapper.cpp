@@ -1147,8 +1147,7 @@ std::optional<MeshHostRankId> TopologyMapper::get_local_host_rank(MeshId mesh_id
             first = false;
             ranks_str += std::to_string(rank.get());
         }
-        TT_FATAL(
-            false,
+        TT_THROW(
             "TopologyMapper: Inconsistent host ranks found for mesh {} on host {}. "
             "All fabric nodes on the same host must have the same mesh host rank. Found ranks: [{}]",
             mesh_id.get(),

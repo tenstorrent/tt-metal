@@ -2735,6 +2735,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
 
     // Build logical graph: 2x2 grid
     std::vector<FabricNodeId> logical_nodes;
+    logical_nodes.reserve(kNumNodes);
     for (uint32_t i = 0; i < kNumNodes; ++i) {
         logical_nodes.push_back(FabricNodeId(mesh_id, i));
     }
