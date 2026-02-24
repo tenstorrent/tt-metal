@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -12,6 +13,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
+from models.common.sampling.generator import SamplingGenerator, format_sampling_params
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
@@ -26,6 +28,19 @@ from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 MAX_SEQ_LEN = 2048
+
+
+@dataclass(frozen=True)
+class SamplingModuleArgs:
+    vocab_size: int
+    padded_vocab_size: int
+    max_top_k: int
+    cluster_shape: tuple[int, int]
+    sampling_cluster_axis: int = 0
+    sub_core_grids: ttnn.CoreRangeSet | None = None
+    sub_core_grid_topk: ttnn.CoreRangeSet | None = None
+    start_core: ttnn.CoreCoord = field(default_factory=lambda: ttnn.CoreCoord(0, 0))
+    model_config: dict = field(default_factory=dict)
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -126,6 +141,19 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.ccl = CCL(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
+        self.sampling_args = SamplingModuleArgs(
+            vocab_size=self.hf_config.vocab_size,
+            padded_vocab_size=self.hf_config.vocab_size,
+            max_top_k=32,
+            cluster_shape=tuple(mesh_shape),
+            sampling_cluster_axis=1,
+        )
+        self.sampling = SamplingGenerator(
+            args=self.sampling_args,
+            mesh_device=self.mesh_device,
+            tt_ccl=self.ccl,
+        )
+
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
         # Paged attention setup
@@ -151,6 +179,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._trace_tokens: ttnn.Tensor | None = None
         self._trace_positions: ttnn.Tensor | None = None
         self._trace_rot_idxs: ttnn.Tensor | None = None
+        self._trace_logits: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
         self._trace_page_tables_to_use: tuple[ttnn.Tensor, ...] | None = None
         self.enable_trace = enable_trace
@@ -414,7 +443,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
-        assert tokens_step.dim() == 1
+        assert tokens_step.dim() == 1, f"Expected 1D tensor, got shape {tokens_step.shape}"
         x = tokens_step.view(1, 1, -1).to(torch.int32)
         return ttnn.from_torch(
             x,
@@ -424,6 +453,93 @@ class DeepseekGenerator(WarmupForwardMixin):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+
+    def _reset_sampling_state(self, sampling: SamplingParams, num_of_prompts: int) -> SamplingParams:
+        sampling = format_sampling_params(sampling, self.batch_size_per_row)
+        self.sampling.reset_sampling_params(sampling)
+        # self.sampling.reset_prompt_tokens(prefill_ids)
+        self.sampling.reset_output_state()
+        # self.sampling.reset_seed(sampling.seed)
+        # self.sampling.seed_manager.reset_seed(sampling.seed, list(range(num_of_prompts)))
+        # self.sampling.seed_manager.get_new_values(list(range(num_of_prompts)))
+        return sampling
+
+    def _sample_tokens_device(
+        self, logits: ttnn.Tensor, tt_out_tok: ttnn.Tensor | None = None, enable_trace: bool = False
+    ) -> ttnn.Tensor:
+        tt_out = self.sampling.sample(logits, enable_trace=enable_trace, tt_out_tok=tt_out_tok)
+        if isinstance(tt_out, tuple):
+            tt_tokens, tt_log_probs = tt_out
+            if tt_log_probs is not None:
+                ttnn.deallocate(tt_log_probs)
+            tt_out = tt_tokens
+        return tt_out
+
+    def _tokens_from_device(self, tt_tokens: ttnn.Tensor, batch_size: int) -> torch.Tensor:
+        mesh_shape = tuple(self.mesh_device.shape)
+        composed = ttnn.to_torch(
+            tt_tokens,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, -1), mesh_shape=mesh_shape),
+        )
+        if composed.ndim == 4:
+            if tt_tokens.shape[-2] == self.batch_size_per_row:
+                tokens = composed[:, :, :, 0]
+            elif tt_tokens.shape[-1] == self.batch_size_per_row:
+                tokens = composed[:, :, 0, : self.batch_size_per_row]
+            else:
+                tokens = composed
+            tokens = tokens.reshape(-1)
+        else:
+            tokens = composed.reshape(-1)
+        return tokens[:batch_size]
+
+    def _normalize_sampled_tokens(self, tt_tokens: ttnn.Tensor) -> ttnn.Tensor:
+        if len(tt_tokens.shape) == 4 and tt_tokens.shape[-1] == 1:
+            return ttnn.reshape(tt_tokens, [1, 1, tt_tokens.shape[-2]])
+        if len(tt_tokens.shape) == 4 and tt_tokens.shape[-2] == 1:
+            return ttnn.reshape(tt_tokens, [1, 1, tt_tokens.shape[-1]])
+        return tt_tokens
+
+    def _reset_decode_trace_state(self) -> None:
+        if self._trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._trace_id)
+        for tensor in (self._trace_tokens, self._trace_positions, self._trace_rot_idxs, self._trace_logits):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+        self._trace_id = None
+        self._trace_tokens = None
+        self._trace_positions = None
+        self._trace_rot_idxs = None
+        self._trace_logits = None
+        self._trace_output = None
+
+    def _reset_trace_inputs(self, tokens: torch.Tensor, positions: torch.Tensor) -> None:
+        assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_rot_idxs is not None
+        torch_input = tokens.view(1, 1, -1).to(torch.int32)
+        host_tokens = ttnn.from_torch(
+            torch_input,
+            device=None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
+
+        host_positions = ttnn.from_torch(
+            positions,
+            device=None,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            dtype=ttnn.int32,
+        )
+        ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
+
+        host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs)
+
+    def _increment_decode_positions_device(self) -> None:
+        ttnn.plus_one(self._trace_positions, skip_negative_entries=True)
+        ttnn.plus_one(self._trace_rot_idxs)
 
     def _tt_from_positions(self, positions: torch.Tensor) -> Tuple[dict, ttnn.Tensor]:
         """Return rope tensors dict and TTNN positions shard for decode.
@@ -452,7 +568,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
         return rope_tensors, tt_positions
 
-    def _get_page_tables(self) -> tuple[ttnn.Tensor, ...]:
+    def _get_page_tables(self) -> ttnn.Tensor | Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return page tables as TTNN tensor or tuple of TTNN tensors [1, 1, B, N]."""
         if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
             return self.page_tables_tt
 
@@ -518,19 +635,51 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_tables=page_tables_to_use,
             profile_decode=self.profile_decode,
         )
-        # Gather to host
-        logits = ttnn.to_torch(
-            logits_tt,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
-        )
+
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
 
-        return logits  # [1, 1, B, V]
+        return logits_tt  # [1, 1, B, V]
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
+
+    def _decode_step_tt(
+        self,
+        tt_tokens: ttnn.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        page_table: torch.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Run a single decode step using device tokens and return logits on device."""
+        # Get rot_idxs from positions (this uses ttnn.as_tensor, which is like from_torch)
+        rot_idxs = self.rope_setup.get_rot_idxs(positions)
+
+        # Generate rotation matrices from rot_idxs (all ttnn ops)
+        rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(rot_idxs)
+
+        # Create TTNN position tensor
+        tt_positions = ttnn.from_torch(
+            positions,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            dtype=ttnn.int32,
+        )
+
+        if page_table is not None:
+            page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table)
+        else:
+            page_tables_to_use = self._get_page_tables()
+
+        logits_tt = RowBatchedModel.forward_decode(
+            tt_tokens,
+            tt_positions,
+            self.model_run_config_decode,
+            rope_tensors,
+            page_tables=page_tables_to_use,
+        )
+        return logits_tt
 
     def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Pad/pack a list of token id sequences to batch of size batch_size.
@@ -543,6 +692,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         max_len = max(len(t) for t in tokens_list)
         if self.prefill_max_tokens is not None:
             max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
+            logger.info(f"Truncating sequences to {max_len} tokens")
         # Round up to nearest multiple of TILE_SIZE
         max_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
@@ -621,6 +771,14 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
 
+        if sampling is None:
+            # Default to greedy decode when caller does not provide sampling params.
+            sampling = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+        sampling = self._reset_sampling_state(sampling, num_of_prompts)
+        if self.enable_trace and teacher_forcing is not None:
+            logger.warning("Teacher forcing is disabled when enable_trace=True.")
+            teacher_forcing = None
+
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
             # Reset teacher-forcing state per batch.
@@ -641,11 +799,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if self.signpost:
                     signpost(header="prefill")
                 profiler.start("inference_prefill")
-                last_logits = []
+                last_tokens = []
                 for user_id in range(num_of_users):
                     if lengths[user_id] == 0:
                         logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
-                        last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                        pad_token = self.tokenizer.pad_token_id if self.tokenizer is not None else 0
+                        last_tokens.append(torch.tensor(pad_token, dtype=torch.int64))
                         continue
                     logger.info(f"Running prefill for user_id: {user_id}")
                     prompt_len = int(lengths[user_id].item())
@@ -660,24 +819,32 @@ class DeepseekGenerator(WarmupForwardMixin):
                             else str(tokens_batched[user_id][:prompt_len].tolist())
                         )
                     )
-                    user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
-                    # Use logits at the *actual* last prompt token (not the padded tail).
-                    last_logits.append(user_out[0, 0, prompt_len - 1, :])
+                    prefill_logits = self._prefill(tokens_batched[user_id], user_id=user_id, return_logits=True)
+                    assert prefill_logits is not None
+                    last_logits = self._slice_last_token_logits(prefill_logits, prompt_len)
+                    last_logits = self._expand_prefill_logits(last_logits)
+                    tt_pred = self._sample_tokens_device(last_logits)
+                    host_pred = self._tokens_from_device(tt_pred, batch_size=1)
+                    pred_token = host_pred[0]
+                    ttnn.deallocate(last_logits)
+                    ttnn.deallocate(tt_pred)
+                    ttnn.deallocate(prefill_logits)
+                    last_tokens.append(pred_token)
                     self.ccl.reset_sem_counters()
-                last_logits = torch.stack(last_logits)
+                last_tokens = torch.stack(last_tokens)
                 profiler.end("inference_prefill")
                 if self.signpost:
                     signpost(header="prefill")
+                ttnn.ReadDeviceProfiler(self.mesh_device)
 
             if not self.profile_decode:
-                assert len(last_logits) == num_of_users
+                assert len(last_tokens) == num_of_users
 
             logger.info(
                 f"Finished prefill for all users..."
                 if not self.profile_decode
                 else "Skipped prefill, starting decode..."
             )
-
             generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
             if max_new_tokens <= 0:
                 logger.info("max_new_tokens <= 0, skipping decode loop.")
@@ -691,11 +858,16 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if self.profile_decode:
                     next_tokens = next_tokens_override
                 else:
-                    next_tokens = self._sample_greedy(last_logits)
+                    next_tokens = last_tokens
                 if teacher_forcing is not None:
                     # Record user-0 prediction for accuracy, but force teacher token for alignment.
                     forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
                     next_tokens[0] = int(forced0)
+
+                # Non-trace decode path consumes device-resident tokens.
+                tt_next_tokens = None
+                if not self.enable_trace:
+                    tt_next_tokens = self._tt_from_tokens_step(next_tokens)
 
                 # Positions for the first generated token are the prompt lengths
                 positions = lengths.clone()
@@ -713,35 +885,75 @@ class DeepseekGenerator(WarmupForwardMixin):
                 # Generate remaining tokens with decode (each decode call produces the next token)
                 decode_steps = max_new_tokens - 1
                 profiler.start("inference_decode")
+                read_events = []
+                tt_out_toks_cpu = []
+                trace_exec_offset = 1
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
-                    logits = self.decode_forward(
-                        tokens=next_tokens,
-                        start_pos=positions,
-                        batch_size_per_row=self.batch_size_per_row,
-                        profiler=profiler,
-                        gen_idx=gen_idx,
-                        enable_trace=self.enable_trace,
-                    )
+                    if self.enable_trace:
+                        logits = self.decode_forward(
+                            next_tokens,
+                            positions,
+                            self.batch_size_per_row,
+                            profiler,
+                            gen_idx,
+                            enable_trace=True,
+                        )
+                        tt_next_tokens = self._sample_tokens_device(
+                            logits, tt_out_tok=self._trace_tokens, enable_trace=True
+                        )
+                    else:
+                        logits = self.decode_forward_tt(
+                            tt_next_tokens,
+                            positions,
+                            self.batch_size_per_row,
+                            enable_trace=False,
+                        )
                     profiler.end(f"decode_time_{gen_idx}")
                     self.ccl.reset_sem_counters()
-                    pred_tokens = self._sample_greedy(logits)
-                    if teacher_forcing is not None:
-                        # Record user-0 prediction for accuracy, then force teacher token.
-                        forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                        pred_tokens[0] = int(forced)
-                    next_tokens = pred_tokens
-                    positions += 1
-
-                    for i in range(num_of_prompts):
-                        token_value = int(next_tokens[i].item())
-                        generations[i].append(token_value)
-                        if early_print_first_user and i == 0:
-                            if self.tokenizer is not None:
+                    if self.enable_trace:
+                        tt_out_toks_cpu.append(tt_next_tokens.cpu(blocking=False, cq_id=0))
+                        read_events.append(ttnn.record_event(self.mesh_device, 0))
+                        ready_idx = gen_idx - trace_exec_offset
+                        if ready_idx >= 0:
+                            ttnn.event_synchronize(read_events[ready_idx])
+                            tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[ready_idx])[0])
+                            pred_tokens = tt_output_torch.reshape(-1)[: self.batch_size]
+                            for i in range(num_of_prompts):
+                                token_value = int(pred_tokens[i].item())
+                                generations[i].append(token_value)
+                                if early_print_first_user and i == 0:
+                                    print(
+                                        self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True
+                                    )
+                    else:
+                        self._sample_tokens_device(logits, tt_out_tok=tt_next_tokens)
+                        ttnn.deallocate(logits)
+                        pred_tokens = self._tokens_from_device(tt_next_tokens, self.batch_size)
+                        if teacher_forcing is not None:
+                            forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
+                            pred_tokens[0] = int(forced)
+                            ttnn.deallocate(tt_next_tokens)
+                            tt_next_tokens = self._tt_from_tokens_step(pred_tokens)
+                        next_tokens = pred_tokens
+                        positions += 1
+                        for i in range(num_of_prompts):
+                            token_value = int(pred_tokens[i].item())
+                            generations[i].append(token_value)
+                            if early_print_first_user and i == 0:
                                 print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
-                            else:
-                                print(f"{token_value} ", end="", flush=True)
+
+                if self.enable_trace:
+                    for trailing_idx in range(max(0, max_new_tokens - trace_exec_offset), max_new_tokens):
+                        ttnn.event_synchronize(read_events[trailing_idx])
+                        tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[trailing_idx])[0])
+                        pred_tokens = tt_output_torch.reshape(-1)[: self.batch_size]
+                        for i in range(num_of_prompts):
+                            token_value = int(pred_tokens[i].item())
+                            generations[i].append(token_value)
+                            if early_print_first_user and i == 0:
+                                print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
 
                 profiler.end("inference_decode")
 
@@ -833,8 +1045,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         user_id: int,
         page_table: torch.Tensor | None = None,
         local_user_id: int | None = None,
-    ) -> torch.Tensor:
-        """Run prefill for the full prompt sequence and return logits for the last position.
+        return_logits: bool = False,
+    ) -> ttnn.Tensor | None:
+        """Run prefill for the full prompt sequence to populate caches.
 
         Args:
             tokens: [1, 1, seq_len] padded token sequences
@@ -842,7 +1055,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             local_user_id: local user id for page table lookup
 
         Returns:
-            logits: [1, 1, seq_len, V] logits for the full sequence
+            logits tensor if return_logits is True, otherwise None
         """
 
         tokens = tokens.view(1, 1, -1)
@@ -878,7 +1091,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_tables_to_use = self._get_page_tables()
 
         # RowBatchedModel forward prefill
-        logits_tt = RowBatchedModel.forward_prefill(
+        out_tt = RowBatchedModel.forward_prefill(
             x=tt_tokens,
             user_id=user_id,
             cfg=self.model_run_config_prefill,
@@ -886,16 +1099,52 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_tables=page_tables_to_use,
         )
 
-        # Gather to host
-        logits = ttnn.to_torch(
-            logits_tt,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        ttnn.deallocate(tt_tokens)
+        if return_logits:
+            return out_tt
+        ttnn.deallocate(out_tt)
+        return None
+
+    def _slice_last_token_logits(self, logits: ttnn.Tensor, prompt_len: int) -> ttnn.Tensor:
+        last_idx = max(prompt_len - 1, 0)
+        shard_len = logits.shape[2]
+        local_idx = last_idx % shard_len
+        row_idx = last_idx // shard_len
+
+        last_logits = ttnn.slice(
+            logits,
+            [0, 0, local_idx, 0],
+            [1, 1, local_idx + 1, logits.shape[-1]],
         )
 
-        # Free device tensors for this step
-        ttnn.deallocate(tt_tokens)
-        ttnn.deallocate(logits_tt)
-        return logits  # [1, 1, seq_len, V]
+        if self.mesh_device.shape[0] > 1:
+            gather_cfg = self.ccl.populate_all_gather_runtime_args(
+                {
+                    "cluster_axis": 0,
+                    "dim": 2,
+                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "topology": ttnn.Topology.Linear,
+                }
+            )
+            gathered = ttnn.experimental.all_gather_async(last_logits, **gather_cfg)
+            ttnn.deallocate(last_logits)
+            last_logits = ttnn.slice(
+                gathered,
+                [0, 0, row_idx, 0],
+                [1, 1, row_idx + 1, gathered.shape[-1]],
+            )
+            ttnn.deallocate(gathered)
+
+        return last_logits
+
+    def _expand_prefill_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        if logits.shape[2] == self.batch_size_per_row:
+            return logits
+        if logits.shape[2] == 1:
+            expanded = ttnn.repeat(logits, (1, 1, self.batch_size_per_row, 1))
+            ttnn.deallocate(logits)
+            return expanded
+        return logits
 
     def _capture_decode_trace(
         self,
@@ -907,16 +1156,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
         assert self._trace_id is None, "Trace already captured"
 
-        # 1) Warm-up compile run (no trace) to keep compilation out of capture
-        logger.info("Running warm-up decode step (no trace)...")
-        if self.signpost:
-            signpost(header="decode_warmup")
-        _ = self._decode_step(init_tokens, positions, batch_size_per_row=batch_size_per_row, page_tables=page_tables)
-        ttnn.synchronize_device(self.mesh_device)
-        if self.signpost:
-            signpost(header="decode_warmup")
-
-        # 2) Allocate persistent device inputs
+        # 1) Allocate persistent device inputs
         self._trace_tokens = self._tt_from_tokens_step(init_tokens)
         self._trace_positions = ttnn.from_torch(
             positions,
@@ -935,7 +1175,24 @@ class DeepseekGenerator(WarmupForwardMixin):
             self._trace_page_tables_to_use = self._get_page_tables()
         ttnn.synchronize_device(self.mesh_device)
 
+        # 2) Warm-up compile run (no trace) using persistent buffers
+        logger.info("Running warm-up decode step (no trace)...")
+        self._reset_trace_inputs(init_tokens, positions)
+        warmup_rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._trace_rot_idxs)
+        warmup_logits = RowBatchedModel.forward_decode(
+            x=self._trace_tokens,
+            position_idxs=self._trace_positions,
+            cfg=self.model_run_config_decode,
+            rope_tensors=warmup_rope_tensors,
+            page_tables=self.page_tables_tt,
+        )
+        self._increment_decode_positions_device()
+        _ = self.sampling.sample(warmup_logits, enable_trace=False, tt_out_tok=self._trace_tokens)
+        ttnn.deallocate(warmup_logits)
+        ttnn.synchronize_device(self.mesh_device)
+
         # 3) Capture decode graph
+        self._reset_trace_inputs(init_tokens, positions)
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
         if self.signpost:
@@ -944,7 +1201,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         # Only capture the rot_mats generation from rot_idxs (all ttnn ops, no from_torch)
         rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._trace_rot_idxs)
-        self._trace_output = RowBatchedModel.forward_decode(
+        logits = RowBatchedModel.forward_decode(
             x=self._trace_tokens,
             position_idxs=self._trace_positions,
             cfg=self.model_run_config_decode,
@@ -952,6 +1209,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_tables=self._trace_page_tables_to_use,
             profile_decode=self.profile_decode,
         )
+        self._trace_logits = logits
+        self._increment_decode_positions_device()
+        self._trace_output = logits
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         if self.signpost:
             signpost(header="decode_trace_capture")
@@ -970,25 +1230,20 @@ class DeepseekGenerator(WarmupForwardMixin):
         kv_cache: None = None,
         read_from_device: bool = None,
         sampling_params: SamplingParams = None,
-    ) -> torch.Tensor:
+    ) -> ttnn.Tensor:
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
         if not enable_trace:
-            return self._decode_step(tokens, start_pos, batch_size_per_row, page_table).squeeze(0).squeeze(0)
+            # _decode_step returns logits on device
+            return self._decode_step(tokens, start_pos, batch_size_per_row)
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
                 self._capture_decode_trace(tokens, start_pos, batch_size_per_row, page_table)
-                # First call: return the captured run's output
+                # First call: return the captured run's output (logits)
                 assert self._trace_output is not None
-                logits = ttnn.to_torch(
-                    self._trace_output,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
-                    ),
-                )
-                return logits.squeeze(0).squeeze(0)
+                return self._trace_output
 
             # Update persistent inputs and execute
             assert (
@@ -998,33 +1253,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                 and self._trace_id is not None
                 and self._trace_page_tables_to_use is not None
             )
-            torch_input = tokens.view(1, 1, -1).to(torch.int32)
 
-            if self.signpost:
-                signpost(header="decode_execute_trace")
-
-            host_tokens = ttnn.from_torch(
-                torch_input,
-                device=None,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=ttnn.uint32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-
-            ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
-
-            host_positions = ttnn.from_torch(
-                start_pos,
-                device=None,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-                dtype=ttnn.int32,
-            )
-
-            ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
-
-            host_rot_idxs = self.rope_setup.get_rot_idxs(start_pos, on_host=True)
-            ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs)
+            if gen_idx == 0:
+                self._reset_trace_inputs(tokens, start_pos)
 
             if page_table is not None:
                 page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table, device=None)
@@ -1032,6 +1263,8 @@ class DeepseekGenerator(WarmupForwardMixin):
                     ttnn.copy_host_to_device_tensor(page_table, self._trace_page_tables_to_use[i])
 
             self.ccl.reset_sem_counters()
+            if self.signpost:
+                signpost(header="decode_execute_trace")
             if profiler is not None:
                 profiler.start(f"trace_execution_{gen_idx}")
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
@@ -1041,18 +1274,13 @@ class DeepseekGenerator(WarmupForwardMixin):
                     f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
                 )
             assert self._trace_output is not None
-            logits = ttnn.to_torch(
-                self._trace_output,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
-                ),
-            )
+
             if self.signpost:
                 signpost(header="decode_execute_trace")
             if self.profile_decode:
                 # trigger the profiler to read the device side data each iteration to not miss any data
                 ttnn.ReadDeviceProfiler(self.mesh_device)
-            return logits.squeeze(0).squeeze(0)
+            return self._trace_output
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
@@ -1104,6 +1332,17 @@ class DeepseekGenerator(WarmupForwardMixin):
             logger.warning(
                 f"set_kv_cache: More kv_cache entries provided ({len(kv_cache_list)}) than decoder blocks ({cache_idx})"
             )
+
+    def decode_forward_tt(
+        self,
+        tt_tokens: ttnn.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        enable_trace: bool = False,
+    ) -> ttnn.Tensor:
+        if enable_trace:
+            raise NotImplementedError("Trace mode uses host token updates; call decode_forward instead.")
+        return self._decode_step_tt(tt_tokens, positions, batch_size_per_row)
 
     def _convert_vllm_page_table_for_user(
         self, page_table: torch.Tensor, user_id: int, local_user_id: int | None = None

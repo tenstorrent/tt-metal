@@ -649,6 +649,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             in_dim=1,
             out_dim=2,
+            # memory_config=ttnn.L1_MEMORY_CONFIG, # Pratik ??
         )
 
         # WO
