@@ -142,8 +142,12 @@ class PreSDPA:
         return full_q, new_kv, output
 
     @staticmethod
+    def get_num_semaphores(skip_ccl=False):
+        return 10 if skip_ccl else 13
+
+    @staticmethod
     def create_semaphores(mesh_device, skip_ccl=False):
-        num_semaphores = 11 if skip_ccl else 14
+        num_semaphores = PreSDPA.get_num_semaphores(skip_ccl)
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         available_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
@@ -243,7 +247,7 @@ class PreSDPA:
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
 
-        assert semaphores is not None and len(semaphores) == (11 if skip_ccl else 14)
+        assert semaphores is not None and len(semaphores) == PreSDPA.get_num_semaphores(skip_ccl)
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
@@ -516,8 +520,6 @@ class PreSDPA:
 
         # Semaphore IDs for MLA
         mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
-        semaphore_index += 1
-        mla_output_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
         semaphore_index += 1
         mla_mcast_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
         semaphore_index += 1

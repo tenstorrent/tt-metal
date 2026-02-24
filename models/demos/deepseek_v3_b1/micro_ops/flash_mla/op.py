@@ -598,12 +598,11 @@ class FlashMLADecode:
         # Semaphore IDs
         # =========================================================================
         reducer_semaphore_id = 0
-        output_semaphore_id = 1
-        mcast_semaphore_id = 2
-        ncrisc_brisc_sync_semaphore_id = 3
-        receiver_ready_semaphore_id = 4
-        q_input_mcast_semaphore_id = 5
-        kv_cache_cur_pos_ready_semaphore_id = 6
+        mcast_semaphore_id = 1
+        ncrisc_brisc_sync_semaphore_id = 2
+        receiver_ready_semaphore_id = 3
+        q_input_mcast_semaphore_id = 4
+        kv_cache_cur_pos_ready_semaphore_id = 5
 
         # Value to wait on for KV cache cur pos, this is based on the number of cores that increment in the fused sdpa
         kv_cache_cur_pos_ready_value = 3
@@ -780,7 +779,6 @@ class FlashMLADecode:
 
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(reducer_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # reducer_semaphore
-            ttnn.SemaphoreDescriptor(output_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # output_semaphore
             ttnn.SemaphoreDescriptor(
                 mcast_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
             ),  # mcast_semaphore for KV cache
