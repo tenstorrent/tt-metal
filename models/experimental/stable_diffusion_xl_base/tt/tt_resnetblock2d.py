@@ -162,7 +162,6 @@ class TtResnetBlock2D(LightweightModule):
             **self.groupnorm_config_1,
         )
 
-        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
