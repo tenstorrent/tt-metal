@@ -29,7 +29,7 @@ def test_perf_device_bare_metal_swin_l():
     subdir = "ttnn_swin_l_backbone_800x1333"
     num_iterations = 1
 
-    command = "pytest models/experimental/swin_l/tests/pcc/test_ttnn_backbone.py" "::test_ttnn_swin_l_backbone_e2e -sv"
+    command = "pytest --timeout=900 models/experimental/swin_l/tests/pcc/test_ttnn_backbone.py::test_ttnn_swin_l_backbone_e2e -sv"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
