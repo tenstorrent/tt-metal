@@ -36,31 +36,10 @@ constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
 #define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) y
 #define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_NODE_ID)
 
-// Not used as DYNAMIC_NOC is not supported on Quasar but we have to keep it
-// Because the compilation can fail in dataflow_cmd_bufs.h
-constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = 2;  // all writes share cmd buf
-constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF = 2;
-constexpr uint32_t DYNAMIC_NOC_NCRISC_AT_CMD_BUF = 3;
-constexpr uint32_t DYNAMIC_NOC_NCRISC_RD_CMD_BUF = 3;
-constexpr uint32_t DYNAMIC_NOC_BRISC_WR_CMD_BUF = 0;  // all writes share cmd buf
-constexpr uint32_t DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF = 0;
-constexpr uint32_t DYNAMIC_NOC_BRISC_AT_CMD_BUF = 1;
-constexpr uint32_t DYNAMIC_NOC_BRISC_RD_CMD_BUF = 1;
-// End of not used code
-
+// Quasar overlay command buffer indices (3 buffers: write, read, atomic)
 #define OVERLAY_WR_CMD_BUF 0
 #define OVERLAY_RD_CMD_BUF 1
 #define OVERLAY_AT_CMD_BUF 2
-
-constexpr uint32_t NCRISC_WR_CMD_BUF = 0;      // for large writes
-constexpr uint32_t NCRISC_RD_CMD_BUF = 1;      // for all reads
-constexpr uint32_t NCRISC_WR_REG_CMD_BUF = 0;  // for small writes (e.g., registers, semaphores)
-constexpr uint32_t NCRISC_AT_CMD_BUF = 2;      // (simple CMD buff) for atomics
-
-constexpr uint32_t BRISC_WR_CMD_BUF = 0;      // for large writes
-constexpr uint32_t BRISC_RD_CMD_BUF = 1;      // for all reads
-constexpr uint32_t BRISC_WR_REG_CMD_BUF = 0;  // for small writes (e.g., registers, semaphores)
-constexpr uint32_t BRISC_AT_CMD_BUF = 2;      // for atomics
 
 /* Qsr has 64 bit addresses, use same encoding as BH and WH */
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 36;
