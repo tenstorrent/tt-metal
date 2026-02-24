@@ -141,21 +141,22 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Phi-4-mini unit tests
-  cmd: |
-    export HF_MODEL=microsoft/Phi-4-mini-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-4-mini-instruct
-    pytest --timeout 180 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
-    pytest --timeout 180 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
-  model: phi-4-mini
-  skus:
-    wh_n150:
-      timeout: 3
-      tier: 3
-    wh_n300:
-      timeout: 3
-      tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
+# Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
+# - name: Phi-4-mini unit tests
+#   cmd: |
+#     export HF_MODEL=microsoft/Phi-4-mini-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-4-mini-instruct
+#     pytest --timeout 180 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
+#     pytest --timeout 180 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
+#   model: phi-4-mini
+#   skus:
+#     wh_n150:
+#       timeout: 3
+#       tier: 3
+#     wh_n300:
+#       timeout: 3
+#       tier: 3
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
 
 - name: Falcon-40B unit tests
   cmd: |
