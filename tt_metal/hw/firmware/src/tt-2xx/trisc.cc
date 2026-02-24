@@ -12,6 +12,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 #include "internal/debug/fw_debug.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "internal/debug/stack_usage.h"
@@ -96,10 +97,7 @@ void init_sync_registers() {
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    std::uint64_t hartid;
-    std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
-    std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    hartid = 8 + 4 * neo_id + trisc_id;  // after 8 DM cores
+    uint32_t hartid = internal_::get_hw_thread_idx();
     DPRINT << "hartid: " << hartid << ENDL();
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC

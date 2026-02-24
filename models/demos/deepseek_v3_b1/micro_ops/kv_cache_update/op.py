@@ -39,8 +39,8 @@ class KVCacheUpdate:
         nope_cache_tensor,
         rope_cache_tensor,
         full_kv_cache_tensor,
+        position_ids_tensor: ttnn.Tensor,
         output_tensor,  # not used
-        position_id: int,
     ):
         """
         Run KV cache update as a standalone program.
@@ -63,6 +63,15 @@ class KVCacheUpdate:
         ncrisc_compile_time_args = tensor_accessor_args.get_compile_time_args()
         brisc_compile_time_args = tensor_accessor_args.get_compile_time_args()
 
+        device = full_kv_cache_tensor.device()
+        device_grid_size = device.compute_with_storage_grid_size()
+        full_device_grid = ttnn.CoreRange(
+            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1)
+        )
+        full_grid_mcast_start_core = device.worker_core_from_logical_core(full_device_grid.start)
+        full_grid_mcast_end_core = device.worker_core_from_logical_core(full_device_grid.end)
+        full_grid_mcast_num_dests = full_device_grid.grid_size().x * full_device_grid.grid_size().y
+
         # CB indices and krope_Wt passed as named compile-time args; kernel uses get_named_compile_time_arg_val
         ncrisc_named = [
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
@@ -75,6 +84,12 @@ class KVCacheUpdate:
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
             ("krope_output_cb", KROPE_OUTPUT_CB),
             ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
+            ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
+            ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
+            ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
+            ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
+            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests),
+            ("kv_cache_cur_pos_ready_semaphore_id", 0),
         ]
         trisc_named = [
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
@@ -130,8 +145,15 @@ class KVCacheUpdate:
             ),
         ]
 
+        # not used in unit test, but needed for fused sdpa to wait on kv cache update
+        mla_kv_cache_cur_pos_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=0,
+            core_ranges=kv_cache_core_grid,
+            initial_value=0,
+        )
+        pos_addr = position_ids_tensor.buffer_address()
         ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address()]
-        brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), position_id]
+        brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
 
         kernel_desc = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/kv_cache_update/kernels/kv_cache_update_kernel.cpp",
@@ -157,13 +179,15 @@ class KVCacheUpdate:
                     other_value=0,
                 ),
             ],
+            #  noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         )
         kernel_result = kernel_desc.get_kernel_descriptors()
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=kernel_result.kernels,
             cbs=cbs,
+            semaphores=[mla_kv_cache_cur_pos_ready_semaphore_descriptor],
         )
-        io_tensors = [nope_cache_tensor, rope_cache_tensor, output_tensor]
+        io_tensors = [nope_cache_tensor, rope_cache_tensor, position_ids_tensor, output_tensor]
 
         output = ttnn.generic_op(io_tensors, program_descriptor)
 
