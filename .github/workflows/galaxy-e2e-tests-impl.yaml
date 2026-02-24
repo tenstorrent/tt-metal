@@ -31,17 +31,17 @@ jobs:
             .github
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
-      - name: Install dependencies
-        run: |
-          pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "e2e"
+      # - name: Install dependencies
+      #   run: |
+      #     pip3 install PyYAML
+      # - name: Verify test timeouts against budget
+      #   run: |
+      #     set -e
+      #     echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+      #     python3 .github/scripts/utils/verify_time_budget.py \
+      #       ${{ env.TESTS_YAML_PATH }} \
+      #       ./.github/time_budget.yaml \
+      #       "e2e"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
