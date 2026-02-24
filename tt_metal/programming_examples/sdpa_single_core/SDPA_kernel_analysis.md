@@ -10,7 +10,7 @@ Comprehensive analysis of the in-progress single-core Scaled Dot-Product Attenti
 3. [Circular Buffer Map](#3-circular-buffer-map)
 4. [Data Flow: End-to-End](#4-data-flow)
 5. [Compute Kernel Detailed Walkthrough](#5-compute-kernel-walkthrough)
-6. [CB Usage Static Analysis (sbh=1, OVERLAP_DRAIN_WITH_MATMUL)](#6-cb-usage-static-analysis)
+6. [CB Usage Static Analysis (sbh=1)](#6-cb-usage-static-analysis)
 7. [Indexing Correctness Audit](#7-indexing-correctness-audit)
 8. [Comparison with Reference SDPA (compute_common.hpp)](#8-comparison-with-reference)
 9. [Missing Features for Numerical Correctness](#9-missing-features)
@@ -74,7 +74,7 @@ Runs on the Math+Pack RISC-V cores (TRISC_MATH, TRISC_PACK). This is the main ke
 
 ## 3. Circular Buffer Map <a id="3-circular-buffer-map"></a>
 
-### Concrete sizes for default config: Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, sbh=1
+### Concrete sizes for default config: Sq_chunk_t=7, Sk_chunk_t=16 (or 8), head_dim_t=4, sbh=1
 
 | CB Index | Name | Capacity (tiles) | Role | Producer | Consumer |
 |----------|------|-------------------|------|----------|----------|
@@ -174,8 +174,8 @@ This matches the reference SDPA's `processed_k_chunks > 0` pattern and eliminate
 **Derived constants (sbh=1, default config):**
 - `qkt_subblock_w` = 8/1 = 8 (Q@KT matmul produces 1×8 tiles per DST batch)
 - `q_num_subblocks` = 7/1 = 7 (7 rows to process)
-- `kt_num_subblocks` = 16/8 = 2 (each row split into 2 subblocks along K dimension)
-- `row_tiles` = 1×16 = 16 (tiles per full row)
+- `kt_num_subblocks` = Sk_chunk_t/8: **2** when Sk_chunk_t=16, **1** when Sk_chunk_t=8
+- `row_tiles` = 1×Sk_chunk_t (16 or 8 tiles per full row)
 
 **Flow for each q_subblock (0..6):**
 
@@ -201,12 +201,19 @@ This matches the reference SDPA's `processed_k_chunks > 0` pattern and eliminate
 
 **q_subblock 0 (drain + first V matmul):**
 
-With `OVERLAP_DRAIN_WITH_MATMUL` defined:
+Uses a unified overlap drain loop over `kt_num_subblocks` iterations. Each iteration drains one sub_exp block (SFPU), then runs a matmul over `qktv_in0_block_w / kt_num_subblocks` inner tiles (FPU). EXP on SFPU overlaps with FPU matmul each iteration. L1 accumulate is used for matmul iterations after the first.
+
+**When kt_num_subblocks=2 (Sk_chunk_t=16):** 2 iterations, each with inner dim 8:
 1. **sub_exp drain kt=0:** last row's first half softmax → cb_qkt_im
-2. **Matmul first half:** QKT_im[row0, :8] @ V[:8, :] → cur_out (first half of inner dim)
+2. **Matmul first half:** QKT_im[row0, :8] @ V[:8, :] → cur_out (FPU overlaps with SFPU EXP)
 3. **sub_exp drain kt=1:** last row's second half softmax → cb_qkt_im
 4. **Push last softmax'd row**, pop prev row buffer
-5. **Matmul second half with L1 accumulate:** QKT_im[row0, 8:16] @ V[8:16, :] → cur_out += (second half)
+5. **Matmul second half with L1 accumulate:** QKT_im[row0, 8:16] @ V[8:16, :] → cur_out +=
+
+**When kt_num_subblocks=1 (Sk_chunk_t=8):** 1 iteration with full inner dim 8:
+1. **sub_exp drain kt=0:** last row's full softmax → cb_qkt_im
+2. **Push last softmax'd row**, pop prev row buffer
+3. **Full matmul:** QKT_im[row0, :8] @ V[:8, :] → cur_out (FPU overlaps with SFPU EXP)
 
 **q_subblocks 1..6 (SALAD interleaved with V matmul):**
 
@@ -243,7 +250,7 @@ Packer ReLU is enabled during exp to clamp any negative results from approximati
 
 ---
 
-## 6. CB Usage Static Analysis (sbh=1, OVERLAP_DRAIN_WITH_MATMUL) <a id="6-cb-usage-static-analysis"></a>
+## 6. CB Usage Static Analysis (sbh=1) <a id="6-cb-usage-static-analysis"></a>
 
 ### 6.1 Phase 1 CB Protocol Trace
 
@@ -294,7 +301,7 @@ pop_front(cur_sum, 7)                     # in next iteration's cleanup (skipped
 ```
 Protocol: correct. The reservation of 7 tiles upfront creates the write region for L1 accumulate. On first K-chunk, only sub_exp contributes to cur_sum (no SALAD L1 accum from prev_sum).
 
-### 6.2 Phase 2 CB Protocol Trace (OVERLAP path)
+### 6.2 Phase 2 CB Protocol Trace
 
 **cur_out (c25 or c26):**
 ```
@@ -511,7 +518,7 @@ The kernel uses cumulative `cb_wait_front` calls extensively. Checking:
    - First K-chunk: `do_eltwise_max=false` — no prev_max comparison (same as reference's `processed_k_chunks > 0`)
 2. Phase 2: Row-by-row QKT@V with interleaved SALAD
    - Pipelined: V matmul for row N while SALAD-correcting row N-1
-   - OVERLAP path: drains last row's softmax while starting first V matmul
+   - Overlap drain loop: drains last row's softmax interleaved with first V matmul
    - First K-chunk: exp_max_diff and SALAD entirely skipped (same as reference's `if (processed_k_chunks > 0)`)
 3. On last K-chunk: per-row normalization streamed directly to output (decoupled from SALAD, runs even when first == last)
 
@@ -592,13 +599,16 @@ Bidirectional attention is numerically correct. Test results against PyTorch `F.
 
 | Test | PCC | Max Abs Error | RMSE |
 |------|-----|--------------|------|
-| `1q_1k-zeros` | 1.000000 | 0.000000 | 0.000000 |
-| `1q_1k-ones` | 1.000000 | 0.007812 | 0.007812 |
-| `1q_1k-random` | 0.999805 | 0.039930 | 0.003270 |
-| `1q_5k-random` | 0.999853 | 0.081168 | 0.003782 |
-| `3q_5k-random` | 0.999851 | 0.493403 | 0.003575 |
+| `1q_1k-zeros-sk16` | 1.000000 | 0.000000 | 0.000000 |
+| `1q_1k-ones-sk16` | 1.000000 | 0.007812 | 0.007812 |
+| `1q_1k-random-sk16` | 0.999805 | 0.039930 | 0.003270 |
+| `1q_5k-random-sk16` | 0.999853 | 0.081168 | 0.003782 |
+| `3q_5k-random-sk16` | 0.999851 | 0.493403 | 0.003575 |
+| `1q_1k-random-sk8` | 0.999717 | 0.103503 | 0.004362 |
+| `1q_5k-random-sk8` | 0.999863 | 0.094849 | 0.004022 |
+| `3q_5k-random-sk8` | 0.999847 | 0.072169 | 0.003000 |
 
-The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
+The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Tests run with both Sk_chunk_t=16 (kt_num_subblocks=2) and Sk_chunk_t=8 (kt_num_subblocks=1). Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
 
 ### Step 2: Add Causal Masking
 
@@ -643,8 +653,8 @@ For multi-device scenarios, implement the ring attention pattern from the refere
 | Index | Name | Default | Description |
 |-------|------|---------|-------------|
 | 0 | `Sq_chunk_t` | 7 | Query chunk height in tiles |
-| 1 | `Sk_chunk_t` | 16 | Key chunk width in tiles |
-| 2 | `Sv_chunk_t` | 16 | Value chunk height in tiles (= Sk_chunk_t) |
+| 1 | `Sk_chunk_t` | 16 (or 8) | Key chunk width in tiles |
+| 2 | `Sv_chunk_t` | 16 (or 8) | Value chunk height in tiles (= Sk_chunk_t) |
 | 3 | `head_dim_t` | 4 | Head dimension in tiles (128/32 = 4) |
 | 4 | `num_q_chunks` | 2 | Number of Q chunks |
 | 5 | `num_k_chunks` | 3 | Number of K/V chunks |
@@ -656,6 +666,5 @@ For multi-device scenarios, implement the ring attention pattern from the refere
 | Define | Effect |
 |--------|--------|
 | `EXP_APPROX_MODE` | 0=polynomial exp, 1=Schraudolph piecewise approximation |
-| `OVERLAP_DRAIN_WITH_MATMUL` | Interleave last-row softmax drain with first V matmul (requires sbh=1, kt_num_subblocks=2) |
 | `PROFILE_KERNEL` | Enable Tracy profiling zones |
 | `MM_THROTTLE` | Matmul throttle level (1-5) |
