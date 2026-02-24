@@ -48,7 +48,7 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
     golden_tensor = golden_fn(in_data, other_data)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
+    output_tensor = ttnn.to_torch(tt_output_tensor_on_device).to(golden_tensor.dtype)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
@@ -91,7 +91,7 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
     golden_tensor = golden_fn(in_data, other_data)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
@@ -144,7 +144,7 @@ def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, tt
     golden_tensor = golden_fn(in_data, scalar)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
+    output_tensor = ttnn.to_torch(tt_output_tensor_on_device).to(golden_tensor.dtype)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
@@ -194,5 +194,5 @@ def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device
     golden_tensor = golden_fn(in_data, other_data)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
     assert torch.equal(output_tensor, golden_tensor)

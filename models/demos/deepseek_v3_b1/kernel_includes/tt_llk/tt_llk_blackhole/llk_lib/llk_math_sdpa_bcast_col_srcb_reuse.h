@@ -30,11 +30,13 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(
         ckernel_template tmp(
             num_tiles, num_faces, TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWSUB) {
         ckernel_template tmp(
             num_tiles, num_faces, TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         if constexpr (high_fidelity) {
@@ -46,6 +48,7 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(
         } else {
             ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_0, 0));
             tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_2, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
             tmp.program();
         }
     }
@@ -94,21 +97,20 @@ inline void _llk_math_sdpa_bcast_col_srcb_reuse_(uint dst_index) {
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         // Row and no broadcasted behaves similarly
         if constexpr (high_fidelity) {
-#pragma GCC unroll 0
             for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
                 ckernel_template::run();
             }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_BD);
         } else {
             ckernel_template::run();
         }
     }
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_BD);
+
     if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB)) {
         ckernel_template::run();
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         // Row and no broadcasted behaves similarly
         if constexpr (high_fidelity) {
-#pragma GCC unroll 0
             for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
                 ckernel_template::run();
             }
@@ -118,10 +120,14 @@ inline void _llk_math_sdpa_bcast_col_srcb_reuse_(uint dst_index) {
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity>
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity, bool dense = false>
 inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_faces) {
     constexpr std::uint32_t FIDELITY_INCREMENT = 1;
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    constexpr uint32_t num_dest_faces = dense ? 2 : 4;
+    if constexpr (dense) {
+        LLK_ASSERT(num_faces == 2, "num_faces must be 2 for dense packing");
+    }
     // Use srcA for data movement
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
@@ -149,7 +155,11 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
             addr_mod_t{
                 .srca = {.incr = 0},
                 .srcb = {.incr = 0},
-                .dest = {.incr = static_cast<int16_t>(16 + (4 - num_faces) * 16), .clr = 0, .cr = 0, .c_to_cr = 1},
+                .dest =
+                    {.incr = static_cast<int16_t>(16 + (num_dest_faces - num_faces) * 16),
+                     .clr = 0,
+                     .cr = 0,
+                     .c_to_cr = 1},
                 .fidelity = {.incr = 0, .clr = 1}}
                 .set(ADDR_MOD_3);
         } else {
@@ -162,18 +172,24 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
             addr_mod_t{
                 .srca = {.incr = 0},
                 .srcb = {.incr = 0},
-                .dest = {.incr = static_cast<int16_t>(16 + (4 - num_faces) * 16)},
+                .dest = {.incr = static_cast<int16_t>(16 + (num_dest_faces - num_faces) * 16)},
             }
                 .set(ADDR_MOD_2);
+            addr_mod_t{
+                .srca = {.incr = 0},
+                .srcb = {.incr = 8},
+                .dest = {.incr = 0, .clr = 1},
+            }
+                .set(ADDR_MOD_3);
         }
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, MathFidelity math_fidelity>
+template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, MathFidelity math_fidelity, bool dense = false>
 inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    sdpa_bcast_col_srcb_reuse_configure_addrmod<eltwise_binary_type, math_fidelity>(num_faces);
+    sdpa_bcast_col_srcb_reuse_configure_addrmod<eltwise_binary_type, math_fidelity, dense>(num_faces);
 
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {

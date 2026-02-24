@@ -237,11 +237,6 @@ void kernel_main() {
                     // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
                     // (using NOC_CMD_STATIC_VC).
 
-#ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
-                    // not be sent in order they are issued
-                    noc_async_writes_flushed();
-#endif
                     // We should also multicast VALID flag to destinations for receiver semaphore
                     noc_semaphore_set_multicast_loopback_src(
                         act_mcast_sender_semaphore_valid_addr,
