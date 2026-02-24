@@ -112,6 +112,8 @@ int main(int argc, char** argv) {
 
     cmdline_parser.apply_overrides(raw_test_configs);
 
+    raw_test_configs = tt::tt_fabric::fabric_tests::expand_channel_trimming(std::move(raw_test_configs));
+
     if (raw_test_configs.empty()) {
         log_fatal(tt::LogTest, "No test configurations loaded or generated. Exiting.");
         return 1;
@@ -177,7 +179,8 @@ int main(int argc, char** argv) {
             topology,
             fabric_tensix_config);
 
-        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
+        bool open_devices_success = test_context.open_devices(
+            test_config.fabric_setup, test_config.channel_trimming_mode);
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
