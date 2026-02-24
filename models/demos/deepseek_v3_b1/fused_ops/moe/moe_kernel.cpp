@@ -100,7 +100,7 @@ void kernel_main() {
             // Mcast (receiver)
             using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
             deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("mcast_dst_cb"),
                 get_named_compile_time_arg_val("mcast_dst_num_pages"),
             };
@@ -114,8 +114,8 @@ void kernel_main() {
             deepseek_b1_ops::MoeGather::ReceiverArgs gather_args{
                 get_named_compile_time_arg_val("gather_noc0_num_senders"),
                 get_named_compile_time_arg_val("gather_noc1_num_senders"),
-                get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
                 get_named_compile_time_arg_val("gather_dst_cb"),
                 get_named_compile_time_arg_val("gather_dst_num_pages"),
             };
@@ -125,14 +125,14 @@ void kernel_main() {
 
             // Index Mcast (receiver)
             deepseek_b1_ops::Mcast::ReceiverArgs index_mcast_args{
-                get_named_compile_time_arg_val("index_mcast_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("index_mcast_receiver_semaphore")),
                 get_named_compile_time_arg_val("gate_proj_cb_index"),
                 get_named_compile_time_arg_val("index_mcast_num_pages"),
             };
 
             // Expert Scale Mcast (receiver)
             deepseek_b1_ops::Mcast::ReceiverArgs expert_scale_mcast_args{
-                get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore")),
                 get_named_compile_time_arg_val("mul_cb_scalar_src"),
                 get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
             };
@@ -183,15 +183,15 @@ void kernel_main() {
             deepseek_b1_ops::MoeGather::ReceiverArgs down_proj_gather_args{
                 get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
                 get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
-                get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id")),
                 get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
                 get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
             };
 
             // down_proj Mcast (receiver)
             deepseek_b1_ops::Mcast::ReceiverArgs down_proj_mcast_args{
-                get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore")),
                 get_named_compile_time_arg_val("down_proj_mcast_dst_cb"),
                 get_named_compile_time_arg_val("down_proj_mcast_dst_num_pages"),
             };
@@ -221,7 +221,7 @@ void kernel_main() {
             // Residual Mcast — receiver (input from sender → residual CB)
             using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
             deepseek_b1_ops::Mcast::ReceiverArgs residual_mcast_args{
-                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("shared_residual_cb"),
                 get_named_compile_time_arg_val("shared_residual_num_pages"),
             };
@@ -259,8 +259,8 @@ void kernel_main() {
             deepseek_b1_ops::MoeGather::ReceiverArgs ag_args{
                 get_named_compile_time_arg_val("shared_ag_noc0_num_senders"),
                 0,  // noc1_num_senders
-                get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_id"),
+                get_semaphore(get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_id")),
                 get_named_compile_time_arg_val("shared_ag_dst_cb"),
                 get_named_compile_time_arg_val("shared_ag_dst_num_pages"),
             };
@@ -269,8 +269,8 @@ void kernel_main() {
             deepseek_b1_ops::MoeGather::ReceiverArgs bg_args{
                 get_named_compile_time_arg_val("shared_bg_noc0_num_senders"),
                 0,  // noc1_num_senders
-                get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_id"),
+                get_semaphore(get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_id")),
                 get_named_compile_time_arg_val("shared_bg_dst_cb"),
                 get_named_compile_time_arg_val("shared_bg_dst_num_pages"),
             };
@@ -282,7 +282,7 @@ void kernel_main() {
             // Down Mcast — receiver (gated reduce output → all 130 cores)
             using DownMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
             deepseek_b1_ops::Mcast::ReceiverArgs down_mcast_args{
-                get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("shared_down_mcast_dst_cb"),
                 get_named_compile_time_arg_val("shared_down_mcast_dst_num_pages"),
             };
@@ -299,8 +299,8 @@ void kernel_main() {
             deepseek_b1_ops::MoeGather::ReceiverArgs og_args{
                 get_named_compile_time_arg_val("shared_og_noc0_num_senders"),
                 get_named_compile_time_arg_val("shared_og_noc1_num_senders"),
-                get_named_compile_time_arg_val("shared_og_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_og_noc1_receiver_semaphore_id"),
+                get_semaphore(get_named_compile_time_arg_val("shared_og_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("shared_og_noc1_receiver_semaphore_id")),
                 get_named_compile_time_arg_val("shared_og_dst_cb"),
                 get_named_compile_time_arg_val("shared_og_dst_num_pages"),
             };
@@ -308,7 +308,7 @@ void kernel_main() {
             // Output Mcast — receiver (DRAM cores receive into add_cb_in1)
             using OutputMcastCTArgs = Routed::McastCTArgs;
             deepseek_b1_ops::Mcast::ReceiverArgs output_mcast_args{
-                get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("add_cb_in1"),
                 get_named_compile_time_arg_val("shared_output_mcast_dst_num_pages"),
             };
@@ -383,8 +383,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("mcast_src_cb"),
                 get_named_compile_time_arg_val("mcast_src_num_pages"),
@@ -425,8 +425,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("index_mcast_sender_semaphore"),
-                get_named_compile_time_arg_val("index_mcast_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("index_mcast_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("index_mcast_receiver_semaphore")),
                 get_named_compile_time_arg_val("index_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("gate_output_indices_cb"),
                 get_named_compile_time_arg_val("index_mcast_num_pages"),
@@ -440,8 +440,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore"),
-                get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore")),
                 get_named_compile_time_arg_val("expert_scale_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("gate_output_cb"),
                 get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
@@ -487,8 +487,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore"),
-                get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore")),
                 get_named_compile_time_arg_val("down_proj_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("down_proj_mcast_src_cb"),
                 get_named_compile_time_arg_val("down_proj_mcast_src_num_pages"),
@@ -509,8 +509,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore"),
-                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
                 get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages"),
@@ -597,8 +597,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("shared_down_mcast_data_sender_semaphore"),
-                get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("shared_down_mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("shared_down_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("shared_down_mcast_src_cb"),
                 get_named_compile_time_arg_val("shared_down_mcast_src_num_pages"),
@@ -638,8 +638,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("shared_output_mcast_data_sender_semaphore"),
-                get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore"),
+                get_semaphore(get_named_compile_time_arg_val("shared_output_mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore")),
                 get_named_compile_time_arg_val("shared_output_mcast_data_size_bytes"),
                 get_named_compile_time_arg_val("shared_output_mcast_src_cb"),
                 get_named_compile_time_arg_val("shared_output_mcast_src_num_pages"),
