@@ -231,6 +231,7 @@ void MetalContext::initialize(
     }
 
     if (rtoptions_.get_profiler_enabled()) {
+        TT_FATAL(cluster_->arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
