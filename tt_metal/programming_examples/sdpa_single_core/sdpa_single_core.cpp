@@ -207,6 +207,7 @@ void sdpa_single_core(
         num_q_chunks,
         num_k_chunks,
         packed_identity_scalar,
+        subblock_h,
         padded_k_tiles};
     TensorAccessorArgs(*out_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(

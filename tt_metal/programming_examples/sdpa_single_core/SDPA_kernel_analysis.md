@@ -172,20 +172,28 @@ This matches the reference SDPA's `processed_k_chunks > 0` pattern and eliminate
 
 ### 5.2 sdpa_inner_loop_step — Phase 1: Q@KT with Softmax
 
-**Derived constants (sbh=1, default config):**
-- `qkt_subblock_w` = 8/1 = 8 (Q@KT matmul produces 1×8 tiles per DST batch)
-- `q_num_subblocks` = 7/1 = 7 (7 rows to process)
-- `kt_num_subblocks` = Sk_chunk_t/8: **2** when Sk_chunk_t=16, **1** when Sk_chunk_t=8
-- `row_tiles` = 1×Sk_chunk_t (16 or 8 tiles per full row)
+**Derived constants:**
+- `qkt_subblock_w` = 8/sbh (8 when sbh=1, 4 when sbh=2)
+- `q_num_subblocks` = Sq_chunk_t/sbh
+- `kt_num_subblocks` = Sk_chunk_t/qkt_subblock_w (1-4 depending on sbh and Sk)
+- `row_tiles` = sbh×Sk_chunk_t
+
+| sbh | Sk | qkt_subblock_w | kt_num_subblocks | DST tiles |
+|-----|-----|----------------|------------------|-----------|
+| 1   | 16  | 8              | 2                | 1×8=8     |
+| 1   | 8   | 8              | 1                | 1×8=8     |
+| 2   | 16  | 4              | 4                | 2×4=8     |
+| 2   | 8   | 4              | 2                | 2×4=8     |
+| 2   | 4   | 4              | 1                | 2×4=8     |
 
 **Flow for each q_subblock (0..6):**
 
 1. **Wait for Q tiles** (cumulative: already loaded by reader)
 2. **Reserve current row buffer** (16 tiles)
-3. **For each kt_subblock (0..1):**
+3. **For each kt_subblock (0..kt_num_subblocks-1):**
    - If q_subblock > 0: drain previous row's sub_exp for this kt_subblock
-     - `sub_exp_block_bcast_cols()`: reads from prev_qkt_row, subtracts cur_max, applies exp with scale, packs to cb_qkt_im (sequential), reduces (L1 accum) to cur_sum
-   - `blocked_matmul_and_pack()`: Q × KT for this subblock, packs to cur_qkt_row (sequential, SEQUENTIAL_OUTPUT=true)
+     - `sub_exp_block_bcast_cols()`: reads from prev_qkt_row, subtracts cur_max, applies exp with scale, packs to cb_qkt_im at row-major offsets via `pack_tile<true>`, reduces (L1 accum) to cur_sum. L1 acc is reset at the start of each sub-row (i) when at the first kt_subblock, ensuring the first write to each reduce position overwrites rather than accumulating with stale data.
+   - `blocked_matmul_and_pack()`: Q × KT for this subblock, packs to cur_qkt_row. Uses sequential output (pack_tile<false>) when sbh=1 or kt_num_subblocks=1; uses absolute-offset output (pack_tile<true> with q_subblock=0) when sbh>1 and kt_num_subblocks>1, to avoid sub-row interleaving in the row buffer layout.
 4. **If q_subblock > 0:** push softmax'd prev row to cb_qkt_im, pop prev row buffer
 5. **If padded_k_tiles > 0 and last K chunk:** `apply_padded_mask()` — L1-accumulates -inf onto padded tile positions in the row buffer (still in reserved state). Processes in batches of up to 8 tiles (DST capacity).
 6. **Push raw matmul row** (makes it available for reading)
@@ -203,19 +211,13 @@ This matches the reference SDPA's `processed_k_chunks > 0` pattern and eliminate
 
 **q_subblock 0 (drain + first V matmul):**
 
-Uses a unified overlap drain loop over `kt_num_subblocks` iterations. Each iteration drains one sub_exp block (SFPU), then runs a matmul over `qktv_in0_block_w / kt_num_subblocks` inner tiles (FPU). EXP on SFPU overlaps with FPU matmul each iteration. L1 accumulate is used for matmul iterations after the first.
+The drain interleaves sub_exp (SFPU) with QKT@V matmul (FPU) for overlap. The strategy depends on sbh:
 
-**When kt_num_subblocks=2 (Sk_chunk_t=16):** 2 iterations, each with inner dim 8:
-1. **sub_exp drain kt=0:** last row's first half softmax → cb_qkt_im
-2. **Matmul first half:** QKT_im[row0, :8] @ V[:8, :] → cur_out (FPU overlaps with SFPU EXP)
-3. **sub_exp drain kt=1:** last row's second half softmax → cb_qkt_im
-4. **Push last softmax'd row**, pop prev row buffer
-5. **Matmul second half with L1 accumulate:** QKT_im[row0, 8:16] @ V[8:16, :] → cur_out +=
+**sbh=1:** Split matmul along inner dimension. Loops `kt_num_subblocks` times, each iteration draining one sub_exp block then running a matmul with `inner_dim = Sv_chunk_t / kt_num_subblocks`. L1 accumulate for iterations after the first.
+- kt_num_subblocks=2 (Sk=16): 2 iterations, each with inner dim 8
+- kt_num_subblocks=1 (Sk=8): 1 iteration with full inner dim 8
 
-**When kt_num_subblocks=1 (Sk_chunk_t=8):** 1 iteration with full inner dim 8:
-1. **sub_exp drain kt=0:** last row's full softmax → cb_qkt_im
-2. **Push last softmax'd row**, pop prev row buffer
-3. **Full matmul:** QKT_im[row0, :8] @ V[:8, :] → cur_out (FPU overlaps with SFPU EXP)
+**sbh>1:** Can't split along inner dimension because `matmul_block` uses `INNER_DIM` as the in0 row stride, which must equal `Sk_chunk_t` for multi-row subblocks. Instead, drains all sub_exp first, then runs a single full-inner-dim matmul. SFPU/FPU overlap still occurs between the last sub_exp's EXP phase and the matmul's FPU phase.
 
 **q_subblocks 1..6 (SALAD interleaved with V matmul):**
 
@@ -612,8 +614,12 @@ Bidirectional attention is numerically correct. Test results against PyTorch `F.
 | `1q_5k-random-sk16-pad4` | 0.999855 | 0.159379 | 0.003332 |
 | `1q_5k-random-sk8-pad2` | 0.999799 | 0.081001 | 0.003905 |
 | `3q_5k-random-sk16-pad8` | 0.999752 | 0.518033 | 0.004621 |
+| `1q_1k-random-sk4-sbh2` | 0.999819 | 0.100782 | 0.006158 |
+| `1q_5k-random-sk4-sbh2` | 0.999821 | 0.083144 | 0.003283 |
+| `1q_5k-random-sk8-sbh2` | 0.999862 | 0.068657 | 0.004281 |
+| `3q_5k-random-sk4-sbh2-pad1` | 0.999763 | 0.102592 | 0.003703 |
 
-The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Tests run with both Sk_chunk_t=16 (kt_num_subblocks=2) and Sk_chunk_t=8 (kt_num_subblocks=1). Padded tests (`-padN`) verify that zero-padded K tiles are correctly masked out via `apply_padded_mask`. Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
+The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Tests run with Sk_chunk_t=16/8 (sbh=1) and Sk_chunk_t=4/8 (sbh=2). Padded tests (`-padN`) verify that zero-padded K tiles are correctly masked out via `apply_padded_mask`. Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
 
 ### Step 2: Add Causal Masking
 
@@ -656,17 +662,29 @@ For multi-device scenarios, implement the ring attention pattern from the refere
 
 ## Appendix B: Compile-Time Arguments
 
+### Compute kernel
+
 | Index | Name | Default | Description |
 |-------|------|---------|-------------|
-| 0 | `Sq_chunk_t` | 7 | Query chunk height in tiles |
-| 1 | `Sk_chunk_t` | 16 (or 8) | Key chunk width in tiles |
-| 2 | `Sv_chunk_t` | 16 (or 8) | Value chunk height in tiles (= Sk_chunk_t) |
+| 0 | `Sq_chunk_t` | 7 | Query chunk height in tiles (must be even when sbh=2) |
+| 1 | `Sk_chunk_t` | 16 (or 8, 4) | Key chunk width in tiles |
+| 2 | `Sv_chunk_t` | 16 (or 8, 4) | Value chunk height in tiles (= Sk_chunk_t) |
 | 3 | `head_dim_t` | 4 | Head dimension in tiles (128/32 = 4) |
 | 4 | `num_q_chunks` | 2 | Number of Q chunks |
 | 5 | `num_k_chunks` | 3 | Number of K/V chunks |
 | 6 | `scale_fp32` | 1/sqrt(128) as uint32 | Scale factor (bit-cast float) |
 | 7 | `subblock_h` | 1 | Subblock height (1 or 2) |
 | 8 | `padded_k_tiles` | 0 | Zero-padded K tiles in last chunk (0 = no masking) |
+
+### Writer kernel
+
+| Index | Name | Default | Description |
+|-------|------|---------|-------------|
+| 0-5 | (same as compute 0-5) | | |
+| 6 | `identity_scalar_packed` | 1.0 packed | Two bfloat16 1.0s packed into uint32 |
+| 7 | `subblock_h` | 1 | Subblock height (must match compute) |
+| 8 | `padded_k_tiles` | 0 | Zero-padded K tiles in last chunk |
+| 9+ | TensorAccessorArgs | | Output DRAM buffer accessor |
 
 ## Appendix C: Defines
 
