@@ -15,7 +15,6 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
-    AllBroadcastAsyncConfig,
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     ConcatConfig,
@@ -1115,8 +1114,10 @@ class MLA1D(AbstractModule):
         )
 
         # WO
-        wo_ag_config = AllBroadcastAsyncConfig(
+        wo_ag_config = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
+            dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
@@ -1872,8 +1873,7 @@ class MLA1D(AbstractModule):
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.all_broadcast(v_out, **cfg["wo_ag_decode"])
-        v_out = ttnn.concat(v_out, dim=2)
+        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
         v_out = ttnn.tilize(v_out)
         # 1,1,32,16384 L1 interleaved
         return v_out

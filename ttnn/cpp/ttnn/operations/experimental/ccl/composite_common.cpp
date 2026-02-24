@@ -275,10 +275,12 @@ bool use_composite_all_gather(
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
     if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D && is_true_2d_mesh(input_tensor)) {
+        printf("Using composite_all_gather because of 2d mesh\n");
         return true;
     }
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
+        printf("Using composite_all_gather because of row-major layout\n");
         return true;
     }
 
@@ -286,6 +288,9 @@ bool use_composite_all_gather(
     bool is_tiled_and_padded_on_gather_dim = input_tensor.layout() == ttnn::Layout::TILE &&
                                              ((gather_dim == rank - 2 && input_shape[-2] % tile_height != 0) ||
                                               (gather_dim == rank - 1 && input_shape[-1] % tile_width != 0));
+    if (is_tiled_and_padded_on_gather_dim) {
+        printf("Using composite_all_gather because of tiled and padded on gather dim\n");
+    }
     return is_tiled_and_padded_on_gather_dim;
 }
 

@@ -35,6 +35,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
+        printf("Using composite_all_gather\n");
         return composite_common::composite_all_gather(
             input_tensor,
             dim,
@@ -43,6 +44,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             subdevice_id,
             /*cluster_axis*/ std::nullopt);
     }
+    printf("Using minimal_all_gather_async\n");
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
         input_tensor,
@@ -89,11 +91,13 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (false && composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        printf("Using composite_all_gather\n");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    printf("Using minimal_all_gather_async\n");
     return ttnn::prim::all_gather_async(
         input_tensor,
         persistent_output_buffer,
@@ -192,16 +196,19 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    printf("invove 4\n");
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
         input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        printf("Using composite_all_gather\n");
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     }
+    printf("Using minimal_all_gather_async\n");
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
         input_tensor,
@@ -238,6 +245,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    printf("invove reversed 1\n");
     // NOTE: reverse_order parameter is ignored, always use true for reversed API
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
@@ -293,6 +301,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     std::optional<uint32_t> num_buffers_per_channel,
     bool /*reverse_order*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    printf("invove reversed 2\n");
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
@@ -342,6 +351,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    printf("invove reversed 4\n");
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
