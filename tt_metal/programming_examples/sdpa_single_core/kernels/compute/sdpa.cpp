@@ -506,6 +506,7 @@ void sub_exp_block_bcast_cols(
 
         // Reduce to reduce_cb at absolute positions with L1 accumulate
         if constexpr (do_reduce) {
+            PACK((llk_pack_mop_config<false, false, false>(reduce_cb, 1)));
             dst_index = 0;
             for (uint32_t i = 0; i < tiles_per_row; i++) {
                 if (global_col_base > 0) {
@@ -588,6 +589,7 @@ void reduce_c_row_group(
     tile_regs_commit();
     tile_regs_wait();
 
+    PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         pack_tile<false>(i, out_cb);
     }
