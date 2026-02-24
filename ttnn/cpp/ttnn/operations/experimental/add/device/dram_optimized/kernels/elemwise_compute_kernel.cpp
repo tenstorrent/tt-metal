@@ -59,8 +59,8 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("PACK_TILES");
-            // packer waits here
+            // DeviceZoneScopedN("PACK_TILES");  // TRISC 2
+            //   packer waits here
             tile_regs_wait();  // Pack
 
             for (uint32_t i = 0; i < num_tiles_per_batch; i++) {

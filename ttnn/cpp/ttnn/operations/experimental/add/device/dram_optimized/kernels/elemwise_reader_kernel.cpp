@@ -123,39 +123,36 @@ void kernel_main() {
     for (auto i = 0u; i < num_tiles; i += num_tiles_per_batch) {
         // DPRINT << "Schedule read with trid " << trid << ENDL();
         {
-            DeviceZoneScopedN("READ_TILES");
+            // DeviceZoneScopedN("READ_TILES");
+            noc_async_read_set_trid(trid);
+
+            noc_async_read_one_packet_set_state<true>(a_noc_addr, num_tiles_per_batch * a_tile_size, args.vc);
+            noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
+            a_addr_ofs += num_tiles_per_batch * a_tile_size;
             for (auto j = 0u; j < num_tiles_per_batch; j++) {
-                noc_async_read_set_trid(trid);
-                noc_async_read_one_packet_set_state<true>(a_noc_addr, a_tile_size, args.vc);
-                noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
-
-                noc_async_read_one_packet_set_state<true>(b_noc_addr, b_tile_size, args.vc);
-                noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_write_ptr, trid);
-
-                a_addr_ofs += a_tile_size;
-                b_addr_ofs += b_tile_size;
-
                 a_write_ptr = next_a_cb_addr(a_write_ptr);
+            }
+
+            noc_async_read_one_packet_set_state<true>(b_noc_addr, num_tiles_per_batch * b_tile_size, args.vc);
+            noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_write_ptr, trid);
+            b_addr_ofs += num_tiles_per_batch * b_tile_size;
+            for (auto j = 0u; j < num_tiles_per_batch; j++) {
                 b_write_ptr = next_b_cb_addr(b_write_ptr);
             }
 
             trid = get_next_trid(trid);
         }
 
-        {
-            if (i != 0) {
-                DeviceZoneScopedN("BARRIER");
-                noc_async_read_barrier_with_trid(trid_to_wait);
-                trid_to_wait = get_next_trid(trid_to_wait);
+        if (i != 0) {
+            DeviceZoneScopedN("BARRIER");
+            noc_async_read_barrier_with_trid(trid_to_wait);
+            trid_to_wait = get_next_trid(trid_to_wait);
 
-                // DPRINT << "1.push data from trid " << trid_to_wait << ENDL();
+            cb_push_back(c_args.a_tensor_cb, num_tiles_per_batch);
+            cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
 
-                cb_push_back(c_args.a_tensor_cb, num_tiles_per_batch);
-                cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
-
-                cb_reserve_back(c_args.a_tensor_cb, num_tiles_per_batch);
-                cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
-            }
+            cb_reserve_back(c_args.a_tensor_cb, num_tiles_per_batch);
+            cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
         }
     }
 
@@ -163,20 +160,23 @@ void kernel_main() {
     if (num_tail_tiles != 0) {
         // DeviceZoneScopedN("READER_KERNEL_DATA_MOVEMENT");
         // DPRINT << "Schedule read with trid " << trid << ENDL();
-        for (auto j = 0u; j < num_tail_tiles; j++) {
-            noc_async_read_set_trid(trid);
-            noc_async_read_one_packet_set_state<true>(a_noc_addr, a_tile_size, args.vc);
-            noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
+        noc_async_read_set_trid(trid);
 
-            noc_async_read_one_packet_set_state<true>(b_noc_addr, b_tile_size, args.vc);
+        noc_async_read_one_packet_set_state<true>(a_noc_addr, a_tile_size, args.vc);
+        for (auto j = 0u; j < num_tiles_per_batch; j++) {
+            noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
+            a_addr_ofs += a_tile_size;
+            a_write_ptr = next_a_cb_addr(a_write_ptr);
+        }
+
+        noc_async_read_one_packet_set_state<true>(b_noc_addr, b_tile_size, args.vc);
+        for (auto j = 0u; j < num_tiles_per_batch; j++) {
             noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_write_ptr, trid);
 
-            a_addr_ofs += a_tile_size;
             b_addr_ofs += b_tile_size;
-
-            a_write_ptr = next_a_cb_addr(a_write_ptr);
             b_write_ptr = next_b_cb_addr(b_write_ptr);
         }
+
         trid = get_next_trid(trid);
         {
             // DeviceZoneScopedN("READER_KERNEL_BARRIER_TAIL");
