@@ -289,6 +289,36 @@ def print_comparison(comparison: dict):
     )
 
 
+def get_run_by_id(run_id: int) -> Optional[WorkflowRun]:
+    """Get a specific workflow run by its GitHub run ID."""
+    data = run_gh_command(
+        [
+            "run",
+            "view",
+            str(run_id),
+            "--json",
+            "databaseId,url,conclusion,status,workflowName,headBranch",
+        ]
+    )
+    if not data or not isinstance(data, dict):
+        return None
+
+    db_id = data.get("databaseId")
+    if db_id is None:
+        return None
+
+    jobs = get_run_jobs(db_id)
+    return WorkflowRun(
+        id=db_id,
+        url=data["url"],
+        workflow_name=data.get("workflowName", str(run_id)),
+        branch=data.get("headBranch", ""),
+        conclusion=data.get("conclusion"),
+        status=data["status"],
+        jobs=jobs,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compare workflow runs between branch and main", epilog="Prerequisites: gh CLI (authenticated), git"
@@ -301,6 +331,14 @@ def main():
         choices=["all", "t3000", "galaxy", "blackhole", "single-card", "core"],
         default="all",
         help="Filter workflows by category",
+    )
+    parser.add_argument(
+        "--branch-run-id",
+        type=int,
+        help=(
+            "Use this workflow run ID on the branch instead of the latest run "
+            "(only meaningful when exactly one workflow is provided with --workflows)"
+        ),
     )
     args = parser.parse_args()
 
@@ -323,7 +361,13 @@ def main():
             print('   Specify the branch explicitly with "--branch <name>".', file=sys.stderr)
             sys.exit(1)
 
-    print(f"🔍 Comparing workflow runs: {branch} vs main\n")
+    if args.branch_run_id is not None:
+        if not args.workflows or len(args.workflows) != 1:
+            print(
+                "❌ Error: --branch-run-id requires exactly one workflow in --workflows.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Default workflows to check - all board-level workflows with workflow_dispatch
     workflows = args.workflows or [
@@ -373,16 +417,40 @@ def main():
         prefixes = category_filters.get(args.category, [])
         workflows = [w for w in workflows if any(w.startswith(p) for p in prefixes)]
 
+    # When using --branch-run-id, fetch the run once and validate it matches the workflow
+    branch_run_by_id: Optional[WorkflowRun] = None
+    if args.branch_run_id is not None:
+        branch_run_by_id = get_run_by_id(args.branch_run_id)
+        if branch_run_by_id is None:
+            print(
+                f"❌ Error: No workflow run found with ID {args.branch_run_id}. "
+                "Check the ID, repository, and that you're authenticated (gh auth status).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if branch_run_by_id.branch != branch:
+            print(
+                f"❌ Error: Run ID {args.branch_run_id} is from branch '{branch_run_by_id.branch}', "
+                f"but you specified branch '{branch}'. Use --branch {branch_run_by_id.branch!r} or a run from {branch!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    print(f"🔍 Comparing workflow runs: {branch} vs main\n")
+
     comparisons = []
     skipped_workflows = []
     for workflow in workflows:
         print(f"Fetching {workflow}...", end=" ", flush=True)
 
-        branch_run = get_latest_run(workflow, branch)
-        if not branch_run:
-            print("skipped (no run on branch)")
-            skipped_workflows.append(workflow)
-            continue
+        if args.branch_run_id is not None:
+            branch_run = branch_run_by_id
+        else:
+            branch_run = get_latest_run(workflow, branch)
+            if not branch_run:
+                print("skipped (no run on branch)")
+                skipped_workflows.append(workflow)
+                continue
 
         main_run = get_latest_run(workflow, "main")
         print("done")
