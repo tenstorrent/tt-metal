@@ -376,8 +376,19 @@ def test_sinh(device, h, w, layout):
 @pytest.mark.parametrize("approx_mode", [True, False])
 @pytest.mark.parametrize("vector_mode", [4])
 def test_sigmoid(device, h, w, vector_mode, approx_mode, layout):
+    class sigmoid_wrap:
+        def __init__(self):
+            self.golden_function = ttnn.sigmoid.golden_function
+
+        def __call__(self, input_tensor, vector_mode, fast_and_approximate_mode):
+            return ttnn.sigmoid(
+                input_tensor,
+                vector_mode=vector_mode,
+                mode=ttnn.SigmoidMode.FastApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
+            )
+
     run_unary_with_approx_mode_test(
-        device, h, w, ttnn.sigmoid, vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, pcc=0.999
+        device, h, w, sigmoid_wrap(), vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, pcc=0.999
     )
 
 
@@ -674,7 +685,7 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
     assert torch.equal(golden_tensor, output_tensor)
 
 

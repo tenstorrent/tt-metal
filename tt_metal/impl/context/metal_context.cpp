@@ -19,6 +19,7 @@
 #include "firmware_capability.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
+#include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
@@ -43,6 +44,7 @@
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
+#include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -230,6 +232,7 @@ void MetalContext::initialize(
     }
 
     if (rtoptions_.get_profiler_enabled()) {
+        TT_FATAL(cluster_->arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
@@ -251,7 +254,7 @@ void MetalContext::initialize(
 
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            futures.emplace_back(detail::async([this, device_id, fw_compile_hash]() {
+            futures.emplace_back(detail::async([this, device_id]() {
                 // Clear L1/DRAM if requested - skip for mock devices
                 if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
                     if (rtoptions_.get_clear_l1()) {
@@ -268,17 +271,11 @@ void MetalContext::initialize(
 
                 // Skip firmware building for mock devices
                 if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-                    // Create build env for this device, and build FW if it's not built already
+                    // Create build env for this device, and build FW if it's not built already.
+                    // build_firmware ensures that the FW is built only once for a given build key
+                    // (which captures the fw_compile_hash).
                     BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-                    // fw_build_key is a combination of build_key and fw_compile_hash
-                    // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-                    // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
-                    // Uses full 64-bit fw_compile_hash for proper change detection
-                    uint64_t fw_build_key =
-                        BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
-
-                    jit_build_once(
-                        fw_build_key, [device_id] { BuildEnvManager::get_instance().build_firmware(device_id); });
+                    BuildEnvManager::get_instance().build_firmware(device_id);
 
                     // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                     // activated. This is required since ethernet cores context switch between application and routing
@@ -409,6 +406,7 @@ void MetalContext::teardown() {
     // Deinitialize inspector
     inspector_data_.reset();
 
+    system_mesh_.reset();
     control_plane_.reset();
 
     noc_debug_state_.reset();
@@ -541,6 +539,7 @@ void MetalContext::reinitialize_for_real_hardware() {
 
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    system_mesh_.reset();
     control_plane_.reset();
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
@@ -781,6 +780,17 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     return *control_plane_;
 }
 
+distributed::SystemMesh& MetalContext::get_system_mesh() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    if (!system_mesh_) {
+        if (!control_plane_) {
+            this->initialize_control_plane_impl();
+        }
+        system_mesh_ = std::unique_ptr<distributed::SystemMesh>(new distributed::SystemMesh(*control_plane_));
+    }
+    return *system_mesh_;
+}
+
 void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
@@ -797,7 +807,8 @@ void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
         !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
-    // Reset the control plane, since it was initialized with custom parameters.
+    // Reset the system mesh and control plane, since they were initialized with custom parameters.
+    system_mesh_.reset();
     control_plane_.reset();
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
@@ -833,6 +844,14 @@ void MetalContext::set_fabric_config(
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
+
+    // Export channel trimming capture data before fabric config changes.
+    // Must happen while fabric_config_ is still active and fabric context is alive.
+    bool is_tearing_down_fabric = fabric_config == tt_fabric::FabricConfig::DISABLED &&
+        this->fabric_config_ != tt_fabric::FabricConfig::DISABLED;
+    if (is_tearing_down_fabric) {
+        tt::tt_fabric::export_channel_trimming_capture();
+    }
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
@@ -896,6 +915,7 @@ void MetalContext::set_fabric_config(
             "Fabric config changed from {} to {}, reinitializing control plane",
             this->get_control_plane().get_fabric_config(),
             this->fabric_config_);
+        system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
 }
@@ -945,7 +965,7 @@ tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return f
 
 std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-    return std::make_shared<ContextDescriptor>(
+    return std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
         *hal_,
         *cluster_,
         rtoptions_,
@@ -961,7 +981,7 @@ std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
         worker_l1_size,
         dispatch_core_config_,
         l1_bank_remap_,
-        rtoptions_.get_mock_cluster_desc_path());
+        rtoptions_.get_mock_cluster_desc_path()));
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {

@@ -176,10 +176,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.encoder_parallel_config = encoder_parallel_config
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
-        self.t1_load_complement = []
-        self.t2_load_complement = []
-        self.text_encoder_load_complement = []
-        self.vae_complement = []
+        self.unload_for_t1 = []
+        self.unload_for_t2 = []
+        self.unload_for_text_encoder = []
+        self.unload_for_vae = []
 
         # Load TT text encoder
         umt5_config = UMT5Config(
@@ -261,10 +261,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self._prepare_vae()
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding models
-            self.t1_load_complement.extend([self.transformer_2])
-            self.t2_load_complement.extend([self.transformer, self.tt_umt5_encoder])
-            self.text_encoder_load_complement.extend([self.transformer_2])
-            self.vae_complement.extend([])  # All models currently load fine with VAE loaded. Here for completeness
+            self.unload_for_t1.extend([self.transformer_2])
+            self.unload_for_t2.extend([self.transformer, self.tt_umt5_encoder])
+            self.unload_for_text_encoder.extend([self.transformer_2])
+            self.unload_for_vae.extend([])  # All models currently load fine with VAE loaded. Here for completeness
         else:
             self._prepare_transformer2()
 
@@ -376,7 +376,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_text_encoder(self):
         if not self.tt_umt5_encoder.is_loaded():
-            for model in self.text_encoder_load_complement:
+            for model in self.unload_for_text_encoder:
                 model.deallocate_weights()
 
             cache.load_model(
@@ -390,7 +390,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_transformer1(self):
         if not self.transformer.is_loaded():
-            for model in self.t1_load_complement:
+            for model in self.unload_for_t1:
                 model.deallocate_weights()
 
             cache.load_model(
@@ -404,7 +404,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_transformer2(self):
         if not self.transformer_2.is_loaded():
-            for model in self.t2_load_complement:
+            for model in self.unload_for_t2:
                 model.deallocate_weights()
 
             cache.load_model(
@@ -418,7 +418,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def _prepare_vae(self):
         if not self.tt_vae.is_loaded():
-            for model in self.vae_complement:
+            for model in self.unload_for_vae:
                 model.deallocate_weights()
 
             cache.load_model(

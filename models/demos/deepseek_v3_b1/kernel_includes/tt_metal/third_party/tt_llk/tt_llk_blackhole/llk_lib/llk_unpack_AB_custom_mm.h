@@ -21,13 +21,13 @@ using namespace ckernel::unpacker;
 // in0 tile shape: [{1, 2, 4, 8}, 32]
 // in1 tile shape: [32, 32]
 // rt_dim: 1
-// ct_dim: {1, 2, 4, 6, 8, 10, 12, 14, 16}
+// ct_dim: {1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16}
 // kt_dim: even number from 2 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 
 inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
-    const std::uint32_t replay_buf_prog_len = ct_dim == 1 ? 10 : 32;
+    const std::uint32_t replay_buf_prog_len = ct_dim % 2 == 1 ? 28 : 32;
 
     load_replay_buf(0, replay_buf_prog_len, [ct_dim] {
         // === Context 0 full ===
@@ -56,7 +56,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
         // Signal context done
         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-        if (ct_dim == 1) {
+        if (ct_dim % 2 == 1) {
             // === Context 1 full ===
             // Wait for context available
             t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
@@ -82,76 +82,100 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
             // Signal context done
             t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-            for (std::uint32_t i = 0; i < 4; i++) {
-                // === Context 0 reuse ===
-                // Wait for context available
-                t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+            // === Context 0 reuse ===
+            // Wait for context available
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
 
-                // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
-                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);  // Also set dvalid
+            // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);  // Also set dvalid
 
-                // Signal context done
-                t6_semaphore_get(semaphore::UNPACK_SYNC);
+            // Signal context done
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-                // === Context 1 reuse ===
-                // Wait for context available
-                t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+            // === Context 1 reuse ===
+            // Wait for context available
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
 
-                // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
-                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);  // Also set dvalid
+            // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);  // Also set dvalid
 
-                // Signal context done
-                t6_semaphore_get(semaphore::UNPACK_SYNC);
-            }
+            // Signal context done
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+        }
+
+        for (std::uint32_t i = 0; i < 3; i++) {
+            // === Context 0 reuse ===
+            // Wait for context available
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+
+            // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);  // Also set dvalid
+
+            // Signal context done
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+            // === Context 1 reuse ===
+            // Wait for context available
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+
+            // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);  // Also set dvalid
+
+            // Signal context done
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
         }
     });
 
-    // When ct_dim == 1 we alternate between full sequences for both contexts kt_dim times in total
-    // When ct_dim > 1 we start with full context 0 and then alternate between reuse contexts 1 and 0 ct_dim - 1 times
-    // Since if ct_dim > 1 it must be even full sequence always lands on context 0
-    // thus instruction sequence is same for each kt_dim
-    // Mop is configured such that it always covers two iterations of the inner dim loop,
-    // this has two benefits:
-    // With the max number of mop iterations (128) we can cover up to 256 kt_dim, which is the max supported by this API
-    // There is no need to have different templates for contexts 0 and 1 since they are always executed as a pair
-    // In order to be able to usefully issue up to 128 mop iterations we are limited to only using 0s in zmask
+    // Mop is configured to always cover two iterations of the inner dim loop, providing two benefits:
+    // 1. With max mop iterations (128) we can cover up to 256 kt_dim (max supported by this API)
+    // 2. No need for different templates for contexts 0 and 1 since they're always executed as a pair
+    // To usefully issue up to 128 mop iterations we're limited to only using 0s in zmask
     // (not using SKIP_A/B instructions) since iterations beyond 32 always use 0s for zmask
-    // In ct_dim == 1 case we enable unpackB and two instructions we issue per iteration are replays for
-    // full context 0 and full context 1
-    // In ct_dim > 1 case we enable unpackHalo and thus have 4 instructions to execute two inner dim iterations,
-    // meaning 2 instructions per inner dim
-    // This is achieved with really long replay sequences that each cover half of the ct_dim iterations
-    // First half is:
-    // full context 0, {reuse context 1, reuse context 0} (ct_dim / 4) - 1 times, [reuse context 1] if ct_dim > 2
-    // Since our replay is organized like:
-    // full context 0, reuse context 1, {reuse context 0, reuse context 1} 4 times (which fills all 32 instructions)
-    // We just pick first ct_dim / 2 sequences (each sequence is 3 instructions plus first full one is
-    // 2 additional instructions, thus getting the equation which calculates first half of the replay length)
-    // Similarly second half is just {reuse context 0, reuse context 1} ct_dim / 4 times,
-    // which is just picking ct_dim / 2 sequences starting from the first reuse context 0 sequence
-    // (each sequence is 3 instructions so replay length calculation is simpler)
-    // To be sure that everything fits, for max ct_dim of 16, second half has to issue 4 pairs of sequences
-    // which is exactly what we recorded at the end
-    // First sequence already has the first pair as full context 0 and reuse context 1
-    // so it needs only 3 additional pair which are covered by the 4 pairs required for the second half
-    // Special case is ct_dim == 2 where first half is just full context 0
-    // and second half is just reuse context 1 thus having an earlier starting index
+    //
+    // Replay buffer layout:
+    // Odd ct_dim (1, 3, 5) uses 28 instructions:
+    //   0-4: full ctx0, 5-9: full ctx1, 10-27: {reuse ctx0, reuse ctx1} x 3 pairs
+    // Even ct_dim (2, 4, 6, 8, 10, 12, 14, 16) uses 32 instructions:
+    //   0-4: full ctx0, 5-7: reuse ctx1, 8-31: {reuse ctx0, reuse ctx1} x 4 pairs
+    //
+    // Desired instruction sequences per mop iteration (covering 2 inner dim loops):
+    // ct_dim == 1: full ctx0, full ctx1
+    // ct_dim == 2: full ctx0, reuse ctx1, full ctx0, reuse ctx1
+    // Odd ct_dim (3, 5): full ctx0, {reuse ctx1, reuse ctx0} x ((ct_dim-1)/2) times,
+    //                    full ctx1, {reuse ctx0, reuse ctx1} x ((ct_dim-1)/2) times
+    // Even ct_dim (4, 6, 8, 10, 12, 14, 16): full ctx0, reuse ctx1, {reuse ctx0, reuse ctx1} x ((ct_dim/2)-1) times,
+    //                                        full ctx0, reuse ctx1, {reuse ctx0, reuse ctx1} x ((ct_dim/2)-1) times
+    //
+    // Mop template parameter assignment (breaking sequences into replay parts):
+    // ct_dim == 1: A0=ctx0_full, B=ctx1_full (uses unpackB)
+    // ct_dim == 2: A0=ct_dim_2,  B=ct_dim_2 (uses unpackB)
+    //              ct_dim_2 captures: full ctx0, reuse ctx1
+    // Odd ct_dim (3, 5): A0=ctx0_full, A1=ctx1_r_tail, A2=ctx1_full, A3=ctx0_r_tail (uses unpackHalo)
+    //                    ctx1_r_tail captures: {reuse ctx1, reuse ctx0} x ((ct_dim-1)/2) times
+    //                    ctx0_r_tail captures: {reuse ctx0, reuse ctx1} x ((ct_dim-1)/2) times
+    // Even ct_dim: A0=first_half, A1=second_half, A2=first_half, A3=second_half (uses unpackHalo)
+    //              first_half captures: full ctx0, reuse ctx1, {reuse ctx0, reuse ctx1} x ((ct_dim/2)-1) times
+    //              second_half captures: {reuse ctx0, reuse ctx1} x (ct_dim/2) times
 
     const std::uint32_t ctx0_full = lltt::replay_insn(0, 5);
     const std::uint32_t ctx1_full = lltt::replay_insn(5, 5);
+    const std::uint32_t ct_dim_2 = lltt::replay_insn(0, 8);
+    const std::uint32_t ctx1_r_tail = lltt::replay_insn(13, (ct_dim - 1) * 3);
+    const std::uint32_t ctx0_r_tail = lltt::replay_insn(10, (ct_dim - 1) * 3);
     const std::uint32_t first_half = lltt::replay_insn(0, 2 + (ct_dim / 2) * 3);
-    const std::uint32_t second_half = lltt::replay_insn(ct_dim == 2 ? 5 : 8, (ct_dim / 2) * 3);
+    const std::uint32_t second_half = lltt::replay_insn(8, (ct_dim / 2) * 3);
+    const std::uint32_t even_A0 = ct_dim == 2 ? ct_dim_2 : first_half;
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        ct_dim == 1,                           // Use UNPACR_B and SKIP_B instructions?
-        ct_dim != 1,                           // Use UNPACR_A1/2/3 instructions?
-        ct_dim == 1 ? ctx0_full : first_half,  // A0
-        ct_dim == 1 ? 0 : second_half,         // A1
-        ct_dim == 1 ? 0 : first_half,          // A2
-        ct_dim == 1 ? 0 : second_half,         // A3
-        0,                                     // Skip A
-        ct_dim == 1 ? ctx1_full : 0,           // B
-        0                                      // Skip B
+        ct_dim <= 2,                                  // Use UNPACR_B and SKIP_B instructions?
+        ct_dim > 2,                                   // Use UNPACR_A1/2/3 instructions?
+        ct_dim % 2 == 1 ? ctx0_full : even_A0,        // A0
+        ct_dim % 2 == 1 ? ctx1_r_tail : second_half,  // A1
+        ct_dim % 2 == 1 ? ctx1_full : first_half,     // A2
+        ct_dim % 2 == 1 ? ctx0_r_tail : second_half,  // A3
+        0,                                            // Skip A
+        ct_dim == 1 ? ctx1_full : ct_dim_2,           // B
+        0                                             // Skip B
     );
 
     tmp.program();
@@ -217,7 +241,7 @@ inline void _llk_unpack_AB_custom_mm_(
             address_a += inner_increment;
             semaphore_post(semaphore::UNPACK_SYNC);
         }
-    } else {
+    } else if (ct_dim % 2 == 0) {
         for (std::uint32_t k = 0; k < kt_dim; k++) {
             std::uint32_t block_start_address = address_a;
 #pragma GCC unroll 8
@@ -231,6 +255,44 @@ inline void _llk_unpack_AB_custom_mm_(
                 block_start_address += block_increment;
                 semaphore_post(semaphore::UNPACK_SYNC);
             }
+            address_a += inner_increment;
+        }
+    } else {
+        for (std::uint32_t k = 0; k < kt_dim; k += 2) {
+            std::uint32_t block_start_address = address_a;
+#pragma GCC unroll 8
+            for (std::uint32_t ct = 0; ct + 1 < ct_dim; ct += 2) {
+                wait_for_next_context(2);
+                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
+                semaphore_post(semaphore::UNPACK_SYNC);
+                wait_for_next_context(2);
+                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
+                semaphore_post(semaphore::UNPACK_SYNC);
+            }
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = block_start_address;
+            block_start_address += block_increment;
+            semaphore_post(semaphore::UNPACK_SYNC);
+            address_a += inner_increment;
+
+            block_start_address = address_a;
+#pragma GCC unroll 8
+            for (std::uint32_t ct = 0; ct + 1 < ct_dim; ct += 2) {
+                wait_for_next_context(2);
+                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
+                semaphore_post(semaphore::UNPACK_SYNC);
+                wait_for_next_context(2);
+                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
+                semaphore_post(semaphore::UNPACK_SYNC);
+            }
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = block_start_address;
+            block_start_address += block_increment;
+            semaphore_post(semaphore::UNPACK_SYNC);
             address_a += inner_increment;
         }
     }

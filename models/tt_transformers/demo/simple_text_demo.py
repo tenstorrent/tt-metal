@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -25,7 +26,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
@@ -621,7 +622,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
