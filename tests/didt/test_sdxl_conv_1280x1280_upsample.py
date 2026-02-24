@@ -54,10 +54,6 @@ class SdxlConvTest(OpTestBase):
         self.input_width = input_width
         self.groups = groups
         self.reader_patterns_cache = {}
-        self.bias_shape = in2_shape
-        self.bias_layout = in2_layout
-        self.bias_dtype = in2_dtype
-        self.bias_mem_config = in2_mem_config
 
     # Remove weights shape
     def generate_torch_activations(self, shape):
@@ -205,7 +201,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         mesh_device,
         OpParameter(in0_shape, in0_dtype, ttnn.ROW_MAJOR_LAYOUT, mem_config),  # activations
         [
-            OpParameter(in0_shape, in1_dtype, ttnn.TILE_LAYOUT, mem_config),  # inputs
+            OpParameter(in1_shape, in1_dtype, ttnn.TILE_LAYOUT, mem_config),  # inputs
             OpParameter(conv_bias_shape, in1_dtype, ttnn.TILE_LAYOUT, mem_config),
         ],
         out_mem_config=mem_config,
@@ -213,7 +209,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         program_config=conv_config,
         compute_config=compute_kernel_config,
         input_channels=input_channels,
-        output_channels=output_channels,
+        out_channels=output_channels,
         filter_height=filter_height,
         filter_width=filter_width,
         stride_h=stride_h,
@@ -225,7 +221,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         input_height=input_height,
         input_width=input_width,
         groups=groups,
-        weights_dtype=weights_dtype,
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,

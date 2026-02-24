@@ -60,7 +60,7 @@ class SdxlConvTest(OpTestBase):
 
     # Remove weights shape
     def generate_torch_activations(self, shape):
-        torch_input_tensor_nchw = torch.randn(self.shape, dtype=torch.bfloat16)
+        torch_input_tensor_nchw = torch.randn(shape, dtype=torch.bfloat16)
         torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
         return torch_input_tensor
 
@@ -363,7 +363,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         program_config=conv_config,  # program config
         compute_config=compute_kernel_config,  # compute config
         input_channels=input_channels,
-        output_channels=output_channels,
+        out_channels=output_channels,
         filter_height=filter_height,
         filter_width=filter_width,
         stride_h=stride_h,
@@ -375,7 +375,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         input_height=input_height,
         input_width=input_width,
         groups=groups,
-        weights_dtype=weights_dtype,
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
