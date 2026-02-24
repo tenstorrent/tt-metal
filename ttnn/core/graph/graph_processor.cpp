@@ -144,7 +144,7 @@ std::string get_mesh_coordinate_mapping_content() {
 namespace ttnn::graph {
 
 // Static member initialization
-bool GraphProcessor::capture_stack_traces_ = false;
+bool GraphProcessor::capture_stack_traces_ = true;
 bool GraphProcessor::capture_buffer_pages_ = false;
 
 void GraphProcessor::enable_stack_traces() { capture_stack_traces_ = true; }

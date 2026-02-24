@@ -2037,46 +2037,23 @@ class TestReportVersion:
 class TestStackTraces:
     """Tests for C++ stack trace capture."""
 
-    def test_stack_traces_disabled_by_default(self):
-        """Test that stack traces are disabled by default."""
-        assert not ttnn.graph.is_stack_trace_enabled()
+    def test_stack_traces_enabled_by_default(self):
+        """Test that stack traces are enabled by default."""
+        assert ttnn.graph.is_stack_trace_enabled()
 
     def test_enable_disable_stack_traces(self):
         """Test enabling and disabling stack traces."""
-        assert not ttnn.graph.is_stack_trace_enabled()
-
-        ttnn.graph.enable_stack_traces()
         assert ttnn.graph.is_stack_trace_enabled()
 
         ttnn.graph.disable_stack_traces()
         assert not ttnn.graph.is_stack_trace_enabled()
 
-    def test_stack_traces_captured_when_enabled(self, device):
-        """Test that stack traces are captured in function_start nodes when enabled."""
         ttnn.graph.enable_stack_traces()
-        try:
-            torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
-            tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        assert ttnn.graph.is_stack_trace_enabled()
 
-            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-            _ = ttnn.relu(tt_input)
-            captured_graph = ttnn.graph.end_graph_capture()
-
-            function_starts = [n for n in captured_graph if n["node_type"] == "function_start"]
-            assert len(function_starts) > 0, "Should have at least one function_start node"
-
-            # At least one should have a stack trace (on Linux/macOS)
-            has_stack_trace = any("stack_trace" in n for n in function_starts)
-            if has_stack_trace:
-                for node in function_starts:
-                    if "stack_trace" in node:
-                        assert isinstance(node["stack_trace"], list)
-        finally:
-            ttnn.graph.disable_stack_traces()
-
-    def test_no_stack_traces_when_disabled(self, device):
-        """Test that no stack traces are captured when disabled."""
-        ttnn.graph.disable_stack_traces()
+    def test_stack_traces_captured_by_default(self, device):
+        """Test that stack traces are captured in function_start nodes by default."""
+        assert ttnn.graph.is_stack_trace_enabled()
 
         torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
         tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
@@ -2085,8 +2062,30 @@ class TestStackTraces:
         _ = ttnn.relu(tt_input)
         captured_graph = ttnn.graph.end_graph_capture()
 
-        for node in captured_graph:
-            assert "stack_trace" not in node, f"Node {node['node_type']} should not have stack_trace"
+        function_starts = [n for n in captured_graph if n["node_type"] == "function_start"]
+        assert len(function_starts) > 0, "Should have at least one function_start node"
+
+        has_stack_trace = any("stack_trace" in n for n in function_starts)
+        assert has_stack_trace, "Stack traces should be present by default"
+        for node in function_starts:
+            if "stack_trace" in node:
+                assert isinstance(node["stack_trace"], list)
+
+    def test_no_stack_traces_when_disabled(self, device):
+        """Test that no stack traces are captured when disabled."""
+        ttnn.graph.disable_stack_traces()
+        try:
+            torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+            tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            _ = ttnn.relu(tt_input)
+            captured_graph = ttnn.graph.end_graph_capture()
+
+            for node in captured_graph:
+                assert "stack_trace" not in node, f"Node {node['node_type']} should not have stack_trace"
+        finally:
+            ttnn.graph.enable_stack_traces()
 
 
 class TestLinearModelE2E:
@@ -2097,9 +2096,11 @@ class TestLinearModelE2E:
 
     Known acceptable differences between C++ capture and old Python capture:
     - Operation names differ (C++ uses internal names like Tensor::to_device)
+    - Tensor IDs differ (C++ and Python assign tensor IDs differently)
     - dtype/layout string format: C++ uses '::' (DataType::BFLOAT16), Python used '.' (DataType.BFLOAT16)
     - device_id values vary per machine
-    - Exact buffer addresses and intermediate buffer sizes vary per run
+    - Exact buffer addresses vary per run (but layout is deterministic so they usually match)
+    - Intermediate matmul buffer sizes may vary across hardware revisions
     """
 
     REFERENCE_DB = Path(__file__).parent / "fixtures" / "linear_reference.sqlite"
@@ -2132,18 +2133,29 @@ class TestLinearModelE2E:
 
         differences = []
 
-        # --- operations: count should match (child ops filtered in compatible mode) ---
-        gc.execute("SELECT COUNT(*) FROM operations")
-        gen_op_count = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM operations")
-        ref_op_count = rc.fetchone()[0]
-        if gen_op_count != ref_op_count:
-            differences.append(f"operations count: generated={gen_op_count}, reference={ref_op_count}")
+        # Build a mapping from reference tensor_id -> generated tensor_id using address as the join key.
+        # Tensor IDs differ between C++ and Python captures but addresses are deterministic.
+        gc.execute("SELECT tensor_id, address FROM tensors ORDER BY address")
+        gen_tid_by_addr = {addr: tid for tid, addr in gc.fetchall()}
+        rc.execute("SELECT tensor_id, address FROM tensors ORDER BY address")
+        ref_tid_by_addr = {addr: tid for tid, addr in rc.fetchall()}
+        ref_to_gen_tid = {}
+        for addr in ref_tid_by_addr:
+            if addr in gen_tid_by_addr:
+                ref_to_gen_tid[ref_tid_by_addr[addr]] = gen_tid_by_addr[addr]
 
-        # --- tensors: count, shapes, buffer_types (normalize dtype/layout; skip device_id as it varies per machine) ---
-        gc.execute("SELECT shape, dtype, layout, buffer_type FROM tensors ORDER BY shape, buffer_type")
+        # --- operations: count and IDs should match ---
+        gc.execute("SELECT operation_id FROM operations ORDER BY operation_id")
+        gen_op_ids = [r[0] for r in gc.fetchall()]
+        rc.execute("SELECT operation_id FROM operations ORDER BY operation_id")
+        ref_op_ids = [r[0] for r in rc.fetchall()]
+        if gen_op_ids != ref_op_ids:
+            differences.append(f"operation IDs: generated={gen_op_ids}, reference={ref_op_ids}")
+
+        # --- tensors: count, shapes, dtypes, layouts, buffer_types ---
+        gc.execute("SELECT shape, dtype, layout, buffer_type FROM tensors ORDER BY address")
         gen_tensors = [(s, self._normalize(d), self._normalize(l), bt) for s, d, l, bt in gc.fetchall()]
-        rc.execute("SELECT shape, dtype, layout, buffer_type FROM tensors ORDER BY shape, buffer_type")
+        rc.execute("SELECT shape, dtype, layout, buffer_type FROM tensors ORDER BY address")
         ref_tensors = [(s, self._normalize(d), self._normalize(l), bt) for s, d, l, bt in rc.fetchall()]
 
         if len(gen_tensors) != len(ref_tensors):
@@ -2153,58 +2165,99 @@ class TestLinearModelE2E:
                 if g != r:
                     differences.append(f"tensors row {i}: generated={g}, reference={r}")
 
-        # --- tensors: all device_ids should be the same (consistent) ---
+        # --- tensors: addresses should match ---
+        gc.execute("SELECT address FROM tensors ORDER BY address")
+        gen_addrs = [r[0] for r in gc.fetchall()]
+        rc.execute("SELECT address FROM tensors ORDER BY address")
+        ref_addrs = [r[0] for r in rc.fetchall()]
+        if gen_addrs != ref_addrs:
+            differences.append(f"tensor addresses: generated={gen_addrs}, reference={ref_addrs}")
+
+        # --- tensors: all device_ids should be consistent (value varies per machine) ---
         gc.execute("SELECT DISTINCT device_id FROM tensors WHERE device_id IS NOT NULL")
         gen_dev_ids = [r[0] for r in gc.fetchall()]
         if len(gen_dev_ids) != 1:
             differences.append(f"tensors should all have same device_id, got {gen_dev_ids}")
 
-        # --- device_tensors: count ---
-        gc.execute("SELECT COUNT(*) FROM device_tensors")
-        gen_dt_count = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM device_tensors")
-        ref_dt_count = rc.fetchone()[0]
-        if gen_dt_count != ref_dt_count:
-            differences.append(f"device_tensors count: generated={gen_dt_count}, reference={ref_dt_count}")
+        # --- device_tensors: count and addresses should match ---
+        gc.execute("SELECT address FROM device_tensors ORDER BY address")
+        gen_dt_addrs = [r[0] for r in gc.fetchall()]
+        rc.execute("SELECT address FROM device_tensors ORDER BY address")
+        ref_dt_addrs = [r[0] for r in rc.fetchall()]
+        if gen_dt_addrs != ref_dt_addrs:
+            differences.append(f"device_tensors addresses: generated={gen_dt_addrs}, reference={ref_dt_addrs}")
 
-        # --- buffers: all buffer_types should match ---
-        gc.execute("SELECT DISTINCT buffer_type FROM buffers ORDER BY buffer_type")
-        gen_bt = gc.fetchall()
-        rc.execute("SELECT DISTINCT buffer_type FROM buffers ORDER BY buffer_type")
-        ref_bt = rc.fetchall()
-        if gen_bt != ref_bt:
-            differences.append(f"buffer types: generated={gen_bt}, reference={ref_bt}")
+        # --- buffers: exact rows should match (operation_id, address, max_size_per_bank, buffer_type) ---
+        gc.execute(
+            "SELECT operation_id, address, max_size_per_bank, buffer_type FROM buffers ORDER BY operation_id, address"
+        )
+        gen_bufs = gc.fetchall()
+        rc.execute(
+            "SELECT operation_id, address, max_size_per_bank, buffer_type FROM buffers ORDER BY operation_id, address"
+        )
+        ref_bufs = rc.fetchall()
+        if len(gen_bufs) != len(ref_bufs):
+            differences.append(f"buffers count: generated={len(gen_bufs)}, reference={len(ref_bufs)}")
+        else:
+            for i, (g, r) in enumerate(zip(gen_bufs, ref_bufs)):
+                if g != r:
+                    differences.append(f"buffers row {i}: generated={g}, reference={r}")
 
-        # --- buffers: cumulative counts per operation should match ---
-        gc.execute("SELECT COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
-        gen_buf_counts = [r[0] for r in gc.fetchall()]
-        rc.execute("SELECT COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
-        ref_buf_counts = [r[0] for r in rc.fetchall()]
-        if gen_buf_counts != ref_buf_counts:
-            differences.append(f"buffers cumulative counts: generated={gen_buf_counts}, reference={ref_buf_counts}")
+        # --- input_tensors: operation_ids, input_indices, and resolved addresses should match ---
+        gc.execute(
+            """
+            SELECT it.operation_id, it.input_index, t.address
+            FROM input_tensors it JOIN tensors t ON it.tensor_id = t.tensor_id
+            ORDER BY it.operation_id, it.input_index
+        """
+        )
+        gen_inputs = gc.fetchall()
+        rc.execute(
+            """
+            SELECT it.operation_id, it.input_index, t.address
+            FROM input_tensors it JOIN tensors t ON it.tensor_id = t.tensor_id
+            ORDER BY it.operation_id, it.input_index
+        """
+        )
+        ref_inputs = rc.fetchall()
+        if gen_inputs != ref_inputs:
+            differences.append(f"input_tensors (op_id, idx, addr): generated={gen_inputs}, reference={ref_inputs}")
 
-        # --- buffers: the stable tensor buffer sizes (176128 for 1024x1024, 6144 for 1x1024) must appear ---
-        gc.execute("SELECT DISTINCT max_size_per_bank FROM buffers ORDER BY max_size_per_bank")
-        gen_sizes = {r[0] for r in gc.fetchall()}
-        for expected_size in [176128, 6144]:
-            if expected_size not in gen_sizes:
-                differences.append(f"buffer size {expected_size} missing from generated. Got {sorted(gen_sizes)}")
+        # --- output_tensors: operation_ids, output_indices, and resolved addresses should match ---
+        gc.execute(
+            """
+            SELECT ot.operation_id, ot.output_index, t.address
+            FROM output_tensors ot JOIN tensors t ON ot.tensor_id = t.tensor_id
+            ORDER BY ot.operation_id, ot.output_index
+        """
+        )
+        gen_outputs = gc.fetchall()
+        rc.execute(
+            """
+            SELECT ot.operation_id, ot.output_index, t.address
+            FROM output_tensors ot JOIN tensors t ON ot.tensor_id = t.tensor_id
+            ORDER BY ot.operation_id, ot.output_index
+        """
+        )
+        ref_outputs = rc.fetchall()
+        if gen_outputs != ref_outputs:
+            differences.append(f"output_tensors (op_id, idx, addr): generated={gen_outputs}, reference={ref_outputs}")
 
-        # --- input_tensors: total count should match ---
-        gc.execute("SELECT COUNT(*) FROM input_tensors")
-        gen_it_total = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM input_tensors")
-        ref_it_total = rc.fetchone()[0]
-        if gen_it_total != ref_it_total:
-            differences.append(f"input_tensors total: generated={gen_it_total}, reference={ref_it_total}")
+        # --- captured_graph: operation_ids should match ---
+        gc.execute("SELECT operation_id FROM captured_graph ORDER BY operation_id")
+        gen_cg_ids = [r[0] for r in gc.fetchall()]
+        rc.execute("SELECT operation_id FROM captured_graph ORDER BY operation_id")
+        ref_cg_ids = [r[0] for r in rc.fetchall()]
+        if gen_cg_ids != ref_cg_ids:
+            differences.append(f"captured_graph operation_ids: generated={gen_cg_ids}, reference={ref_cg_ids}")
 
-        # --- output_tensors: counts per operation should match ---
-        gc.execute("SELECT COUNT(*) FROM output_tensors GROUP BY operation_id ORDER BY operation_id")
-        gen_ot_counts = [r[0] for r in gc.fetchall()]
-        rc.execute("SELECT COUNT(*) FROM output_tensors GROUP BY operation_id ORDER BY operation_id")
-        ref_ot_counts = [r[0] for r in rc.fetchall()]
-        if gen_ot_counts != ref_ot_counts:
-            differences.append(f"output_tensors counts per op: generated={gen_ot_counts}, reference={ref_ot_counts}")
+        # --- stack_traces: count should match (C++ traces are shorter but present) ---
+        gc.execute("SELECT COUNT(*) FROM stack_traces")
+        gen_st = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM stack_traces")
+        ref_st = rc.fetchone()[0]
+        if gen_st != ref_st:
+            differences.append(f"stack_traces count: generated={gen_st}, reference={ref_st}")
 
         gen.close()
         ref.close()

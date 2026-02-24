@@ -968,9 +968,14 @@ Examples:
     parser.add_argument("output_dir", help="Directory to create SQLite database in")
     parser.add_argument("--db-name", default="db.sqlite", help="Database filename")
     parser.add_argument("--svg", action="store_true", help="Generate SVG visualizations")
+    parser.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Import all data including host tensors and nested operations (default: compatible mode)",
+    )
 
     args = parser.parse_args()
-    import_report(args.report_path, args.output_dir, args.db_name, generate_svgs=args.svg)
+    import_report(args.report_path, args.output_dir, args.db_name, generate_svgs=args.svg, detailed=args.detailed)
 
 
 if __name__ == "__main__":
