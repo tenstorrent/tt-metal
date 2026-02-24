@@ -19,6 +19,7 @@ Owner:
     adjordjevic-TT
 """
 
+from ttexalens.device import Device
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.context import Context
@@ -31,14 +32,16 @@ script_config = ScriptConfig(
 
 
 class MetalDeviceIdMapping:
-    def __init__(self, inspector_data: InspectorData):
+    def __init__(self, inspector_data: InspectorData, devices: list[Device]):
         unique_ids_result = inspector_data.getMetalDeviceIdMappings()
         self._metal_device_id_to_unique_id: dict[int, int] = {}
         self._unique_id_to_metal_device_id: dict[int, int] = {}
+        self.metal_device_id_to_device_id: dict[int, int] = {}
 
         for mapping in unique_ids_result.mappings:
             metal_device_id = mapping.metalDeviceId
             unique_id = mapping.uniqueId
+            device_id = next((device.id for device in devices if device.unique_id == unique_id), None)
             log_check(
                 metal_device_id not in self._metal_device_id_to_unique_id, "Invalid Inspector data. Duplicated chip id"
             )
@@ -47,6 +50,7 @@ class MetalDeviceIdMapping:
             )
             self._metal_device_id_to_unique_id[metal_device_id] = unique_id
             self._unique_id_to_metal_device_id[unique_id] = metal_device_id
+            self.metal_device_id_to_device_id[metal_device_id] = device_id
 
     def get_unique_id(self, metal_device_id: int) -> int:
         log_check(
@@ -67,11 +71,20 @@ class MetalDeviceIdMapping:
     def has_unique_id(self, unique_id: int) -> bool:
         return unique_id in self._unique_id_to_metal_device_id
 
+    def deivce_id_mismatch(self) -> bool:
+        return (
+            True
+            if any(
+                device_id != metal_device_id for metal_device_id, device_id in self.metal_device_id_to_device_id.items()
+            )
+            else False
+        )
+
 
 @triage_singleton
 def run(args, context: Context) -> MetalDeviceIdMapping:
     inspector_data = get_inspector_data(args, context)
-    return MetalDeviceIdMapping(inspector_data)
+    return MetalDeviceIdMapping(inspector_data, context.devices.values())
 
 
 if __name__ == "__main__":

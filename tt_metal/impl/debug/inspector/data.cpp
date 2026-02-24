@@ -330,10 +330,10 @@ void Data::rpc_get_cores_by_block_type(rpc::Inspector::GetCoresByBlockTypeResult
                 list[i].setY(xy[i].second);
             }
         };
-        set_coords([&cores](size_t n) { return cores.initTensixCores(n); }, tensix_xy);
-        set_coords([&cores](size_t n) { return cores.initActiveEthCores(n); }, active_eth_xy);
-        set_coords([&cores](size_t n) { return cores.initIdleEthCores(n); }, idle_eth_xy);
-        set_coords([&cores](size_t n) { return cores.initEthCores(n); }, eth_xy);
+        set_coords([&cores](size_t n) { return cores.initTensix(n); }, tensix_xy);
+        set_coords([&cores](size_t n) { return cores.initActiveEth(n); }, active_eth_xy);
+        set_coords([&cores](size_t n) { return cores.initIdleEth(n); }, idle_eth_xy);
+        set_coords([&cores](size_t n) { return cores.initEth(n); }, eth_xy);
     }
 }
 
