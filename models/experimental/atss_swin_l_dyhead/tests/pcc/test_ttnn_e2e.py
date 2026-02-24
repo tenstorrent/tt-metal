@@ -66,18 +66,14 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_backbone_feats = ttnn_model.backbone(x_on_device)
-    ttnn_backbone_feats_nhwc = []
 
     assert len(ref_backbone_feats) == len(ttnn_backbone_feats) == 3
     for i, (rf, tf) in enumerate(zip(ref_backbone_feats, ttnn_backbone_feats)):
         t_out = ttnn.to_torch(ttnn.from_device(tf))
+        t_out = torch.permute(t_out, (0, 3, 1, 2))  # NHWC(backbone output) -> NCHW
         passing, pcc = comp_pcc(rf, t_out, 0.96)
         logger.info(f"  Backbone stage {i+1}: shape={list(rf.shape)}, PCC={pcc:.6f}")
         assert passing, f"Backbone stage {i+1} PCC {pcc:.6f} < 0.96"
-
-        tf_nhwc = ttnn.permute(tf, (0, 2, 3, 1))  # nchw -> nhwc (for FPN)
-        tf_nhwc = ttnn.to_layout(tf_nhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn_backbone_feats_nhwc.append(tf_nhwc)
 
     # ========================
     # Stage 2: FPN
@@ -86,27 +82,15 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
     with torch.no_grad():
         ref_fpn_feats = atss_ref_model.fpn(tuple(ref_backbone_feats))
 
-    ttnn_fpn_feats_nhwc = ttnn_model.fpn(ttnn_backbone_feats_nhwc)
-    ttnn_fpn_feats = []
+    ttnn_fpn_feats = ttnn_model.fpn(ttnn_backbone_feats)
 
-    assert len(ref_fpn_feats) == len(ttnn_fpn_feats_nhwc) == 5
-    for i, (rf, tf) in enumerate(zip(ref_fpn_feats, ttnn_fpn_feats_nhwc)):
+    assert len(ref_fpn_feats) == len(ttnn_fpn_feats) == 5
+    for i, (rf, tf) in enumerate(zip(ref_fpn_feats, ttnn_fpn_feats)):
         t_out = ttnn.to_torch(ttnn.from_device(tf))
-        t_out = torch.permute(t_out, (0, 3, 1, 2))  # NHWC -> NCHW to match reference
+        t_out = torch.permute(t_out, (0, 3, 1, 2))  # NHWC(FPN output) -> NCHW
         passing, pcc = comp_pcc(rf, t_out, 0.96)
         logger.info(f"  FPN P{i+3}: shape={list(rf.shape)}, PCC={pcc:.6f}")
         assert passing, f"FPN P{i+3} PCC {pcc:.6f} < 0.96"
-
-        # --- Prepare Dyhead input ---
-        ttnn_fpn_feats.append(
-            ttnn.from_torch(
-                t_out.contiguous(),  # torch NCHW
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        )
 
     # ========================
     # Stage 3: DyHead (PyTorch on both sides)
@@ -116,17 +100,13 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
         ref_dy_feats = atss_ref_model.dyhead(list(ref_fpn_feats))
 
     ttnn_dy_feats = ttnn_model.forward_dyhead(ttnn_fpn_feats)
-    ttnn_dy_feats_nhwc = []
 
     assert len(ref_dy_feats) == len(ttnn_dy_feats) == 5
     for i, (rf, tf) in enumerate(zip(ref_dy_feats, ttnn_dy_feats)):
+        tf = torch.permute(tf, (0, 3, 1, 2))  # NHWC(Dyhead output) -> NCHW
         passing, pcc = comp_pcc(rf, tf, 0.96)
         logger.info(f"  DyHead level {i}: shape={list(rf.shape)}, PCC={pcc:.6f}")
         assert passing, f"DyHead level {i} PCC {pcc:.6f} < 0.96"
-
-        # Prepare ATSS Head input (ATSS Head expects nhwc)
-        tf_nhwc_torch = tf.permute(0, 2, 3, 1).contiguous()
-        ttnn_dy_feats_nhwc.append(tf_nhwc_torch)
 
     # ========================
     # Stage 4: ATSS Head
@@ -135,7 +115,7 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
     with torch.no_grad():
         ref_cls, ref_reg, ref_cent = atss_ref_model.head(tuple(ref_dy_feats))
 
-    ttnn_cls, ttnn_reg, ttnn_cent = ttnn_model.forward_head(ttnn_dy_feats_nhwc)
+    ttnn_cls, ttnn_reg, ttnn_cent = ttnn_model.forward_head(ttnn_dy_feats)
     ttnn_cls_rp = []
     ttnn_reg_rp = []
     ttnn_cent_rp = []
@@ -143,28 +123,27 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
     for i in range(5):
         # Classification
         N, C, H, W = ref_cls[i].shape
-        ttnn_cls[i] = ttnn_cls[i].reshape(N, H, W, C).permute(0, 3, 1, 2).contiguous()
+        ttnn_cls[i] = ttnn_cls[i].reshape(N, H, W, C).permute(0, 3, 1, 2)
+        ttnn_cls_rp.append(ttnn_cls[i])
         passing, pcc = comp_pcc(ref_cls[i], ttnn_cls[i], 0.96)
         logger.info(f"  Head level {i} cls: PCC={pcc:.6f}")
         assert passing, f"Head cls level {i} PCC {pcc:.6f} < 0.96"
 
         # Regression
         N, C, H, W = ref_reg[i].shape
-        ttnn_reg[i] = ttnn_reg[i].reshape(N, H, W, C).permute(0, 3, 1, 2).contiguous()
+        ttnn_reg[i] = ttnn_reg[i].reshape(N, H, W, C).permute(0, 3, 1, 2)
+        ttnn_reg_rp.append(ttnn_reg[i])
         passing, pcc = comp_pcc(ref_reg[i], ttnn_reg[i], 0.96)
         logger.info(f"  Head level {i} reg: PCC={pcc:.6f}")
         assert passing, f"Head reg level {i} PCC {pcc:.6f} < 0.96"
 
         # Centerness
         N, C, H, W = ref_cent[i].shape
-        ttnn_cent[i] = ttnn_cent[i].reshape(N, H, W, C).permute(0, 3, 1, 2).contiguous()
+        ttnn_cent[i] = ttnn_cent[i].reshape(N, H, W, C).permute(0, 3, 1, 2)
+        ttnn_cent_rp.append(ttnn_cent[i])
         passing, pcc = comp_pcc(ref_cent[i], ttnn_cent[i], 0.96)
         logger.info(f"  Head level {i} cent: PCC={pcc:.6f}")
         assert passing, f"Head cent level {i} PCC {pcc:.6f} < 0.96"
-
-        ttnn_cls_rp.append(ttnn_cls[i])
-        ttnn_reg_rp.append(ttnn_reg[i])
-        ttnn_cent_rp.append(ttnn_cent[i])
 
     # ========================
     # Stage 5: Post-processing comparison

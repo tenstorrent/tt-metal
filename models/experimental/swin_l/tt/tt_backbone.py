@@ -182,9 +182,9 @@ class TtSwinLBackbone:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 # NHWC -> NCHW
-                feat_nchw = ttnn.permute(normed, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                features.append(feat_nchw)
-                ttnn.deallocate(normed)
+                # feat_nchw = ttnn.permute(normed, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                features.append(normed)
+                # ttnn.deallocate(normed)
 
             # Downsample (except after last stage)
             if s < 3:

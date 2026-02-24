@@ -87,6 +87,7 @@ def test_ttnn_swin_l_backbone_e2e(device, swin_l_ref, swin_l_ckpt_path, reset_se
     pcc_threshold = 0.97
     for i, (torch_feat, ttnn_feat) in enumerate(zip(torch_feats, ttnn_feats)):
         ttnn_out = ttnn.to_torch(ttnn.from_device(ttnn_feat))
+        ttnn_out = ttnn_out.permute(0, 3, 1, 2)  # NHWC(backbone output) -> NCHW
         assert (
             ttnn_out.shape == torch_feat.shape
         ), f"Stage {i} shape mismatch: TTNN {ttnn_out.shape} vs PyTorch {torch_feat.shape}"
