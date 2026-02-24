@@ -139,6 +139,8 @@ class LMHeadSampling:
         skip_ccl=None,
         socket_input=None,
         socket_output=None,
+        persistent_mode=False,
+        termination_semaphore=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -167,6 +169,8 @@ class LMHeadSampling:
             socket_input: Optional socket input endpoint. Supports ttnn.MeshSocket receiver endpoint (D2D input).
             socket_output: Optional socket output endpoint. Supports ttnn.D2HSocket (host output) and
                 ttnn.MeshSocket sender endpoint (D2D output).
+            persistent_mode: Enable persistent execution loop in kernel.
+            termination_semaphore: Global semaphore used to terminate persistent loop (terminate when set to 1).
         Returns:
             Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
@@ -355,6 +359,7 @@ class LMHeadSampling:
         mcast_data_receiver_semaphore_id = 1
         argmax_receiver_semaphore_id = 2
         argmax_local_ready_semaphore_id = 3
+        persistent_next_iter_semaphore_id = 4
         # print("Checkpoint 17")
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -621,6 +626,7 @@ class LMHeadSampling:
                     # print(f"Checkpoint 33")
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
+                input_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
 
                 # broadcast_rms-style BRISC source selection:
                 # - CCL path: packet CB
@@ -706,6 +712,8 @@ class LMHeadSampling:
                     ("argmax_socket_mode", argmax_socket_mode),
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    ("persistent_mode", 1 if persistent_mode else 0),
+                    ("persistent_next_iter_semaphore_id", persistent_next_iter_semaphore_id),
                 ]
 
                 # ================================================================
@@ -738,6 +746,8 @@ class LMHeadSampling:
                     ("argmax_socket_mode", argmax_socket_mode),
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    ("persistent_mode", 1 if persistent_mode else 0),
+                    ("persistent_next_iter_semaphore_id", persistent_next_iter_semaphore_id),
                 ]
 
                 # ================================================================
@@ -758,6 +768,8 @@ class LMHeadSampling:
                     ("matmul_out", matmul_out_cb),
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
+                    ("persistent_mode", 1 if persistent_mode else 0),
+                    ("persistent_next_iter_semaphore_id", persistent_next_iter_semaphore_id),
                 ]
                 # print(f"Checkpoint 36")
                 # ================================================================
@@ -773,6 +785,8 @@ class LMHeadSampling:
                         0,
                         0,
                         0,
+                        int(input_core_phys.x),
+                        int(input_core_phys.y),
                     ]
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
@@ -835,6 +849,8 @@ class LMHeadSampling:
                         int(scratch_tensors_per_device[device_idx].buffer_address()),
                         global_sem_addr,
                         global_stage2_sem_addr,
+                        int(input_core_phys.x),
+                        int(input_core_phys.y),
                     ]
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
@@ -992,6 +1008,16 @@ class LMHeadSampling:
                                 id=argmax_local_ready_semaphore_id,
                                 core_ranges=argmax_core_grid,
                                 initial_value=0,
+                            ),
+                        ]
+                    )
+                if persistent_mode:
+                    semaphore_descriptors.extend(
+                        [
+                            ttnn.SemaphoreDescriptor(
+                                id=persistent_next_iter_semaphore_id,
+                                core_ranges=mcast_sender_core_grid,
+                                initial_value=1,
                             ),
                         ]
                     )

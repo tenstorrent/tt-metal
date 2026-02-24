@@ -56,6 +56,9 @@ struct Core {
     static constexpr bool is_argmax_mesh_sender_core =
         get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
+    static constexpr bool persistent_mode = get_named_compile_time_arg_val("persistent_mode") == 1;
+    static constexpr uint32_t persistent_next_iter_semaphore_id =
+        get_named_compile_time_arg_val("persistent_next_iter_semaphore_id");
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
 };
 
@@ -168,7 +171,8 @@ void kernel_main() {
         .global_stage2_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .gather_addr = 0,
     };
-
+    const uint32_t input_core_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
+    const uint32_t input_core_noc_y = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
     // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
     // or intermediate_tensor (CCL mode, where broadcast placed the data)
@@ -289,65 +293,70 @@ void kernel_main() {
     compute_kernel_hw_startup(0, 0, 0);
 #endif
 
-    // ========================================================================
-    // Phase 0: broadcast_rms-style combined path.
-    // - CCL mode (!skip_ccl): CCL broadcast path.
-    // - Socket mode (input_socket_mode==d2d): BRISC socket reader path.
-    // ========================================================================
-    if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
-        deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
-        {
-            DeviceZoneScopedN("CCL_BROADCAST");
-            bcast(bcast_args);
-        }
-    }
-
-    deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
-    {
-        DeviceZoneScopedN("RMSNORM");
-        rmsnorm(rmsnorm_args);
-    }
-
-    // ========================================================================
-    // Phase 1: Mcast — multicast input from sender core to all device cores
-    //
-    // Template params: <CTArgs, IsSender, IsMcastGridCore, IsReceiverCore, PopSrc>
-    //   IsMcastGridCore: participates in semaphore-based sync (all receivers)
-    //   IsReceiverCore:  performs CB reserve/push for incoming data (all receivers)
-    //   PopSrc:          sender pops mcast_src CB after send (frees tensor-backed buffer)
-    // ========================================================================
     deepseek_b1_ops::Mcast::
         Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
             mcast;
-
-    mcast.init(mcast_args);
-    {
-        DeviceZoneScopedN("MCAST");
-        mcast(mcast_args);
-    }
-
-    mcast.teardown();
-
-    // ========================================================================
-    // Phase 2: Matmul — each matmul core computes local GEMM with its weight shard
-    //
-    // Template params: <CTArgs, IsActive, PopIn0, PopIn1>
-    //   IsActive: only matmul cores execute; others are no-ops
-    //   PopIn0:   pop mcast_dst CB (CB 1) after read (frees intermediate buffer)
-    //   PopIn1:   pop matmul_in1 CB (CB 2) after read (frees weight buffer)
-    // ========================================================================
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, true> matmul;
-    {
-        DeviceZoneScopedN("MATMUL");
-        matmul(matmul_args);
-    }
-
-    // k=1 fast path: fused sampling invocation matches micro-op style.
     deepseek_b1_ops::Sampling::
         Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
             sampling_op;
-    {
-        DeviceZoneScopedN("ARGMAX");
-        sampling_op(sampling_args);
+
+    while (true) {
+        // ====================================================================
+        // Phase 0: broadcast_rms-style combined path.
+        // ====================================================================
+        if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::persistent_mode && Core::is_input_core) {
+                auto next_iteration_semaphore = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_semaphore(Core::persistent_next_iter_semaphore_id));
+                noc_semaphore_wait(next_iteration_semaphore, 1);
+                noc_semaphore_set(next_iteration_semaphore, 0);
+            }
+#endif
+
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+            {
+                DeviceZoneScopedN("CCL_BROADCAST");
+                bcast(bcast_args);
+            }
+        }
+
+        deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
+        {
+            DeviceZoneScopedN("RMSNORM");
+            rmsnorm(rmsnorm_args);
+        }
+
+        // Keep mcast init/teardown in-loop to preserve prior ordering semantics.
+        mcast.init(mcast_args);
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(mcast_args);
+        }
+        mcast.teardown();
+
+        {
+            DeviceZoneScopedN("MATMUL");
+            matmul(matmul_args);
+        }
+
+        {
+            DeviceZoneScopedN("ARGMAX");
+            sampling_op(sampling_args);
+        }
+
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::persistent_mode && Core::is_argmax_final_core) {
+            noc_semaphore_inc(
+                get_noc_addr(
+                    input_core_noc_x, input_core_noc_y, get_semaphore(Core::persistent_next_iter_semaphore_id)),
+                1);
+            noc_async_atomic_barrier();
+        }
+#endif
+        if constexpr (!Core::persistent_mode) {
+            break;
+        }
     }
 }
