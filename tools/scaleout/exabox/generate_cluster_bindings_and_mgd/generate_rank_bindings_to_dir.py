@@ -27,7 +27,10 @@ def main():
 
     # Resolve the test executable to an absolute path now, before os.chdir moves us
     # into output_dir (where the relative path "build/..." would no longer resolve).
-    abs_test_exec = Path("build/test/tt_metal/tt_fabric/test_physical_discovery").resolve()
+    abs_test_exec = (
+        Path(__file__).resolve().parents[4] / "build" / "test" / "tt_metal" / "tt_fabric" / "test_physical_discovery"
+    ).resolve()
+    # abs_test_exec = Path(Path(__file__).resolve().parents[4] / "build/test/tt_metal/tt_fabric/test_physical_discovery").resolve()
 
     def _mapping_with_abs_exec(mapping_file):
         """Drop-in replacement for grb.generate_tray_to_pcie_device_mapping that uses

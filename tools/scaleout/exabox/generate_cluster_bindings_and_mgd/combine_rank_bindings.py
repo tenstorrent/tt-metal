@@ -53,12 +53,11 @@ _OUT_MGD = "combined_mesh_graph_descriptor.textproto"
 _TRAY_MAPPING_FILE = "tray_to_pcie_device_mapping.yaml"
 
 # Path to parse_cluster_config.py relative to this file:
-#   this file  : tests/tt_metal/tt_fabric/utils/combine_rank_bindings.py
+#   this file  : tools/scaleout/exabox/generate_cluster_bindings_and_mgd/combine_rank_bindings.py
 #   parents[4] : repo root
 #   target     : tools/scaleout/cabling_descriptor/parse_cluster_config.py
-_CLUSTER_PARSER_PATH = (
-    Path(__file__).resolve().parents[4] / "tools" / "scaleout" / "cabling_descriptor" / "parse_cluster_config.py"
-)
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_CLUSTER_PARSER_PATH = _REPO_ROOT / "tools" / "scaleout" / "cabling_descriptor" / "parse_cluster_config.py"
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +498,7 @@ def combine(hostnames, binding_filename, output_dir, cluster_config_path=None, r
     if len(mgd_paths) != 1:
         print(f"warning: hosts reference different mesh graph descriptors: {mgd_paths}", file=sys.stderr)
     source_mgd = next(iter(mgd_paths))
+    source_mgd = _REPO_ROOT / source_mgd
     if not Path(source_mgd).exists():
         print(f"error: mesh graph descriptor not found: {source_mgd}", file=sys.stderr)
         sys.exit(1)
@@ -574,6 +574,8 @@ def combine(hostnames, binding_filename, output_dir, cluster_config_path=None, r
         mgd_path_str = str(mgd_out.resolve().relative_to(Path.cwd().resolve()))
     except ValueError:
         mgd_path_str = str(mgd_out.resolve())
+    # Change MGD path string to be absolute
+    mgd_path_str = str(mgd_out.resolve())
 
     binding_out = output_dir / _OUT_BINDING
     with open(binding_out, "w") as f:
