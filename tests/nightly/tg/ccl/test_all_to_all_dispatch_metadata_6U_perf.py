@@ -13,7 +13,7 @@ Prerequisites:
     - TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto
 
 Example:
-    RUN_ALL_TO_ALL_PERF=1 TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto pytest tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U_perf.py -v
+    RUN_ALL_TO_ALL_PERF=1 TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto pytest tests/nightly/tg/ccl/test_all_to_all_dispatch_metadata_6U_perf.py -v
 """
 
 import os
