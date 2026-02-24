@@ -62,23 +62,23 @@ FORCE_INLINE void fill_tile_with_first_element(uint32_t cb_id) {
 //   Bytes 64-1087: Data section (256 uint32_t words = 1024 bytes)
 //                  4 faces x 256 bytes/face, one byte per element
 FORCE_INLINE void fill_tile_with_first_element_bfp8(uint32_t cb_id) {
-    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
-    uint8_t exp_val = byte_ptr[0];    // First exponent byte
-    uint8_t data_val = byte_ptr[64];  // First data byte (after 64 exponent bytes)
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    uint32_t packed_exp = (word_ptr[0] & 0xFF) * 0x01010101u;
+    uint32_t packed_data = (word_ptr[16] & 0xFF) * 0x01010101u;
 
-    uint32_t packed_exp =
-        (uint32_t)exp_val | ((uint32_t)exp_val << 8) | ((uint32_t)exp_val << 16) | ((uint32_t)exp_val << 24);
-    uint32_t packed_data =
-        (uint32_t)data_val | ((uint32_t)data_val << 8) | ((uint32_t)data_val << 16) | ((uint32_t)data_val << 24);
-
-    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
-    // Fill 64 exponent bytes = 16 uint32_t words
-    for (uint32_t i = 0; i < 16; ++i) {
-        write_ptr[i] = packed_exp;
+    // Fill 64 exponent bytes = 16 uint32_t words (unrolled by 4)
+    for (uint32_t i = 0; i < 16; i += 4) {
+        word_ptr[i] = packed_exp;
+        word_ptr[i + 1] = packed_exp;
+        word_ptr[i + 2] = packed_exp;
+        word_ptr[i + 3] = packed_exp;
     }
-    // Fill 1024 data bytes = 256 uint32_t words (starting at word offset 16)
-    for (uint32_t i = 0; i < 256; ++i) {
-        write_ptr[16 + i] = packed_data;
+    // Fill 1024 data bytes = 256 uint32_t words (unrolled by 4, direct indexing)
+    for (uint32_t i = 16; i < 272; i += 4) {
+        word_ptr[i] = packed_data;
+        word_ptr[i + 1] = packed_data;
+        word_ptr[i + 2] = packed_data;
+        word_ptr[i + 3] = packed_data;
     }
 }
 
@@ -208,37 +208,50 @@ FORCE_INLINE void fill_tile_with_first_row_bfp4(uint32_t cb_id) {
 // Column broadcast: left faces (0,2) have column 0 data; right faces (1,3) are zero.
 //   -> Replicate column 0 within left faces, then copy left faces to right faces.
 FORCE_INLINE void fill_tile_with_first_column_bfp8(uint32_t cb_id) {
-    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
     auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
 
-    // Process left->right face pairs: (face0->face1) and (face2->face3)
-    for (uint32_t pair = 0; pair < 2; ++pair) {
-        uint32_t left_exp_word = pair * 8;               // word 0 or 8
-        uint32_t right_exp_word = left_exp_word + 4;     // word 4 or 12
-        uint32_t left_data_byte = 64 + pair * 512;       // byte 64 or 576
-        uint32_t left_data_word = left_data_byte / 4;    // word 16 or 144
-        uint32_t right_data_word = left_data_word + 64;  // word 80 or 208
+    // --- Face pair 0: face0 (left) -> face1 (right) ---
+    // Replicate column 0 across all 16 columns in left face data (4 words per row)
+    uint32_t row_word = 16;  // left face data starts at word 16
+    for (uint32_t row = 0; row < 16; ++row) {
+        uint32_t col0_val = word_ptr[row_word] & 0xFF;
+        uint32_t packed = col0_val | (col0_val << 8) | (col0_val << 16) | (col0_val << 24);
+        word_ptr[row_word] = packed;
+        word_ptr[row_word + 1] = packed;
+        word_ptr[row_word + 2] = packed;
+        word_ptr[row_word + 3] = packed;
+        row_word += 4;
+    }
+    // Copy left face exponents to right face (words 0-3 -> 4-7)
+    word_ptr[4] = word_ptr[0];
+    word_ptr[5] = word_ptr[1];
+    word_ptr[6] = word_ptr[2];
+    word_ptr[7] = word_ptr[3];
+    // Copy left face data to right face (words 16-79 -> 80-143)
+    for (uint32_t i = 0; i < 64; ++i) {
+        word_ptr[80 + i] = word_ptr[16 + i];
+    }
 
-        // 1. Replicate column 0 across columns 1-15 in left face data (4 words per row)
-        for (uint32_t row = 0; row < 16; ++row) {
-            uint8_t col0_val = byte_ptr[left_data_byte + row * 16];
-            uint32_t packed = (uint32_t)col0_val | ((uint32_t)col0_val << 8) | ((uint32_t)col0_val << 16) |
-                              ((uint32_t)col0_val << 24);
-            uint32_t row_word = left_data_word + row * 4;
-            for (uint32_t w = 0; w < 4; ++w) {
-                word_ptr[row_word + w] = packed;
-            }
-        }
-
-        // 2. Copy left face exponents to right face (4 words)
-        for (uint32_t i = 0; i < 4; ++i) {
-            word_ptr[right_exp_word + i] = word_ptr[left_exp_word + i];
-        }
-
-        // 3. Copy left face data to right face (64 words)
-        for (uint32_t i = 0; i < 64; ++i) {
-            word_ptr[right_data_word + i] = word_ptr[left_data_word + i];
-        }
+    // --- Face pair 1: face2 (left) -> face3 (right) ---
+    // Replicate column 0 across all 16 columns in left face data (4 words per row)
+    row_word = 144;  // left face data starts at word 144
+    for (uint32_t row = 0; row < 16; ++row) {
+        uint32_t col0_val = word_ptr[row_word] & 0xFF;
+        uint32_t packed = col0_val | (col0_val << 8) | (col0_val << 16) | (col0_val << 24);
+        word_ptr[row_word] = packed;
+        word_ptr[row_word + 1] = packed;
+        word_ptr[row_word + 2] = packed;
+        word_ptr[row_word + 3] = packed;
+        row_word += 4;
+    }
+    // Copy left face exponents to right face (words 8-11 -> 12-15)
+    word_ptr[12] = word_ptr[8];
+    word_ptr[13] = word_ptr[9];
+    word_ptr[14] = word_ptr[10];
+    word_ptr[15] = word_ptr[11];
+    // Copy left face data to right face (words 144-207 -> 208-271)
+    for (uint32_t i = 0; i < 64; ++i) {
+        word_ptr[208 + i] = word_ptr[144 + i];
     }
 }
 

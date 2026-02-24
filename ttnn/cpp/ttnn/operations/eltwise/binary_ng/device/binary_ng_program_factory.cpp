@@ -477,17 +477,21 @@ bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    const DataType c_dtype) {
+    [[maybe_unused]] const DataType c_dtype) {
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
-        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+        if ((a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) ||
+            (a_dtype == DataType::BFLOAT8_B && b_dtype == DataType::BFLOAT8_B) ||
+            (a_dtype == DataType::BFLOAT4_B && b_dtype == DataType::BFLOAT4_B)) {
             return true;
         }
     }
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
-        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+        if ((a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) ||
+            (a_dtype == DataType::BFLOAT8_B && b_dtype == DataType::BFLOAT8_B) ||
+            (a_dtype == DataType::BFLOAT4_B && b_dtype == DataType::BFLOAT4_B)) {
             return true;
         }
     }
