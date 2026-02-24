@@ -46,6 +46,7 @@
 #include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "impl/debug/inspector/inspector.hpp"
+#include "tt_metal/llrt/tt_elffile.hpp"
 
 using std::flush;
 using std::int32_t;
@@ -275,6 +276,25 @@ private:
 };
 
 // New DEVICE_PRINT implementation (stub - to be implemented).
+
+// TODO: Can we reuse structure defined for device?
+struct DevicePrintHeader {
+    static constexpr uint32_t max_info_id_value = 65535;
+    static constexpr uint32_t max_message_payload_size = 1023;  // 10 bits for message_payload
+
+    uint32_t is_kernel : 1;         // 0 = firmware, 1 = kernel
+    uint32_t risc_id : 5;           // 0-31 risc id (supporting quasar)
+    uint32_t message_payload : 10;  // Message payload size (<1024 bytes)
+    uint32_t info_id : 16;          // Index into .device_print_strings_info (max 65536 entries)
+};
+static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
+
+struct DevicePrintStringInfo {
+    std::uint32_t format_string_ptr;
+    std::uint32_t file;
+    std::uint32_t line;
+};
+
 class DevicePrintImpl : public DPrintServer::Impl {
 public:
     DevicePrintImpl(llrt::RunTimeOptions& rtoptions) : DPrintServer::Impl(rtoptions) {}
@@ -291,6 +311,55 @@ protected:
 private:
     void print_buffer_data(
         ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data);
+
+    struct ElfFileCacheEntry {
+        uint32_t ref_count;
+        ll_api::ElfFile elf_file;
+        std::vector<std::byte> format_strings_info_bytes;
+        uint64_t format_strings_info_address;
+        std::vector<std::byte> format_strings_bytes;
+        uint64_t format_strings_address;
+        DevicePrintStringInfo* string_info_ptr = nullptr;
+        size_t string_info_size = 0;
+
+        void load_elf(const std::filesystem::path& elf_path) {
+            try {
+                elf_file.ReadImage(elf_path);
+                elf_file.GetSectionContents(
+                    ".device_print_strings_info", format_strings_info_bytes, format_strings_info_address);
+                elf_file.GetSectionContents(".device_print_strings", format_strings_bytes, format_strings_address);
+                string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
+                string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
+            } catch (...) {
+                // Failed to load ELF file
+            }
+        }
+    };
+
+    struct KernelIdKey {
+        ChipId device_id;
+        umd::CoreDescriptor logical_core;
+        uint32_t risc_id;
+
+        bool operator<(const KernelIdKey& other) const {
+            if (device_id != other.device_id) {
+                return device_id < other.device_id;
+            }
+            tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
+            if (core_desc_cmp(logical_core, other.logical_core)) {
+                return true;
+            }
+            if (core_desc_cmp(other.logical_core, logical_core)) {
+                return false;
+            }
+            return risc_id < other.risc_id;
+        }
+    };
+
+    std::map<std::string, ElfFileCacheEntry> elf_cache_;
+    std::map<KernelIdKey, std::string> firmware_elf_cache_;
+    std::map<std::tuple<int, uint32_t>, std::string> kernel_elf_cache_;
+    std::map<KernelIdKey, int> risc_to_last_loaded_kernel_id_;
 };
 
 void DPrintImpl::init_print_buffers_for_core(
@@ -335,18 +404,6 @@ bool DPrintImpl::core_has_outstanding_prints(
 
 // DEVICE_PRINT implementations — single shared buffer per core.
 
-// TODO: Can we reuse structure defined for device?
-struct DevicePrintHeader {
-    static constexpr uint32_t max_info_id_value = 65535;
-    static constexpr uint32_t max_message_payload_size = 1023;  // 10 bits for message_payload
-
-    uint32_t is_kernel : 1;         // 0 = firmware, 1 = kernel
-    uint32_t risc_id : 5;           // 0-31 risc id (supporting quasar)
-    uint32_t message_payload : 10;  // Message payload size (<1024 bytes)
-    uint32_t info_id : 16;          // Index into .device_print_strings_info (max 65536 entries)
-};
-static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
-
 void DevicePrintImpl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data) {
     auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -372,16 +429,63 @@ void DevicePrintImpl::print_buffer_data(
 
         // Check if we are loading new kernel
         if (header->is_kernel && header->message_payload == DevicePrintHeader::max_message_payload_size) {
-            // TODO: Load new kernel (maybe add elf reference counter, so that we can unload them when they are not used
-            // anymore?)
+            KernelIdKey kernel_id_key = {device_id, logical_core, header->risc_id};
+            auto last_loaded_kernel_id_it = risc_to_last_loaded_kernel_id_.find(kernel_id_key);
+            if (last_loaded_kernel_id_it != risc_to_last_loaded_kernel_id_.end()) {
+                if (last_loaded_kernel_id_it->second == header->info_id) {
+                    // We have already loaded this kernel, no need to do load it again.
+                    continue;
+                }
+
+                // Decrease reference count of previously loaded kernel and remove it from cache if reference count
+                // reaches 0.
+                auto prev_kernel_cache_it =
+                    kernel_elf_cache_.find(std::make_tuple(last_loaded_kernel_id_it->second, header->risc_id));
+                if (prev_kernel_cache_it != kernel_elf_cache_.end()) {
+                    auto& prev_kernel_elf_path = prev_kernel_cache_it->second;
+                    auto elf_cache_it = elf_cache_.find(prev_kernel_elf_path);
+                    if (elf_cache_it != elf_cache_.end()) {
+                        auto& kernel_entry = elf_cache_it->second;
+                        kernel_entry.ref_count--;
+                        if (kernel_entry.ref_count == 0) {
+                            elf_cache_.erase(elf_cache_it);
+                        }
+                    }
+                }
+            }
+
+            auto kernel_id = static_cast<int>(header->info_id);
+            risc_to_last_loaded_kernel_id_[kernel_id_key] = kernel_id;
+
+            auto kernel_elf_cache_it = kernel_elf_cache_.find(std::make_tuple(kernel_id, header->risc_id));
+            if (kernel_elf_cache_it != kernel_elf_cache_.end()) {
+                auto& kernel_elf_path = kernel_elf_cache_it->second;
+                auto elf_cache_it = elf_cache_.find(kernel_elf_path);
+                if (elf_cache_it != elf_cache_.end()) {
+                    // Kernel already in cache, just increase reference count and continue.
+                    auto& kernel_entry = elf_cache_it->second;
+                    kernel_entry.ref_count++;
+                    continue;
+                }
+            }
+
+            // Find elf path from inspector using kernel id
             auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
             auto risc_name = GetRiscName(device_id, logical_core, header->risc_id);
             std::transform(
                 risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
+
+            // TODO: Remove debug print
             std::cout << "Loading new kernel " << header->info_id << " on device " << device_id << " location "
-                      << virtual_core.str() << " on risc " << risc_name << std::endl;
+                      << virtual_core.str() << " on " << risc_name << std::endl;
             std::cout << "Resolved ELF path: " << elf_path << std::endl;
+
+            // Load elf file
+            kernel_elf_cache_[std::make_tuple(kernel_id, header->risc_id)] = elf_path.string();
+            auto& kernel_entry = elf_cache_[elf_path.string()];
+            kernel_entry.ref_count = 1;
+            kernel_entry.load_elf(elf_path);
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
             header->info_id == DevicePrintHeader::max_info_id_value) {
@@ -400,6 +504,45 @@ void DevicePrintImpl::print_buffer_data(
                 std::cout << data[word_index + i] << " ";
             }
             std::cout << std::dec << std::endl;
+
+            // Find elf file
+            ElfFileCacheEntry* elf_entry_ptr = nullptr;
+
+            if (header->is_kernel) {
+                KernelIdKey kernel_id_key = {device_id, logical_core, header->risc_id};
+                auto loaded_kernel_id_it = risc_to_last_loaded_kernel_id_.find(kernel_id_key);
+                if (loaded_kernel_id_it != risc_to_last_loaded_kernel_id_.end()) {
+                    auto kernel_elf_cache_it =
+                        kernel_elf_cache_.find(std::make_tuple(loaded_kernel_id_it->second, header->risc_id));
+                    if (kernel_elf_cache_it != kernel_elf_cache_.end()) {
+                        auto& kernel_elf_path = kernel_elf_cache_it->second;
+                        auto elf_cache_it = elf_cache_.find(kernel_elf_path);
+                        if (elf_cache_it != elf_cache_.end()) {
+                            elf_entry_ptr = &elf_cache_[kernel_elf_path];
+                        }
+                    }
+                }
+            } else {
+                // TODO: Find firmware elf. If it is still not loaded, load it into cache.
+            }
+
+            // Check if we found elf file for this print message.
+            if (elf_entry_ptr != nullptr) {
+                if (elf_entry_ptr->string_info_ptr != nullptr && elf_entry_ptr->string_info_size > header->info_id) {
+                    const DevicePrintStringInfo& info = elf_entry_ptr->string_info_ptr[header->info_id];
+                    if (info.format_string_ptr >= elf_entry_ptr->format_strings_address &&
+                        info.format_string_ptr <
+                            elf_entry_ptr->format_strings_address + elf_entry_ptr->format_strings_bytes.size()) {
+                        const char* format_string = reinterpret_cast<const char*>(
+                            elf_entry_ptr->format_strings_bytes.data() +
+                            (info.format_string_ptr - elf_entry_ptr->format_strings_address));
+                        std::string_view format_str(format_string);
+
+                        // TODO: Remove debug print
+                        std::cout << "Resolved format string: " << format_str << std::endl;
+                    }
+                }
+            }
 
             // Move to the next message
             word_index += (header->message_payload + 3) / 4;  // round up to nearest word
