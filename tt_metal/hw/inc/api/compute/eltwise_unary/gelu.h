@@ -55,9 +55,10 @@ ALWI void gelu_derivative_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
- * Uses Sollya-derived minimax polynomial approximation for high accuracy:
- * - Max ULP: 54 (vs 32,460 for formula-based implementation)
- * - 99.86% of BF16 values have ULP ≤ 1
+ * When fast_and_approx=false (default): uses piecewise polynomial approximation
+ * with Max ULP = 1 across all BF16 inputs.
+ *
+ * When fast_and_approx=true: uses the original formula-based implementation.
  *
  * Return value: None
  *
