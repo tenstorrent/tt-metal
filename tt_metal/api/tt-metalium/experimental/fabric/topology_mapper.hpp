@@ -71,8 +71,11 @@ struct MappedChipInfo {
     MeshCoordinate mesh_coord{0, 0};
 
     // Host information
+    // mesh_host_rank: from fabric_node_id and logical mesh (mesh graph / fabric structure)
+    // mpi_rank: from physical system (hostname -> rank via PhysicalSystemDescriptor)
     MeshHostRankId mesh_host_rank{0};
     HostName hostname;
+    int mpi_rank = -1;
 
     // Flag to track if this entry has been mapped (fabric_node_id is valid)
     bool is_mapped = false;
