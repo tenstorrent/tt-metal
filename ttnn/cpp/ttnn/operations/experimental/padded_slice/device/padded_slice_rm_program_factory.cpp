@@ -264,13 +264,18 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
         is_non_aligned = true;
     }
 
+    // The kernel advances the write pointer by the aligned row size (stick_size_offset),
+    // so the CB page size must match to avoid overflow.
+    uint32_t output_cb_page_size =
+        is_non_aligned ? tt::round_up(output_row_size_bytes, dst_buffer_alignment) : output_row_size_bytes;
+
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
     auto cb_output_tuple = tt::tt_metal::create_cb(
         output_cb_index,
         program,
         total_cores,
-        output_row_size_bytes,
+        output_cb_page_size,
         num_output_sticks_per_core,
         cb_data_format,
         output.buffer());
@@ -287,11 +292,12 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
     }
     uint32_t num_trids = 2;
     if (is_non_aligned) {
+        // Scratch page must accommodate padded_stick_size + worst-case misalignment.
         tt::tt_metal::create_cb(
             non_aligned_temp_cb_index,
             program,
             total_cores,
-            tt::align(a.logical_shape()[-1] * a.element_size(), src_buffer_alignment),
+            tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment),
             num_trids,
             cb_data_format);
     }
