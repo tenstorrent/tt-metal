@@ -47,7 +47,7 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     uint32_t output_width = output_shape[-1];
     uint32_t num_batches = output.physical_volume() / (output_height * output_width);
 
-    const uint32_t input_shard_height = input_shard_spec.shape[0];
+    // const uint32_t input_shard_height = input_shard_spec.shape[0];
     const uint32_t input_shard_width = input_shard_spec.shape[1];
     const uint32_t output_shard_height = output_shard_spec.shape[0];
     const uint32_t output_shard_width = output_shard_spec.shape[1];
@@ -121,6 +121,11 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
 
         // Shard start row per batch
         const uint32_t shard_start_row = i * output_shard_height;
+        const uint32_t logical_height_core =
+            shard_start_row < global_logical_height
+                ? std::min(output_shard_height, global_logical_height - shard_start_row)
+                : 0;
+        const uint32_t padded_height_core = output_shard_height;
 
         // For block Sharding support: Column offset in bytes. For pure HEIGHT, 0.
         const uint32_t start_col_bytes = 0;  // !TODO: later support.
@@ -133,8 +138,8 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
             src_buffer->address(),  // Base address for ShardedAddrGen
             input_shard_width,      // logical_width
             output_shard_width,     // padded_width
-            input_shard_height,     // logical_height
-            output_shard_height,    // padded_height
+            logical_height_core,    // logical_height
+            padded_height_core,     // padded_height
             global_logical_height,
             shard_start_row,
             start_col_bytes,  // For block support.
