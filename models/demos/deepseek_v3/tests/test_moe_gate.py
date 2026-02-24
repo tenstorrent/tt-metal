@@ -53,7 +53,14 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     weight_config = get_test_weight_config(
-        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoEGate,
+        hf_config,
+        (hf_state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_moe_gate",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function

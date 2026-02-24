@@ -103,6 +103,9 @@ def test_forward_pass(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_rms_norm",
+        real_weights=reference_layernorm_path is not None,
+        layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     model_state = RMSNormClass.create_state(
