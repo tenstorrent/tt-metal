@@ -2230,7 +2230,8 @@ FORCE_INLINE void noc_semaphore_inc_multicast(
         false /*linked*/,
         num_dests,
         /*multicast_path_reserve=*/true,
-        posted);
+        posted,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
     WAYPOINT("NIMD");
 }
 

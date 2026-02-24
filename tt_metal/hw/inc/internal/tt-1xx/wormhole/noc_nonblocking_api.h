@@ -953,7 +953,8 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
     // Due to a HW bug, using posted with multicast can introduce hangs.
     posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -962,6 +963,13 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
         }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT));
     NOC_CMD_BUF_WRITE_REG(
