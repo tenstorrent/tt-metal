@@ -84,7 +84,10 @@ class TTPenalties(LightweightModule):
         super().__init__()
         self.mesh_device = mesh_device
         self.cluster_shape = mesh_device.shape
-        self.max_batch_size = getattr(args, "max_batch_size", 32)
+        # Floor at 32 so that ROW_MAJOR [batch, vocab] buffers passed to
+        # ttnn.tilize always have physical_volume divisible by TILE_HW
+        # (32*32 = 1024).  32 * V is 1024-aligned for any 32-aligned V.
+        self.max_batch_size = max(getattr(args, "max_batch_size", 32), 32)
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
