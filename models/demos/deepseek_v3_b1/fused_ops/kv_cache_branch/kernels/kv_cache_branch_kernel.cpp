@@ -170,8 +170,7 @@ void kernel_main() {
         .sin_interm_cb = sin_interm_cb,
         .out_cb = k_rope_output_cb,
     };
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
