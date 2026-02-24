@@ -11,7 +11,7 @@ training_config:
   data_path: "data/shakespeare.txt"
   model_config: "configs/model_configs/nanogpt.yaml"
 
-optimizer_config: "configs/optimizer_configs/adamw_fused.yaml"
+optimizer_config: "configs/optimizer_configs/adamw.yaml"
 
 device_config:
   enable_ddp: false

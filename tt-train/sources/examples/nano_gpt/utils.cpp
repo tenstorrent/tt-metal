@@ -46,12 +46,12 @@ std::unique_ptr<ttml::optimizers::OptimizerBase> create_optimizer(
                 .epsilon = cfg.epsilon,
                 .weight_decay = cfg.weight_decay,
                 .amsgrad = cfg.amsgrad,
-                .use_kahan_summation = cfg.use_kahan_summation});
+                .stochastic_rounding = cfg.stochastic_rounding});
     }
     if (cfg.type == "MorehAdamW") {
         return std::make_unique<ttml::optimizers::MorehAdamW>(
             std::move(params),
-            ttml::optimizers::AdamWConfig{
+            ttml::optimizers::AdamWCompositeConfig{
                 .lr = cfg.lr,
                 .beta1 = cfg.beta1,
                 .beta2 = cfg.beta2,
@@ -60,17 +60,17 @@ std::unique_ptr<ttml::optimizers::OptimizerBase> create_optimizer(
                 .amsgrad = cfg.amsgrad,
                 .use_kahan_summation = cfg.use_kahan_summation});
     }
-    if (cfg.type == "AdamWFused") {
-        return std::make_unique<ttml::optimizers::AdamWFused>(
+    if (cfg.type == "AdamWComposite") {
+        return std::make_unique<ttml::optimizers::AdamWComposite>(
             std::move(params),
-            ttml::optimizers::AdamWFusedConfig{
+            ttml::optimizers::AdamWCompositeConfig{
                 .lr = cfg.lr,
                 .beta1 = cfg.beta1,
                 .beta2 = cfg.beta2,
                 .epsilon = cfg.epsilon,
                 .weight_decay = cfg.weight_decay,
                 .amsgrad = cfg.amsgrad,
-                .stochastic_rounding = cfg.stochastic_rounding});
+                .use_kahan_summation = cfg.use_kahan_summation});
     }
     if (cfg.type == "AdamWFullPrecision") {
         return std::make_unique<ttml::optimizers::AdamWFullPrecision>(
@@ -93,10 +93,10 @@ std::unique_ptr<ttml::optimizers::OptimizerBase> create_optimizer(
                 .weight_decay = cfg.weight_decay,
                 .nesterov = cfg.nesterov});
     }
-    if (cfg.type == "SGDFused") {
-        return std::make_unique<ttml::optimizers::SGDFused>(
+    if (cfg.type == "SGDComposite") {
+        return std::make_unique<ttml::optimizers::SGDComposite>(
             std::move(params),
-            ttml::optimizers::SGDFusedConfig{
+            ttml::optimizers::SGDCompositeConfig{
                 .lr = cfg.lr,
                 .momentum = cfg.momentum,
                 .dampening = cfg.dampening,

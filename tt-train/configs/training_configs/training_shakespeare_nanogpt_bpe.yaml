@@ -8,7 +8,7 @@ training_config:
   tokenizer_type: bpe
   model_config: "configs/model_configs/nanogpt.yaml"
 
-optimizer_config: "configs/optimizer_configs/adamw.yaml"
+optimizer_config: "configs/optimizer_configs/adamw_composite.yaml"
 
 device_config:
   enable_ddp: false

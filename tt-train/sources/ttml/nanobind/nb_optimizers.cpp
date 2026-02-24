@@ -18,6 +18,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/adamw_composite.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
@@ -30,6 +31,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<SGDConfig>(m, "SGDConfig");
     nb::class_<SGD, OptimizerBase>(m, "SGD");
     nb::class_<AdamWConfig>(m, "AdamWConfig");
+    nb::class_<AdamWCompositeConfig>(m, "AdamWCompositeConfig");
     nb::class_<AdamW, OptimizerBase>(m, "AdamW");
     nb::class_<MorehAdamW, OptimizerBase>(m, "MorehAdamW");
     nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
@@ -93,6 +95,23 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_adamw_composite_config = static_cast<nb::class_<AdamWCompositeConfig>>(m.attr("AdamWCompositeConfig"));
+        py_adamw_composite_config.def(nb::init<>());
+        py_adamw_composite_config.def_static(
+            "make",
+            [](float lr, float beta1, float beta2, float epsilon, float weight_decay) {
+                return AdamWCompositeConfig{
+                    .lr = lr, .beta1 = beta1, .beta2 = beta2, .epsilon = epsilon, .weight_decay = weight_decay};
+            },
+            nb::arg("lr"),
+            nb::arg("beta1"),
+            nb::arg("beta2"),
+            nb::arg("epsilon"),
+            nb::arg("weight_decay"),
+            "Make an AdamWCompositeConfig object");
+    }
+
+    {
         auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
         py_adamw.def(
             nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
@@ -101,7 +120,9 @@ void py_module(nb::module_& m) {
     {
         auto py_moreh_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("MorehAdamW"));
         py_moreh_adamw.def(
-            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+            nb::init<serialization::NamedParameters, const AdamWCompositeConfig&>(),
+            nb::arg("parameters"),
+            nb::arg("config"));
     }
 
     {

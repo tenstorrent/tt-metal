@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sgd_fused.hpp"
+#include "sgd.hpp"
 
-#include "device/sgd_fused_device_operation.hpp"
+#include "device/sgd_device_operation.hpp"
 
 namespace ttml::metal {
 
-ttnn::Tensor sgd_fused(
+ttnn::Tensor sgd(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     const float lr,
@@ -17,7 +17,7 @@ ttnn::Tensor sgd_fused(
     const float weight_decay,
     const bool nesterov,
     const std::optional<ttnn::Tensor>& momentum_buffer) {
-    return ttnn::prim::ttml_sgd_fused(param, grad, lr, momentum, dampening, weight_decay, nesterov, momentum_buffer);
+    return ttnn::prim::ttml_sgd(param, grad, lr, momentum, dampening, weight_decay, nesterov, momentum_buffer);
 }
 
 }  // namespace ttml::metal

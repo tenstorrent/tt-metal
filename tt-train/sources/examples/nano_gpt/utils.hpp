@@ -13,11 +13,11 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/adamw_composite.hpp"
 #include "optimizers/adamw_full_precision.hpp"
-#include "optimizers/adamw_fused.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/sgd.hpp"
-#include "optimizers/sgd_fused.hpp"
+#include "optimizers/sgd_composite.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"
@@ -26,7 +26,7 @@
 #include "serialization/serialization.hpp"
 
 struct OptimizerConfig {
-    std::string type = "AdamWFused";
+    std::string type = "AdamW";
     float lr = 3e-4F;
     float beta1 = 0.9F;
     float beta2 = 0.999F;
@@ -201,6 +201,4 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     return ss.str();
 }
 
-void initialize_device(
-    const tt::tt_metal::distributed::MeshShape &mesh_shape,
-    const std::vector<int> &device_ids);
+void initialize_device(const tt::tt_metal::distributed::MeshShape &mesh_shape, const std::vector<int> &device_ids);

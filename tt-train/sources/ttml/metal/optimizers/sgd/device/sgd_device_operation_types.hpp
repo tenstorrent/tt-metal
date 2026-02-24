@@ -9,7 +9,7 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::optimizers::sgd_fused::device {
+namespace ttml::metal::optimizers::sgd::device {
 
 struct operation_attributes_t {
     float lr{};
@@ -28,4 +28,4 @@ struct tensor_args_t {
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 
-}  // namespace ttml::metal::optimizers::sgd_fused::device
+}  // namespace ttml::metal::optimizers::sgd::device

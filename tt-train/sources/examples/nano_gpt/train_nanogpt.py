@@ -1354,14 +1354,6 @@ def main():
             beta2 = 0.999
             epsilon = 1e-8
 
-            adamw_config = ttml.optimizers.AdamWConfig.make(
-                training_config.learning_rate,  # lr
-                beta1,  # beta1
-                beta2,  # beta2
-                epsilon,  # epsilon
-                training_config.weight_decay,  # weight_decay
-            )
-
             # Note: use_kahan_summation is not exposed in Python API yet
             # It's a property of AdamWConfig but can't be set via make()
             # For now, we'll skip it (defaults to False)
@@ -1370,9 +1362,23 @@ def main():
             parameters = model.parameters()
 
             if training_config.use_moreh_adamw:
+                adamw_config = ttml.optimizers.AdamWCompositeConfig.make(
+                    training_config.learning_rate,
+                    beta1,
+                    beta2,
+                    epsilon,
+                    training_config.weight_decay,
+                )
                 optimizer = ttml.optimizers.MorehAdamW(parameters, adamw_config)
                 print("   - Optimizer: MorehAdamW")
             else:
+                adamw_config = ttml.optimizers.AdamWConfig.make(
+                    training_config.learning_rate,
+                    beta1,
+                    beta2,
+                    epsilon,
+                    training_config.weight_decay,
+                )
                 optimizer = ttml.optimizers.AdamW(parameters, adamw_config)
                 print("   - Optimizer: AdamW")
 

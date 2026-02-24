@@ -8,7 +8,7 @@
 
 namespace ttml::metal {
 
-ttnn::Tensor sgd_fused(
+ttnn::Tensor sgd(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
     const float lr,

@@ -86,17 +86,23 @@ def create_optimizer(model, yaml_config: dict):
     weight_decay = optimizer_config.get("weight_decay", 0.01)
     use_moreh_adamw = optimizer_config.get("use_moreh_adamw", False)
 
-    adamw_cfg = ttml.optimizers.AdamWConfig.make(
-        float(lr),
-        float(beta1),
-        float(beta2),
-        float(eps),
-        float(weight_decay),
-    )
-
     if use_moreh_adamw:
+        adamw_cfg = ttml.optimizers.AdamWCompositeConfig.make(
+            float(lr),
+            float(beta1),
+            float(beta2),
+            float(eps),
+            float(weight_decay),
+        )
         return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
     else:
+        adamw_cfg = ttml.optimizers.AdamWConfig.make(
+            float(lr),
+            float(beta1),
+            float(beta2),
+            float(eps),
+            float(weight_decay),
+        )
         return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
 
 

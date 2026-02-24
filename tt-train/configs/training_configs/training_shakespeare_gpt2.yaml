@@ -12,7 +12,7 @@ training_config:
   model_config: "configs/model_configs/gpt2s.yaml"
   tokenizer_type: "bpe"
 
-optimizer_config: "configs/optimizer_configs/adamw_fused.yaml"
+optimizer_config: "configs/optimizer_configs/adamw.yaml"
 
 device_config:
   enable_ddp: false

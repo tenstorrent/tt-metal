@@ -18,4 +18,4 @@
 #include "ops/softmax_backward/softmax_backward.hpp"
 #include "ops/swiglu_fw/swiglu_fw.hpp"
 #include "optimizers/adamw/adamw.hpp"
-#include "optimizers/sgd_fused/sgd_fused.hpp"
+#include "optimizers/sgd/sgd.hpp"

@@ -10,7 +10,7 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
 
-optimizer_config: "configs/optimizer_configs/adamw_fused.yaml"
+optimizer_config: "configs/optimizer_configs/adamw.yaml"
 
 device_config:
   enable_ddp: true

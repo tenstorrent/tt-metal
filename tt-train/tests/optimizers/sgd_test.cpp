@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "optimizers/sgd_fused.hpp"
+#include "optimizers/sgd.hpp"
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
@@ -40,7 +40,7 @@ void PrintTo(const ParityCase& pc, std::ostream* os) {
         *os << " nesterov=true";
 }
 
-class SGDFusedParityTest : public ::testing::TestWithParam<ParityCase> {
+class SGDParityTest : public ::testing::TestWithParam<ParityCase> {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
@@ -128,7 +128,7 @@ static void run_steps_and_compare(const ParityCase& pc, uint32_t steps) {
     ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
 
     // Build fused config
-    ttml::optimizers::SGDFusedConfig fused_cfg;
+    ttml::optimizers::SGDConfig fused_cfg;
     fused_cfg.lr = pc.lr;
     fused_cfg.momentum = pc.momentum;
     fused_cfg.dampening = pc.dampening;
@@ -136,20 +136,20 @@ static void run_steps_and_compare(const ParityCase& pc, uint32_t steps) {
     fused_cfg.nesterov = pc.nesterov;
 
     // Create fused optimizer
-    ttml::optimizers::SGDFused opt_fused(params_fused, fused_cfg);
+    ttml::optimizers::SGD opt_fused(params_fused, fused_cfg);
 
     auto theta_ref = autograd::create_tensor(to_tt(w0), true);
     theta_ref->set_grad(to_tt(g0));
     ttml::serialization::NamedParameters params_ref{{"theta", theta_ref}};
 
-    ttml::optimizers::SGDConfig ref_cfg;
+    ttml::optimizers::SGDCompositeConfig ref_cfg;
     ref_cfg.lr = pc.lr;
     ref_cfg.momentum = pc.momentum;
     ref_cfg.dampening = pc.dampening;
     ref_cfg.weight_decay = pc.weight_decay;
     ref_cfg.nesterov = pc.nesterov;
 
-    ttml::optimizers::SGD opt_ref(params_ref, ref_cfg);
+    ttml::optimizers::SGDComposite opt_ref(params_ref, ref_cfg);
 
     // Run both optimizers for the specified number of steps
     for (uint32_t i = 0; i < steps; ++i) {
@@ -196,7 +196,7 @@ static std::string CaseName(const ::testing::TestParamInfo<ParityCase>& info) {
     return fmt::format("{}_B{}H{}S{}C{}", c.name, c.shape[0], c.shape[1], c.shape[2], c.shape[3]);
 }
 
-TEST_P(SGDFusedParityTest, UpdateParity) {
+TEST_P(SGDParityTest, UpdateParity) {
     const auto& pc = GetParam();
     // Run 2 steps if momentum is enabled, 1 step otherwise
     const uint32_t steps = (pc.momentum != 0.0f) ? 2 : 1;
@@ -207,7 +207,7 @@ static const ParityCase kVanillaCases[] = {
     {{1, 1, 32, 32}, 1.0f, 0.0f, 0.0f, 0.0f, false, "Vanilla"},
 };
 
-INSTANTIATE_TEST_SUITE_P(SGDFusedVanillaParity, SGDFusedParityTest, ::testing::ValuesIn(kVanillaCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(SGDVanillaParity, SGDParityTest, ::testing::ValuesIn(kVanillaCases), CaseName);
 
 static const ParityCase kVanillaNightlyCases[] = {
     {{1, 1, 1, 262'144}, 1.0f, 0.0f, 0.0f, 0.0f, false, "Vanilla"},
@@ -216,14 +216,13 @@ static const ParityCase kVanillaNightlyCases[] = {
     {{1, 64, 64, 64}, 1e-6f, 0.0f, 0.0f, 0.0f, false, "Vanilla"},
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedVanillaParity, SGDFusedParityTest, ::testing::ValuesIn(kVanillaNightlyCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(NIGHTLY_SGDVanillaParity, SGDParityTest, ::testing::ValuesIn(kVanillaNightlyCases), CaseName);
 
 static const ParityCase kWDCases[] = {
     {{1, 1, 32, 32}, 1e-1f, 0.0f, 0.0f, 1.0f, false, "WD"},
 };
 
-INSTANTIATE_TEST_SUITE_P(SGDFusedWeightDecayParity, SGDFusedParityTest, ::testing::ValuesIn(kWDCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(SGDWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kWDCases), CaseName);
 
 static const ParityCase kWDNightlyCases[] = {
     {{1, 1, 1, 262'144}, 1.0f, 0.0f, 0.0f, 1.0f, false, "WD"},
@@ -234,14 +233,13 @@ static const ParityCase kWDNightlyCases[] = {
     {{1, 256, 32, 32}, 1e-5f, 0.0f, 0.0f, 1e-5f, false, "WD"},
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedWeightDecayParity, SGDFusedParityTest, ::testing::ValuesIn(kWDNightlyCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(NIGHTLY_SGDWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kWDNightlyCases), CaseName);
 
 static const ParityCase kMomCases[] = {
     {{1, 2, 32, 64}, 1e-2f, 0.9f, 0.0f, 0.0f, false, "Mom"},
 };
 
-INSTANTIATE_TEST_SUITE_P(SGDFusedMomentumParity, SGDFusedParityTest, ::testing::ValuesIn(kMomCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(SGDMomentumParity, SGDParityTest, ::testing::ValuesIn(kMomCases), CaseName);
 
 static const ParityCase kMomNightlyCases[] = {
     {{1, 8, 128, 256}, 1e-1f, 0.9f, 0.0f, 0.0f, false, "Mom"},
@@ -252,15 +250,13 @@ static const ParityCase kMomNightlyCases[] = {
     {{1, 256, 32, 32}, 1e-4f, 0.1f, 0.0f, 0.0f, false, "Mom"},
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedMomentumParity, SGDFusedParityTest, ::testing::ValuesIn(kMomNightlyCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(NIGHTLY_SGDMomentumParity, SGDParityTest, ::testing::ValuesIn(kMomNightlyCases), CaseName);
 
 static const ParityCase kMomWDCases[] = {
     {{1, 2, 32, 64}, 1e-2f, 0.9f, 0.0f, 1e-3f, false, "MomWD"},
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    SGDFusedMomentumWeightDecayParity, SGDFusedParityTest, ::testing::ValuesIn(kMomWDCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(SGDMomentumWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kMomWDCases), CaseName);
 
 static const ParityCase kMomWDNightlyCases[] = {
     {{1, 1, 1, 262'144}, 1e-2f, 0.9f, 0.0f, 1e-2f, false, "MomWD"},
@@ -271,14 +267,13 @@ static const ParityCase kMomWDNightlyCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedMomentumWeightDecayParity, SGDFusedParityTest, ::testing::ValuesIn(kMomWDNightlyCases), CaseName);
+    NIGHTLY_SGDMomentumWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kMomWDNightlyCases), CaseName);
 
 static const ParityCase kMomDampCases[] = {
     {{1, 2, 32, 64}, 1e-2f, 0.9f, 0.1f, 0.0f, false, "MomDamp"},
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    SGDFusedMomentumDampeningParity, SGDFusedParityTest, ::testing::ValuesIn(kMomDampCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(SGDMomentumDampeningParity, SGDParityTest, ::testing::ValuesIn(kMomDampCases), CaseName);
 
 static const ParityCase kMomDampNightlyCases[] = {
     {{1, 8, 128, 256}, 1e-2f, 0.9f, 0.1f, 0.0f, false, "MomDamp"},
@@ -289,14 +284,14 @@ static const ParityCase kMomDampNightlyCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedMomentumDampeningParity, SGDFusedParityTest, ::testing::ValuesIn(kMomDampNightlyCases), CaseName);
+    NIGHTLY_SGDMomentumDampeningParity, SGDParityTest, ::testing::ValuesIn(kMomDampNightlyCases), CaseName);
 
 static const ParityCase kMomDampWDCases[] = {
     {{1, 2, 32, 64}, 1e-2f, 0.9f, 0.1f, 1e-3f, false, "MomDampWD"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    SGDFusedMomentumDampeningWeightDecayParity, SGDFusedParityTest, ::testing::ValuesIn(kMomDampWDCases), CaseName);
+    SGDMomentumDampeningWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kMomDampWDCases), CaseName);
 
 static const ParityCase kMomDampWDNightlyCases[] = {
     {{1, 8, 128, 256}, 1e-2f, 0.9f, 0.1f, 1e-3f, false, "MomDampWD"},
@@ -307,8 +302,8 @@ static const ParityCase kMomDampWDNightlyCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedMomentumDampeningWeightDecayParity,
-    SGDFusedParityTest,
+    NIGHTLY_SGDMomentumDampeningWeightDecayParity,
+    SGDParityTest,
     ::testing::ValuesIn(kMomDampWDNightlyCases),
     CaseName);
 
@@ -316,7 +311,7 @@ static const ParityCase kNesterovCases[] = {
     {{1, 2, 32, 64}, 1e-2f, 0.9f, 0.0f, 0.0f, true, "Nesterov"},
 };
 
-INSTANTIATE_TEST_SUITE_P(SGDFusedNesterovParity, SGDFusedParityTest, ::testing::ValuesIn(kNesterovCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(SGDNesterovParity, SGDParityTest, ::testing::ValuesIn(kNesterovCases), CaseName);
 
 static const ParityCase kNesterovNightlyCases[] = {
     {{1, 8, 128, 256}, 1e-1f, 0.9f, 0.0f, 0.0f, true, "Nesterov"},
@@ -327,14 +322,13 @@ static const ParityCase kNesterovNightlyCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedNesterovParity, SGDFusedParityTest, ::testing::ValuesIn(kNesterovNightlyCases), CaseName);
+    NIGHTLY_SGDNesterovParity, SGDParityTest, ::testing::ValuesIn(kNesterovNightlyCases), CaseName);
 
 static const ParityCase kNesterovWDCases[] = {
     {{1, 2, 32, 64}, 1e-2f, 0.9f, 0.0f, 1e-3f, true, "NesterovWD"},
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    SGDFusedNesterovWeightDecayParity, SGDFusedParityTest, ::testing::ValuesIn(kNesterovWDCases), CaseName);
+INSTANTIATE_TEST_SUITE_P(SGDNesterovWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kNesterovWDCases), CaseName);
 
 static const ParityCase kNesterovWDNightlyCases[] = {
     {{1, 1, 1, 262'144}, 1e-2f, 0.9f, 0.0f, 1e-2f, true, "NesterovWD"},
@@ -345,7 +339,4 @@ static const ParityCase kNesterovWDNightlyCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    NIGHTLY_SGDFusedNesterovWeightDecayParity,
-    SGDFusedParityTest,
-    ::testing::ValuesIn(kNesterovWDNightlyCases),
-    CaseName);
+    NIGHTLY_SGDNesterovWeightDecayParity, SGDParityTest, ::testing::ValuesIn(kNesterovWDNightlyCases), CaseName);

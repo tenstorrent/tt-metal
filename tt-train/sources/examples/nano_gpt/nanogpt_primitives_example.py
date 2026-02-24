@@ -1167,19 +1167,27 @@ def main():
             beta1 = 0.9
             beta2 = 0.999
             epsilon = 1e-8
-            adamw_config = ttml.optimizers.AdamWConfig.make(
-                training_config.learning_rate,
-                beta1,
-                beta2,
-                epsilon,
-                training_config.weight_decay,
-            )
 
             parameters = model.parameters()
+
             if training_config.use_moreh_adamw:
+                adamw_config = ttml.optimizers.AdamWCompositeConfig.make(
+                    training_config.learning_rate,
+                    beta1,
+                    beta2,
+                    epsilon,
+                    training_config.weight_decay,
+                )
                 optimizer = ttml.optimizers.MorehAdamW(parameters, adamw_config)
                 print("   - Optimizer: MorehAdamW")
             else:
+                adamw_config = ttml.optimizers.AdamWConfig.make(
+                    training_config.learning_rate,
+                    beta1,
+                    beta2,
+                    epsilon,
+                    training_config.weight_decay,
+                )
                 optimizer = ttml.optimizers.AdamW(parameters, adamw_config)
                 print("   - Optimizer: AdamW")
 
