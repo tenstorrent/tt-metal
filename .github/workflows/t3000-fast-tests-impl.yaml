@@ -91,7 +91,7 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
-        timeout-minutes: ${{ inputs.enable-watcher && 60 || 20 }}
+        timeout-minutes: ${{ inputs.enable-watcher && 240 || 20 }}
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
@@ -104,7 +104,7 @@ jobs:
           owner: UJ45FEC7M #Allan Liu
       - name: Run t3k ttnn multiprocess tests
         id: t3k-ttnn-multiprocess-tests
-        timeout-minutes: ${{ inputs.enable-watcher && 60 || 15 }}
+        timeout-minutes: ${{ inputs.enable-watcher && 240 || 15 }}
         if: ${{ inputs.run-multiprocess-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
@@ -118,7 +118,7 @@ jobs:
 
       - name: Run t3k ttnn ccl tests
         id: t3k-ttnn-ccl-tests
-        timeout-minutes: ${{ inputs.enable-watcher && 60 || 10 }}
+        timeout-minutes: ${{ inputs.enable-watcher && 240 || 10 }}
         if: ${{ inputs.run-ccl-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
