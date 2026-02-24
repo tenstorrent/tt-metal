@@ -309,6 +309,7 @@ void JitBuildEnv::init(
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
+    this->firmware_binary_root_ = this->out_firmware_root_;
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
@@ -412,7 +413,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto target_name = jit_build_query.weakened_firmware_target_name(params);
         std::string_view suffix = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
         this->weakened_firmware_name_ =
-            fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, target_name, target_name, suffix);
+            fmt::format("{}{}/{}_{}", this->env_.firmware_binary_root_, target_name, target_name, suffix);
     }
 
     // Note the preceding slash which defies convention as this gets appended to
