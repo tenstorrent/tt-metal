@@ -933,6 +933,19 @@ void kernel_main() {
             rmsnorm(moe.routed.rmsnorm_args);
         }
 
+#ifdef ENABLE_BCAST
+        // Pop CB 25 after consumers (residual mcast + RMSNorm) are done,
+        // so next iteration's setup_sharded_buffer can push new data
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t bcast_residual_cb = get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+            constexpr uint32_t bcast_residual_pages =
+                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
+            cb_pop_front(bcast_residual_cb, bcast_residual_pages);
+        }
+#endif
+#endif
+
         // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
         {
             DeviceZoneScopedN("MCAST");
