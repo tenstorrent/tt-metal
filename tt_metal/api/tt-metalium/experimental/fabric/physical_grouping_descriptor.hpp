@@ -16,6 +16,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 // Forward declaration
 namespace tt::tt_metal {
@@ -39,8 +40,8 @@ struct GroupingItemInfo {
     enum class CornerOrientation { NW, NE, SW, SE };  // Corner orientation for mesh groupings
 
     ItemType type;
-    uint32_t asic_location = 0;  // Only valid if type == ASIC_LOCATION
-    uint32_t tray_id = 0;        // Tray ID (1-4) if available, 0 otherwise
+    tt::tt_metal::ASICLocation asic_location{0};  // Only valid if type == ASIC_LOCATION
+    tt::tt_metal::TrayID tray_id{0};              // Tray ID (1-4) if available, 0 otherwise
 
     std::string grouping_name;   // Only valid if type == GROUPING_REF
     std::vector<CornerOrientation>
