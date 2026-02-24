@@ -2936,7 +2936,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
 
     // Test 2x8_Mesh BH - should pass (fits in single galaxy; uses TRAY_1+TRAY_2 or TRAY_3+TRAY_4)
     {
-        const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh BH");
+        const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh WH");
         ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh BH grouping not found";
 
         auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
