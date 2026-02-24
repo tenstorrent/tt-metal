@@ -51,8 +51,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("moe_gate_eps"),
         get_named_compile_time_arg_val("moe_gate_scaling_factor"),
         get_named_compile_time_arg_val("moe_gate_enable_sigmoid")>;
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

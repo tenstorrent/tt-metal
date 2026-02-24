@@ -608,8 +608,7 @@ void kernel_main() {
     // Compute has no runtime args
     deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
 #endif
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ============================================================================

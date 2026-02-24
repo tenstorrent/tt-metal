@@ -88,7 +88,7 @@ class KVCacheUpdate:
             ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
             ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
             ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
-            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests),
+            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests - 1),
             ("kv_cache_cur_pos_ready_semaphore_id", 0),
         ]
         trisc_named = [

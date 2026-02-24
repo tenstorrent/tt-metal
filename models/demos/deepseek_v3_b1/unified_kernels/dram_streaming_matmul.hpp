@@ -176,6 +176,9 @@ struct DRAMStreamingMatmul {
                 expert_offset_bytes = expert_idx * expert_size_bytes;
             }
 
+            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
+            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
             // Setup DRAM read for in1
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
             uint32_t l1_write_addr_in1;

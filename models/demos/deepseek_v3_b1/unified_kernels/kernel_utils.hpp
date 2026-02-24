@@ -8,6 +8,9 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #endif
+#if defined(COMPILE_FOR_TRISC)
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
+#endif
 
 // Firmware-set logical coordinates (defined in brisc.cc, ncrisc.cc, trisc.cc)
 extern uint8_t my_logical_x_;

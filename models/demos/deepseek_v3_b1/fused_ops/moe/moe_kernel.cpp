@@ -876,8 +876,7 @@ void kernel_main() {
         } shared;
     } moe;
 
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ============================================================================
