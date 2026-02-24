@@ -16,7 +16,7 @@ def roll(tensor, shifts, dims):
         shifts = (shifts,)
     if isinstance(dims, int):
         dims = (dims,)
-    assert len(shifts) == len(dims)
+
     result = tensor
     shape = result.shape
     num_dims = len(shape)
@@ -25,6 +25,7 @@ def roll(tensor, shifts, dims):
         shift %= shape[dim]
         if shift == 0:
             continue
+
         start_left = [0] * num_dims
         end_left = list(shape)
         start_right = [0] * num_dims
@@ -32,21 +33,11 @@ def roll(tensor, shifts, dims):
         start_left[dim] = shape[dim] - shift
         end_right[dim] = shape[dim] - shift
 
-        left_part = ttnn.slice(
-            result,
-            slice_start=start_left,
-            slice_end=end_left,
-            slice_step=[1] * num_dims,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        right_part = ttnn.slice(
-            result,
-            slice_start=start_right,
-            slice_end=end_right,
-            slice_step=[1] * num_dims,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        result = ttnn.concat([left_part, right_part], dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        left_part = ttnn.slice(result, slice_start=start_left, slice_end=end_left, slice_step=[1] * num_dims)
+        right_part = ttnn.slice(result, slice_start=start_right, slice_end=end_right, slice_step=[1] * num_dims)
+        result = ttnn.concat([left_part, right_part], dim)
+        ttnn.deallocate(left_part)
+        ttnn.deallocate(right_part)
     return result
 
 
@@ -68,9 +59,11 @@ class TtSwinAttention:
         B, H, W, C = input_tensor.shape
         pad_r = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
         pad_b = (self.window_size[0] - H % self.window_size[0]) % self.window_size[0]
-        pad_values = (B, H + pad_b, W + pad_r, C)
-        input_tensor = ttnn.pad(input_tensor, pad_values, [0, 0, 0, 0], 0)
-        _, pad_H, pad_W, _ = input_tensor.shape
+        pad_H = H + pad_b
+        pad_W = W + pad_r
+
+        if pad_b > 0 or pad_r > 0:
+            input_tensor = ttnn.pad(input_tensor, [(0, 0), (0, pad_b), (0, pad_r), (0, 0)], value=0.0)
 
         shift_size = self.shift_size.copy()
         if self.window_size[0] >= pad_H:
@@ -84,64 +77,53 @@ class TtSwinAttention:
 
         # partition windows
         num_windows = (pad_H // self.window_size[0]) * (pad_W // self.window_size[1])
+        nH = pad_H // self.window_size[0]
+        nW = pad_W // self.window_size[1]
+        wH = self.window_size[0]
+        wW = self.window_size[1]
+
         input_tensor = ttnn.reshape(
-            input_tensor,
-            (
-                B,
-                pad_H // self.window_size[0],
-                self.window_size[0],
-                pad_W // self.window_size[1],
-                self.window_size[1],
-                C,
-            ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        input_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2, 4, 5), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        input_tensor = ttnn.reshape(
-            input_tensor,
-            (B * num_windows, self.window_size[0] * self.window_size[1], C),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.transpose(ttnn.reshape(input_tensor, (B, nH, wH, nW, wW, C)), 2, 3), (B * num_windows, wH * wW, C)
         )
 
         # QKV projection
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        seq_len = wH * wW
+        head_dim = C // self.num_heads
+
         qkv = ttnn.linear(
-            input_tensor,
+            ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             self.parameters["qkv"]["weight"],
             bias=self.parameters["qkv"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True
             ),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        seq_len = input_tensor.shape[1]
-        head_dim = C // self.num_heads
-        qkv = ttnn.reshape(qkv, (B * num_windows, seq_len, 3, self.num_heads, head_dim))
-        qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(input_tensor)
 
-        q = qkv[0]
-        k = qkv[1]
-        v = qkv[2]
-        q = ttnn.squeeze(q, 0)
-        k = ttnn.squeeze(k, 0)
-        v = ttnn.squeeze(v, 0)
+        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q = ttnn.slice(qkv, [0, 0, 0], [B * num_windows, seq_len, C])
+        k = ttnn.slice(qkv, [0, 0, C], [B * num_windows, seq_len, 2 * C])
+        v = ttnn.slice(qkv, [0, 0, 2 * C], [B * num_windows, seq_len, 3 * C])
+        ttnn.deallocate(qkv)
 
-        # scaled dot-product attention
-        q = q * (head_dim**-0.5)
-        k = ttnn.permute(k, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q = ttnn.transpose(ttnn.reshape(q, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
+        k = ttnn.permute(ttnn.reshape(k, (B * num_windows, seq_len, self.num_heads, head_dim)), (0, 2, 3, 1))
+        v = ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
+
+        scale = head_dim**-0.5
+        q = ttnn.to_layout(q * scale, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.matmul(
             q,
             k,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
             ),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(qkv)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
 
@@ -150,55 +132,44 @@ class TtSwinAttention:
 
         # attention mask for shifted windows
         if sum(shift_size) > 0 and self.attn_mask is not None:
-            attn = attn + self.attn_mask
-            attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            attn = ttnn.reshape(attn, (-1, self.num_heads, seq_len, seq_len))
-            attn = ttnn.to_layout(attn, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn = ttnn.reshape(
+                attn + self.attn_mask,
+                (B * num_windows, self.num_heads, seq_len, seq_len),
+            )
 
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.matmul(
             attn,
             v,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
             ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(v)
         ttnn.deallocate(attn)
 
-        output = ttnn.permute(output, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.transpose(output, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B * num_windows, seq_len, C))
 
-        # output projection
-        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.linear(
-            output,
+            ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
             ),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # reverse windows
-        output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.reshape(
-            output,
-            (
-                B,
-                pad_H // self.window_size[0],
-                pad_W // self.window_size[1],
-                self.window_size[0],
-                self.window_size[1],
-                C,
-            ),
-        )
-        output = ttnn.permute(output, (0, 1, 3, 2, 4, 5), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.reshape(output, (B, nH, nW, wH, wW, C))
+        output = ttnn.transpose(output, 2, 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B, pad_H, pad_W, C))
 
         # reverse cyclic shift
@@ -206,5 +177,6 @@ class TtSwinAttention:
             output = roll(output, (shift_size[0], shift_size[1]), [1, 2])
 
         # unpad
-        output = output[:, :H, :W, :]
+        if pad_b > 0 or pad_r > 0:
+            output = ttnn.slice(output, [0, 0, 0, 0], [B, H, W, C], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return output

@@ -24,26 +24,26 @@ class TtSwinBlock:
 
     def __call__(self, input_tensor):
         # LN1 -> Attention
-        norm1 = ttnn.layer_norm(
-            input_tensor,
-            weight=self.parameters["norm1"]["weight"],
-            bias=self.parameters["norm1"]["bias"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        attn_out = self.attn(
+            ttnn.layer_norm(
+                input_tensor,
+                weight=self.parameters["norm1"]["weight"],
+                bias=self.parameters["norm1"]["bias"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         )
-        attn_out = self.attn(norm1)
         output = input_tensor + attn_out
-        ttnn.deallocate(norm1)
+        ttnn.deallocate(attn_out)
 
         # LN2 -> MLP
-        norm2 = ttnn.layer_norm(
-            output,
-            weight=self.parameters["norm2"]["weight"],
-            bias=self.parameters["norm2"]["bias"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mlp_out = self.mlp(
+            ttnn.layer_norm(
+                output,
+                weight=self.parameters["norm2"]["weight"],
+                bias=self.parameters["norm2"]["bias"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         )
-        ttnn.deallocate(attn_out)
-        mlp_out = self.mlp(norm2)
-        output = output + mlp_out
-        ttnn.deallocate(norm2)
+        result = output + mlp_out
         ttnn.deallocate(mlp_out)
-        return output
+        return result
