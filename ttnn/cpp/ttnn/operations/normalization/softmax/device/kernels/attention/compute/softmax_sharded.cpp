@@ -20,13 +20,14 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
     cb_reserve_back(cb_max, 1);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(cb_in, cb_bcast_scaler, cb_max);
     cb_wait_front(cb_bcast_scaler, 1);
     for (uint32_t w = 0; w < block_w; w++) {
         constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, w, bcast_scaler0, 0);
+        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(
+            cb_in, cb_bcast_scaler, w, bcast_scaler0, 0);
     }
-    reduce_uninit();
+    reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_in);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_max);
@@ -223,7 +224,7 @@ void kernel_main() {
             constexpr uint32_t bcast_scaler0 = 0;
             reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, w, bcast_scaler0, dst0);
         }
-        reduce_uninit();
+        reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_exps);
         recip_tile_init();
         recip_tile(dst0);
         tile_regs_commit();
