@@ -2,14 +2,14 @@
 
 Five demos showcasing different fusion capabilities on Tenstorrent Wormhole hardware.
 
-**Test file:** `tests/ttnn/unit_tests/operations/fused/test_fused_demo.py`
+**Test file:** `tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py`
 
 ```bash
 # Run tests:
-python -m pytest tests/ttnn/unit_tests/operations/fused/test_fused_demo.py -xvs
+python -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs
 
 # Run with Tracy device profiler:
-TT_METAL_DEVICE_PROFILER=1 python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/fused/test_fused_demo.py -xvs
+TT_METAL_DEVICE_PROFILER=1 python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs
 ```
 
 All timing measured on Wormhole n150, BF16, `l1_small_size=24576`.
@@ -54,7 +54,7 @@ For the fused op, E2E is just its single `FW DURATION` (one firmware window, no 
 
 The first invocation of each op+config variant in a new process incurs ~15 ms of JIT cache deserialization (loading compiled programs from the on-disk cache into per-process memory). This one-time cost dominates the `OP TO OP LATENCY` column and obscures the true steady-state dispatch overhead.
 
-To avoid this, each test runs its unfused op chain **twice**. The first pass (warmup) populates the per-process JIT cache. The second pass (measured) reflects steady-state dispatch. In the Tracy CSV, the warmup ops appear as earlier rows with large `OP TO OP LATENCY` values (millions of ns); the measured ops appear as later rows with small values (30–60 us). Only the second-pass rows are reported below.
+To avoid this, the **entire suite runs twice** via a class-scoped `iteration` fixture. The first pass (warmup) runs all 5 demos, populating the per-process JIT cache for every kernel — fused and unfused. The second pass (timed) is all cache hits and provides accurate timing. In the Tracy CSV, the warmup ops appear as earlier rows with large `OP TO OP LATENCY` values (millions of ns); the timed ops appear as later rows with small values (30–60 us). Only the second-pass rows are reported below.
 
 Fused ops appear in the CSV as `GenericOpDeviceOperation`.
 
@@ -78,7 +78,10 @@ Basic sequential chaining of heterogeneous ops (norm + matmul + norm) into a sin
 | Weight B (matmul) | `(1, 1, 128, 128)` | 4x4 | BF16, DRAM interleaved |
 | Output | `(1, 1, 256, 128)` | 8x4 | BF16, DRAM interleaved |
 
-- **Grid:** 4x2 = 8 cores, `per_core_M=1`, `per_core_N=4`, `in0_block_w=4`
+**Program configs:**
+- **RMS #1, RMS #2:** Interleaved, `(0,0)-(3,1)` = 4x2 = 8 cores
+- **Matmul:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(4, 2), in0_block_w=4, out_subblock_h=1, out_subblock_w=4, per_core_M=1, per_core_N=4)`
+
 - **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (all 3 phases)
 
 **Dataflow:**
@@ -115,9 +118,11 @@ Fusion with block-sharded memory layout. The CB allocator detects pinned buffer 
 | Weight | `(1, 1, 1, 512)` | 1x16 | BF16, DRAM interleaved |
 | Output | `(1, 1, 128, 512)` | 4x16 | BF16, block-sharded L1 |
 
-- **Grid:** 4x4 = 16 cores
 - **Shard spec:** `(32, 128)` = 1x4 tiles per core, `ROW_MAJOR` orientation
-- **Program config:** `LayerNormShardedMultiCoreProgramConfig(subblock_w=4, block_h=1, block_w=4)`
+
+**Program configs:**
+- **RMS, LN:** `LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(4, 4), subblock_w=4, block_h=1, block_w=4, inplace=False)`, 4x4 = 16 cores
+
 - **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (both phases)
 
 **Timing:**
@@ -163,9 +168,14 @@ Nested `Sequential`/`Parallel` composition expressing a tree-shaped dataflow gra
 | Weight (norm) | `(1, 1, 1, 128)` | 1x4 | BF16, DRAM interleaved |
 | Weight B (matmul) | `(1, 1, 128, 128)` | 4x4 | BF16, DRAM interleaved |
 
-- **Grid:** 8x8 = 64 cores total, subdivided per branch (split by rows so matmul grid_y divides N_tiles=4)
-- **Matmul configs:** `right_mm` 8x4=32 cores (`per_core_M=2`), `ll_mm` 4x4=16 cores (`per_core_M=4`)
-- **`per_core_M` rule:** Each branch processes the full tensor. `per_core_M = total_M_tiles / num_cores`
+**Program configs:**
+- **stem_rms:** Interleaved, `(0,0)-(7,7)` = 8x8 = 64 cores
+- **left_ln:** Interleaved, `(0,0)-(7,3)` = 8x4 = 32 cores
+- **right_mm:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(8, 4), in0_block_w=4, out_subblock_h=1, out_subblock_w=4, per_core_M=2, per_core_N=4)`, `(0,4)-(7,7)` = 8x4 = 32 cores
+- **ll_mm:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(4, 4), in0_block_w=4, out_subblock_h=1, out_subblock_w=4, per_core_M=4, per_core_N=4)`, `(0,0)-(3,3)` = 4x4 = 16 cores
+- **lr_rms:** Interleaved, `(4,0)-(7,3)` = 4x4 = 16 cores
+- `per_core_M = total_M_tiles / num_cores` (each branch processes the full tensor, grid split by rows so matmul `grid_y` divides `N_tiles=4`)
+
 - **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (all 5 ops)
 
 **API:**
@@ -268,8 +278,12 @@ Two completely independent 2-op chains running on disjoint 4x4 core groups withi
 | Input B | `(1, 1, 512, 128)` | 16x4 | BF16, DRAM interleaved |
 | Weight B | `(1, 1, 128, 128)` | 4x4 | BF16, DRAM interleaved |
 
-- **Chain A:** LN -> Matmul on `(0,0)-(3,3)` = 4x4 = 16 cores, `per_core_M=1`, `per_core_N=4`, `in0_block_w=4`
-- **Chain B:** RMS -> Matmul on `(4,0)-(7,3)` = 4x4 = 16 cores, same matmul config
+**Program configs:**
+- **Chain A — LN:** Interleaved, `(0,0)-(3,3)` = 4x4 = 16 cores
+- **Chain A — Matmul:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(4, 4), in0_block_w=4, out_subblock_h=1, out_subblock_w=4, per_core_M=1, per_core_N=4)`
+- **Chain B — RMS:** Interleaved, `(4,0)-(7,3)` = 4x4 = 16 cores
+- **Chain B — Matmul:** Same `MatmulMultiCoreReuseProgramConfig` as Chain A
+
 - **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (all 4 ops)
 
 **API:**
@@ -326,8 +340,13 @@ Sender core (0,0):                    Receiver core (1,0):
 | Receiver | core `(1,0)`, standalone consumer program |
 | GlobalCB | 2-tile double-buffer (`4096` bytes) |
 
+**Program configs:**
+- **gcb_sender (phase 0):** Custom reader + compute + GlobalCB writer on `(0,0)`, 1 core
+- **identity (phase 1):** Custom reader + compute + DRAM writer on `(0,0)`, 1 core
+- **gcb_consumer:** Custom GlobalCB reader + DRAM writer on `(1,0)`, 1 core
+- All kernels are `SOURCE_CODE` (not factory descriptors, no `ProgramConfig` objects)
+
 - **Compute:** Identity tile copy (unary `copy_tile`)
-- **Kernels:** Custom `SOURCE_CODE` kernels (not factory descriptors)
 
 **Timing:**
 
