@@ -187,9 +187,6 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(device_id, num_hw_cqs, dispatch_core_config);
-
-    size_t trace_region_alignment = hal.get_alignment(HalMemType::DRAM) * soc_desc.get_num_dram_views();
-    size_t aligned_trace_region_size = (trace_region_size + trace_region_alignment - 1) / trace_region_alignment * trace_region_alignment;
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
@@ -201,7 +198,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
-         .trace_region_size = aligned_trace_region_size,
+         .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = cluster.get_worker_logical_to_virtual_x(device_id),
          .worker_log_to_virtual_routing_y = cluster.get_worker_logical_to_virtual_y(device_id),
