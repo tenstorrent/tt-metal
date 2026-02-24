@@ -246,7 +246,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                     mm_cores_y=mm_core_grid.y,
                     mm_block_ht=mm_block_m // TILE_SIZE,
                     mm_block_wt=mm_block_n // TILE_SIZE,
-                    mm_N_block_wt=N // TILE_SIZE // mm_core_grid.x,
+                    mm_N_full_block_wt=N // TILE_SIZE // mm_core_grid.x,
                     chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
                 )
             elif rs_mode == "separate":
@@ -506,6 +506,51 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 num_workers_per_link=3,  # 8 RS cores, 64 total (full grid)
             ),
             id="xlarge_3584_y7_Nwt16_cwimb2_rs3_fullgrid",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9216,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 6),
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=6,
+            ),
+            id="xlarge_9216_3456_5120_cwimb1_rs3",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=10752,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 7),
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=3,
+            ),
+            id="xlarge_10752_3456_5120_cwimb1_rs3_fullgrid",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 4),
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=3,
+            ),
+            id="xlarge_9472_3456_5120_cwimb1_rs3_fullgrid",
         ),
     ],
 )
