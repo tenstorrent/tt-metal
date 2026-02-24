@@ -2893,7 +2893,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
             }
         }
         for (const auto& mesh : all_mesh_groupings) {
-            if (mesh.name.find(name) == 0) {
+            if (mesh.name.starts_with(name)) {
                 return &mesh;
             }
         }
@@ -3224,7 +3224,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_8x16Mesh) {
             EXPECT_EQ(grouping.asic_count, 128u) << "Should have 128 ASICs";
             // Accept any grouping with 128 ASICs (8x16_Mesh or 4x32_Mesh are both valid)
             // Names may be uniquified if there are duplicates
-            EXPECT_TRUE(grouping.name == "8x16_Mesh" || grouping.name.find("8x16_Mesh") == 0)
+            EXPECT_TRUE(grouping.name == "8x16_Mesh" || grouping.name.starts_with("8x16_Mesh"))
                 << "Should match a 128-ASIC mesh grouping (name: " << grouping.name << ")";
         }
     }
@@ -3408,10 +3408,10 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Phase3_HigherLayer
 
     // Grouping names may have suffixes (e.g., mesh_2x4_0, mesh_4x2_1) due to flattened combinations
     bool m0_has_mesh_2x4_or_4x2 = std::any_of(m0_groupings.begin(), m0_groupings.end(), [](const auto& g) {
-        return g.name.find("mesh_2x4") == 0 || g.name.find("mesh_4x2") == 0;
+        return g.name.starts_with("mesh_2x4") || g.name.starts_with("mesh_4x2");
     });
     bool m1_has_mesh_2x4_or_4x2 = std::any_of(m1_groupings.begin(), m1_groupings.end(), [](const auto& g) {
-        return g.name.find("mesh_2x4") == 0 || g.name.find("mesh_4x2") == 0;
+        return g.name.starts_with("mesh_2x4") || g.name.starts_with("mesh_4x2");
     });
 
     EXPECT_TRUE(m0_has_mesh_2x4_or_4x2) << "M0 (2x4) should map to at least one of mesh_2x4 or mesh_4x2";
