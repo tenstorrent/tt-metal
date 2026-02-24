@@ -46,7 +46,7 @@ void kernel_main() {
     // Constants for MoEGPT
     // GPT-OSS: K=2880 -> 90 tiles height, N=2880 -> 90 tiles
     constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
-    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;        // 240
+    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;        // 90
 
     const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
     const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
