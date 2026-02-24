@@ -29,17 +29,13 @@ Training hyperparameters and optimization settings.
 | `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
 | `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
 
-### Optimizer Parameters
+### Optimizer
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `learning_rate` | float | 3e-4 | Learning rate |
-| `beta1` | float | 0.9 | Adam beta1 parameter |
-| `beta2` | float | 0.999 | Adam beta2 parameter |
-| `eps` | float | 1e-8 | Adam epsilon parameter |
-| `weight_decay` | float | 1e-2 | Weight decay for regularization |
+| `optimizer_config` | str | — | Path to optimizer config YAML (e.g. `"configs/optimizer_configs/adamw.yaml"`) |
 | `use_no_op` | bool | false | Use no-op optimizer (no parameter updates) |
-| `use_moreh_adamw` | bool | false | Use Moreh AdamW optimizer |
-| `use_kahan_summation` | bool | false | Use Kahan summation in AdamW |
+
+Optimizer hyperparameters (type, lr, weight_decay, etc.) are specified in the optimizer config YAML file. See [Optimizer Configuration](#optimizer-configuration-optimizer_configs) below.
 
 ### Gradient Clipping Parameters
 | Parameter | Type | Default | Description |
@@ -57,10 +53,7 @@ training_config:
   gradient_accumulation_steps: 8
   num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
-  use_moreh_adamw: true
-  use_kahan_summation: false
+  optimizer_config: "configs/optimizer_configs/adamw.yaml"
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
@@ -221,8 +214,65 @@ The main executable accepts these command line arguments:
 tt-train/configs/
 ├── training_configs/          # Training configuration files
 ├── model_configs/            # Model architecture configurations
+├── optimizer_configs/        # Optimizer configuration files
 ├── multihost_configs/        # MultiHost execution configurations (if separated)
 └── README.md                 # This file
+```
+
+## Optimizer Configuration (`optimizer_configs/`)
+
+Each optimizer is fully specified by its own YAML file. The training config
+references it via `optimizer_config`.
+
+### Available Optimizer Configs
+
+| File | Type | Description |
+|------|------|-------------|
+| `adamw.yaml` | AdamW | Fused AdamW — single custom kernel per step (default, recommended). Supports stochastic rounding. |
+| `adamw_full_precision.yaml` | AdamWFullPrecision | AdamW with fp32 master weights and optimizer state; casts back to bf16 for the forward pass. Use when bf16 accumulation causes training instability. |
+| `moreh_adamw.yaml` | MorehAdamW | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation |
+| `adamw_composite.yaml` | AdamWComposite | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
+| `sgd.yaml` | SGD | Fused SGD — single custom kernel per step (default, recommended) |
+| `sgd_composite.yaml` | SGDComposite | SGD built from individual TTNN ops (no custom kernel) |
+| `no_op.yaml` | NoOp | No-op optimizer (no parameter updates) |
+
+### AdamW Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | str | — | Optimizer type (e.g. `"AdamW"`, `"MorehAdamW"`) |
+| `lr` | float | 3e-4 | Learning rate |
+| `beta1` | float | 0.9 | Exponential decay rate for first moment |
+| `beta2` | float | 0.999 | Exponential decay rate for second moment |
+| `epsilon` | float | 1e-8 | Numerical stability constant |
+| `weight_decay` | float | 1e-2 | Weight decay coefficient |
+| `amsgrad` | bool | false | Use AMSGrad variant |
+| `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
+| `use_kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
+
+### SGD Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | str | — | Optimizer type (`"SGD"` or `"SGDComposite"`) |
+| `lr` | float | 1e-3 | Learning rate |
+| `momentum` | float | 0.0 | Momentum factor |
+| `dampening` | float | 0.0 | Dampening for momentum |
+| `weight_decay` | float | 0.0 | Weight decay coefficient |
+| `nesterov` | bool | false | Enable Nesterov momentum |
+
+### Example
+
+```yaml
+# configs/optimizer_configs/adamw.yaml
+type: AdamW
+lr: 0.0003
+beta1: 0.9
+beta2: 0.999
+epsilon: 1.0e-8
+weight_decay: 0.01
+amsgrad: false
+stochastic_rounding: false
 ```
 
 ## Configuration Loading
@@ -254,10 +304,7 @@ training_config:
   gradient_accumulation_steps: 8
   num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
-  use_moreh_adamw: true
-  use_kahan_summation: false
+  optimizer_config: "configs/optimizer_configs/adamw.yaml"
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
