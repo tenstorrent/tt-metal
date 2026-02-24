@@ -18,7 +18,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "api/compute/eltwise_unary/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/gelu.h"
 
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
@@ -279,6 +279,21 @@ void kernel_main() {
             mul_tiles_init(cb_xmm, cb_ex2pe);
             for (auto i : block.local()) {
                 mul_tiles(cb_xmm, cb_ex2pe, i, 0, i);
+                // NOTE: SFPU_OP_INIT_ACTIVATION / SFPU_OP_FUNC_ACTIVATION are never defined
+                // when this kernel is reached from an RMSNorm-based op (e.g.
+                // dit_rms_norm_unary_fused). The `large_tensor_needed` path in
+                // layernorm_op_multi_core.cpp is gated behind `if (!rms_norm ...)`, so this
+                // kernel is only compiled for LayerNorm. These guards are here for consistency
+                // with the other layernorm kernels in case that changes in the future.
+#ifdef SFPU_OP_INIT_ACTIVATION
+                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
+                // activation will be applied after the gamma/beta multiplication/addition.
+                // Otherwise, we can apply the activation here.
+                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+#endif
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -289,12 +304,6 @@ void kernel_main() {
             cb_reserve_back(cb_fusion, block.full_block_size());
             pack_reconfig_data_format(cb_fusion);
             for (auto i : block.local()) {
-#ifdef SFPU_OP_INIT_ACTIVATION
-                if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-                }
-#endif
                 pack_tile(i, cb_fusion);
             }
             tile_regs_release();
@@ -313,6 +322,13 @@ void kernel_main() {
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
+                    // See note above: SFPU_OP_INIT_ACTIVATION is never defined for RMSNorm.
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    if constexpr (do_beta != 1) {
+                        SFPU_OP_INIT_ACTIVATION
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+#endif
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_gamma, block.full_block_size());
@@ -320,10 +336,6 @@ void kernel_main() {
                 if constexpr (!do_beta) {
                     cb_reserve_back(cb_out, block.full_block_size());
                     for (auto i : block.local()) {
-#ifdef SFPU_OP_INIT_ACTIVATION
-                        SFPU_OP_INIT_ACTIVATION
-                        SFPU_OP_FUNC_ACTIVATION
-#endif
                         pack_tile(i, cb_out);
                     }
                     cb_push_back(cb_out, block.full_block_size());
@@ -347,16 +359,17 @@ void kernel_main() {
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
+                    // See note above: SFPU_OP_INIT_ACTIVATION is never defined for RMSNorm.
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_beta, block.full_block_size());
                 cb_pop_front(cb_fusion, block.full_block_size());
                 cb_reserve_back(cb_out, block.full_block_size());
                 for (auto i : block.local()) {
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-#endif
                     pack_tile(i, cb_out);
                 }
                 tile_regs_release();

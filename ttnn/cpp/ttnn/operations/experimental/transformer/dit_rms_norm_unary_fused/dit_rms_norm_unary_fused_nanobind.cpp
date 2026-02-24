@@ -57,7 +57,7 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
         compute_kernel_config : Optional[ttnn.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If not provided, defaults to HiFi4 with approx mode.
 
-        activation : Optional[str or ttnn.UnaryWithParam], default: None
+        activation : Optional[Union[str, ttnn.UnaryOpType, ttnn.UnaryWithParam]], default: None
             Unary activation to apply after normalization. Supports string names (e.g. ``"silu"``, ``"gelu"``)
             or ``ttnn.UnaryOpType`` / ``ttnn.UnaryWithParam`` objects.
             If ``None``, no activation is applied (equivalent to plain rms_norm).

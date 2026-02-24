@@ -509,8 +509,11 @@ KernelDefines KernelDefines::build(
     }
     if (fused_activation.has_value()) {
         const auto& act = fused_activation.value();
+        // The inner tile loop variable in layernorm_sharded.cpp is "w" (dst register index).
+        // Using "i" would refer to the outer block_h loop and apply the activation to the
+        // wrong dst register.
         auto act_defines =
-            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "i", output_dtype);
+            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "w", output_dtype);
         for (auto& [key, val] : act_defines) {
             defines.compute.emplace_back(key, val);
         }

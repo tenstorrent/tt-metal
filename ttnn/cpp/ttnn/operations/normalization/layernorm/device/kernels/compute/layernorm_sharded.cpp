@@ -13,7 +13,13 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/gelu.h"
+
+// DEBUG ONLY:
+#define XSTR(x) STR(x)
+#define STR(x) #x
+
+#pragma message "The value of SFPU_OP_FUNC_ACTIVATION: " XSTR(SFPU_OP_FUNC_ACTIVATION)
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -33,6 +39,8 @@ void kernel_main() {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+
+    MATH(DPRINT << "Value of SFPU_OP_FUNC_ACTIVATION: " XSTR(SFPU_OP_FUNC_ACTIVATION) << ENDL(););
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
@@ -356,17 +364,21 @@ void kernel_main() {
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
                 mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
+                // activation will be applied after the gamma/beta multiplication/addition.
+                // Otherwise, we can apply the activation here.
+                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+#endif
             }
             tile_regs_commit();
 
             tile_regs_wait();
             for (uint32_t i = 0; i < subblock_w; i++) {
-#ifdef SFPU_OP_INIT_ACTIVATION
-                if constexpr (!(do_gamma | do_beta)) {
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-                }
-#endif
                 pack_tile(i, cb_im);
             }
             tile_regs_release();
@@ -397,16 +409,19 @@ void kernel_main() {
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
                     mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < subblock_w; i++) {
 #ifdef SFPU_OP_INIT_ACTIVATION
+                    // Activation must be applied last. If do_beta != 0 then
+                    // activation will be applied after the beta addition.
+                    // Otherwise, we can apply the activation here.
                     if constexpr (!do_beta) {
                         SFPU_OP_INIT_ACTIVATION
                         SFPU_OP_FUNC_ACTIVATION
                     }
 #endif
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < subblock_w; i++) {
                     pack_tile(i, cb_outgamma);
                 }
                 tile_regs_release();
@@ -433,14 +448,14 @@ void kernel_main() {
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
                     add_tiles_bcast_rows(cb_fusion, cb_beta, index + index_h_offset, index, w);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < subblock_w; i++) {
 #ifdef SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
 #endif
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < subblock_w; i++) {
                     pack_tile(i, cb_out);
                 }
                 tile_regs_release();
