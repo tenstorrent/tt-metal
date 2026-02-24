@@ -33,7 +33,7 @@ struct SGDDeviceOperation {
 
 namespace ttnn::prim {
 
-ttml::metal::optimizers::sgd::device::SGDDeviceOperation::tensor_return_value_t ttml_sgd(
+ttml::metal::optimizers::sgd::device::SGDDeviceOperation::tensor_return_value_t sgd(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     float lr,

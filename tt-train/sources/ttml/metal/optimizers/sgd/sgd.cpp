@@ -17,7 +17,7 @@ ttnn::Tensor sgd(
     const float weight_decay,
     const bool nesterov,
     const std::optional<ttnn::Tensor>& momentum_buffer) {
-    return ttnn::prim::ttml_sgd(param, grad, lr, momentum, dampening, weight_decay, nesterov, momentum_buffer);
+    return ttnn::prim::sgd(param, grad, lr, momentum, dampening, weight_decay, nesterov, momentum_buffer);
 }
 
 }  // namespace ttml::metal
