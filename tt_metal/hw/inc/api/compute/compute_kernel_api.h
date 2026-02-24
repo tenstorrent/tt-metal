@@ -638,33 +638,28 @@ ALWI void max_reduce_with_indices_init() {
 
 // clang-format off
 /**
- * Performs reduce operation (sum or average) on a 32x32 tile, placing output values into the first row.
+ * Performs reduce operation (sum, average, max, min) on a 32x32 tile for column reduction and multiple tiles for row reduction, placing output values into the first row.
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
- * Only 32x32 tile dimensions are supported.
+ * Only 32x32 tile dimensions are supported
  *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
  *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM only.
- *  - REDUCE_COL operates on a single tile only (ct_dim = rt_dim = 1).
+ *  - REDUCE_COL operates on a single tile only (ct_dim = 1, rt_dim = 1).
  *  - REDUCE_ROW supports multiple tiles: ct_dim and rt_dim specify the tile block dimensions to reduce over.
  *
- * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
- * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t  | Must be less than the size of the DST register buffer | True     |
- * | pool_type       | The type of reduction operation, SUM or AVG (MAX/MIN for REDUCE_COL only)| PoolType  | SUM, AVG, MAX, MIN                                    | True     |
- * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt32, UInt16, Float16_b             | True     |
- * | reduce_dim      | The reduction dimension                                                  | ReduceDim | REDUCE_COL or REDUCE_ROW (REDUCE_ROW only for SUM)    | True     |
- * | ct_dim          | Tile dimension along columns; tile dimension >= 1                        | uint32_t  | Must be == 1 when reduce_dim is REDUCE_COL            | False    |
- * | rt_dim          | Tile dimension along rows; tile dimension >= 1                           | uint32_t  | Must be == 1 when reduce_dim is REDUCE_COL            | False    |
+ * | Argument        | Description                                                                     | Type      | Valid Range
+ * |-----------------|---------------------------------------------------------------------------------|-----------|-------------------------------------------------------
+ * | pool_type       | The type of reduction operation, SUM or AVG (MAX/MIN for REDUCE_COL only)       | PoolType  | SUM, AVG, MAX, MIN
+ * | format          | The data format for the reduction operation                                     | DataFormat| Float32, Int32, UInt32, UInt16, Float16_b
+ * | reduce_dim      | The reduction dimension                                                         | ReduceDim | REDUCE_COL or REDUCE_ROW (REDUCE_ROW only for SUM)
+ * | idst            | The index of the tile in DST register containing the data to be reduced         | uint32_t  | Must be less than the size of the DST register buffer
+ * | ct_dim          | Tile dimension along columns (runtime); must be 1 when reduce_dim is REDUCE_COL | uint32_t  | >= 1; default 1
+ * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
  */
 // clang-format on
-template <
-    PoolType pool_type,
-    DataFormat format,
-    ReduceDim reduce_dim,
-    uint32_t ct_dim = 1,
-    uint32_t rt_dim = 1>
-ALWI void sfpu_reduce(uint32_t idst) {
+template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim=ReduceDim::REDUCE_COL>
+ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL || (reduce_dim == ReduceDim::REDUCE_ROW && pool_type == PoolType::SUM),
         "Only column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is only supported for SUM");
@@ -677,11 +672,8 @@ ALWI void sfpu_reduce(uint32_t idst) {
             pool_type == PoolType::MIN,
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
     static_assert(
-        reduce_dim != ReduceDim::REDUCE_COL || (ct_dim == 1 && rt_dim == 1),
-        "REDUCE_COL: only one tile is supported; ct_dim and rt_dim must be 1");
-    static_assert(
-        reduce_dim != ReduceDim::REDUCE_ROW || (pool_type == PoolType::SUM && ct_dim >= 1 && rt_dim >= 1),
-        "REDUCE_ROW: only SUM is supported; ct_dim and rt_dim must be >= 1");
+        reduce_dim != ReduceDim::REDUCE_ROW || pool_type == PoolType::SUM,
+        "REDUCE_ROW supports SUM only");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
     MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format, ct_dim, rt_dim>(idst, VectorMode::RC_custom)));
