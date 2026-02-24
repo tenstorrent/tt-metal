@@ -360,8 +360,6 @@ fi
 
 if [ "$pch" = "OFF" ]; then
     cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON")
-else
-    echo ""
 fi
 
 if [ "$unity_builds" = "ON" ]; then
