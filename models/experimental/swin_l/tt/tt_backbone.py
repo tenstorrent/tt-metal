@@ -19,7 +19,7 @@ Use `out_indices` to control which stages produce outputs:
   ATSS-DyHead: out_indices=(1, 2, 3)    -> 3 feature maps
 
 Input: [B, 3, H, W] in NCHW (converted to NHWC internally).
-Output: list of len(out_indices) tensors in NCHW.
+Output: list of len(out_indices) tensors in NHWC [B, H, W, C].
 """
 
 import ttnn
@@ -95,22 +95,19 @@ class TtSwinLBackbone:
         N, C, H, W = input_tensor.shape
         patch_size = 4
 
-        # Pad input to multiple of patch_size (mmdet PatchEmbed uses padding='corner')
+        # Pad input to multiple of patch_size
         pad_h = (patch_size - H % patch_size) % patch_size
         pad_w = (patch_size - W % patch_size) % patch_size
         min_channels = 16
         pad_c = max(0, min_channels - C)
         if pad_h > 0 or pad_w > 0 or pad_c > 0:
-            nchw = ttnn.pad(
-                input_tensor,
-                ((0, 0), (0, pad_c), (0, pad_h), (0, pad_w)),
-                value=0.0,
-            )
+            nchw = ttnn.pad(input_tensor, [(0, 0), (0, pad_c), (0, pad_h), (0, pad_w)], value=0.0)
         else:
             nchw = input_tensor
+
         nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
-        ttnn.deallocate(nchw)
-        nhwc = ttnn.reallocate(nhwc)
+        if nchw is not input_tensor:
+            ttnn.deallocate(nchw)
 
         # Patch embedding: 4x4 conv stride 4
         conv_config = ttnn.Conv2dConfig(
@@ -129,10 +126,10 @@ class TtSwinLBackbone:
 
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-            math_approx_mode=True,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            math_approx_mode=False,
         )
 
         [output, [out_h, out_w], [self.patch_embed_weight, self.patch_embed_bias]] = ttnn.conv2d(
@@ -154,13 +151,12 @@ class TtSwinLBackbone:
             return_weights_and_bias=True,
             dtype=ttnn.bfloat16,
         )
-        output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(nhwc)
         output = ttnn.reshape(output, (N, out_h, out_w, self.embed_dim))
 
         # Post-embed layer norm
-        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.layer_norm(
-            output,
+            ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             weight=self.parameters["patch_embed"]["norm"]["weight"],
             bias=self.parameters["patch_embed"]["norm"]["bias"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -181,10 +177,7 @@ class TtSwinLBackbone:
                     bias=self.parameters[f"norm{s}"]["bias"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                # NHWC -> NCHW
-                # feat_nchw = ttnn.permute(normed, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 features.append(normed)
-                # ttnn.deallocate(normed)
 
             # Downsample (except after last stage)
             if s < 3:
