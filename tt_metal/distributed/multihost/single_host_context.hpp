@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -81,6 +82,7 @@ private:
 
     // caching our own world communicator
     inline static ContextPtr current_world_;
+    inline static std::mutex current_world_mutex_;
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

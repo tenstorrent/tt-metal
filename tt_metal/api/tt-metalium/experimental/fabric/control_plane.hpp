@@ -15,6 +15,8 @@
 #include <tt-metalium/distributed_context.hpp>
 
 #include <map>
+#include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <memory>
 #include <vector>
@@ -258,7 +260,7 @@ public:
     const MeshGraph& get_mesh_graph() const;
 
     // Get the logical node id to mesh id and mesh host rank id mapping
-    const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+    std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
     get_global_logical_bindings() const;
 
     // Check if the physical system supports the specified fabric configuration
@@ -348,6 +350,8 @@ private:
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
         global_logical_bindings_;
+    mutable std::shared_mutex global_bindings_mutex_;
+    bool global_bindings_initialized_{false};
 
     // custom logic to order eth channels
     void order_ethernet_channels();

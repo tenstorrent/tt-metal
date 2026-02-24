@@ -623,11 +623,16 @@ const distributed::multihost::DistributedContext& MetalContext::full_world_distr
 }
 
 const distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
-    // If control plane is not initilazed, return the global distributed context
-    if (!control_plane_) {
-        return *distributed_context_;
+    // If control plane is not initialized, return the global distributed context.
+    // Read control_plane_ under its mutex to avoid racing with initialization/reset.
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        if (!control_plane_) {
+            return *distributed_context_;
+        }
     }
-    // Lazy initilazation of compute only distributed context
+    // Thread-safe lazy initialization of compute-only distributed context
+    std::lock_guard<std::mutex> lock(compute_only_context_mutex_);
     if (!compute_only_distributed_context_) {
         compute_only_distributed_context_ = construct_compute_only_distributed_context(*this);
     }
@@ -814,8 +819,14 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
-    // Stub control plane for mock devices will make this a no-op
-    this->get_control_plane().clear_fabric_context();
+
+    // Only clear if control plane exists; do not call get_control_plane() or
+    // we may lazily create one during teardown (e.g. after devices are
+    // closed), which can trigger topology mapper failures.
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    if (control_plane_) {
+        control_plane_->clear_fabric_context();
+    }
 }
 
 void MetalContext::set_fabric_config(

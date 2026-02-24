@@ -175,6 +175,7 @@ inline void init_env(int& argc, char**& argv) {
 }
 
 void MPIContext::create(int argc, char** argv) {
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     init_env(argc, argv);
     // it is a good idea to duplicate the world communicator
     // don't want to rely on the global comm_world which cannot be replaced
@@ -182,9 +183,13 @@ void MPIContext::create(int argc, char** argv) {
 }
 
 const ContextPtr& MPIContext::get_current_world() {
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     if (!current_world_) {
         // Default initialization of MPIContext if not already initialized
-        MPIContext::create(0, nullptr);
+        int argc = 0;
+        char** argv = nullptr;
+        init_env(argc, argv);
+        current_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
     }
     return current_world_;
 }
@@ -193,6 +198,7 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
     TT_FATAL(
         ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
         "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     MPIContext::current_world_ = ctx;
 }
 

@@ -377,6 +377,10 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
 void ControlPlane::initialize_distributed_contexts() {
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (*global_context->size() == 1) {
+        {
+            std::unique_lock lock(global_bindings_mutex_);
+            global_bindings_initialized_ = true;
+        }
         host_local_context_ = global_context;
         std::transform(
             local_mesh_binding_.mesh_ids.begin(),
@@ -391,13 +395,18 @@ void ControlPlane::initialize_distributed_contexts() {
 
     // Use mesh_graph to get all (mesh_id, host_rank) pairs (this follows topology_mapper's mesh_rank_bindings),
     // then use topology_mapper's helper function to get the MPI rank for each (mesh_id, host_rank) pair.
-    for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
-        const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
-        for (const auto& [_, mesh_host_rank] : host_ranks) {
-            int mpi_rank = topology_mapper_->get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
-            mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank};
-            global_logical_bindings_[tt::tt_metal::distributed::multihost::Rank{mpi_rank}] = {mesh_id, mesh_host_rank};
+    {
+        std::unique_lock lock(global_bindings_mutex_);
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+            const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
+            for (const auto& [_, mesh_host_rank] : host_ranks) {
+                int mpi_rank = topology_mapper_->get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
+                mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank};
+                global_logical_bindings_[tt::tt_metal::distributed::multihost::Rank{mpi_rank}] = {
+                    mesh_id, mesh_host_rank};
+            }
         }
+        global_bindings_initialized_ = true;
     }
 
     // Create a sub-context for each mesh-host-rank pair.
@@ -1187,14 +1196,18 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     // Assign this edge to all links on the local chip part of this intramesh connection
                     for (const auto& neighbor_host : neighbor_hosts) {
                         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-                        auto neighbor_mesh_id =
-                            this->global_logical_bindings_
-                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                                .first;
-                        auto neighbor_mesh_host_rank =
-                            this->global_logical_bindings_
-                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                                .second;
+                        MeshId neighbor_mesh_id;
+                        MeshHostRankId neighbor_mesh_host_rank;
+                        {
+                            std::shared_lock lock(global_bindings_mutex_);
+                            auto it = global_logical_bindings_.find(
+                                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
+                            if (it == global_logical_bindings_.end()) {
+                                continue;
+                            }
+                            neighbor_mesh_id = it->second.first;
+                            neighbor_mesh_host_rank = it->second.second;
+                        }
                         if (neighbor_mesh_id == mesh_id && neighbor_mesh_host_rank == connected_host_rank_id) {
                             const auto& neighbor_exit_nodes =
                                 physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
@@ -2323,8 +2336,12 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
     return host_local_context_;
 }
 
-const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
 ControlPlane::get_global_logical_bindings() const {
+    std::shared_lock lock(global_bindings_mutex_);
+    if (!global_bindings_initialized_) {
+        return {};
+    }
     return global_logical_bindings_;
 }
 
@@ -2618,9 +2635,18 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     std::unordered_set<port_id_t>& assigned_port_ids) {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-    const auto& neighbor_binding = this->global_logical_bindings_.at(
-        tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
-    const auto neighbor_mesh_id = neighbor_binding.first;
+    MeshId neighbor_mesh_id;
+    {
+        std::shared_lock lock(global_bindings_mutex_);
+        auto it = global_logical_bindings_.find(
+            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
+        if (it == global_logical_bindings_.end()) {
+            log_warning(
+                tt::LogFabric, "Neighbor host rank {} not found in global logical bindings", neighbor_host_rank);
+            return {};
+        }
+        neighbor_mesh_id = it->second.first;
+    }
 
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
@@ -2700,14 +2726,16 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
         // Skip if neighbor host is not in our global logical bindings
-        if (!this->global_logical_bindings_.contains(
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})) {
-            continue;
+        MeshId neighbor_mesh_id;
+        {
+            std::shared_lock bindings_lock(global_bindings_mutex_);
+            auto bindings_it = global_logical_bindings_.find(
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
+            if (bindings_it == global_logical_bindings_.end()) {
+                continue;
+            }
+            neighbor_mesh_id = bindings_it->second.first;
         }
-        auto neighbor_mesh_id =
-            this->global_logical_bindings_
-                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                .first;
         bool connection_requested = check_connection_requested(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports);
         if (!connection_requested) {

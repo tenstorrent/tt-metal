@@ -259,6 +259,7 @@ private:
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
+    std::mutex compute_only_context_mutex_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread

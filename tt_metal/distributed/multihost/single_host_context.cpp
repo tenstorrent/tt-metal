@@ -14,10 +14,12 @@ namespace tt::tt_metal::distributed::multihost {
 SingleHostContext::SingleHostContext() : rank_(0), size_(1) { id_ = DistributedContext::generate_unique_id(); }
 
 void SingleHostContext::create(int argc [[maybe_unused]], char** argv [[maybe_unused]]) {
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     current_world_ = std::make_shared<SingleHostContext>();
 }
 
 const ContextPtr& SingleHostContext::get_current_world() {
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     if (!current_world_) {
         current_world_ = std::make_shared<SingleHostContext>();
     }
@@ -28,10 +30,14 @@ void SingleHostContext::set_current_world(const ContextPtr& ctx) {
     TT_FATAL(
         ctx != nullptr && std::dynamic_pointer_cast<SingleHostContext>(ctx) != nullptr,
         "SingleHostContext::set_current_world: context is not a SingleHostContext or a nullptr");
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     SingleHostContext::current_world_ = ctx;
 }
 
-bool SingleHostContext::is_initialized() { return current_world_ != nullptr; }
+bool SingleHostContext::is_initialized() {
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
+    return current_world_ != nullptr;
+}
 
 // basic info
 Rank SingleHostContext::rank() const { return Rank(rank_); }
