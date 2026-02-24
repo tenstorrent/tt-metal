@@ -79,7 +79,7 @@ void kernel_main() {
             dst_noc_ofs += tile_size;
         }
         {
-            // DeviceZoneScopedN("TILE WRITER_KERNEL_BARRIER");
+            DeviceZoneScopedN("TILE WRITER_KERNEL_BARRIER");
             noc_async_write_barrier();
         }
         cb_pop_front(c_args.cb_dst, num_tiles_per_batch);
