@@ -66,19 +66,42 @@ void bind_all_to_all_combine(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::all_to_all_combine,
+            +[](const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& expert_metadata_tensor,
+                const ttnn::Tensor& expert_mapping_tensor,
+                const bool local_reduce,
+                const std::optional<uint32_t> output_shard_dim,
+                const std::optional<uint32_t> cluster_axis,
+                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& output_tensor,
+                const std::optional<uint32_t> num_links,
+                const std::optional<tt::tt_fabric::Topology> topology) {
+                return ttnn::all_to_all_combine(
+                    input_tensor,
+                    expert_mapping_tensor,
+                    expert_metadata_tensor,
+                    local_reduce,
+                    num_links,
+                    topology,
+                    memory_config,
+                    cluster_axis,
+                    output_shard_dim,
+                    subdevice_id,
+                    output_tensor);
+            },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("expert_mapping_tensor").noconvert(),
             nb::arg("expert_metadata_tensor").noconvert(),
+            nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("local_reduce") = false,
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology").noconvert() = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("cluster_axis") = nb::none(),
             nb::arg("output_shard_dim") = 1,
+            nb::arg("cluster_axis") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("num_links") = nb::none(),
+            nb::arg("topology").noconvert() = nb::none()));
 }
 
 }  // namespace ttnn::operations::ccl
