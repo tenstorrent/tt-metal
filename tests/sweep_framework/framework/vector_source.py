@@ -288,31 +288,47 @@ class VectorExportSource(VectorSource):
                                             pass
                                 return None
 
-                            # Check if required mesh shape exceeds available devices
-                            # This check only applies to model_traced runs (not nightly/lead models)
-                            # and is independent of MESH_DEVICE_SHAPE env var
+                            # Check if traced hardware matches the current hardware by comparing
+                            # board_type, device_series, card_count, and device_count.
                             skip_for_resources = False
                             if current_machine_info and traced_machine_entries:
-                                current_device_count = current_machine_info.get("device_count", 1)
-                                required_device_counts = []
+                                current_board = current_machine_info.get("board_type", "").lower()
+                                current_series = current_machine_info.get("device_series", "").lower()
+                                current_card_count = current_machine_info.get("card_count")
+                                current_device_count = current_machine_info.get("device_count")
+
+                                has_matching_hardware = False
                                 for entry in traced_machine_entries:
-                                    mesh_shape = _extract_mesh_shape(entry)
-                                    if mesh_shape is not None:
-                                        required_device_counts.append(mesh_shape[0] * mesh_shape[1])
-                                        continue
+                                    traced_board = entry.get("board_type", "").lower()
+                                    traced_series = entry.get("device_series", "").lower()
+                                    traced_card_count = entry.get("card_count")
+                                    traced_device_count = entry.get("device_count")
 
-                                    fallback_device_count = entry.get("device_count")
-                                    if isinstance(fallback_device_count, int) and fallback_device_count > 0:
-                                        required_device_counts.append(fallback_device_count)
+                                    board_match = (
+                                        not traced_board
+                                        or not current_board
+                                        or traced_board == current_board
+                                        or ("wormhole" in traced_board and "wormhole" in current_board)
+                                    )
+                                    series_match = (
+                                        not traced_series or not current_series or traced_series == current_series
+                                    )
+                                    card_match = traced_card_count is None or traced_card_count == current_card_count
+                                    device_match = (
+                                        traced_device_count is None or traced_device_count == current_device_count
+                                    )
 
-                                # Only skip if we have explicit requirements and ALL exceed current capacity.
-                                # If no requirement is present, do not filter the vector out.
-                                if required_device_counts and all(
-                                    required > current_device_count for required in required_device_counts
-                                ):
+                                    if board_match and series_match and card_match and device_match:
+                                        has_matching_hardware = True
+                                        break
+
+                                if not has_matching_hardware:
                                     logger.debug(
-                                        f"Skipping vector requiring one of {required_device_counts} devices "
-                                        f"(current machine has {current_device_count} devices)"
+                                        f"Skipping vector - traced hardware does not match current machine "
+                                        f"(current: board_type={current_machine_info.get('board_type')}, "
+                                        f"device_series={current_machine_info.get('device_series')}, "
+                                        f"card_count={current_machine_info.get('card_count')}, "
+                                        f"device_count={current_machine_info.get('device_count')})"
                                     )
                                     machine_mismatch_count += 1
                                     skip_for_resources = True
