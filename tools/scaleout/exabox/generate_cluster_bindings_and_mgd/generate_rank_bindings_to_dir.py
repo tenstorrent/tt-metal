@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 # Ensure the sibling module is importable regardless of working directory.
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parents[4] / "tests" / "tt_metal" / "tt_fabric" / "utils"))
 import generate_rank_bindings as grb  # noqa: E402
 
 
