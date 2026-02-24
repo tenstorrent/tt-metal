@@ -7,13 +7,18 @@
 # Automatically resets the device after hangs, ensuring the next runner
 # always gets a clean device.
 #
-# Usage: .claude/scripts/tt-test.sh [--dev] <test_path> [extra_pytest_args...]
+# Usage: .claude/scripts/tt-test.sh [--dev] [--device N] <test_path> [extra_pytest_args...]
+#
+# Options:
+#   --dev       Adds no-poll watcher (NoC sanitizer, waypoints without polling
+#               overhead), lightweight ebreak asserts, and auto-triage on hang
+#               with callstack summary and watcher log dump.
+#   --device N  Target device ID (default: 0). Each device gets its own flock
+#               and dirty flag, so tests on different cards run in parallel.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
-#   --dev    - Adds no-poll watcher (NoC sanitizer, waypoints without polling
-#              overhead), lightweight ebreak asserts, and auto-triage on hang
-#              with callstack summary and watcher log dump.
+#   --dev    - Debug mode with watcher, asserts, and triage (see above).
 #
 # Exit codes:
 #   0 - All tests passed
@@ -24,26 +29,44 @@
 set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LOCK_FILE="/tmp/tt-device-0.lock"
-DIRTY_FLAG="/tmp/tt-device-0.dirty"
 DISPATCH_TIMEOUT=5
 SAFETY_NET_TIMEOUT=300
-TRIAGE_LOG="/tmp/tt-test-triage.log"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 TRIAGE_SUMMARIZER="${REPO_DIR}/.claude/scripts/summarize-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 
-# --- Parse --dev flag ---
+# --- Parse flags ---
 DEV_MODE=false
-if [[ "${1:-}" == "--dev" ]]; then
-    DEV_MODE=true
-    shift
-fi
+DEVICE_ID=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dev)
+            DEV_MODE=true
+            shift
+            ;;
+        --device)
+            if [[ -z "${2:-}" || "$2" == -* ]]; then
+                echo "TT_TEST_ERROR: --device requires a device ID" >&2
+                exit 3
+            fi
+            DEVICE_ID="$2"
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Derive per-device paths from DEVICE_ID
+LOCK_FILE="/tmp/tt-device-${DEVICE_ID}.lock"
+DIRTY_FLAG="/tmp/tt-device-${DEVICE_ID}.dirty"
+TRIAGE_LOG="/tmp/tt-test-triage-dev${DEVICE_ID}.log"
 
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "TT_TEST_ERROR: No test path provided" >&2
-    echo "Usage: .claude/scripts/tt-test.sh [--dev] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: .claude/scripts/tt-test.sh [--dev] [--device N] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -53,17 +76,17 @@ shift
 # --- Acquire flock ---
 exec 9>"$LOCK_FILE"
 
-echo "TT_TEST: Waiting for device lock..." >&2
+echo "TT_TEST: Waiting for device ${DEVICE_ID} lock..." >&2
 flock 9
-echo "TT_TEST: Device lock acquired" >&2
+echo "TT_TEST: Device ${DEVICE_ID} lock acquired" >&2
 
 # --- Check if device needs reset from previous hang ---
 if [[ -f "$DIRTY_FLAG" ]]; then
-    echo "TT_TEST: Device marked dirty from previous hang, resetting..." >&2
-    tt-smi -r 2>/dev/null
+    echo "TT_TEST: Device ${DEVICE_ID} marked dirty from previous hang, resetting..." >&2
+    tt-smi -r "$DEVICE_ID" 2>/dev/null
     sleep 2
     rm -f "$DIRTY_FLAG"
-    echo "TT_TEST: Device reset complete" >&2
+    echo "TT_TEST: Device ${DEVICE_ID} reset complete" >&2
 fi
 
 # --- Setup environment ---
@@ -112,7 +135,7 @@ touch "$DIRTY_FLAG"
 # NOTE: Do NOT use setsid here — it breaks signal delivery and prevents the dispatch
 # timeout from running TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE (causes SIGABRT
 # instead of a clean TT_THROW that pytest can catch).
-timeout --foreground "$SAFETY_NET_TIMEOUT" pytest "${TEST_PATH}" -x "$@" 2>&1
+timeout --foreground "$SAFETY_NET_TIMEOUT" pytest "${TEST_PATH}" -x --device-id="$DEVICE_ID" "$@" 2>&1
 EXIT_CODE=$?
 
 echo "========================================" >&2
@@ -150,11 +173,11 @@ if [[ "$IS_HANG" == true ]]; then
 fi
 
 if [[ "$NEEDS_RESET" == true ]]; then
-    echo "TT_TEST: Resetting device..." >&2
-    tt-smi -r 2>/dev/null
+    echo "TT_TEST: Resetting device ${DEVICE_ID}..." >&2
+    tt-smi -r "$DEVICE_ID" 2>/dev/null
     sleep 2
     rm -f "$DIRTY_FLAG"
-    echo "TT_TEST: Device reset complete" >&2
+    echo "TT_TEST: Device ${DEVICE_ID} reset complete" >&2
 fi
 
 if [[ "$IS_HANG" == true ]]; then
