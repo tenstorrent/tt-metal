@@ -15,7 +15,7 @@ void kernel_main() {
     uint32_t output_tile_start_id = get_arg_val<uint32_t>(3);  // starting tile ID for output tiles
     uint32_t num_output_tiles = get_arg_val<uint32_t>(4);      // number of output tiles to read
 
-    DPRINT << "Reader kernel started." << ENDL();
+    // DPRINT << "Reader kernel started." << ENDL();
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
@@ -61,6 +61,25 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, 1);
             }
 
+            // Print a full tile
+            // for (uint8_t r = 0; r < 1; ++r) {
+            //     uint8_t next = (r + 1);
+            //     SliceRange sr = SliceRange{.h0 = r, .h1 = next, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
+            //     to specify whether
+            //     // the CB is input or output.
+            //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(cb_id_in0, 0, sr,
+            //     TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); }); DPRINT_DATA1({ DPRINT << (uint)r << "
+            //     --READ--cin0-- " << TileSlice(cb_id_in0, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false) <<
+            //     ENDL(); });
+            //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(cb_id_in0, 0, sr, true, false)
+            //     << ENDL(); });
+            //     // Packer RISC only has wr_ptr
+            //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(cb_id_in0, 0, sr, true, false) <<
+            //     ENDL(); });
+            // }
+
             // Read B's tile at (k, out_col)
             uint32_t tile_B = k * Nt + out_col;  // B is KN, so we stride by Nt
             {
@@ -70,12 +89,73 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, 1);
             }
+
+            // Print a full tile
+            // for (uint8_t r = 0; r < 1; ++r) {
+            //     uint8_t next = (r + 1);
+            //     SliceRange sr = SliceRange{.h0 = r, .h1 = next, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
+            //     to specify whether
+            //     // the CB is input or output.
+            //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_id_in1, 0, sr,
+            //     TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); }); DPRINT_DATA1({ DPRINT << (uint)r << "
+            //     --READ--cin1-- " << TileSlice(cb_id_in1, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false) <<
+            //     ENDL(); });
+            //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_id_in1, 0, sr, true, false)
+            //     << ENDL(); });
+            //     // Packer RISC only has wr_ptr
+            //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_id_in1, 0, sr, true, false) <<
+            //     ENDL(); });
+            // }
+
+            // DPRINT << "Read tiles for output tile " << current_tile_id << ": A tile " << tile_A << ", B tile " <<
+            // tile_B
+            //<< ENDL();
         }
+
         // Bias tile
         cb_reserve_back(cb_id_in2, 1);
         uint32_t c_l1 = get_write_ptr(cb_id_in2);
         noc_async_read_tile(current_tile_id, c, c_l1);
         noc_async_read_barrier();
         cb_push_back(cb_id_in2, 1);
+        // DPRINT << "Read bias tile for output tile " << current_tile_id << ": C tile " << current_tile_id << ENDL();
     }
+
+    // Print a full tile
+    // for (uint8_t r = 0; r < 1; ++r) {
+    //     uint8_t next = (r + 1);
+    //     SliceRange sr = SliceRange{.h0 = r, .h1 = next, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to
+    //     specify whether
+    //     // the CB is input or output.
+    //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB,
+    //     TSLICE_RD_PTR, true, false) << ENDL(); }); DPRINT_DATA1({ DPRINT << (uint)r << " --READ--cin0-- " <<
+    //     TileSlice(cb_id_in0, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false) << ENDL(); });
+    //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+    //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(cb_id_in0, 0, sr, true, false) <<
+    //     ENDL(); });
+    //     // Packer RISC only has wr_ptr
+    //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(cb_id_in0, 0, sr, true, false) << ENDL();
+    //     });
+    // }
+
+    // // Print a full tile
+    // for (uint8_t r = 0; r < 1; ++r) {
+    //     uint8_t next = (r + 1);
+    //     SliceRange sr = SliceRange{.h0 = r, .h1 = next, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to
+    //     specify whether
+    //     // the CB is input or output.
+    //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_id_in1, 0, sr, TSLICE_INPUT_CB,
+    //     TSLICE_RD_PTR, true, false) << ENDL(); }); DPRINT_DATA1({ DPRINT << (uint)r << " --READ--cin1-- " <<
+    //     TileSlice(cb_id_in1, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false) << ENDL(); });
+    //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+    //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_id_in1, 0, sr, true, false) <<
+    //     ENDL(); });
+    //     // Packer RISC only has wr_ptr
+    //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_id_in1, 0, sr, true, false) << ENDL();
+    //     });
+    // }
 }

@@ -34,17 +34,24 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
 
-    tt::tt_metal::IDevice* device = a.device();  // ← Get device from tensor
+    // tt::tt_metal::IDevice* device = a.device();  // ← Get device from tensor
 
-    auto core_grid = device->compute_with_storage_grid_size();
-    auto num_cores_y = core_grid.y;
-    // auto num_output_tiles_total = (M * N) / TILE_HW;
+    // auto core_grid = device->compute_with_storage_grid_size();
+    // auto num_cores_y = core_grid.y;
+    //  auto num_output_tiles_total = (M * N) / TILE_HW;
 
     auto shard_spec = output.buffer()->shard_spec();
     auto all_cores = shard_spec.grid();
     auto shard_height_tiles = shard_spec.shape()[0] / TILE_HEIGHT;
+    fmt::print(
+        "Output shard spec: grid {}, shape {}, orientation {}\n",
+        shard_spec.grid(),
+        shard_spec.shape(),
+        shard_spec.orientation());
+    fmt::print("Shard height tiles: {}\n", shard_height_tiles);
     auto tiles_per_core = shard_height_tiles * Nt;
-
+    fmt::print("Tiles per core: {}\n", tiles_per_core);
+    fmt::print("Mt: {}, Kt: {}, Nt: {}\n", Mt, Kt, Nt);
     // auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
     //     split_work_to_cores(core_grid, num_output_tiles_total);
 
@@ -98,6 +105,13 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
     //         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args =
     //         writer_ct_args});
 
+    auto writer_id = CreateKernel(
+        program,
+        "ttnn/tutorials/onboarding/e04_matmul_add/solution_cpp/device/kernels/writer_idle.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {}});
+
     auto compute_id = CreateKernel(
         program,
         "ttnn/tutorials/onboarding/e04_matmul_add/solution_cpp/device/kernels/compute.cpp",
@@ -110,6 +124,7 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
 
     for (const auto& range : all_cores.ranges()) {
         for (const auto& core : range) {
+            fmt::print("Setting runtime args for core ({}, {})\n", core.x, core.y);
             // Set arguments for the reader kernel (data input)
             tt_metal::SetRuntimeArgs(
                 program,
@@ -135,8 +150,7 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
             work_offset += tiles_per_core;  // Update offset for next core
         }
     }
-
-    return {std::move(program), {reader_id, cb_out_handle, compute_id, all_cores.num_cores(), num_cores_y}};
+    return {std::move(program), {reader_id, writer_id, cb_out_handle, compute_id, all_cores.num_cores(), 1}};
 }
 
 void MatmulAddOperation::ProgramFactory::override_runtime_arguments(
@@ -146,7 +160,7 @@ void MatmulAddOperation::ProgramFactory::override_runtime_arguments(
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     // CoreCoord core{0, 0};
-
+    fmt::print("override_runtime_arguments\n");
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 

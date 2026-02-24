@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "matmul_add_device_operation.hpp"
+#include <fmt/ostream.h>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -42,8 +43,17 @@ MatmulAddOperation::spec_return_value_t MatmulAddOperation::compute_output_specs
     auto Mt = M / tt::constants::TILE_HEIGHT;
     auto num_cores = Mt;                           // — one core per tile-row, capped by device
     auto shard_height = tt::div_up(M, num_cores);  // — round up to TILE_HEIGHT
+    fmt::print("grid size: {}, Mt: {}, num_cores: {}, shard_height: {}\n", grid_size, Mt, num_cores, shard_height);
     CoreRangeSet grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
     auto shard_spec = tt::tt_metal::ShardSpec{grid, {shard_height, N}};
+    fmt::print(
+        "Output shard spec: grid {}, shape {}, orientation {}\n",
+        shard_spec.grid,
+        shard_spec.shape,
+        shard_spec.orientation);
+    fmt::print("Num cores in shard grid: {}\n", shard_spec.grid.num_cores());
+
+    fmt::print("PageConfig: input layout {}\n", tensor_args.a.layout());
 
     return TensorSpec(
         Shape(out_shape),

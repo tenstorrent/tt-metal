@@ -24,7 +24,7 @@ struct MatmulAddOperation {
     struct ProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_id;
-            // tt::tt_metal::KernelHandle writer_id;
+            tt::tt_metal::KernelHandle writer_id;
             tt::tt_metal::CBHandle cb_output_handle;
             tt::tt_metal::KernelHandle compute_id;
             std::size_t num_cores;

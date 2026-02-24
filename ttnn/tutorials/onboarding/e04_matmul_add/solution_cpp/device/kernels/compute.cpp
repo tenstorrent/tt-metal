@@ -33,7 +33,7 @@ void kernel_main() {
     // and output circular buffers.
     mm_init(cb_in0, cb_in1, cb_out);
 
-    DPRINT << "Compute kernel started." << ENDL();
+    // DPRINT << "Compute kernel started." << ENDL();
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -48,18 +48,40 @@ void kernel_main() {
             // Perform the matrix multiplication for the current tile.
             // NOTE: This function also accumulates the result into the destination tile.
             matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
-            DPRINT << "Matmul tiles." << ENDL();
+            // DPRINT << "Matmul tiles." << ENDL();
 
             // Mark the input tiles as used by popping them from the front of the circular buffers.
             cb_pop_front(cb_in0, 1);
             cb_pop_front(cb_in1, 1);
         }
 
-        // Add bias from c (reusing matmul result in DST)
+        for (uint8_t r = 0; r < 1; ++r) {
+            uint8_t next = (r + 1);
+            SliceRange sr = SliceRange{.h0 = r, .h1 = next, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            DPRINT_UNPACK(
+                { DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_in1, 0, sr, true, false) << ENDL(); });
+            // Packer RISC only has wr_ptr
+            // DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_in1, 0, sr, true, false) << ENDL();
+            // });
+        }
+
+        for (uint8_t r = 0; r < 1; ++r) {
+            uint8_t next = (r + 1);
+            SliceRange sr = SliceRange{.h0 = r, .h1 = next, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            DPRINT_UNPACK(
+                { DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(cb_in0, 0, sr, true, false) << ENDL(); });
+            // Packer RISC only has wr_ptr
+            // DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(cb_in0, 0, sr, true, false) << ENDL();
+            // });
+        }
+
+        // // Add bias from c (reusing matmul result in DST)
         cb_wait_front(cb_in2, 1);
         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in2);
         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in2, 0, 0);
-        DPRINT << "Add tiles." << ENDL();
+        // DPRINT << "Add tiles." << ENDL();
         cb_pop_front(cb_in2, 1);
 
         // Commit and wait for the registers are populated with the results from the FPU
@@ -75,5 +97,7 @@ void kernel_main() {
 
         // We don't need the registers anymore, so we can release them and prepare for the next output tile.
         tile_regs_release();
+
+        mm_init_short(cb_in0, cb_in1);
     }
 }
