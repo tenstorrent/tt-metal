@@ -57,7 +57,6 @@ void kernel_main() {
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
-    // barrier_sem is a CreateSemaphore (initialized to 0 at program dispatch). No kernel-side init needed.
     // Wait for Phase 1 to complete.
     if (barrier_count > 0) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);

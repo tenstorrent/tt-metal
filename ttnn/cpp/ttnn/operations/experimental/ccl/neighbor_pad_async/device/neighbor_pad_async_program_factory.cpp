@@ -692,7 +692,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 uint32_t w_core_idx = w_link * 2 + w_direction;
                 CoreCoord w_core = w_fabric_logical_cores[w_core_idx];
                 CoreCoord w_virtual_core = w_fabric_virtual_cores[w_core_idx];
-                CoreCoord w_opposite_virtual_core = w_fabric_virtual_cores[w_link * 2 + (1 - w_direction)];
+                // CoreCoord w_opposite_virtual_core = w_fabric_virtual_cores[w_link * 2 + (1 - w_direction)];
 
                 // Phase 2 W reader kernel — reads boundary sticks from output DRAM.
                 auto w_reader_kernel_config = ReaderDataMovementConfig{};
@@ -762,15 +762,15 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     w_outer_dim_size,                         // outer_dim_size = B*T*(H+2pH)
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
                     operation_attributes.pad2_left,                                                  // padding_left
-                    1,                          // num_sticks_to_read
-                    1,                          // num_sticks_per_halo_dim
-                    w_virtual_core.x,           // out_ready_sem_noc0_x
-                    w_virtual_core.y,           // out_ready_sem_noc0_y
-                    w_final_sem_addr,           // out_ready_sem (program-local)
-                    false,                      // use_barrier_semaphore (disabled: barrier used for Phase 1→2 barrier)
-                    w_opposite_virtual_core.x,  // barrier_sem_noc0_x
-                    w_opposite_virtual_core.y,  // barrier_sem_noc0_y
-                    w_barrier_sem_addr};        // barrier_sem (program-local)
+                    1,                 // num_sticks_to_read
+                    1,                 // num_sticks_per_halo_dim
+                    w_virtual_core.x,  // out_ready_sem_noc0_x
+                    w_virtual_core.y,  // out_ready_sem_noc0_y
+                    w_final_sem_addr,  // out_ready_sem (program-local)
+                    false,             // use_barrier_semaphore (W writers: no startup barrier)
+                    0,                 // barrier_sem_noc0_x (unused)
+                    0,                 // barrier_sem_noc0_y (unused)
+                    0};                // barrier_sem (unused)
                 // No Phase 3 signal targets
                 w_writer_rt_args.push_back(0);
                 for (uint32_t s = 0; s < 6; s++) {

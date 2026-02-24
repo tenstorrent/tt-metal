@@ -91,48 +91,46 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
-    constexpr const char* WR_PREFIX = is_w_fabric_writer ? "WW" : "HW";
+    // H writers: open fabric at kernel start for initial barrier exchange.
+    // W writers: defer fabric open until first cb_wait_front in main loop
+    // (implicitly gated by Phase 2 barrier via CB dependency with W reader).
     bool fabric_opened = false;
     if constexpr (!is_w_fabric_writer) {
-        // H writer: open immediately (needs fabric for barrier exchange)
         fabric_connection.open();
         fabric_opened = true;
-    }
-    // W writer: deferred open — see !is_last_chip block in main loop
 
-    // Barrier semaphore
-    if (use_barrier_sem) {
-        auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
+        // Barrier semaphore (H writers only): pairwise sync with H neighbor
+        if (use_barrier_sem) {
+            auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
 
-        if (!is_last_chip) {
-            // unicast output ready semaphore
-            uint64_t barrier_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-            pkt_hdr_barrier_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                barrier_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
-            // Write the unicast packet
-            if (direction) {
-                if (fabric_connection.has_backward_connection()) {
-                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_barrier_sem_inc, unicast_route_info);
-                    fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
+            if (!is_last_chip) {
+                uint64_t barrier_sem_noc_addr_in_pkt =
+                    safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+                pkt_hdr_barrier_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    barrier_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});
+                if (direction) {
+                    if (fabric_connection.has_backward_connection()) {
+                        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_barrier_sem_inc, unicast_route_info);
+                        fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                            (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                    }
+                } else {
+                    if (fabric_connection.has_forward_connection()) {
+                        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_barrier_sem_inc, unicast_route_info);
+                        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                            (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                    }
                 }
-            } else {
-                if (fabric_connection.has_forward_connection()) {
-                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_barrier_sem_inc, unicast_route_info);
-                    fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
-                }
+                noc_async_writes_flushed();
             }
-            noc_async_writes_flushed();
-        }
 
-        if (!is_last_chip) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+            if (!is_last_chip) {
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+            }
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
         }
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
@@ -152,6 +150,13 @@ void kernel_main() {
                 dst_stick_id += outer_dim_offset;
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     cb_wait_front(cb_output_id, 1);
+                    if constexpr (is_w_fabric_writer) {
+                        if (!fabric_opened) {
+                            fabric_connection.open();
+                            fabric_opened = true;
+                            DPRINT << "WW:opn" << ENDL();
+                        }
+                    }
                     uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
                     for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
@@ -173,6 +178,13 @@ void kernel_main() {
                 }
                 dst_stick_id += outer_dim_offset;
                 cb_wait_front(cb_output_id, 1);
+                if constexpr (is_w_fabric_writer) {
+                    if (!fabric_opened) {
+                        fabric_connection.open();
+                        fabric_opened = true;
+                        DPRINT << "WW:opn" << ENDL();
+                    }
+                }
                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
@@ -201,17 +213,14 @@ void kernel_main() {
                 dst_stick_id += outer_dim_offset;
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     cb_wait_front(cb_output_id, 1);
-                    uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-
-                    // W writer: deferred fabric open. Phase 1 is done on this device
-                    // (cb_wait_front returned, meaning the paired W reader passed the
-                    // Phase 2 barrier). Open the fabric connection for W data exchange.
                     if constexpr (is_w_fabric_writer) {
                         if (!fabric_opened) {
                             fabric_connection.open();
                             fabric_opened = true;
+                            DPRINT << "WW:opn" << ENDL();
                         }
                     }
+                    uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
                     uint64_t dst_noc_addr;
                     if constexpr (use_l1_intermediate) {
@@ -274,12 +283,12 @@ void kernel_main() {
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
     }
 
-    DPRINT << WR_PREFIX << ":s " << fab_data_pkts_sent << "d" << fab_sem_pkts_sent << "s" << ENDL();
+    if constexpr (is_w_fabric_writer) {
+        DPRINT << "WW:s " << fab_data_pkts_sent << "d" << fab_sem_pkts_sent << "s" << ENDL();
+    }
 
     // Ensure all DRAM writes from main loop are complete.
     noc_async_write_barrier();
-
-    // for (volatile uint32_t delay = 0; delay < 50000; delay++) {}
 
     // Incoming writes: pop sticks that the paired reader pushed from its L1 recv buffer
     // (fabric-delivered padding from neighbor) and write to output DRAM.
@@ -313,15 +322,18 @@ void kernel_main() {
         }
     }
 
-    if constexpr (!is_w_fabric_writer) {
-        for (volatile uint32_t delay = 0; delay < 100000; delay++) {
-        }
+    // Debug delay: uncomment to add temporal separation before Phase 2 signal
+    // if constexpr (!is_w_fabric_writer) {
+    //     for (volatile uint32_t delay = 0; delay < 100000; delay++) {}
+    // }
+
+    // Close fabric connection.
+    if (fabric_opened) {
+        noc_async_write_barrier();
+        fabric_connection.close();
     }
 
-    // Signal Phase 2 AFTER all work is complete (main loop + handle_incoming_writes).
-    // This ensures W readers won't start reading boundary sticks from output DRAM until
-    // all H halo padding rows are fully committed, and avoids NOC contention between
-    // handle_incoming_writes DRAM traffic and W fabric delivery.
+    // Signal Phase 2 AFTER fabric close and all work is complete.
     noc_async_write_barrier();
     for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
         uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], signal_sem_addr[st]);
@@ -329,14 +341,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
 
-    // Close fabric connection AFTER all data exchange is complete.
-    // Closing immediately after the send loop can race with the EDM's packet forwarding —
-    // the teardown may preempt in-flight packets. Deferring close to here gives the EDM
-    // ample time to forward all packets during handle_incoming_writes.
-    if (fabric_opened) {
-        noc_async_write_barrier();
-        fabric_connection.close();
+    if constexpr (is_w_fabric_writer) {
+        DPRINT << "WW:ok" << ENDL();
     }
-
-    DPRINT << WR_PREFIX << ":ok" << ENDL();
 }
