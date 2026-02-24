@@ -84,7 +84,7 @@ void CommandQueueInitializer::initialize_host(Device* dev) const {
     if (using_fast_dispatch()) {
         dev->init_command_queue_host();
     } else {
-        TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
+        TT_FATAL(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 }
 
