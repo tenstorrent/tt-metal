@@ -18,8 +18,8 @@ import numpy as np
 # Dictionaries for converting dtypes
 tt_dtype_to_torch_dtype = {
     ttnn.uint8: torch.uint8,
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
+    ttnn.uint16: torch.uint16,
+    ttnn.uint32: torch.uint32,
     ttnn.int32: torch.int32,
     ttnn.float32: torch.float,
     ttnn.bfloat16: torch.bfloat16,
@@ -29,13 +29,16 @@ tt_dtype_to_torch_dtype = {
 
 tt_dtype_to_np_dtype = {
     ttnn.uint8: np.ubyte,
-    ttnn.uint16: np.int16,
-    ttnn.uint32: np.int32,
+    ttnn.uint16: np.uint16,
+    ttnn.uint32: np.uint32,
     ttnn.int32: np.int32,
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,
     ttnn.bfloat4_b: np.float32,
 }
+
+TORCH_INTEGER_DTYPES = [torch.int16, torch.int32, torch.int64, torch.uint16, torch.uint32, torch.uint64, torch.uint8]
+NP_INTEGER_DTYPES = [np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
@@ -47,6 +50,32 @@ def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorc
     # messages.append(str(actual_pytorch_result))
     messages = [str(m) for m in messages]
     return "\n".join(messages)
+
+
+def _post_to_torch_conversion(tensor):
+    # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
+    # This was changed to convert to unsigned types instead to address issue with the value truncation
+    # https://github.com/tenstorrent/tt-metal/issues/31150
+
+    # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
+    # so ttnn tensor must have a post-conversion correction to avoid this error.
+    if tensor.dtype == torch.uint16:
+        return tensor.to(torch.int32)
+
+    elif tensor.dtype == torch.uint32:
+        return tensor.to(torch.int64)
+
+    else:
+        return tensor
+
+
+def _normalize_tensor(tensor):
+    if isinstance(tensor, ttnn.Tensor):
+        tensor = ttnn.to_torch(tensor)
+
+    tensor = _post_to_torch_conversion(tensor)
+
+    return tensor
 
 
 def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
@@ -71,6 +100,10 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     Raises:
         AssertionError: If the tensor shapes don't match or if the PCC is below the specified threshold
     """
+
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -108,10 +141,9 @@ def assert_allclose(
          AssertionError: If the tensor shapes don't match or if tensors are not close enough according to
                          the aforementioned formula.
     """
-    if isinstance(expected_result, ttnn.Tensor):
-        expected_result = ttnn.to_torch(expected_result)
-    if isinstance(actual_result, ttnn.Tensor):
-        actual_result = ttnn.to_torch(actual_result)
+
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
 
     assert list(expected_result.shape) == list(
         actual_result.shape
@@ -233,6 +265,9 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     Raises:
         AssertionError: If the tensor shapes don't match or if the tensors are not exactly equal
     """
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -398,6 +433,21 @@ def maybe_trace(op_func, enable_trace, device):
     else:
         output = op_func()
     return output
+
+
+def is_unsigned_tensor(py_tensor):
+    return py_tensor.dtype in TORCH_INTEGER_DTYPES
+
+
+def align_tensor_dtype(roundtrip_tensor, dtype):
+    if isinstance(roundtrip_tensor, torch.Tensor):
+        return roundtrip_tensor.to(dtype)
+
+    elif isinstance(roundtrip_tensor, np.ndarray):
+        return roundtrip_tensor.astype(dtype)
+
+    else:
+        raise ValueError(f"Expected torch.Tensor or np.ndarray, got {type(roundtrip_tensor)}")
 
 
 def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):

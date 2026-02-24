@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, TORCH_INTEGER_DTYPES
 
 
 GOLDEN_TENSOR_STRINGS = {
@@ -74,7 +74,7 @@ def test_print(device, dtype, layout, profile, deallocate):
     torch_dtype = tt_dtype_to_torch_dtype[dtype]
     shape = (2, 16, 64, 32)
 
-    if torch_dtype in {torch.int16, torch.int32}:
+    if torch_dtype in TORCH_INTEGER_DTYPES:
         torch_tensor = torch.randint(0, 1024, shape, dtype=torch_dtype)
     else:
         torch_tensor = torch.rand(shape, dtype=torch_dtype)

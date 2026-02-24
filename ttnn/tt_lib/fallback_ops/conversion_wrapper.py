@@ -59,9 +59,16 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, output_format):
     tt_tensor = tt_tensor.cpu()
     tt_tensor = tt_tensor.to(ttnn.ROW_MAJOR_LAYOUT)
     torch_tensor = tt_tensor.to_torch()
-    # Required as not all torch ops/layers support bfloat16
     if torch_tensor.dtype == torch.bfloat16:
+        # Required as not all torch ops/layers support bfloat16
         torch_tensor = torch_tensor.float()
+    elif torch_tensor.dtype == torch.uint16:
+        # Not all torch operations support unsigned int16/32. Not using wider
+        # types here to avoid mismatching the input and output tensor types.
+        torch_tensor = torch_tensor.to(torch.int16)
+    elif torch_tensor.dtype == torch.uint32:
+        torch_tensor = torch_tensor.to(torch.int32)
+
     return torch_tensor
 
 
