@@ -151,9 +151,11 @@ class TtBarkModel:
         logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True)
 
         # Greedy decoding for optimization (Stage 2)
-        logits_torch = ttnn.to_torch(logits).squeeze(0)
+        ttnn_next_token = ttnn.argmax(logits, dim=-1)
+        # Squeeze out any extra dims to get [seq_len] and then grab the last one
+        next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
         ttnn.deallocate(logits)
-        next_token = torch.argmax(logits_torch[:, -1, :], dim=-1)
+        ttnn.deallocate(ttnn_next_token)
 
         tokens = [input_ids, next_token.unsqueeze(-1)]
 
@@ -166,10 +168,13 @@ class TtBarkModel:
                 input_ids=next_token.unsqueeze(-1), layer_past=layer_past, use_cache=True
             )
 
-            logits_torch = ttnn.to_torch(logits).squeeze(0)
+            ttnn_next_token = ttnn.argmax(logits, dim=-1)
+            # Pull only the scalar next_token back to host
+            next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
+            
             ttnn.deallocate(logits)
+            ttnn.deallocate(ttnn_next_token)
 
-            next_token = torch.argmax(logits_torch[:, -1, :], dim=-1)
             tokens.append(next_token.unsqueeze(-1))
 
             if next_token.item() == self.tokenizer.eos_token_id:
@@ -196,9 +201,12 @@ class TtBarkModel:
         # Initial pre-fill
         logits, layer_past = self.coarse_model(input_ids=input_ids, use_cache=True)
 
-        logits_torch = ttnn.to_torch(logits).squeeze(0)
+        ttnn_next_token = ttnn.argmax(logits, dim=-1)
+        # Squeeze out any extra dims to get [seq_len] and then grab the last one
+        next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
+        
         ttnn.deallocate(logits)
-        next_token = torch.argmax(logits_torch[:, -1, :], dim=-1)
+        ttnn.deallocate(ttnn_next_token)
 
         tokens = [next_token.unsqueeze(-1)]
 
@@ -210,10 +218,12 @@ class TtBarkModel:
                 input_ids=next_token.unsqueeze(-1), layer_past=layer_past, use_cache=True
             )
 
-            logits_torch = ttnn.to_torch(logits).squeeze(0)
+            ttnn_next_token = ttnn.argmax(logits, dim=-1)
+            next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
+            
             ttnn.deallocate(logits)
+            ttnn.deallocate(ttnn_next_token)
 
-            next_token = torch.argmax(logits_torch[:, -1, :], dim=-1)
             tokens.append(next_token.unsqueeze(-1))
 
             if next_token.item() == 10_047:  # End of codebook marker for Bark
