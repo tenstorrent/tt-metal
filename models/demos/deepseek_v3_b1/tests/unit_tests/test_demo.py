@@ -8,16 +8,33 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.cli import FIRST_K_DENSE_REPLACE, enable_fast_dispatch_mode
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+from models.demos.deepseek_v3_b1.demo.cli import (
+    FIRST_K_DENSE_REPLACE,
+    SYSTEM_MESH_ID_EMBEDDING,
+    SYSTEM_MESH_ID_LM_HEAD,
+    load_weights_from_cache,
+)
 from models.demos.deepseek_v3_b1.demo.runner import run_generation
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
-    DeepSeekV3Weights,
-    deallocate_weights,
-    load_layer,
-    load_moe_routed_experts_from_cache,
-    prepare_weights,
-    save_layer,
+    DeepSeekV3EmbeddingLayerWeights,
+    DeepSeekV3LMHeadWeights,
+    DeepSeekV3MoELayerWeights,
+    prepare_dense_layer_weights,
+    prepare_embedding_weights,
+    prepare_lm_head_weights,
+    prepare_moe_layer_weights,
+    save_decoder_layer,
+    save_embedding_weights,
+    save_lm_head_weights,
+)
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights import (
+    NUM_ROUTED_EXPERTS,
+    _add_global_weights,
+    _deallocate_layer,
+    _layer_state_dict,
+    _skip_unless_4x2_mesh,
 )
 
 
@@ -144,6 +161,71 @@ def test_run_generation_rejects_negative_max_new_tokens():
     assert not model.stopped
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "layer_offset",
+    [
+        SYSTEM_MESH_ID_EMBEDDING,
+        FIRST_K_DENSE_REPLACE - 1,
+        FIRST_K_DENSE_REPLACE,
+        SYSTEM_MESH_ID_LM_HEAD,
+    ],
+)
+def test_load_weights_from_cache(bh_2d_mesh_device, tmp_path, layer_offset):
+    """Load weights from cache for embedding, last dense, first MoE, and LM head (4x2 submesh)."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    if not is_slow_dispatch():
+        pytest.skip("load_weights_from_cache requires slow dispatch")
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    manifest_kw = dict(
+        hf_model_name="test-demo-load",
+        hf_state_dict_name="test.safetensors",
+        device_mesh_shape=(4, 2),
+    )
+
+    if layer_offset == SYSTEM_MESH_ID_EMBEDDING or layer_offset == SYSTEM_MESH_ID_LM_HEAD:
+        state = {}
+        _add_global_weights(state)
+        embedding_weights = prepare_embedding_weights(state, submesh)
+        lm_head_weights = prepare_lm_head_weights(state, submesh)
+        save_embedding_weights(embedding_weights, tmp_path, **manifest_kw)
+        save_lm_head_weights(lm_head_weights, tmp_path, **manifest_kw)
+        ttnn.deallocate(embedding_weights.embedding, force=True)
+        ttnn.deallocate(lm_head_weights.lm_head, force=True)
+        ttnn.deallocate(lm_head_weights.final_norm, force=True)
+    elif layer_offset == FIRST_K_DENSE_REPLACE - 1:
+        state = _layer_state_dict(0, is_moe=False)
+        bdw = BlitzDecodeWeights(submesh)
+        layer = prepare_dense_layer_weights(bdw, state, 0)
+        save_decoder_layer(layer, tmp_path, 1, **manifest_kw)
+        _deallocate_layer(layer)
+    elif layer_offset == FIRST_K_DENSE_REPLACE:
+        state = _layer_state_dict(0, is_moe=True, seed=43)
+        bdw = BlitzDecodeWeights(submesh)
+        layer = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
+        save_decoder_layer(layer, tmp_path, 2, **manifest_kw)
+        _deallocate_layer(layer)
+
+    result = load_weights_from_cache(tmp_path, submesh, layer_offset)
+
+    if layer_offset == SYSTEM_MESH_ID_EMBEDDING:
+        assert isinstance(result, DeepSeekV3EmbeddingLayerWeights)
+        assert result.embedding is not None
+    elif layer_offset == SYSTEM_MESH_ID_LM_HEAD:
+        assert isinstance(result, DeepSeekV3LMHeadWeights)
+        assert result.lm_head is not None
+        assert result.final_norm is not None
+    elif layer_offset == FIRST_K_DENSE_REPLACE - 1:
+        assert isinstance(result, DeepSeekV3DenseLayerWeights)
+    else:
+        assert layer_offset == FIRST_K_DENSE_REPLACE
+        assert isinstance(result, DeepSeekV3MoELayerWeights)
+
+
 class _LoopbackTokenizer:
     bos_token_id = 1
 
@@ -186,70 +268,3 @@ def test_demo_decode_stress_64k_tokens(mesh_device) -> None:
     assert result.generated_token_ids[0] == tokenizer.bos_token_id
     assert result.generated_token_ids[-1] == tokenizer.bos_token_id
     assert model.position == 1 + max_new_tokens
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
-    indirect=True,
-)
-def test_demo_weight_loading_from_cache_4x2(bh_2d_mesh_device, tmp_path):
-    """Test the demo's two-phase weight loading: create a one-layer dense cache, then run the same load path as run_demo and assert weights are loaded."""
-    from models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights import (
-        _layer_state_dict,
-        _skip_unless_4x2_mesh,
-    )
-
-    _skip_unless_4x2_mesh(bh_2d_mesh_device)
-    if not is_slow_dispatch():
-        pytest.skip("Demo weight loading requires slow dispatch")
-
-    # Same as CLI: full mesh split into (4, 2) submeshes; layer i goes on submeshes[i]
-    submeshes = bh_2d_mesh_device.create_submeshes(ttnn.MeshShape(4, 2))
-    assert len(submeshes) >= 1, "Need at least one (4,2) submesh"
-    submesh0 = submeshes[0]
-    cache_path = tmp_path
-
-    # Create minimal cache: one dense layer on submesh 0 (same pattern as test_prepare_weights)
-    state = _layer_state_dict(0, is_moe=False)
-    weights = prepare_weights(
-        state,
-        submesh0,
-        num_layers=1,
-        first_k_dense_replace=1,
-    )
-    save_layer(
-        weights.layers[0],
-        cache_path,
-        0,
-        hf_model_name="test-demo-weight-load",
-        hf_state_dict_name="test.safetensors",
-        device_mesh_shape=(4, 2),
-    )
-    deallocate_weights(weights)
-
-    # Run the same two-phase loading logic as run_demo() (each layer on its submesh)
-    num_layers = 1
-    preloaded_experts = {}
-    with enable_fast_dispatch_mode(bh_2d_mesh_device):
-        for layer_idx in range(FIRST_K_DENSE_REPLACE, num_layers):
-            preloaded_experts[layer_idx] = load_moe_routed_experts_from_cache(
-                cache_path, submeshes[layer_idx], layer_idx
-            )
-
-    layers = []
-    for layer_idx in range(num_layers):
-        layer = load_layer(
-            cache_path,
-            submeshes[layer_idx],
-            layer_idx,
-            preloaded_routed_experts=preloaded_experts.get(layer_idx),
-        )
-        layers.append(layer)
-    loaded_weights = DeepSeekV3Weights(layers=layers)
-
-    assert len(loaded_weights.layers) == 1
-    assert isinstance(loaded_weights.layers[0], DeepSeekV3DenseLayerWeights)
-    layer0 = loaded_weights.layers[0]
-    assert layer0.q_a_proj.tensor_shape == (3584, 3072)
-    assert layer0.o_proj.tensor_shape == (8192, 7168)

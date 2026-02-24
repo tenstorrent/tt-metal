@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
-import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
@@ -21,15 +20,21 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.runner import GenerationResult, run_generation
 from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
 from models.demos.deepseek_v3_b1.prepare_weights import (
-    MoERoutedExpertWeights,
-    load_layer,
-    load_moe_routed_experts_from_cache,
+    DeepSeekV3DenseLayerWeights,
+    DeepSeekV3EmbeddingLayerWeights,
+    DeepSeekV3LMHeadWeights,
+    DeepSeekV3MoELayerWeights,
+    load_dense_decoder_layer,
+    load_embedding_weights,
+    load_lm_head_weights,
+    load_moe_decoder_layer,
+    load_moe_routed_experts,
 )
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
 FIRST_K_DENSE_REPLACE = 3
 
-SUBMESH_SHAPE = (4, 2)
+EXPECTED_PIPELINE_STAGE_MESH_SHAPE = (4, 2)
 
 
 @contextlib.contextmanager
@@ -37,10 +42,13 @@ def open_mesh_device():
     """Open mesh device using bh_2d_mesh_device_context."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
-        logger.info("Set TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=30000 (fabric init may be slow)")
     device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
     logger.info("Opening mesh device...")
     with bh_2d_mesh_device_context(device_params) as mesh_device:
+        mesh_shape = (mesh_device.shape[0], mesh_device.shape[1])
+        assert (
+            mesh_shape == EXPECTED_PIPELINE_STAGE_MESH_SHAPE
+        ), f"Demo requires a {EXPECTED_PIPELINE_STAGE_MESH_SHAPE[0]}x{EXPECTED_PIPELINE_STAGE_MESH_SHAPE[1]} mesh; got {mesh_shape[0]}x{mesh_shape[1]}"
         logger.info(f"Mesh device opened (id={mesh_device.get_system_mesh_id()}, shape={mesh_device.shape})")
         yield mesh_device
 
@@ -62,49 +70,29 @@ def load_weights_from_cache(
     cache_path: Path,
     mesh_device: ttnn.MeshDevice,
     layer_offset: int,
-) -> DeepSeekV3LayerWeights:
-    """Load weights from cache: routed experts in fast-dispatch phase, then all layers on their submesh."""
+) -> (
+    DeepSeekV3EmbeddingLayerWeights | DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights | DeepSeekV3LMHeadWeights
+):
+    """Load weights from cache (embedding, decoder layer, or lm_head)."""
     mesh_id = mesh_device.get_system_mesh_id() + layer_offset
     assert (
         mesh_id >= SYSTEM_MESH_ID_EMBEDDING and mesh_id <= SYSTEM_MESH_ID_LM_HEAD
     ), f"Mesh ID must be between {SYSTEM_MESH_ID_EMBEDDING} and {SYSTEM_MESH_ID_LM_HEAD} but got {mesh_id}"
     if mesh_id == SYSTEM_MESH_ID_EMBEDDING:
-        # TODO: Load embedding weights from the cache
         logger.info("Loading embedding weights from cache")
-        embedding_shape = (129280, 7168)
-        embedding_tensor = ttnn.from_torch(
-            torch.rand(embedding_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        embedding_tensor = ttnn.to_device(embedding_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tensor)
+        return load_embedding_weights(cache_path, mesh_device)
     elif mesh_id == SYSTEM_MESH_ID_LM_HEAD:
         logger.info("Loading LM head weights from cache")
-        # TODO: Load LM head weights from the cache
-        lm_head_shape = (129280, 7168)
-        lm_head_tensor = ttnn.from_torch(torch.rand(lm_head_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        lm_head_tensor = ttnn.to_device(lm_head_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return DeepSeekV3LMHeadWeights(lm_head=lm_head_tensor)
+        return load_lm_head_weights(cache_path, mesh_device)
     else:
-        # Get the correct layer ID given the mesh ID
         layer_id = decoder_layer_id_from_mesh_id(mesh_id)
-
         is_moe = layer_id >= FIRST_K_DENSE_REPLACE
         logger.info(f"Loading {'moe' if is_moe else 'dense'} layer weights from cache")
-
-        preloaded_experts: MoERoutedExpertWeights | None = None
         if is_moe:
-            # Phase 1: Fast dispatch -- load routed experts for MoE layers (each on its submesh)
             with ttnn.device.setup_fast_dispatch(mesh_device):
-                preloaded_experts = load_moe_routed_experts_from_cache(cache_path, mesh_device, layer_id)
-
-        # Phase 2: Slow dispatch -- load each layer onto its (4, 2) submesh
-        layer = load_layer(
-            cache_path,
-            mesh_device,
-            layer_id,
-            preloaded_routed_experts=preloaded_experts,
-        )
-        return layer
+                preloaded_experts = load_moe_routed_experts(cache_path, mesh_device, layer_id)
+            return load_moe_decoder_layer(cache_path, mesh_device, layer_id, preloaded_routed_experts=preloaded_experts)
+        return load_dense_decoder_layer(cache_path, mesh_device, layer_id)
 
 
 def create_parser() -> argparse.ArgumentParser:
