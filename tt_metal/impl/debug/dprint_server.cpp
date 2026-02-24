@@ -45,6 +45,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "impl/debug/inspector/inspector.hpp"
 
 using std::flush;
 using std::int32_t;
@@ -288,7 +289,8 @@ protected:
         ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
 
 private:
-    void print_buffer_data(ChipId device_id, const CoreCoord& virtual_core, const std::vector<uint32_t>& data);
+    void print_buffer_data(
+        ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data);
 };
 
 void DPrintImpl::init_print_buffers_for_core(
@@ -346,7 +348,9 @@ struct DevicePrintHeader {
 static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
 
 void DevicePrintImpl::print_buffer_data(
-    ChipId device_id, const CoreCoord& virtual_core, const std::vector<uint32_t>& data) {
+    ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data) {
+    auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        device_id, logical_core.coord, logical_core.type);
     // TODO: Remove debug print
     std::cout << "Read data:" << std::hex << std::endl;
     for (size_t i = 0; i < data.size(); i++) {
@@ -370,8 +374,14 @@ void DevicePrintImpl::print_buffer_data(
         if (header->is_kernel && header->message_payload == DevicePrintHeader::max_message_payload_size) {
             // TODO: Load new kernel (maybe add elf reference counter, so that we can unload them when they are not used
             // anymore?)
-            std::cout << "Loading new kernel on device " << device_id << " location " << virtual_core.str() << " risc "
-                      << header->risc_id << " with id " << header->info_id << std::endl;
+            auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
+            auto risc_name = GetRiscName(device_id, logical_core, header->risc_id);
+            std::transform(
+                risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
+            auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
+            std::cout << "Loading new kernel " << header->info_id << " on device " << device_id << " location "
+                      << virtual_core.str() << " on risc " << risc_name << std::endl;
+            std::cout << "Resolved ELF path: " << elf_path << std::endl;
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
             header->info_id == DevicePrintHeader::max_info_id_value) {
@@ -435,7 +445,7 @@ bool DevicePrintImpl::poll_one_core(
                 device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
 
             // Process buffer data
-            print_buffer_data(device_id, virtual_core, data);
+            print_buffer_data(device_id, logical_core, data);
 
             // Update rpos, so that device knows it can use rest of the buffer
             rpos = 0;
@@ -448,7 +458,7 @@ bool DevicePrintImpl::poll_one_core(
                 device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
 
             // Process buffer data
-            print_buffer_data(device_id, virtual_core, data);
+            print_buffer_data(device_id, logical_core, data);
 
             // Update rpos, so that device knows it can use rest of the buffer
             rpos = wpos;
