@@ -9,13 +9,8 @@
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <array>
-
-uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
-    uint32_t old_arg_idx = arg_idx;
-    arg_idx += num_args;
-    return old_arg_idx;
-}
 
 void compute_device_chunk_stats(
     uint32_t input_tensor_Wt,
