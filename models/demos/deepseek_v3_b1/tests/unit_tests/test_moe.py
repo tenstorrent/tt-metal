@@ -1287,7 +1287,7 @@ def test_moe_fused_with_bcast(bh_2d_mesh_device, use_hardcoded_expert_index):
     bcast_sender_coord = (0, 0)
 
     # ── Run fused MoE op with broadcast ──
-    num_iterations = 1
+    num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
         r["ttnn_rmsnorm_output"],
         r["ttnn_mcast_output"],

@@ -328,18 +328,18 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
         unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
 
-#ifdef ENABLE_BCAST
-        // Broadcast pkt_cb: tensor-backed input staging buffer (init before bcast_op)
-        constexpr uint32_t bcast_pkt_cb = get_named_compile_time_arg_val("bcast_pkt_cb");
-        constexpr uint32_t bcast_num_pages = get_named_compile_time_arg_val("bcast_num_pages_to_read");
-        unified_kernels::setup_sharded_buffer(bcast_pkt_cb, bcast_num_pages);
-#else
-        // When no broadcast, CB 25 data is pre-loaded in tensor — set up here
+#ifndef ENABLE_BCAST
+        // When no broadcast, CB 25 data is pre-loaded — set up once here (never popped)
         constexpr uint32_t shared_residual_mcast_src_cb =
             get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
         constexpr uint32_t shared_residual_mcast_src_num_pages =
             get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(shared_residual_mcast_src_cb, shared_residual_mcast_src_num_pages);
+#else
+        // Broadcast pkt_cb: tensor-backed input staging buffer
+        constexpr uint32_t bcast_pkt_cb = get_named_compile_time_arg_val("bcast_pkt_cb");
+        constexpr uint32_t bcast_num_pages = get_named_compile_time_arg_val("bcast_num_pages_to_read");
+        unified_kernels::setup_sharded_buffer(bcast_pkt_cb, bcast_num_pages);
 #endif
     }
     if constexpr (Core::Routed::is_gate_mm_core) {
@@ -958,14 +958,13 @@ void kernel_main() {
             bcast_op(bcast_args);
 #endif
         }
-        // After broadcast completes, set up CB 25 so pipeline can read from it
+        // After broadcast, push CB 25 pages so residual mcast + RMSNorm can read
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {
-            constexpr uint32_t shared_residual_mcast_src_cb =
-                get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
-            constexpr uint32_t shared_residual_mcast_src_num_pages =
+            constexpr uint32_t bcast_residual_cb = get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+            constexpr uint32_t bcast_residual_pages =
                 get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
-            unified_kernels::setup_sharded_buffer(shared_residual_mcast_src_cb, shared_residual_mcast_src_num_pages);
+            unified_kernels::setup_sharded_buffer(bcast_residual_cb, bcast_residual_pages);
         }
 #endif
 #endif
@@ -986,6 +985,19 @@ void kernel_main() {
                 rmsnorm;
             rmsnorm(moe.routed.rmsnorm_args);
         }
+
+#ifdef ENABLE_BCAST
+        // Pop CB 25 after consumers (residual mcast + RMSNorm) are done,
+        // so next iteration's setup_sharded_buffer can push new data
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t bcast_residual_cb = get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+            constexpr uint32_t bcast_residual_pages =
+                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
+            cb_pop_front(bcast_residual_cb, bcast_residual_pages);
+        }
+#endif
+#endif
 
         // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
         {

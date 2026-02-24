@@ -41,6 +41,9 @@ using address_t = uint32_t;
 
 namespace deepseek_b1_ops {
 
+// Atomic semaphore decrement by 1
+inline void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) { __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED); }
+
 // Unified kernel for CCL Broadcast operation
 struct Broadcast {
     // ========================================================================
@@ -163,6 +166,9 @@ struct Broadcast {
                 constexpr uint32_t secondary_connection_idx = num_primary_connections;
                 size_t arg_for_fab = 0;
 
+                // Reset pool so broadcast can be called across loop iterations
+                PacketHeaderPool::reset();
+
                 auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 // Allocate separate route for secondary axis unicast (if applicable)
@@ -250,13 +256,12 @@ struct Broadcast {
                     if (args.wait_output_semaphore) {
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait(sem_ptr, args.out_ready_sem_wait_value);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                     }
 
                     // 4. global semaphore reset
                     if (args.reset_global_semaphore) {
-                        noc_semaphore_set(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
+                        semaphore_dec(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
@@ -267,13 +272,12 @@ struct Broadcast {
                     if (args.wait_output_semaphore) {
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait(sem_ptr, args.out_ready_sem_wait_value);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                     }
 
                     // Reset semaphore after receiving data
                     if (args.reset_global_semaphore) {
-                        noc_semaphore_set(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
+                        semaphore_dec(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
 
                     // broadcast the received data along the primary axis
@@ -300,13 +304,12 @@ struct Broadcast {
                     if (args.wait_output_semaphore) {
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait(sem_ptr, args.out_ready_sem_wait_value);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                     }
 
                     // Reset global semaphore
                     if (args.reset_global_semaphore) {
-                        noc_semaphore_set(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
+                        semaphore_dec(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
                 }
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
