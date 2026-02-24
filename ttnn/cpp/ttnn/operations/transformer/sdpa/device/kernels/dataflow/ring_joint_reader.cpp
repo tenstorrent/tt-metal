@@ -135,7 +135,7 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
-    uint32_t rind_index = fused_op_receiver.ring_index;
+    uint32_t ring_index = fused_op_receiver.ring_index;
     // DPRINT << "READER BEGIN FOR " << rind_index << ENDL();
     // uint32_t tmp = global_q_end - global_q_start;
     // DPRINT << "GLOBAL Q RANGE: " << global_q_start << " - " << global_q_end << ENDL();
