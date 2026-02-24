@@ -5,8 +5,8 @@ A stage-gated test-driven development pipeline for implementing TTNN kernels inc
 ## Quick Start
 
 ```bash
-# 1. Initialize pipeline from an operation spec
-python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init path/to/my_op_spec.md --op-path ttnn/ttnn/operations/my_op
+# 1. Initialize pipeline from an operation design
+python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init path/to/op_design.md --op-path ttnn/ttnn/operations/my_op
 
 # 2. Register stages (order matters — they execute sequentially)
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py add-stage '{
@@ -42,7 +42,7 @@ Initialize a TDD pipeline from an operation spec file.
 **Example:**
 ```bash
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py init \
-  ttnn/ttnn/operations/my_op/my_op_spec.md \
+  ttnn/ttnn/operations/my_op/op_design.md \
   --op-path ttnn/ttnn/operations/my_op
 ```
 
@@ -178,7 +178,7 @@ Lives in the operation directory. Example:
 {
   "op_name": "my_op",
   "op_path": "ttnn/ttnn/operations/my_op",
-  "spec_path": "ttnn/ttnn/operations/my_op/my_op_spec.md",
+  "spec_path": "ttnn/ttnn/operations/my_op/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
   "current_stage_index": 1,
   "last_passing_commit": "abc1234...",

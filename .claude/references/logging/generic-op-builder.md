@@ -9,7 +9,7 @@ First read: `.claude/references/logging/common.md`
 ## Agent Identity
 
 - **Agent name**: `ttnn-generic-op-builder`
-- **Predecessor**: `ttnn-operation-planner`
+- **Predecessor**: `ttnn-operation-architect`
 - **Operation path**: `ttnn/ttnn/operations/{operation_name}` (see `ttnn-generic-op-workflow.md`)
 
 ---

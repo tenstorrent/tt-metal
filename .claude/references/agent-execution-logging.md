@@ -184,8 +184,8 @@ mkdir -p {operation_path}/agent_logs
   - `ttnn/ttnn/operations/{operation_name}` (see `ttnn-generic-op-workflow.md`)
 - `agent_name`: e.g., `ttnn-generic-op-builder`, `ttnn-kernel-writer`
 - `operation_name`: e.g., `my_op`
-- `predecessor_agent`: e.g., `ttnn-operation-planner` or `""` if first agent
-- `input_file_path`: e.g., `my_op_spec.md`
+- `predecessor_agent`: e.g., `ttnn-operation-architect` or `""` if first agent
+- `input_file_path`: e.g., `op_design.md`
 
 ---
 
@@ -256,7 +256,7 @@ When deviating from instructions:
 ### upstream_feedback
 Issues with input from predecessor agent:
 ```json
-{"event":"upstream_feedback","target_agent":"ttnn-operation-planner","issue":"Validation used property syntax","suggestion":"Use method syntax","severity":"MEDIUM"}
+{"event":"upstream_feedback","target_agent":"ttnn-operation-architect","issue":"Validation used property syntax","suggestion":"Use method syntax","severity":"MEDIUM"}
 ```
 
 ### complete

@@ -9,7 +9,7 @@ First read: `.claude/references/logging/common.md`
 ## Agent Identity
 
 - **Agent name**: `ttnn-kernel-writer`
-- **Predecessor**: `ttnn-kernel-designer`
+- **Predecessor**: `ttnn-operation-architect`
 - **Stages owned**: 7
 
 ---
@@ -38,7 +38,7 @@ In TDD pipelines, the kernel-writer is invoked **multiple times** (once per stag
 ### phase_start
 Log at the very beginning of implementation:
 ```json
-{"event":"phase_start","phase":"implementation","design_doc":"path/to/kernel_design.md"}
+{"event":"phase_start","phase":"implementation","design_doc":"path/to/op_design.md"}
 ```
 
 ### design_parsed
@@ -179,7 +179,7 @@ Track host file changes:
 This shows what a complete debugging trail looks like:
 
 ```jsonl
-{"ts":"10:00:01","event":"phase_start","phase":"implementation","design_doc":"reduce_avg_w_rm/kernel_design.md"}
+{"ts":"10:00:01","event":"phase_start","phase":"implementation","design_doc":"reduce_avg_w_rm/op_design.md"}
 {"ts":"10:00:15","event":"design_parsed","phases_count":5,"helpers_required":["tilize","reduce","untilize"],"raw_phases":["reader","writer"]}
 {"ts":"10:05:00","event":"kernel_implemented","kernel":"reader","approach":"TensorAccessor, push Wt tiles per block"}
 {"ts":"10:10:00","event":"kernel_implemented","kernel":"compute","approach":"tilize->reduce->untilize sequence"}
