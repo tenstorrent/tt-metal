@@ -146,6 +146,20 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_socket_cb"),
         get_named_compile_time_arg_val("argmax_socket_page_size_bytes")>;
 
+    constexpr uint32_t gather_cb = get_named_compile_time_arg_val("argmax_gather_cb");
+
+    deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
+        0,
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        0,
+    };
+
     // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
     if constexpr (Core::is_matmul_core) {
         constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
@@ -268,6 +282,10 @@ void kernel_main() {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
+
+    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ComputeCTArgs;
+    deepseek_b1_ops::Sampling::ComputeArgs sampling_args{};
+
     // Full init, CBs don't matter
     compute_kernel_hw_startup(0, 0, 0);
 #endif
@@ -325,27 +343,16 @@ void kernel_main() {
         matmul(matmul_args);
     }
 
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #if defined(COMPILE_FOR_NCRISC)
-        constexpr uint32_t gather_cb = get_named_compile_time_arg_val("argmax_gather_cb");
-        uint32_t scores_addr = 0;
-        if constexpr (Core::is_matmul_core) {
-            // Matmul (TRISC) pushes matmul_out CB; wait before NCRISC consumes scores.
-            cb_wait_front(matmul_out_cb, out_w);
-            scores_addr = get_read_ptr(matmul_out_cb);
-        }
-        deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
-            scores_addr,
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-            get_write_ptr(gather_cb),
-        };
-        // k=1 fast path: fused sampling invocation matches micro-op style.
+    uint32_t scores_addr = 0;
+    if constexpr (Core::is_matmul_core) {
+        // Matmul (TRISC) pushes matmul_out CB; wait before NCRISC consumes scores.
+        cb_wait_front(matmul_out_cb, out_w);
+        scores_addr = get_read_ptr(matmul_out_cb);
+    }
+    sampling_args.scores_addr = scores_addr;
+    sampling_args.gather_addr = get_write_ptr(gather_cb);
+    // k=1 fast path: fused sampling invocation matches micro-op style.
 #endif
         deepseek_b1_ops::Sampling::
             Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
@@ -358,6 +365,5 @@ void kernel_main() {
         if constexpr (Core::is_matmul_core) {
             cb_pop_front(matmul_out_cb, out_w);
         }
-#endif
 #endif
 }
