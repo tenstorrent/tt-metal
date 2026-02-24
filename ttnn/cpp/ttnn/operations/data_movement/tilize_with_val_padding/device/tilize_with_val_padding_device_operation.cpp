@@ -17,10 +17,14 @@ namespace ttnn::prim {
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        TT_FATAL(
-            !operation_attributes.sub_core_grids.has_value(),
-            "Sharded tilize does not support sub core grid specification");
-        return TilizeWithValPaddingMultiCoreShardedFactory{};
+        if (!input_tensor.nd_shard_spec().has_value()) {
+            TT_FATAL(
+                !operation_attributes.sub_core_grids.has_value(),
+                "Sharded tilize does not support sub core grid specification");
+            return TilizeWithValPaddingMultiCoreShardedFactory{};
+        }
+        return TilizeWithValPaddingMultiCoreInterleavedFactory{};  // ND sharded inputs take the Interleaved program
+                                                                   // path.
     }
     if (!operation_attributes.enough_space_height) {
         return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
@@ -57,7 +61,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -102,31 +106,38 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_HEIGHT);
 
     if (input_tensor.memory_config().is_sharded()) {
-        TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-            "Input tensor must be width sharded");
-        TT_FATAL(
-            operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
-            "Output tensor must have the same memory layout as input tensor");
-        for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
-            if (i != input_shape.rank() - 2) {
-                TT_FATAL(
-                    input_shape[i] == operation_attributes.output_padded_shape[i],
-                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
-                    i,
-                    input_shape[i],
-                    i,
-                    operation_attributes.output_padded_shape[i]);
+        if (input_tensor.shard_spec().has_value() && !input_tensor.nd_shard_spec().has_value()) {
+            std::cout << "Huh????\n";
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                "Input tensor must be width sharded");
+            TT_FATAL(
+                operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
+                "Output tensor must have the same memory layout as input tensor");
+            const auto& padded_shape = input_tensor.padded_shape();
+
+            for (uint32_t i = 0; i < padded_shape.rank(); i++) {
+                if (i != padded_shape.rank() - 2) {
+                    TT_FATAL(
+                        padded_shape[i] == operation_attributes.output_padded_shape[i],
+                        "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+                        i,
+                        padded_shape[i],
+                        i,
+                        operation_attributes.output_padded_shape[i]);
+                }
             }
+        } else {
+            // TODO: check for ND shard width alignment wityh L1 requirements.
         }
     }
 }
 
 TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
-    if (input_tensor.memory_config().is_sharded()) {
+    if (input_tensor.memory_config().is_sharded() && input_tensor.shard_spec().has_value()) {
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];

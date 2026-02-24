@@ -62,18 +62,21 @@ void kernel_main() {
     constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(0);
     constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
     constexpr uint32_t elem_size = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr uint32_t num_sticks_in_row = get_compile_time_arg_val(3);
+    constexpr uint32_t stick_size = get_compile_time_arg_val(4);
+    constexpr uint32_t size_of_valid_data_in_last_stick_in_row = get_compile_time_arg_val(5);
+    constexpr auto src_args = TensorAccessorArgs<6>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
     const uint32_t pad_value = get_arg_val<uint32_t>(2);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);  // modify in program factory for ND-sharded case
     const uint32_t n_block_reps = get_arg_val<uint32_t>(4);
 
     const uint32_t num_tiles_per_row =
         padded_X_size >> tile_row_shift_bits;  // means / 64, assuming bfloat16, there are 64 bytes per tile row
 
-    const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
+    const auto s = TensorAccessor(src_args, src_addr, stick_size);
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
@@ -92,16 +95,29 @@ void kernel_main() {
         cb_reserve_back(cb_id_in0, num_tiles_per_row * has_rows);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(base_stick_id + k, s);
+            uint32_t start_of_row_l1_write_addr = l1_write_addr;
+            for (uint32_t i = 0; i < num_sticks_in_row; i++) {
+                uint64_t src_noc_addr = s.get_noc_addr(base_stick_id + k * num_sticks_in_row + i);
+                bool is_last_stick_in_row = i == num_sticks_in_row - 1;
+                uint32_t num_bytes_to_read =
+                    (is_last_stick_in_row ? size_of_valid_data_in_last_stick_in_row : stick_size);
+                // Read from DRAM to tmp buffer
+                noc_async_read(src_noc_addr, l1_write_addr, num_bytes_to_read);
+                uint32_t size_of_padding_columns = 0;
+                if (is_last_stick_in_row) {
+                    size_of_padding_columns = padded_X_size - unpadded_X_size;
+                    fill_with_val<elem_size>(
+                        start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
+                }
+                // fill_with_val<elem_size>(l1_write_addr + unpadded_X_size, padded_X_size - unpadded_X_size,
+                // pad_value);
 
-            // Read from DRAM to tmp buffer
-            noc_async_read(src_noc_addr, l1_write_addr, unpadded_X_size);
-
-            fill_with_val<elem_size>(l1_write_addr + unpadded_X_size, padded_X_size - unpadded_X_size, pad_value);
-
-            // Block before copying data from tmp to cb buffer
-            noc_async_read_barrier();
-            l1_write_addr += padded_X_size;
+                // Block before copying data from tmp to cb buffer
+                noc_async_read_barrier();
+                l1_write_addr +=
+                    (is_last_stick_in_row ? size_of_valid_data_in_last_stick_in_row + size_of_padding_columns
+                                          : stick_size);
+            }
         }
 
         fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
@@ -135,11 +151,11 @@ void kernel_main() {
         for (uint32_t t = 0; t < times; ++t) {
             for (uint32_t y_t = 0; y_t < n_data; y_t++) {
                 read_block(stick_id, tile_height);
-                stick_id += tile_height;
+                stick_id += tile_height * num_sticks_in_row;  // adjust for ND-sharded case
             }
 
             read_block(stick_id, n_mixed);
-            stick_id += n_mixed;
+            stick_id += n_mixed * num_sticks_in_row;  // adjust for ND-sharded case
 
             pad_blocks(n_pads);
         }

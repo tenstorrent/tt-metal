@@ -24,6 +24,7 @@ namespace ttnn::prim {
 TilizeWithValPaddingMultiCoreInterleavedFactory::cached_program_t
 TilizeWithValPaddingMultiCoreInterleavedFactory::create(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
+    std::cout << "Creating program for ND-sharded input\n";
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const Tensor& a = input_tensor;
     const Tensor& output = output_tensor;
@@ -40,15 +41,17 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid =
         operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
-    uint32_t num_blocks = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t tile_width = output.tensor_spec().tile().get_width();
+    uint32_t tile_height = output.tensor_spec().tile().get_height();
+    uint32_t num_blocks = output.physical_volume() / output.padded_shape()[-1] / tile_height;
+    uint32_t num_tiles_per_row = output.padded_shape()[-1] / tile_width;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(available_grid, num_blocks);
 
     bool has_cliff = !core_range_cliff.empty();
 
-    uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
+    uint32_t unpadded_row_size_bytes = a.logical_shape()[-1] * a.element_size();    // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
@@ -63,15 +66,39 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
     /** reader
      */
     uint32_t packed_pad_value = detail::get_packed_value(a, operation_attributes.pad_value);
-    // log2(TILE_WIDTH * data_format_size_in_bytes)
+    // log2(tile_height * data_format_size_in_bytes)
     uint32_t shift_bits = static_cast<uint32_t>(std::log2(
         a.element_size() *
-        TILE_HEIGHT));  // This gives log2 of bytes per tile row, so in the kernel we
+        tile_height));  // This gives log2 of bytes per tile row, so in the kernel we
                         // can shift right by this to get number of tiles.
                         // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
     uint32_t elem_size = a.element_size();
+    uint32_t num_sticks_in_row = 1;                 // tt::div_up(a.padded_shape()[-1], tile_width);
+    uint32_t stick_size = unpadded_row_size_bytes;  // a.element_size() * tile_width;
+    uint32_t size_of_valid_data_in_last_stick_in_row =
+        unpadded_row_size_bytes;  // a.padded_shape()[-1] % tile_width * a.element_size();
+    if (a.is_sharded()) {
+        num_sticks_in_row = tt::div_up(a.logical_shape()[-1], a.nd_shard_spec().value().shard_shape[-1]);
+        stick_size = a.element_size() * a.nd_shard_spec().value().shard_shape[-1];
+        std::cout << "AAAA unpadded_row_size_bytes: " << unpadded_row_size_bytes << "\n";
+        std::cout << "AAAA stick_size: " << stick_size << "\n";
+        std::cout << "AAAA num_sticks_in_row: " << num_sticks_in_row << "\n";
+        size_of_valid_data_in_last_stick_in_row = unpadded_row_size_bytes - (num_sticks_in_row - 1) * stick_size;
+    }
+    std::cout << "num_sticks_in_row: " << num_sticks_in_row << "\n";
+    std::cout << "stick_size: " << stick_size << "\n";
+    std::cout << "size_of_valid_data_in_last_stick_in_row: " << size_of_valid_data_in_last_stick_in_row << "\n";
+    std::cout << "unpadded_row_size_bytes: " << unpadded_row_size_bytes << "\n";
+    std::cout << "elem_size: " << elem_size << "\n";
+    std::cout << "shift_bits: " << shift_bits << "\n";
 
-    std::vector<uint32_t> reader_compile_time_args = {shift_bits, unpadded_row_size_bytes, elem_size};
+    std::vector<uint32_t> reader_compile_time_args = {
+        shift_bits,
+        unpadded_row_size_bytes,
+        elem_size,
+        num_sticks_in_row,
+        stick_size,
+        size_of_valid_data_in_last_stick_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
@@ -110,7 +137,6 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
 
     /* RUNTIME ARGS */
     // 1D distribution of blocks across cores
-    uint32_t tile_height = output.tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
         output.logical_shape(),
         output.padded_shape(),
@@ -121,7 +147,7 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
         tile_height);
 
     uint32_t tile_start_id = 0;
-    uint32_t row_start_id = 0;
+    uint32_t start_page_id = 0;
 
     const auto cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores; ++i) {
@@ -133,7 +159,7 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
             src0_buffer->address(),
             padded_row_size_bytes,
             packed_pad_value,
-            row_start_id,
+            start_page_id,
             static_cast<unsigned int>(assignment.size()),
         };
 
@@ -142,7 +168,7 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
         uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
-            row_start_id += el.data_row_count();
+            start_page_id += el.data_row_count() * num_sticks_in_row;
             if (compare_assignments(ref_el, el)) {
                 count_repeated++;
             } else {
