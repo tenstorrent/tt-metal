@@ -151,7 +151,12 @@ class T5Stack(Module):
         if attention_mask is not None:
             attention_mask = (attention_mask - 1.0) * float("inf")
             # reshape attention mask to b x 1 x 1 x seq_len to make compatible with relative position bias
-            attention_mask = ttnn.reshape(attention_mask, (attention_mask.shape[0], 1, 1, -1))
+            if len(attention_mask.shape) == 2:
+                attention_mask = ttnn.reshape(attention_mask, (attention_mask.shape[0], 1, 1, -1))
+            else:
+                assert (
+                    len(attention_mask.shape) == 4
+                ), "Attention mask must be of shape 4D (B, 1, 1, seq_len) or 2D (B, seq_len)"
 
         for layer in self.layers:
             # Precompute position bias to preserve previous behaviour. If not set for this layer, use the previous layer's position bias.
