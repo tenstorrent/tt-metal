@@ -569,15 +569,16 @@ void sub_exp_block_bcast_cols(
     {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PACK SUB_EXP");
 
-        // Pack to write_cb sequentially via pack_tile<false>
+        // Pack write_cb: one pack_tile<true> per row, ambient MOP=SBW handles all columns.
+        // Offsets are local to wr_ptr (caller advances wr_ptr via cb_push_back between rows).
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-            for (uint32_t j = 0; j < tiles_per_column; ++j) {
-                pack_tile<false>(dst_index++, write_cb);
-            }
+            const uint32_t out_row_offset = i * cols_in_row + global_col_base;
+            pack_tile<true>(dst_index, write_cb, out_row_offset);
+            dst_index += tiles_per_column;
         }
 
-        // Reduce to reduce_cb at absolute positions with L1 accumulate
+        // Reduce: MOP=1 to L1-accumulate each tile individually into one position per row.
         if constexpr (do_reduce) {
             PACK((llk_pack_mop_config<false, false, false>(reduce_cb, 1)));
             dst_index = 0;
@@ -595,7 +596,6 @@ void sub_exp_block_bcast_cols(
         }
     }
 
-    // Restore packer ReLU config after all exp operations complete
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 
     tile_regs_release();
@@ -692,7 +692,8 @@ template <
     uint32_t IN1_STRIDE,
     uint32_t OUT_NUM_COLS,
     bool SEQUENTIAL_OUTPUT = false,
-    bool SKIP_INIT = false>
+    bool SKIP_INIT = false,
+    bool RECONFIG_PACK = true>
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -711,7 +712,7 @@ void blocked_matmul_and_pack(
 
     // --- Matmul phase ---
     tile_regs_acquire();
-    if constexpr (!SEQUENTIAL_OUTPUT) {
+    if constexpr (!SEQUENTIAL_OUTPUT && RECONFIG_PACK) {
         PACK((llk_pack_mop_config<false, false, false>(out_cb, SUBBLOCK_W)));
     }
     uint32_t dst_index = 0;
@@ -751,7 +752,7 @@ void blocked_matmul_and_pack(
         }
     }
     tile_regs_release();
-    if constexpr (!SEQUENTIAL_OUTPUT) {
+    if constexpr (!SEQUENTIAL_OUTPUT && RECONFIG_PACK) {
         PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
     }
 }
@@ -917,6 +918,7 @@ void sdpa_inner_loop_step(
 #else
     mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #endif
+    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
@@ -942,13 +944,25 @@ void sdpa_inner_loop_step(
 #else
                 mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #endif
+                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
             }
 
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
-            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true, false>(
+            blocked_matmul_and_pack<
+                true,
+                qkt_subblock_w,
+                sbh,
+                in0_block_w,
+                Sk_chunk_t,
+                Sk_chunk_t,
+                false,
+                false,
+                false>(
                 cb_q_in, cb_kt_in, alias_cur_qkt_row, q_index_offset, kt_index_offset, 0, kt_subblock * qkt_subblock_w);
             kt_index_offset += qkt_subblock_w;
         }
+        // Set MOP=1 before reduce.
+        PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
 
         if (q_subblock > 0) {
             // Push softmax'd prev row to cb_qkt_im, free prev row buffer
@@ -973,12 +987,14 @@ void sdpa_inner_loop_step(
                 0 /*in0_row_group_index*/);
             cb_push_back(cur_max, sbh);
         }
+        PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
 
         // Current row still has data (not popped) — becomes prev row in next iteration's sub_exp
         std::swap(alias_cur_qkt_row, alias_prev_qkt_row);
         q_index_offset += sbh * in0_block_w;
         q_wait_tiles += q_subblock_num_tiles;
     }
+    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
 
     cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
 
@@ -1017,6 +1033,7 @@ void sdpa_inner_loop_step(
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_subblocks; ++kt_sub) {
                     // sub_exp drain — EXP runs on SFPU, freeing FPU for matmul overlap
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=" << kt_sub << ENDL());
+                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
                     sub_exp_block_bcast_cols<
                         PROFILING_ENABLED,
                         scale_fp32,
@@ -1025,6 +1042,7 @@ void sdpa_inner_loop_step(
                         true,
                         VectorMode::RC,
                         true>(alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
+                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
 
                     // After last sub_exp: push softmax'd row, free raw row buffer.
                     // cur_sum stays RESERVED — SALAD will L1-accumulate onto it later.
