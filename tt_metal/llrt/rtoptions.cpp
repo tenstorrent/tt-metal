@@ -150,6 +150,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_ETH,                             // Disable watcher on ethernet cores
     TT_METAL_WATCHER_DISABLE_CB_SANITIZE,                     // Disable watcher circular buffer sanitization
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
+    TT_METAL_WATCHER_NO_POLL,                                 // Enable watcher device-side checks without host polling
 
     // ========================================
     // INSPECTOR
@@ -1070,6 +1071,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_settings.noc_sanitize_linked_transaction = true;
             break;
 
+        // TT_METAL_WATCHER_NO_POLL
+        // Enables all watcher device-side instrumentation (asserts, NOC sanitization,
+        // waypoints, ring buffer, stack usage, pause, eth link status) but does NOT
+        // start the host polling thread. On error, kernel hangs with full diagnostic
+        // info in L1 mailbox; use tt-triage to diagnose.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_WATCHER_NO_POLL=1
+        case EnvVarID::TT_METAL_WATCHER_NO_POLL:
+            this->watcher_no_poll = true;
+            this->watcher_settings.enabled = true;
+            break;
+
         // ========================================
         // INSPECTOR
         // ========================================
@@ -1365,11 +1378,16 @@ void RunTimeOptions::ParseWatcherEnv() {
         }
     }
 
+    if (watcher_no_poll && getenv("TT_METAL_WATCHER")) {
+        TT_THROW("TT_METAL_WATCHER_NO_POLL and TT_METAL_WATCHER are mutually exclusive.");
+    }
+
     const char* watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
-        // Assert watcher is also enabled (TT_METAL_WATCHER=1)
-        TT_ASSERT(watcher_settings.enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
+        TT_ASSERT(
+            watcher_settings.enabled,
+            "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER or TT_METAL_WATCHER_NO_POLL");
         // Assert TT_METAL_WATCHER_DISABLE_NOC_SANITIZE is either not set or set to 0
         TT_ASSERT(
             !watcher_disabled_features.contains(watcher_noc_sanitize_str),

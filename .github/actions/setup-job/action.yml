@@ -91,9 +91,8 @@ runs:
       if: ${{ inputs.enable-watcher == 'true' }}
       working-directory: ${{ inputs.path }}
       run: |
-        echo "Enabling TT Metal Watcher"
-        echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
-        echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+        echo "Enabling TT Metal Watcher (no-poll mode)"
+        echo "TT_METAL_WATCHER_NO_POLL=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
       shell: bash
 
