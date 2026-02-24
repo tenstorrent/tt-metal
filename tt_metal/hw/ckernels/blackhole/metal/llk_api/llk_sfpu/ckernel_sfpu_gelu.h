@@ -7,6 +7,7 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_nearest_int32_
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -70,7 +71,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     constexpr float C3 = 0.166666667f;
     constexpr float C4 = 0.0416666667f;
     constexpr float C5 = 0.00833333333f;
-    sfpi::vFloat poly = 1.0f + r * (1.0f + r * (C2 + r * (C3 + r * (C4 + r * C5))));
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5);
 
     // Step 4: FUSED MULTIPLY - multiply by x BEFORE exponent shift!
     // This is the key to avoiding intermediate underflow.
@@ -183,36 +184,6 @@ inline void calculate_gelu_derivative() {
 // Uses piecewise polynomials for high accuracy
 // =============================================================================
 
-// POLYVAL16 macro for degree-16 polynomial (17 coefficients)
-// Horner's method with multi-line formatting for compiler compatibility
-#define POLYVAL16(c16, c15, c14, c13, c12, c11, c10, c9, c8, c7, c6, c5, c4, c3, c2, c1, c0, x)                      \
-    ((((((((((((((((c16) * (x) + (c15)) * (x) + (c14)) * (x) + (c13)) * (x) + (c12)) * (x) + (c11)) * (x) + (c10)) * \
-                 (x) +                                                                                               \
-             (c9)) *                                                                                                 \
-                (x) +                                                                                                \
-            (c8)) *                                                                                                  \
-               (x) +                                                                                                 \
-           (c7)) *                                                                                                   \
-              (x) +                                                                                                  \
-          (c6)) *                                                                                                    \
-             (x) +                                                                                                   \
-         (c5)) *                                                                                                     \
-            (x) +                                                                                                    \
-        (c4)) *                                                                                                      \
-           (x) +                                                                                                     \
-       (c3)) *                                                                                                       \
-          (x) +                                                                                                      \
-      (c2)) *                                                                                                        \
-         (x) +                                                                                                       \
-     (c1)) * (x) +                                                                                                   \
-        (c0)
-
-// POLYVAL8 macro for degree-8 polynomial
-#define POLYVAL8(c8, c7, c6, c5, c4, c3, c2, c1, c0, x)                                                             \
-    ((((((((c8) * (x) + (c7)) * (x) + (c6)) * (x) + (c5)) * (x) + (c4)) * (x) + (c3)) * (x) + (c2)) * (x) + (c1)) * \
-            (x) +                                                                                                   \
-        (c0)
-
 // Degree-16 polynomial for GELU'(x) over [-3, 3]
 // Coefficients from Sollya fpminimax
 constexpr float GELU_DERIV_CORE_C0 = 0.49999025f;
@@ -265,42 +236,42 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     // Core region [-3, 3.1719], degree 16 polynomial
     // Polynomial reproduces the "hump" where GELU'(x) > 1
     v_elseif(x >= -3.0f) {
-        result = POLYVAL16(
-            GELU_DERIV_CORE_C16,
-            GELU_DERIV_CORE_C15,
-            GELU_DERIV_CORE_C14,
-            GELU_DERIV_CORE_C13,
-            GELU_DERIV_CORE_C12,
-            GELU_DERIV_CORE_C11,
-            GELU_DERIV_CORE_C10,
-            GELU_DERIV_CORE_C9,
-            GELU_DERIV_CORE_C8,
-            GELU_DERIV_CORE_C7,
-            GELU_DERIV_CORE_C6,
-            GELU_DERIV_CORE_C5,
-            GELU_DERIV_CORE_C4,
-            GELU_DERIV_CORE_C3,
-            GELU_DERIV_CORE_C2,
-            GELU_DERIV_CORE_C1,
+        result = PolynomialEvaluator::eval(
+            x,
             GELU_DERIV_CORE_C0,
-            x);
+            GELU_DERIV_CORE_C1,
+            GELU_DERIV_CORE_C2,
+            GELU_DERIV_CORE_C3,
+            GELU_DERIV_CORE_C4,
+            GELU_DERIV_CORE_C5,
+            GELU_DERIV_CORE_C6,
+            GELU_DERIV_CORE_C7,
+            GELU_DERIV_CORE_C8,
+            GELU_DERIV_CORE_C9,
+            GELU_DERIV_CORE_C10,
+            GELU_DERIV_CORE_C11,
+            GELU_DERIV_CORE_C12,
+            GELU_DERIV_CORE_C13,
+            GELU_DERIV_CORE_C14,
+            GELU_DERIV_CORE_C15,
+            GELU_DERIV_CORE_C16);
     }
     // Left region [-5, -3], degree 8 SHIFTED polynomial
     // SHIFTED: t = x + 4 maps x ∈ [-5, -3] to t ∈ [-1, 1]
     // This avoids catastrophic cancellation in float32 Horner's method
     v_elseif(x >= -5.0f) {
         sfpi::vFloat t = x + 4.0f;  // Shift to [-1, 1] range
-        result = POLYVAL8(
-            GELU_DERIV_LEFT_C8,
-            GELU_DERIV_LEFT_C7,
-            GELU_DERIV_LEFT_C6,
-            GELU_DERIV_LEFT_C5,
-            GELU_DERIV_LEFT_C4,
-            GELU_DERIV_LEFT_C3,
-            GELU_DERIV_LEFT_C2,
-            GELU_DERIV_LEFT_C1,
+        result = PolynomialEvaluator::eval(
+            t,
             GELU_DERIV_LEFT_C0,
-            t);
+            GELU_DERIV_LEFT_C1,
+            GELU_DERIV_LEFT_C2,
+            GELU_DERIV_LEFT_C3,
+            GELU_DERIV_LEFT_C4,
+            GELU_DERIV_LEFT_C5,
+            GELU_DERIV_LEFT_C6,
+            GELU_DERIV_LEFT_C7,
+            GELU_DERIV_LEFT_C8);
     }
     // Deep negative region (-13.375, -5]: use asymptotic formula with fused x*exp(t)
     // The fused method achieves Max ULP ≤ 1 across this entire range, outperforming
@@ -352,12 +323,15 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_gelu_derivative_polynomial() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE>(val);
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
@@ -365,7 +339,9 @@ inline void calculate_gelu_derivative_polynomial() {
 
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
-    // No special initialization needed for polynomial evaluation
+    if constexpr (!APPROXIMATION_MODE) {
+        _init_sfpu_reciprocal_<false>();
+    }
 }
 
 }  // namespace sfpu
