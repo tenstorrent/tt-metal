@@ -206,6 +206,19 @@ async function run() {
     // This identifies NEW failing jobs in pipelines that were already failing
     await detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, github.context);
 
+    // --- TESTING: Inject t3k_ttnn_tests as a forced regression ---
+    regressedDetails.push({
+      name: 't3000-unit-tests',
+      workflow_path: '.github/workflows/t3000-unit-tests.yaml',
+      workflow_url: `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/actions/workflows/t3000-unit-tests.yaml`,
+      failing_jobs: [{
+        name: 't3k_ttnn_tests',
+        url: '',
+        owners: [{ name: 'Evan Small' }]
+      }]
+    });
+    // --- END TESTING ---
+
     // upload the changes json to the artifact space
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
     const statusChangesPath = path.join(outputDir, 'workflow-status-changes.json');
