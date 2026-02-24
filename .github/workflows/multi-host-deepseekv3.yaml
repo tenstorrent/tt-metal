@@ -63,11 +63,16 @@ on:
 
 run-name: "DeepSeek V3 – ${{ inputs.setup }} [${{ inputs.deepseekv3_unit_tests && 'unit ' || '' }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
+      actions: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -157,7 +162,7 @@ jobs:
       - name: Run dual DeepSeek V3 module tests
         if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 150
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -168,6 +173,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /mnt/MLPerf:/mnt/MLPerf
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -181,7 +187,7 @@ jobs:
       - name: Run quad DeepSeek V3 module tests
         if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 150
+        timeout-minutes: 600
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -192,6 +198,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /mnt/MLPerf:/mnt/MLPerf
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
