@@ -378,6 +378,9 @@ public:
 
     tt::ARCH get_arch() const { return arch_; }
 
+    // Returns true if the NoC has a torus topology (supports wrap-around)
+    bool get_noc_is_torus() const { return (arch_ == tt::ARCH::WORMHOLE_B0 || arch_ == tt::ARCH::BLACKHOLE); }
+
     uint32_t get_num_nocs() const { return num_nocs_; }
     uint32_t get_noc_node_id() const { return noc_node_id_; }
     uint32_t get_noc_node_id_mask() const { return noc_node_id_mask_; }

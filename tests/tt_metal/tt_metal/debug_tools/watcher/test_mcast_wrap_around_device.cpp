@@ -5,7 +5,7 @@
 // Device-side functional tests for wrap-around multicast on NoC torus architectures (WH/BH).
 //
 // Verifies that hardware multicasts work correctly with wrap-around coordinates (end < start).
-// Tests both noc0 and noc1 behavior. Some tests are disabled due to hardware limitations.
+// Tests both noc0 and noc1 for single-dimension wraps (Y-only or X-only).
 
 #include <gtest/gtest.h>
 #include <tt-metalium/host_api.hpp>
@@ -120,8 +120,6 @@ bool RunDeviceMcastWrapAroundTest(
     // Use RISCV_0 (BRISC) for noc0, RISCV_1 (NCRISC) for noc1 (conventional pairing)
     DataMovementProcessor sender_processor =
         (noc_id == NOC::RISCV_0_default) ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1;
-    DataMovementProcessor receiver_processor =
-        (noc_id == NOC::RISCV_0_default) ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
 
     auto sender_kernel = CreateKernel(
         program,
@@ -129,14 +127,7 @@ bool RunDeviceMcastWrapAroundTest(
         sender_logical,
         DataMovementConfig{.processor = sender_processor, .noc = noc_id});
 
-    // Create receiver kernels on all destination cores
-    for (const auto& receiver_core : receiver_cores) {
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/mcast_wrap_around_receiver.cpp",
-            receiver_core,
-            DataMovementConfig{.processor = receiver_processor, .noc = noc_id});
-    }
+    // No receiver kernels needed - multicast write directly commits data to receiver L1
 
     // Set runtime args for sender
     SetRuntimeArgs(
@@ -333,50 +324,6 @@ TEST_F(MeshWatcherFixture, DeviceMcastMixedWrap_XWrapYNormal_Noc0) {
         mcast_start,
         mcast_end,
         "Mixed: X-wrap + Y-normal (noc0)");
-
-    EXPECT_TRUE(pass);
-}
-
-// Test dual-dimension wrap: down and right (both X and Y wrap)
-// DISABLED: Dual-dimension wraps hang on hardware
-TEST_F(MeshWatcherFixture, DISABLED_DeviceMcastWrapAroundXY_DownRight_Noc0) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->logical_grid_size();
-
-    if (grid.x < 3 || grid.y < 3) {
-        GTEST_SKIP() << "Need grid.x >= 3 and grid.y >= 3 for XY-wrap test";
-    }
-
-    // Use safe coordinates that won't go out of bounds
-    // X-wrap: right to left, Y-wrap: bottom to top
-    CoreCoord sender(5, 5);
-    CoreCoord mcast_start(10, grid.y - 2);  // Near bottom-right
-    CoreCoord mcast_end(1, 1);              // Near top-left (both dimensions wrap)
-
-    bool pass = RunDeviceMcastWrapAroundTest(
-        device, this->devices_[0], NOC::RISCV_0_default, sender, mcast_start, mcast_end, "XY-wrap down-right (noc0)");
-
-    EXPECT_TRUE(pass);
-}
-
-// Test dual-dimension wrap: left and up (both X and Y wrap with noc1)
-// DISABLED: Dual-dimension wraps hang on hardware
-TEST_F(MeshWatcherFixture, DISABLED_DeviceMcastWrapAroundXY_LeftUp_Noc1) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    CoreCoord grid = device->logical_grid_size();
-
-    if (grid.x < 3 || grid.y < 3) {
-        GTEST_SKIP() << "Need grid.x >= 3 and grid.y >= 3 for XY-wrap test";
-    }
-
-    // Use safe coordinates for noc1
-    // X-wrap: right to left, Y-wrap: bottom to top
-    CoreCoord sender(5, 5);
-    CoreCoord mcast_start(9, grid.y - 2);  // Near bottom-right
-    CoreCoord mcast_end(1, 1);             // Near top-left (both dimensions wrap)
-
-    bool pass = RunDeviceMcastWrapAroundTest(
-        device, this->devices_[0], NOC::RISCV_1_default, sender, mcast_start, mcast_end, "XY-wrap left-up (noc1)");
 
     EXPECT_TRUE(pass);
 }
