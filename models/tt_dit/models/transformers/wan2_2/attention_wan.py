@@ -14,7 +14,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.matmul import get_matmul_config
+from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
@@ -232,7 +232,7 @@ class WanAttention(Module):
             weight = to_out.weight.data
 
         M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N_out, core_grid)
 
         output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
