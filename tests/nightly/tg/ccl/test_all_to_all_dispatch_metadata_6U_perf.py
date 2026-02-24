@@ -13,7 +13,7 @@ Prerequisites:
     - TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto
 
 Example:
-    RUN_ALL_TO_ALL_PERF=1 TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto pytest tests/nightly/tg/ccl/test_all_to_all_dispatch_metadata_6U_perf.py -v
+    RUN_ALL_TO_ALL_PERF=1 TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto pytest tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U_perf.py -v
 """
 
 import os
@@ -55,7 +55,7 @@ def test_perf_16x1(select_experts_k, packet_size, expected_lower_ns, expected_up
     """Performance validation: persistent, random_sequential_experts, direct, 16x1 mesh"""
     k_filter = f"k{select_experts_k}"
     command = (
-        f"pytest tests/nightly/tg/ccl/test_all_to_all_dispatch_metadata_6U.py::test_decode_perf "
+        f"pytest tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U.py::test_decode_perf "
         f"-k 'persistent and random_sequential_experts and direct and {k_filter} and {packet_size} and 16x1' -v"
     )
     subdir = f"all_to_all_dispatch_metadata_{k_filter}_{packet_size}_16x1"
