@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/experimental/udm/mesh_utils.hpp"
-#include "tt_metal/experimental/udm/mesh_tensor_builder.hpp"
-#include "tt_metal/experimental/udm/mesh_builder.hpp"
+#include <tt-metalium/experimental/udm/mesh_utils.hpp>
+#include <tt-metalium/experimental/udm/mesh_tensor_builder.hpp>
+#include <tt-metalium/experimental/udm/mesh_builder.hpp>
 #include <tt_stl/assert.hpp>
 #include <cmath>
 

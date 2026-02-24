@@ -124,6 +124,14 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
     api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
+    api/tt-metalium/experimental/udm/types.hpp
+    api/tt-metalium/experimental/udm/mesh_builder.hpp
+    api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
+    api/tt-metalium/experimental/udm/mesh_kernel.hpp
+    api/tt-metalium/experimental/udm/mesh_program.hpp
+    api/tt-metalium/experimental/udm/mesh_semaphore.hpp
+    api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
+    api/tt-metalium/experimental/udm/mesh_utils.hpp
 )
 target_sources(
     tt_metal
@@ -317,7 +325,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
-add_subdirectory(experimental/udm)
+add_subdirectory(impl/experimental/udm)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()
