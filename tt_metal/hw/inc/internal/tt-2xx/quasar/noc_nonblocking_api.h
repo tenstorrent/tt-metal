@@ -16,14 +16,12 @@
 //
 // V1 (noc_nonblocking_api_v1.h) - Legacy Path
 //   Uses memory-mapped NOC register writes (NOC_CMD_BUF_WRITE_REG / NOC_CMD_BUF_READ_REG),
-//   same mechanism as Wormhole and Blackhole. Each register write is a separate store to
-//   a NOC address, which is slow because each write goes through the NOC interconnect.
-//   Kept for compatibility and bringup; not recommended for production.
+//   same mechanism as Wormhole and Blackhole.
+//   Kept for compatibility and bringup; not recommended for production as it is super slow.
 //
 // V2 (noc_nonblocking_api_v2.h) - Custom Instruction Path (Default)
 //   Uses RISC-V custom instructions (RoCC) to program the Quasar overlay's command buffers
-//   directly. Register writes go through the co-processor interface rather than the NOC,
-//   making transaction setup significantly faster.
+//   directly. Register writes go through the ROCC interface.
 //
 //   Each data-movement core has 3 overlay command buffers:
 //     - Command Buffer 0 (OVERLAY_WR_CMD_BUF): Complex buffer, typically used for writes.
@@ -53,15 +51,6 @@
 
 // Legacy per-processor cmd_buf aliases for dataflow_cmd_bufs.h compatibility.
 // Complex buffers 0,1 are addressed by index; simple buffer (2) uses scmdbuf instructions.
-constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = OVERLAY_WR_CMD_BUF;
-constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF = OVERLAY_WR_CMD_BUF;
-constexpr uint32_t DYNAMIC_NOC_NCRISC_AT_CMD_BUF = OVERLAY_AT_CMD_BUF;
-constexpr uint32_t DYNAMIC_NOC_NCRISC_RD_CMD_BUF = OVERLAY_RD_CMD_BUF;
-constexpr uint32_t DYNAMIC_NOC_BRISC_WR_CMD_BUF = OVERLAY_WR_CMD_BUF;
-constexpr uint32_t DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF = OVERLAY_WR_CMD_BUF;
-constexpr uint32_t DYNAMIC_NOC_BRISC_AT_CMD_BUF = OVERLAY_AT_CMD_BUF;
-constexpr uint32_t DYNAMIC_NOC_BRISC_RD_CMD_BUF = OVERLAY_RD_CMD_BUF;
-
 constexpr uint32_t NCRISC_WR_CMD_BUF = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t NCRISC_RD_CMD_BUF = OVERLAY_RD_CMD_BUF;
 constexpr uint32_t NCRISC_WR_REG_CMD_BUF = OVERLAY_WR_CMD_BUF;
