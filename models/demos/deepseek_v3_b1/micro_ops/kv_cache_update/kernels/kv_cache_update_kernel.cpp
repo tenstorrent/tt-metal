@@ -31,13 +31,19 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     deepseek_b1_ops::KVCacheUpdate::WriterArgs args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
-        .position_id = get_common_arg_val<uint32_t>(1),
+        .pos_addr = get_common_arg_val<uint32_t>(1),
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
+        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
+        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
+        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
+        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
+        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
+        .kv_cache_cur_pos_ready_semaphore_id = get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_id"),
     };
 #elif defined(COMPILE_FOR_TRISC)
     deepseek_b1_ops::KVCacheUpdate::ComputeArgs args{

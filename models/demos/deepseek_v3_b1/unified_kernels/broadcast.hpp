@@ -105,6 +105,7 @@ struct Broadcast {
         uint32_t ring_index;
         uint32_t secondary_sync_sem;
         uint32_t num_connections;
+        uint32_t fabric_args_start_index = 0;
     };
 
     // TRISC args - not used for CCL broadcast op
@@ -161,7 +162,6 @@ struct Broadcast {
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
                 constexpr uint32_t secondary_connection_idx = num_primary_connections;
-                size_t arg_for_fab = 0;
 
                 auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
@@ -170,8 +170,9 @@ struct Broadcast {
 
                 tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
+                size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    open_connections(fabric_connection, args.num_connections, arg_for_fab);
+                    open_connections(fabric_connection, args.num_connections, fabric_args_start_index);
                 }
 
                 uint8_t starts[] = {
