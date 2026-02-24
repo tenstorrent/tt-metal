@@ -86,7 +86,7 @@ class SamplingGenerator:
 
         self._trace_states: dict[_TraceKey, dict] = {}
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
-        self.seed_manager = SeedManager(self.tt_sampling, max_batch_size=seed_batch_size)
+        self.seed_manager = SeedManager(self, max_batch_size=seed_batch_size)
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -327,7 +327,7 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling.force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
-        ttnn.copy_host_to_device_tensor(self.tt_sampling.seeds_tt_host_tensor, self.tt_sampling.seeds_tt_tensor)
+        ttnn.copy_host_to_device_tensor(self.seeds_tt_host_tensor, self.tt_sampling.seeds_tt_tensor)
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
@@ -503,11 +503,12 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
 
 
 class SeedManager:
-    def __init__(self, tt_sampling, max_batch_size=32):
+    def __init__(self, generator, max_batch_size=32):
         self.max_batch_size = max_batch_size
         self.seeds = [secrets.randbits(64) for _ in range(max_batch_size)]
         self.rngs = [random.Random(seed) for seed in self.seeds]
-        self.tt_sampling = tt_sampling
+        self.generator = generator
+        tt_sampling = generator.tt_sampling
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1
         if tt_sampling._sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
@@ -530,7 +531,8 @@ class SeedManager:
         if replicate_seeds:
             assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
             new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
-        # send new seeds to sampling module
-        self.tt_sampling.seeds_tt_host_tensor = ttnn.from_torch(
+        # update the host tensor with the new seeds
+        # sampling generator is responsible for copying to the device tensor before sampling
+        self.generator.seeds_tt_host_tensor = ttnn.from_torch(
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
         )
