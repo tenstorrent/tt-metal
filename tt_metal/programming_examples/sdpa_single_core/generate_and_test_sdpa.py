@@ -352,20 +352,25 @@ def run_sdpa_single_core_test(
 # ---------------------------------------------------------------------------
 
 TEST_CASES = [
-    # (num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles)
-    (1, 1, "zeros", 16, 0),
-    (1, 1, "ones", 16, 0),
-    (1, 1, "random", 16, 0),
-    (1, 5, "random", 16, 0),
-    (3, 5, "random", 16, 0),
+    # (num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles, sq_chunk_t, subblock_h)
+    (1, 1, "zeros", 16, 0, 7, 1),
+    (1, 1, "ones", 16, 0, 7, 1),
+    (1, 1, "random", 16, 0, 7, 1),
+    (1, 5, "random", 16, 0, 7, 1),
+    (3, 5, "random", 16, 0, 7, 1),
     # K=8 variants
-    (1, 1, "random", 8, 0),
-    (1, 5, "random", 8, 0),
-    (3, 5, "random", 8, 0),
+    (1, 1, "random", 8, 0, 7, 1),
+    (1, 5, "random", 8, 0, 7, 1),
+    (3, 5, "random", 8, 0, 7, 1),
     # Padded K variants (last chunk partially valid)
-    (1, 5, "random", 16, 4),
-    (1, 5, "random", 8, 2),
-    (3, 5, "random", 16, 8),
+    (1, 5, "random", 16, 4, 7, 1),
+    (1, 5, "random", 8, 2, 7, 1),
+    (3, 5, "random", 16, 8, 7, 1),
+    # sbh=2 variants (Sq_chunk_t must be even)
+    (1, 1, "random", 4, 0, 4, 2),
+    (1, 5, "random", 4, 0, 4, 2),
+    (1, 5, "random", 8, 0, 4, 2),
+    (3, 5, "random", 4, 1, 4, 2),
 ]
 
 TEST_IDS = [
@@ -380,16 +385,22 @@ TEST_IDS = [
     "1q_5k-random-sk16-pad4",
     "1q_5k-random-sk8-pad2",
     "3q_5k-random-sk16-pad8",
+    "1q_1k-random-sk4-sbh2",
+    "1q_5k-random-sk4-sbh2",
+    "1q_5k-random-sk8-sbh2",
+    "3q_5k-random-sk4-sbh2-pad1",
 ]
 
 
 @pytest.mark.parametrize(
-    "num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles",
+    "num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles, sq_chunk_t, subblock_h",
     TEST_CASES,
     ids=TEST_IDS,
 )
-def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles):
-    test_id = request.node.callspec.id  # e.g. "1q_1k-zeros-sk16"
+def test_sdpa_single_core(
+    request, num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles, sq_chunk_t, subblock_h
+):
+    test_id = request.node.callspec.id
     save_only = request.config.getoption("--save-inputs", default=False)
     run_sdpa_single_core_test(
         test_id,
@@ -399,4 +410,6 @@ def test_sdpa_single_core(request, num_q_chunks, num_k_chunks, data_mode, sk_chu
         save_inputs_only=save_only,
         sk_chunk_t=sk_chunk_t,
         padded_k_tiles=padded_k_tiles,
+        sq_chunk_t=sq_chunk_t,
+        subblock_h=subblock_h,
     )

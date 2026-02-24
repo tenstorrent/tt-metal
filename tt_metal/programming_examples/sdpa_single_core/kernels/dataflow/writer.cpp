@@ -14,7 +14,8 @@ void kernel_main() {
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(4);
     constexpr uint32_t num_k_chunks = get_compile_time_arg_val(5);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(6);
-    constexpr uint32_t padded_k_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(7);
+    constexpr uint32_t padded_k_tiles = get_compile_time_arg_val(8);
 
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
@@ -43,10 +44,10 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * head_dim_t;
 
     uint32_t out_addr = get_arg_val<uint32_t>(0);
-    constexpr auto out_accessor_args = TensorAccessorArgs<8>();
+    constexpr auto out_accessor_args = TensorAccessorArgs<9>();
     const auto out_accessor = TensorAccessor(out_accessor_args, out_addr, get_tile_size(cb_normalized_out));
 
-    constexpr uint32_t subblock_h = 1;  // Must match compute kernel's subblock_h
+    // subblock_h from compile-time arg (index 7), must match compute kernel
     constexpr uint32_t row_tiles = subblock_h * head_dim_t;
     constexpr uint32_t rows_per_chunk = Sq_chunk_t / subblock_h;
 
