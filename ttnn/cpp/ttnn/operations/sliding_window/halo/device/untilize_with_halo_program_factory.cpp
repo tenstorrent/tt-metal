@@ -169,11 +169,6 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
     uint32_t in_page_size = tt::tile_size(in_df);
-    if (skip_untilize) {
-        uint32_t in_nbytes = datum_size(in_df);
-        in_page_size = input_shard_shape[1] * in_nbytes;
-        input_npages = remapped_input_shard_shape_for_output_grid;
-    }
 
     // Calculate aligned stick size - used for both input and output since channels don't change
     const uint32_t stick_nbytes = output_shard_shape[1] * out_nbytes;
@@ -182,6 +177,14 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         aligned_stick_nbytes = tt::round_up(stick_nbytes, input_tensor.buffer()->alignment());
     }
     const uint32_t out_tile_size = tt::tile_size(out_df);
+
+    // For ROW_MAJOR input the kernel reads with aligned_stick_nbytes stride
+    // across the full input shard, so the CB must match the actual buffer layout:
+    // page size = aligned stick width, npages = actual shard height.
+    if (skip_untilize) {
+        in_page_size = aligned_stick_nbytes;
+        input_npages = input_shard_shape[0];
+    }
 
     CBIndices cb_indices = CBIndices();
 
