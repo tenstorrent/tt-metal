@@ -49,7 +49,7 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
 
     /***************   CIRCULAR BUFFERS ***************/
     constexpr uint32_t num_tiles_per_cycle = 1;  //
-    // constexpr uint32_t num_output_tiles = 2;
+    // constexpr uint32_t noc_page_size = 8192;
 
     auto createCircularBuffer = [&program, &all_device_cores, dtype = dtype](
                                     tt::CBIndex cb_idx, uint32_t tile_size, uint32_t num_input_tiles = 1) {
@@ -64,21 +64,27 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     auto b_tensor_cb = tt::CBIndex::c_1;
     auto output_cb_index = tt::CBIndex::c_2;
 
-    constexpr uint32_t num_tiles_reader_cb = num_tiles_per_cycle * 5;
-    CBHandle a_tensor_cb_handle = createCircularBuffer(a_tensor_cb, single_tile_size, num_tiles_reader_cb);
-    CBHandle b_tensor_cb_handle = createCircularBuffer(b_tensor_cb, single_tile_size, num_tiles_reader_cb);
+    constexpr uint32_t max_num_tiles_per_noc_transaction = 4;
+    constexpr uint32_t num_ongoing_transactions = 2;
+    constexpr uint32_t num_reserved_transactions = 1;
+    constexpr uint32_t num_tiles_per_cb =
+        max_num_tiles_per_noc_transaction * (num_ongoing_transactions + num_reserved_transactions);  // 12 tiles per CB
 
-    CBHandle cb_output = createCircularBuffer(output_cb_index, single_tile_size, num_tiles_per_cycle);
-
-    EltwiseReaderCTArgs reader_compile_time_args = {
-        .a_tensor_cb = a_tensor_cb, .b_tensor_cb = b_tensor_cb, .num_tiles_per_cycle = num_tiles_per_cycle};
+    CBHandle a_tensor_cb_handle = createCircularBuffer(a_tensor_cb, single_tile_size, num_tiles_per_cb);
+    CBHandle b_tensor_cb_handle = createCircularBuffer(b_tensor_cb, single_tile_size, num_tiles_per_cb);
+    CBHandle cb_output = createCircularBuffer(output_cb_index, single_tile_size, num_tiles_per_cb);
 
     /***************   READER KERNEL ***************/
-    /* Specify data movement kernels for reading/writing data to/from DRAM */
-    std::map<std::string, std::string> reader_defines;
+
+    EltwiseReaderCTArgs reader_compile_time_args = {
+        .a_tensor_cb = a_tensor_cb,
+        .b_tensor_cb = b_tensor_cb,
+    };
     std::vector<uint32_t> reader_compile_time_vec = ttnn::kernel_utils::to_vector(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(args.a_tensor.buffer()).append_to(reader_compile_time_vec);
     tt::tt_metal::TensorAccessorArgs(args.b_tensor.buffer()).append_to(reader_compile_time_vec);
+
+    std::map<std::string, std::string> reader_defines;
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         kernel_prefix + "elemwise_reader_kernel.cpp",
@@ -88,13 +94,15 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    /***************   WRITER KERNEL ***************/
+
     EltwiseWriterCTArgs writer_compile_time_args = {
         .cb_dst = output_cb_index, .num_tiles_per_cycle = num_tiles_per_cycle};
 
-    /***************   WRITER KERNEL ***************/
-    std::map<std::string, std::string> writer_defines;
     std::vector<uint32_t> writer_compile_time_vec = ttnn::kernel_utils::to_vector(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
+
+    std::map<std::string, std::string> writer_defines;
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         kernel_prefix + "elemwise_writer_kernel.cpp",
@@ -111,16 +119,13 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     std::vector<uint32_t> compute_compile_time_vec = ttnn::kernel_utils::to_vector(compute_compile_time_args);
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        kernel_prefix + "elemwise_add_kernel.cpp",
+        kernel_prefix + "elemwise_compute_kernel.cpp",
         all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compute_compile_time_vec});
-
-    // we assume that we pass dram cores only
-    // TODO: Need more genere impleemntatin
 
     if (operation_attributes.sub_core_grids.has_value()) {
         std::cout << "[debug] sub_core_grids provided, using dram cores" << std::endl;

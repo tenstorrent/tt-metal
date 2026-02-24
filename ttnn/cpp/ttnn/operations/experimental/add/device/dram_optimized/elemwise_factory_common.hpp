@@ -70,8 +70,23 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
 
     uint32_t num_tiles = static_cast<uint32_t>(a_tensor.physical_volume() / TILE_HW);
 
+    // constexpr uint32_t num_blocks = 4;  // autotune parameter; shows how many tiles per block accross height
+    constexpr uint32_t num_banks = 12;  // constant; show how many tiles per block accross width
+
     bool row_major = true;  // TODO: make this configurable
     uint32_t num_cores_total = all_device_cores.num_cores();
+
+    TT_FATAL(num_cores_total == num_banks, "num_cores_total must be eq to num_banks");
+    TT_FATAL(
+        a_tensor.logical_shape()[-1] % tt::constants::TILE_HEIGHT == 0,
+        "num_tiles mismatch, {} % {} != 0",
+        a_tensor.logical_shape()[-1],
+        tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        a_tensor.logical_shape()[-2] % tt::constants::TILE_WIDTH == 0,
+        "num_tiles mismatch, {} % {} != 0",
+        a_tensor.logical_shape()[-2],
+        tt::constants::TILE_WIDTH);
 
     // vector of cores
     auto cores = corerange_to_cores(all_device_cores, std::nullopt, row_major);
@@ -87,7 +102,7 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     auto& cached_eltwise_args = GetRuntimeArgs(program, compute_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
-    auto num_dram_banks = 12;
+    // constexpr auto num_dram_banks = 12u;
     std::vector<uint32_t> core_ids;
     for (uint32_t core_id = 0; core_id < num_cores_total; ++core_id) {
         const CoreCoord& core = cores.at(core_id);
@@ -103,9 +118,8 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             auto& writer_args = cached_writer_args.at(core.x).at(core.y);
             writer_args[1] = 0;
         }
-        // std::cout << "Assigning runtime args to core: " << core.str() << " num_tiles_per_core: " <<
-        // num_tiles_per_core
-        //           << " tile_ofs: " << core_id << std::endl;
+        std::cout << "Assigning runtime args to core: " << core.str() << " num_tiles_per_core: " << num_tiles_per_core
+                  << " tile_ofs: " << core_id << std::endl;
 
         uint32_t vc = core_id & 0x3;
         core_ids.push_back(core_id);
@@ -123,7 +137,6 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             .b_tensor_base_addr = b_tensor.buffer()->address(),
             .tile_ofs = core_id,
             .num_tiles = num_tiles_per_core,
-            .tile_stride = num_dram_banks,
             .vc = vc};
 
         EltwiseComputeArgs compute_kern_args = {.num_tiles = num_tiles_per_core, .vc = vc};
@@ -132,7 +145,6 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             .dst_base_addr = output.buffer()->address(),
             .tile_ofs = core_id,
             .num_tiles = num_tiles_per_core,
-            .tile_stride = num_dram_banks,
             .vc = vc};
 
         reader_args_array[core_id] = to_vector(read_kern_args);
@@ -263,14 +275,14 @@ inline void set_eltwise_binary_runtime_args_across_all_cores(
             .b_tensor_base_addr = b_tensor.buffer()->address(),
             .tile_ofs = tile_ofs,
             .num_tiles = num_tiles_per_core,
-            .tile_stride = num_cores_total};
+        };
         EltwiseComputeArgs compute_kern_args = {.num_tiles = num_tiles_per_core};
 
         EltwiseWriterArgs write_kern_args = {
             .dst_base_addr = output.buffer()->address(),
             .tile_ofs = tile_ofs,
             .num_tiles = num_tiles_per_core,
-            .tile_stride = num_cores_total};
+        };
 
         reader_args_array[i] = to_vector(read_kern_args);
         compute_args_array[i] = to_vector(compute_kern_args);

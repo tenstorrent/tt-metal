@@ -16,7 +16,6 @@ struct EltwiseReaderArgs {
     uint32_t b_tensor_base_addr;
     uint32_t tile_ofs;
     uint32_t num_tiles;
-    uint32_t tile_stride;
     uint32_t vc;
 };
 
@@ -28,7 +27,6 @@ struct EltwiseWriterArgs {
     uint32_t dst_base_addr;
     uint32_t tile_ofs;
     uint32_t num_tiles;
-    uint32_t tile_stride;
     uint32_t vc;
 };
 
@@ -37,7 +35,6 @@ struct EltwiseWriterArgs {
 struct EltwiseReaderCTArgs {
     uint32_t a_tensor_cb;
     uint32_t b_tensor_cb;
-    uint32_t num_tiles_per_cycle;
 };
 
 struct EltwiseComputeCTArgs {
