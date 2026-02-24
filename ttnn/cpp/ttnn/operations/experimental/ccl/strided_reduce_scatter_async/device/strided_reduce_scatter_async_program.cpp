@@ -217,7 +217,6 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t N_full_block_wt,
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_full_block,
-    const uint32_t chunk_width_in_mm_blocks,
     const uint32_t mm_block_wt,
     const uint32_t slice_Ht_per_core,
     const bool fuse_mm_op) {
@@ -278,6 +277,7 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t slice_Ht_per_core) {
     // Strided writer compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
+    // NOTE: writer does not receive fuse_mm_op; only reader needs to wait on the MM semaphore.
     return {
         ring_index,                         // [0]  my_chip_id
         ring_size,                          // [1]  ring_size
@@ -671,7 +671,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_N_full_block_wt_val,
             chunk_width_in_tiles_val,
             chunks_per_mm_N_full_block_val,
-            chunk_width_in_mm_blocks_val,
             mm_block_wt_val,
             slice_Ht_per_core,
             fuse_mm_op);

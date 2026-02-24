@@ -695,6 +695,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // The writer receiver cores always have core.x > 0
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
+        uint32_t max_defer_write_k_block = K_blocks - 1;
 
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
@@ -713,6 +714,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            max_defer_write_k_block,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -763,6 +765,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            max_defer_write_k_block,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {

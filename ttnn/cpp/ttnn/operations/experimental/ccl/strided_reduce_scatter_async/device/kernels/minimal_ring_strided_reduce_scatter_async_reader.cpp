@@ -41,7 +41,8 @@ constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
 constexpr uint32_t chunk_width_in_mm_blocks = get_compile_time_arg_val(21);
 constexpr uint32_t mm_block_wt = get_compile_time_arg_val(22);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(23);
-// [24]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t mm_block_wt = get_compile_time_arg_val(24); 
+// [25]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -100,6 +101,10 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
+#ifdef FUSE_MM_OP_SIGNALER
+    size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t mm_sem_target = 0;
+#endif
     /**
     Iterate over chunks in the row-major order and reduce-scatter each chunk, one by one.
     In particular, for each chunk, perform a full ring reduce-scatter iteration before going to the next one.
@@ -132,6 +137,13 @@ void kernel_main() {
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
+#ifdef FUSE_MM_OP_SIGNALER
+                // Wait for matmul to finish writing the output blocks for this chunk.
+                // The last chunk may be narrower, so compute the effective width in mm blocks.
+                uint32_t effective_chunk_width_in_mm_blocks = effective_chunk_width_in_tiles / mm_block_wt;
+                mm_sem_target += effective_chunk_width_in_mm_blocks;
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
+#endif
                 // Run a full ring reduce-scatter for the current chunk.
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
@@ -232,5 +244,10 @@ void kernel_main() {
         // Reset the semaphore before the next batch to avoid overflow
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
+
+#ifdef FUSE_MM_OP_SIGNALER
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 0);
+        mm_sem_target = 0;
+#endif
     }
 }
