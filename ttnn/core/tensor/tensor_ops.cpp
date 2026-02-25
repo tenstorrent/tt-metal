@@ -105,8 +105,10 @@ void copy_to_device(
     const std::byte* src,
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region) {
+    TT_FATAL(
+        device_tensor.storage_type() == StorageType::DEVICE, "copy_to_device: destination tensor must be on device");
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", queue, src, device_tensor, region);
-    tensor_impl::copy_to_device(queue, src, device_tensor, region);
+    tensor_impl::copy_to_device(queue, src, device_tensor.device_tensor(), region);
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
@@ -116,9 +118,10 @@ void copy_to_host(
     std::byte* dst,
     const std::optional<BufferRegion>& region,
     bool blocking) {
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_to_host: source tensor must be on device");
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", queue, device_tensor, dst, region, blocking);
-    tensor_impl::copy_to_host(queue, device_tensor, dst, region, blocking);
+    tensor_impl::copy_to_host(queue, device_tensor.device_tensor(), dst, region, blocking);
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
