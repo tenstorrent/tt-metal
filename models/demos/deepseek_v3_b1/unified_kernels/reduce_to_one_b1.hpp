@@ -42,9 +42,6 @@
 
 namespace deepseek_b1_ops {
 
-// Atomic semaphore decrement by 1
-inline void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) { __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED); }
-
 // Device roles
 constexpr uint32_t MESH_LEAF = 0;
 constexpr uint32_t MESH_ROOT3 = 1;
@@ -221,7 +218,7 @@ struct ReduceToOneB1 {
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round1);
                 noc_semaphore_wait_min(recv_sem1_ptr, 1);
-                semaphore_dec(recv_sem1_ptr);
+                unified_kernels::semaphore_dec(recv_sem1_ptr);
                 cb_push_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
             }
 
@@ -231,7 +228,7 @@ struct ReduceToOneB1 {
                 volatile tt_l1_ptr uint32_t* recv_sem2_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
                 noc_semaphore_wait_min(recv_sem2_ptr, 1);
-                semaphore_dec(recv_sem2_ptr);
+                unified_kernels::semaphore_dec(recv_sem2_ptr);
                 cb_push_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
             }
 
@@ -241,7 +238,7 @@ struct ReduceToOneB1 {
                 volatile tt_l1_ptr uint32_t* recv_sem3_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round3);
                 noc_semaphore_wait_min(recv_sem3_ptr, 1);
-                semaphore_dec(recv_sem3_ptr);
+                unified_kernels::semaphore_dec(recv_sem3_ptr);
                 cb_push_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
             }
 
@@ -281,7 +278,7 @@ struct ReduceToOneB1 {
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
                     noc_semaphore_wait_min(worker_sem_ptr, 1);
-                    semaphore_dec(worker_sem_ptr);
+                    unified_kernels::semaphore_dec(worker_sem_ptr);
 
                     fabric_sender.wait_for_empty_write_slot();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(

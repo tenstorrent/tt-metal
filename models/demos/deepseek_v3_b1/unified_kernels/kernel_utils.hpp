@@ -66,6 +66,11 @@ FORCE_INLINE void setup_sharded_buffer(uint32_t cb_id, uint32_t num_tiles) {
     cb_push_back(cb_id, num_tiles);
 }
 
+// Atomic semaphore decrement (for global semaphore reset across iterations)
+FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
+    __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED);
+}
+
 #endif
 
 }  // namespace unified_kernels

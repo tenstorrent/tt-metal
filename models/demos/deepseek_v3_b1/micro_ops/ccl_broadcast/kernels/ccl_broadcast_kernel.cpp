@@ -65,6 +65,14 @@ void kernel_main() {
 #endif
 
     // Execute ccl broadcast op
-    Broadcast::Op<BcastCTArgs, true> bcast;
-    bcast(bcast_args);
+    constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
+
+    auto body = [&]() {
+        Broadcast::Op<BcastCTArgs, true> bcast;
+        bcast(bcast_args);
+    };
+
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        body();
+    }
 }
