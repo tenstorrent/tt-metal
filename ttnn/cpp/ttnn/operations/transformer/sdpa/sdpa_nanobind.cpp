@@ -315,18 +315,72 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"flash_mla_prefill", "ttnn.transformer.">(
         mod,
         mla_doc,
-        &ttnn::transformer::flash_mla_prefill,
-        nb::arg("input_tensor_q").noconvert(),
-        nb::arg("input_tensor_k").noconvert(),
-        nb::arg("head_dim_v").noconvert(),
-        nb::kw_only(),
-        nb::arg("input_tensor_v") = nb::none(),
-        nb::arg("attn_mask") = nb::none(),
-        nb::arg("is_causal").noconvert() = true,
-        nb::arg("scale") = nb::none(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        // Overload: head_dim_v as uint32_t (original MLA)
+        ttnn::overload_t(
+            [](const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               const std::optional<ttnn::Tensor>& attn_mask,
+               bool is_causal,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<SDPAProgramConfig>& program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+                return ttnn::transformer::flash_mla_prefill(
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    std::nullopt,
+                    attn_mask,
+                    is_causal,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            nb::arg("input_tensor_q").noconvert(),
+            nb::arg("input_tensor_k").noconvert(),
+            nb::arg("head_dim_v").noconvert(),
+            nb::kw_only(),
+            nb::arg("attn_mask") = nb::none(),
+            nb::arg("is_causal").noconvert() = true,
+            nb::arg("scale") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()),
+        // Overload: input_tensor_v as Tensor (V in embedding space)
+        ttnn::overload_t(
+            [](const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
+               const std::optional<ttnn::Tensor>& attn_mask,
+               bool is_causal,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<SDPAProgramConfig>& program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+                return ttnn::transformer::flash_mla_prefill(
+                    input_tensor_q,
+                    input_tensor_k,
+                    input_tensor_v.logical_shape()[-1],
+                    input_tensor_v,
+                    attn_mask,
+                    is_causal,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            nb::arg("input_tensor_q").noconvert(),
+            nb::arg("input_tensor_k").noconvert(),
+            nb::arg("input_tensor_v").noconvert(),
+            nb::kw_only(),
+            nb::arg("attn_mask") = nb::none(),
+            nb::arg("is_causal").noconvert() = true,
+            nb::arg("scale") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()));
 
     const auto* const chunked_mla_doc =
         R"doc(

@@ -87,8 +87,7 @@ void kernel_main() {
         .sin_interm_cb = sin_interm_cb,
         .out_cb = out_cb,
     };
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);  // Full init, CBs don't matter
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

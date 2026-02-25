@@ -641,6 +641,8 @@ class BlitzDecodeWeights:
         q_a_proj_weights: torch.Tensor,
         q_b_proj_weights: torch.Tensor,
         kv_a_proj_weights: torch.Tensor,
+        *,
+        move_to_device: bool = True,
     ) -> list[OverlappedTensor]:
         """Fuse q_a_proj, q_b_proj, and kv_a_proj into one WIDTH_SHARDED tensor.
 
@@ -669,6 +671,10 @@ class BlitzDecodeWeights:
             q_b_proj_weights: Raw (unshuffled) q_b_proj tensor, shape
                 ``(1536, 12288 * mla_tp)``.
             kv_a_proj_weights: Raw kv_a_proj tensor, shape ``(7168, 576)``.
+            move_to_device: If True (default), place the result on the mesh device
+                via ``ttnn.from_torch(..., device=...)``. If False, device is
+                passed as None so the tensor remains on host; mesh_mapper is still
+                provided for layout/sharding metadata.
 
         Returns:
             A list of three :class:`OverlappedTensor` views
@@ -749,12 +755,13 @@ class BlitzDecodeWeights:
         else:
             mesh_shape = (self._device.shape[0], self._device.shape[1])
             mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=mesh_shape, dims=(None, 1))
+        device_for_torch = self._device if move_to_device else None
 
         fused = ttnn.from_torch(
             combined,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self._device,
+            device=device_for_torch,
             memory_config=mem_config,
             mesh_mapper=mesh_mapper,
         )
@@ -806,38 +813,19 @@ class BlitzDecodeWeights:
         q_norm: torch.Tensor,
         kv_norm: torch.Tensor,
         ffn_norm: torch.Tensor,
+        *,
+        move_to_device: bool = True,
     ) -> list[OverlappedTensor]:
         """Fuse o_proj, gate_mm, and 4 RMSNorm gammas into one WIDTH_SHARDED tensor.
 
         The fused buffer is a UINT32 raw-byte container where each core's
-        shard is zero-padded to the same maximum byte size.  The six
-        sub-tensors use three distinct formats:
+        shard is zero-padded to the same maximum byte size.  There are always
+        six sub-tensors.
 
         * **o_proj** — BFP8 (32×32 tiles) on 112 cores.
         * **gate_mm** — BFP16 (32×32 tiles) on 8 cores.
-        * **attn_norm, q_norm, ffn_norm** — BFP16
-          (1×32 tiles) back-to-back on core (12, 9).
+        * **attn_norm, q_norm, ffn_norm** — BFP16 (1×32 tiles) back-to-back on core (12, 9).
         * **kv_norm** — BFP16 (1×32 tiles) on dedicated core (0, 8).
-
-        Layout::
-
-            -- o_proj region: 112 cores --
-            o_proj (8192, 7168) as bfloat8_b
-              shard (8192, 64) = 512 tiles × 1088 B = 557 056 B
-
-            -- gate_mm region: 8 cores (col 12, rows 0-7) --
-            gate_mm (7168, 256) as bfloat16
-              shard (7168, 32) = 224 tiles × 2048 B = 458 752 B
-
-            -- gamma core: 1 core (12, 9) --
-            attn_norm (1, 7168)   @ offset 0      → 14 336 B
-            q_norm (1, 1536)  @ offset 14 336  →  3 072 B
-            ffn_norm (1, 7168) @ offset 17 408 → 14 336 B
-
-            -- kv_norm core: 1 core (0, 8) --
-            kv_norm (1, 512) @ offset 0 → 1 024 B
-
-            combined: 122 cores, shard = max_shard_bytes
 
         Args:
             o_proj_weights:     Raw o_proj tensor, shape
@@ -850,10 +838,8 @@ class BlitzDecodeWeights:
             ffn_norm:  MoE pre-MLP RMSNorm gamma, shape (1, 7168).
 
         Returns:
-            A list of six :class:`OverlappedTensor` views
-            ``[o_proj, gate_mm, attn_norm, q_norm,
-            kv_norm, ffn_norm]`` sharing the same
-            underlying fused device buffer.
+            List of six OverlappedTensors
+            ``[o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm]``.
         """
         cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
         mla_tp = self.mla_tp
@@ -939,12 +925,13 @@ class BlitzDecodeWeights:
         else:
             combined = torch.cat([t.reshape(1, -1) for t in per_tp_raw], dim=1)
 
-        combined_crs = ttnn.CoreRangeSet(
+        combined_crs_ranges = (
             list(cfg.o_proj_core_range_set.ranges())
             + list(cfg.gate_mm_core_range_set.ranges())
             + list(cfg.gamma_core_range_set.ranges())
             + list(cfg.kv_norm_core_range_set.ranges())
         )
+        combined_crs = ttnn.CoreRangeSet(combined_crs_ranges)
         shard_spec = ttnn.ShardSpec(
             combined_crs,
             (1, uint32_per_shard),
@@ -961,12 +948,13 @@ class BlitzDecodeWeights:
         else:
             mesh_shape = (self._device.shape[0], self._device.shape[1])
             mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=mesh_shape, dims=(None, 1))
+        device_for_torch = self._device if move_to_device else None
 
         fused = ttnn.from_torch(
             combined,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self._device,
+            device=device_for_torch,
             memory_config=mem_config,
             mesh_mapper=mesh_mapper,
         )
@@ -975,7 +963,7 @@ class BlitzDecodeWeights:
         tile_32x32 = (cfg.tile_h, cfg.tile_w)
         tile_1x32 = (cfg.gamma_tile_h, cfg.gamma_tile_w)
 
-        return [
+        result: list[OverlappedTensor] = [
             OverlappedTensor(
                 fused_tensor=fused,
                 tensor_shape=cfg.o_proj_shape,
@@ -985,6 +973,8 @@ class BlitzDecodeWeights:
                 tile_shape=tile_32x32,
                 byte_offset=0,
             ),
+        ]
+        result.append(
             OverlappedTensor(
                 fused_tensor=fused,
                 tensor_shape=cfg.gate_mm_shape,
@@ -993,49 +983,56 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat16,
                 tile_shape=tile_32x32,
                 byte_offset=0,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.attn_norm_shape,
-                shard_shape=cfg.attn_norm_shape,
-                core_range_set=cfg.gamma_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.attn_norm_byte_offset,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.q_norm_shape,
-                shard_shape=cfg.q_norm_shape,
-                core_range_set=cfg.gamma_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.q_norm_byte_offset,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.kv_norm_shape,
-                shard_shape=cfg.kv_norm_shape,
-                core_range_set=cfg.kv_norm_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.kv_norm_byte_offset,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.ffn_norm_shape,
-                shard_shape=cfg.ffn_norm_shape,
-                core_range_set=cfg.gamma_core_range_set,
-                dtype=ttnn.bfloat16,
-                tile_shape=tile_1x32,
-                byte_offset=cfg.ffn_norm_byte_offset,
-            ),
-        ]
+            )
+        )
+        result.extend(
+            [
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.attn_norm_shape,
+                    shard_shape=cfg.attn_norm_shape,
+                    core_range_set=cfg.gamma_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.attn_norm_byte_offset,
+                ),
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.q_norm_shape,
+                    shard_shape=cfg.q_norm_shape,
+                    core_range_set=cfg.gamma_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.q_norm_byte_offset,
+                ),
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.kv_norm_shape,
+                    shard_shape=cfg.kv_norm_shape,
+                    core_range_set=cfg.kv_norm_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.kv_norm_byte_offset,
+                ),
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=cfg.ffn_norm_shape,
+                    shard_shape=cfg.ffn_norm_shape,
+                    core_range_set=cfg.gamma_core_range_set,
+                    dtype=ttnn.bfloat16,
+                    tile_shape=tile_1x32,
+                    byte_offset=cfg.ffn_norm_byte_offset,
+                ),
+            ]
+        )
+        return result
 
     def get_tt_kv_b12_proj_weights(
         self,
         kv_b1_proj_weights: torch.Tensor,
         kv_b2_proj_weights: torch.Tensor,
+        *,
+        move_to_device: bool = True,
     ) -> list[OverlappedTensor]:
         """Fuse kv_b1_proj and kv_b2_proj into one HEIGHT_SHARDED tensor.
 
@@ -1108,12 +1105,13 @@ class BlitzDecodeWeights:
         else:
             mesh_shape = (self._device.shape[0], self._device.shape[1])
             mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=mesh_shape, dims=(None, 0))
+        device_for_torch = self._device if move_to_device else None
 
         fused = ttnn.from_torch(
             combined,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self._device,
+            device=device_for_torch,
             memory_config=mem_config,
             mesh_mapper=mesh_mapper,
         )
@@ -1154,6 +1152,8 @@ class BlitzDecodeWeights:
         gate_proj_weights: torch.Tensor,
         up_proj_weights: torch.Tensor,
         down_proj_weights: torch.Tensor,
+        *,
+        move_to_device: bool = True,
     ) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor]:
         """Create all shared-expert weight tensors in one call.
 
@@ -1236,12 +1236,13 @@ class BlitzDecodeWeights:
                 rows.append(torch.cat(gu_per_tp[r * mesh_cols : (r + 1) * mesh_cols], dim=1))
             gu_combined = torch.cat(rows, dim=0)
             gu_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
+        device_gu = self._device if move_to_device else None
 
         fused = ttnn.from_torch(
             gu_combined,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self._device,
+            device=device_gu,
             memory_config=gu_mem,
             mesh_mapper=gu_mapper,
         )
@@ -1294,6 +1295,7 @@ class BlitzDecodeWeights:
                 .reshape(mesh_rows * K_down_per_device, mesh_cols * N_down)
             )
             dp_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
+        device_dp = self._device if move_to_device else None
 
         dp_shard_spec = ttnn.ShardSpec(
             matmul_core_grid, (K_down_per_device, N_per_core), ttnn.ShardOrientation.ROW_MAJOR
@@ -1304,7 +1306,7 @@ class BlitzDecodeWeights:
             dp_combined,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self._device,
+            device=device_dp,
             memory_config=dp_mem,
             tile=ttnn.Tile([32, 32]),
             mesh_mapper=dp_mapper,
@@ -1317,6 +1319,8 @@ class BlitzDecodeWeights:
         gate_proj_weights: torch.Tensor,
         up_proj_weights: torch.Tensor,
         down_proj_weights: torch.Tensor,
+        *,
+        move_to_device: bool = True,
     ) -> tuple[list[ttnn.Tensor], list[ttnn.Tensor], list[ttnn.Tensor]]:
         """Create DRAM WIDTH_SHARDED expert weight tensors for routed MoE.
 
@@ -1351,6 +1355,7 @@ class BlitzDecodeWeights:
         tile_w = 32
         num_banks = device.dram_grid_size().x
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        device_for_torch = device if move_to_device else None
 
         def upload(expert_weights: torch.Tensor) -> list[ttnn.Tensor]:
             num_experts, K, N = expert_weights.shape
@@ -1382,7 +1387,7 @@ class BlitzDecodeWeights:
                         w_shuffled.contiguous(),
                         dtype=ttnn.bfloat4_b,
                         layout=ttnn.TILE_LAYOUT,
-                        device=device,
+                        device=device_for_torch,
                         memory_config=mem_config,
                         mesh_mapper=mesh_mapper,
                     )
@@ -1402,7 +1407,9 @@ class BlitzDecodeWeights:
         gate_proj_weights: torch.Tensor,
         up_proj_weights: torch.Tensor,
         down_proj_weights: torch.Tensor,
-    ) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor | None]:
+        *,
+        move_to_device: bool = True,
+    ) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor]:
         """Create MLP shared-expert weights (SRAM) from full projection tensors.
 
         The full MLP projections contain ``9`` experts of width
@@ -1423,6 +1430,7 @@ class BlitzDecodeWeights:
             gate_proj_weights[:, :shared_n],
             up_proj_weights[:, :shared_n],
             down_proj_weights[:shared_n, :],
+            move_to_device=move_to_device,
         )
 
     def get_tt_mlp_routed_expert_weights(
@@ -1430,6 +1438,8 @@ class BlitzDecodeWeights:
         gate_proj_weights: torch.Tensor,
         up_proj_weights: torch.Tensor,
         down_proj_weights: torch.Tensor,
+        *,
+        move_to_device: bool = True,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Create MLP per-device routed expert weights (DRAM).
 
@@ -1476,6 +1486,8 @@ class BlitzDecodeWeights:
         num_banks = device.dram_grid_size().x
         mesh_rows = device.shape[0]
         mesh_cols = device.shape[1]
+        mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
+        device_for_torch = device if move_to_device else None
 
         def upload(experts: torch.Tensor) -> ttnn.Tensor:
             n_exp, K, N = experts.shape
@@ -1507,9 +1519,9 @@ class BlitzDecodeWeights:
                 stacked.contiguous(),
                 dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
+                device=device_for_torch,
                 memory_config=mem_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1)),
+                mesh_mapper=mesh_mapper,
             )
 
         return upload(gate_experts), upload(up_experts), upload(down_experts)

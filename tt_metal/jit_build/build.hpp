@@ -64,6 +64,11 @@ public:
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
 
+    // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
+    // May differ when binaries are provided from an external source.
+    const std::string& get_firmware_binary_root() const { return firmware_binary_root_; }
+    void set_firmware_binary_root(const std::string& path) { firmware_binary_root_ = path; }
+
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
     uint32_t max_cbs_{};
@@ -73,6 +78,7 @@ private:
     std::string out_root_;
     std::string out_firmware_root_;
     std::string out_kernel_root_;
+    std::string firmware_binary_root_;
 
     // Tools
     std::string gpp_;
@@ -97,10 +103,6 @@ protected:
     bool process_defines_at_compile_{};
     bool firmware_is_kernel_object_{};
 
-    HalProgrammableCoreType core_type_;
-    HalProcessorClassType processor_class_;
-    uint32_t processor_id_;
-
     std::string out_path_;
     std::string target_name_;
     std::string target_full_path_;
@@ -116,6 +118,7 @@ protected:
     vector_cache_aligned<std::string> temp_objs_;
 
     std::string extra_link_objs_;
+    std::string weakened_firmware_name_;
 
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
@@ -135,7 +138,6 @@ protected:
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
-    std::string weakened_firmware_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
@@ -145,6 +147,7 @@ public:
 
     const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }
+    const std::string& get_target_full_path() const { return this->target_full_path_; }
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
