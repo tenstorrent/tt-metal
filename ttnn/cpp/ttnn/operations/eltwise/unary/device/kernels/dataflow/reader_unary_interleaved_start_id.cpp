@@ -53,6 +53,55 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onepage);
     }
+#elif defined(TRID_PIPELINED)
+    // Double-buffered TRID pipelining: issue batch N+1 (TRID B) while
+    // waiting for batch N (TRID A) to complete. Hides DRAM read latency.
+    const uint32_t end_id = start_id + num_pages;
+    uint32_t i = start_id;
+
+    // Prime: issue first batch without waiting.
+    uint32_t prev_batch = 0;
+    if (i < end_id) {
+        prev_batch = (end_id - i < batch_size) ? (end_id - i) : batch_size;
+        cb_reserve_back(cb_id_in0, prev_batch);
+        auto l1_write_addr = get_write_ptr(cb_id_in0);
+        noc_async_read_set_trid(1);
+        for (uint32_t j = 0; j < prev_batch; ++j) {
+            noc_async_read_page(i + j, s, l1_write_addr);
+            l1_write_addr += page_bytes;
+        }
+        i += prev_batch;
+    }
+
+    uint32_t prev_trid = 1;
+
+    // Steady state: issue next batch, then drain previous.
+    while (i < end_id) {
+        const uint32_t cur_batch = (end_id - i < batch_size) ? (end_id - i) : batch_size;
+        const uint32_t cur_trid = (prev_trid == 1) ? 2 : 1;
+
+        cb_reserve_back(cb_id_in0, cur_batch);
+        auto l1_write_addr = get_write_ptr(cb_id_in0);
+        noc_async_read_set_trid(cur_trid);
+        for (uint32_t j = 0; j < cur_batch; ++j) {
+            noc_async_read_page(i + j, s, l1_write_addr);
+            l1_write_addr += page_bytes;
+        }
+
+        // Wait for previous batch and push to compute.
+        noc_async_read_barrier_with_trid(prev_trid);
+        cb_push_back(cb_id_in0, prev_batch);
+
+        prev_trid = cur_trid;
+        prev_batch = cur_batch;
+        i += cur_batch;
+    }
+
+    // Drain last batch.
+    if (prev_batch > 0) {
+        noc_async_read_barrier_with_trid(prev_trid);
+        cb_push_back(cb_id_in0, prev_batch);
+    }
 #else
     const uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; i += batch_size) {

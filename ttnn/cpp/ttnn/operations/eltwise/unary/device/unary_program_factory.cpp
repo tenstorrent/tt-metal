@@ -129,6 +129,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     std::map<std::string, std::string> dataflow_defines;
     if (use_strided_l1) {
         dataflow_defines["STRIDED_L1_ACCESS"] = "1";
+    } else if (!is_row_major && src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM) {
+        dataflow_defines["TRID_PIPELINED"] = "1";
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
