@@ -251,14 +251,14 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_page_size_bytes);
 
     // active token counts page buffer
-    // offset into token maps, number of tokens, offset into active token counts
-    constexpr auto token_offset_count_values_per_expert = 3;
+    const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
+    // offset into token maps, number of tokens, offset into activations
+    const auto token_offset_count_bytes_per_expert = 3 * tt::datum_size(token_counts_data_format);
     const auto dram_alignment = hal::get_dram_alignment();
     constexpr auto token_counts_cb_id = tt::CBIndex::c_2;
     const auto token_counts_element_size = dense_token_counts_tensor.element_size();
-    const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
     const uint32_t aligned_token_counts_buffer_size = tt::align(
-        (token_counts_element_size + token_offset_count_values_per_expert) * experts_per_device, dram_alignment);
+        (token_counts_element_size + token_offset_count_bytes_per_expert) * experts_per_device, dram_alignment);
     CircularBufferConfig cb_token_counts_config =
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);

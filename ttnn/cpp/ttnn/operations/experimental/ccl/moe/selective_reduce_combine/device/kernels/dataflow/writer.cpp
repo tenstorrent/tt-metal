@@ -198,10 +198,10 @@ void kernel_main() {
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * global_num_tokens + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
-            uint32_t gaurd = 0;
+            uint32_t guard = 0;
             while (expert_token_activations_ptr[0] != st) {
                 expert_token_activations_ptr += aligned_token_activation_page_size;
-                ASSERT(gaurd++ < global_num_tokens);
+                ASSERT(guard++ < global_num_tokens);
             }
             const uint32_t k = expert_token_activations_ptr[1 + e];
 
