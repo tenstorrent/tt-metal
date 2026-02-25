@@ -50,14 +50,22 @@ void bind_point_to_point(nb::module_& mod) {
     ttnn::bind_function<"point_to_point">(
         mod,
         doc,
-        &ttnn::point_to_point,
+        +[](const ttnn::Tensor& input_tensor,
+            const MeshCoordinate& sender_coord,
+            const MeshCoordinate& receiver_coord,
+            const std::optional<ttnn::Tensor>& output_tensor,
+            const std::optional<ttnn::Tensor>& intermediate_tensor,
+            const ccl::Topology topology) {
+            return ttnn::point_to_point(
+                input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
+        },
         nb::arg("input_tensor").noconvert(),
-        nb::arg("receiver_coord"),
         nb::arg("sender_coord"),
+        nb::arg("receiver_coord"),
         nb::kw_only(),
-        nb::arg("topology").noconvert() = ccl::Topology::Linear,
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("intermediate_tensor") = nb::none());
+        nb::arg("intermediate_tensor") = nb::none(),
+        nb::arg("topology").noconvert() = ccl::Topology::Linear);
     mod.def(
         "p2p_compute_intermediate_tensor_spec",
         operations::point_to_point::p2p_compute_intermediate_tensor_spec,
