@@ -237,3 +237,107 @@ def test_ccl_broadcast_dual_axis(
 
     assert all_passed, "Not all devices received the correct broadcast data"
     logger.info("CCL broadcast dual-axis test passed!")
+
+
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    [
+        (4, 2, 0, 0, [1, 7168], (1, 7168), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("secondary_cluster_axis", [1])
+@pytest.mark.parametrize("num_iters", [100])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_ccl_broadcast_loop(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    cluster_axis,
+    secondary_cluster_axis,
+    num_iters,
+):
+    """
+    Test CCL broadcast called multiple times without trace.
+    Validates PacketHeaderPool::reset(), semaphore_dec, noc_semaphore_wait_min.
+    """
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    compute_grid_size = submesh.compute_with_storage_grid_size()
+
+    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
+
+    sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
+    device_tensors = []
+    for row in range(mesh_rows):
+        device_tensors.append(sender_tensor if row == sender_row else torch.zeros_like(sender_tensor))
+
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
+    input_tensor_mesh = ttnn.from_torch(
+        torch.cat(device_tensors, dim=0),
+        device=submesh,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.bfloat16),
+        device=submesh,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    num_cores = compute_grid_size.x * compute_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(3)]
+
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
+
+    logger.info(f"Running CCL broadcast loop: {num_iters} internal iterations, sender=({sender_row},{sender_col})")
+    ttnn_result = DeepseekMinimalBroadcast.op(
+        input_tensor_mesh,
+        output_tensor,
+        sender_coord,
+        cluster_axis=cluster_axis,
+        secondary_cluster_axis=secondary_cluster_axis,
+        semaphores=semaphores,
+        num_iterations=num_iters,
+    )
+    ttnn.synchronize_device(submesh)
+
+    output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    slice_size = output_shape[0]
+    for device_idx in range(num_devices):
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert torch.allclose(
+            received, torch_expected, rtol=1e-3, atol=1e-3
+        ), f"Device {device_idx} data mismatch after {num_iters} iterations"
+        logger.info(f"Device {device_idx}: PASSED")
+
+    logger.info(f"CCL broadcast loop test PASSED! ({num_iters} iterations)")

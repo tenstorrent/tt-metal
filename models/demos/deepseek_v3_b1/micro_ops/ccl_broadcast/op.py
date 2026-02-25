@@ -45,6 +45,7 @@ class DeepseekMinimalBroadcast:
         cluster_axis=0,
         secondary_cluster_axis=None,
         num_links=1,
+        num_iterations=1,
     ):
         """
         Execute broadcast operation using generic_op.
@@ -182,6 +183,7 @@ class DeepseekMinimalBroadcast:
                     if name not in _seen_ct:
                         _seen_ct.add(name)
                         union_named_compile_time_args.append((name, val))
+                union_named_compile_time_args.append(("num_iterations", num_iterations))
 
                 # Determine fabric connections
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
