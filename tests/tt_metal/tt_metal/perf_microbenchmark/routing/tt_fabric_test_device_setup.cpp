@@ -1334,7 +1334,7 @@ void TestDevice::create_latency_sender_kernel(
     bool measure_send_payload = true;
     bool measure_send_header = true;
     bool measure_individual_phases =
-        true;  // Set to false to measure only total send latency without per-phase overhead
+        false;  // Set to false to measure only total send latency without per-phase overhead
     std::vector<uint32_t> ct_args = {
         enable_fused_payload_with_sync ? 1u : 0u,
         sem_inc_only ? 1u : 0u,
