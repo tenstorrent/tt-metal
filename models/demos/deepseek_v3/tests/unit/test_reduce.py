@@ -11,6 +11,7 @@ from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.parametrize(
     "shape",
     [

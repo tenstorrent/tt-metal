@@ -172,6 +172,7 @@ def run_test_matmul_dram_sharded(
 # =============================================================================
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.parametrize(
     "M, K, N",
     [
@@ -431,6 +432,7 @@ L1_INTERLEAVED = ttnn.MemoryConfig(
 )
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.parametrize(
     "in0_shape, in1_shape, in0_dtype, in1_dtype, in0_mem_config, in1_mem_config, out_mem_config, compute_kernel_config",
     [

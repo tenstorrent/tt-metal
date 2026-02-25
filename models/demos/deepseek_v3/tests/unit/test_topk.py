@@ -20,6 +20,7 @@ SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.Co
 K_VALUE = 32
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "shape",

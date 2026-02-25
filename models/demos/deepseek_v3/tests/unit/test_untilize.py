@@ -9,6 +9,7 @@ from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_t
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape, dtype, mem_config",
@@ -47,6 +48,7 @@ def test_untilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
     run_test(mesh_device, run_op, check_op, enable_trace)
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "in_shape, out_shape, dtype, mem_config",

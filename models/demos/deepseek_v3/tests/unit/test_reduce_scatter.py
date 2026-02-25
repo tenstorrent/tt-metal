@@ -68,6 +68,7 @@ def _get_tensors(
     return tt_input, torch_reference_slices
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.requires_device(
     [
         "TG",

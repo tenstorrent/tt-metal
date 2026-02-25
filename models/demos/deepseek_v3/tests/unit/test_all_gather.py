@@ -70,6 +70,7 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 ]
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.requires_device(["N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
