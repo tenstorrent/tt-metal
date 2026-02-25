@@ -876,7 +876,7 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(FabricNodeId fabric_node_i
     }
     if (!eth_chans_in_direction.has_value() && this->teardown_in_progress_.load(std::memory_order_acquire))
         [[unlikely]] {
-        s { return 0; }
+        return 0;
     }
     TT_FATAL(
         eth_chans_in_direction.has_value(),
