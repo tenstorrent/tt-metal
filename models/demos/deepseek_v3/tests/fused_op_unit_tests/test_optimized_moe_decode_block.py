@@ -410,6 +410,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     return eq
 
 
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
