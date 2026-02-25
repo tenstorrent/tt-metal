@@ -58,8 +58,11 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
         uint32_t batch_size = input_tensor.padded_shape()[1];
         TT_FATAL(cos.padded_shape()[1] == batch_size, "Cos batch dim must match input");
         TT_FATAL(sin.padded_shape()[1] == batch_size, "Sin batch dim must match input");
-        TT_FATAL(cos.padded_shape()[2] == 1, "Cos seq_len must be 1 in decode mode");
-        TT_FATAL(sin.padded_shape()[2] == 1, "Sin seq_len must be 1 in decode mode");
+        /* TODO: think about this: I've modified this , as seq_len would correspond to shape [0], anyway if checking
+        shape[2], that has to be 1, this could fail due to layout
+        */
+        TT_FATAL(cos.padded_shape()[0] == 1, "Cos seq_len must be 1 in decode mode");
+        TT_FATAL(sin.padded_shape()[0] == 1, "Sin seq_len must be 1 in decode mode");
     } else {
         // Prefill mode: input [1, num_heads, seq_len, head_dim], cos/sin [1, 1, seq_len, head_dim]
         uint32_t seq_len = input_tensor.padded_shape()[-2];
