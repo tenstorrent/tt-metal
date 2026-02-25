@@ -97,7 +97,7 @@ def check_binary_integrity(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth"]
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)

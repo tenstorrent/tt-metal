@@ -70,7 +70,7 @@ script_config = ScriptConfig(
 )
 
 # Core filtering
-BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth", "activeEth"]
 
 # Display limits
 MAX_CORES_DISPLAYED = 5  # Maximum cores shown per operation

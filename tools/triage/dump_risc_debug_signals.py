@@ -113,7 +113,7 @@ def dump_risc_debug_signals(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth"]
     CORE_TYPES_TO_CHECK = ["brisc", "trisc0", "trisc1", "trisc2", "erisc", "erisc0", "erisc1"]
 
     run_checks = get_run_checks(args, context)

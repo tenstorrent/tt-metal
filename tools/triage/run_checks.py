@@ -25,10 +25,11 @@ Owner:
     adjordjevic-TT
 """
 
+from collections import defaultdict
 from collections.abc import Callable
 import threading
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 from triage import log_warning
 
@@ -49,8 +50,8 @@ script_config = ScriptConfig(
 
 # List of block types that script returns, can be extended if other block types are needed
 BLOCK_TYPES = [
-    "idle_eth",
-    "active_eth",
+    "idleEth",
+    "activeEth",
     "tensix",
     "eth",
 ]
@@ -108,23 +109,10 @@ class PerCoreCheckResult(PerBlockCheckResult):
     risc_name: str = triage_field("RiscV")
 
 
-def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
-    block_locations = device.idle_eth_block_locations
-    # We remove idle eth blocks that are reserved for syseng use
-    # These are blocks on wormhole mmio capable devices with connections to remote devices
-    # If board type is galaxy, we remove idle eth blocks at locations e0,0 e0,1 e0,2 e0,3 and e0,15,
-    # if not we just remove e0,15
-    if device.is_wormhole() and device.is_local:
-        locations_to_remove = {"e0,0", "e0,1", "e0,2", "e0,3", "e0,15"} if is_galaxy(device) else {"e0,15"}
-        block_locations = [loc for loc in block_locations if loc.to_str("logical") not in locations_to_remove]
-
-    return block_locations
-
-
 def get_devices(
     devices: list[str],
     inspector_data: InspectorData | None,
-    metal_device_id_mapping: dict[int, int],
+    metal_device_id_mapping: MetalDeviceIdMapping,
     context: Context,
 ) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
@@ -137,7 +125,9 @@ def get_devices(
                 )
                 device_ids = [int(id) for id in context.devices.keys()]
             else:
-                device_ids = [metal_device_id_mapping[metal_device_id] for metal_device_id in metal_device_ids]
+                device_ids = [
+                    metal_device_id_mapping.get_device_id(metal_device_id) for metal_device_id in metal_device_ids
+                ]
         else:
             utils.WARN(f"  Using all available devices.")
             device_ids = [int(id) for id in context.devices.keys()]
@@ -154,7 +144,7 @@ def _convert_to_on_chip_coordinates(
 ) -> list[OnChipCoordinate]:
     on_chip_coordinates: list[OnChipCoordinate] = []
     for location in block_locations:
-        coord_str = f"e{location.x},{location.y}" if "eth" in block_type else f"{location.x},{location.y}"
+        coord_str = f"e{location.x},{location.y}" if "eth" in block_type.lower() else f"{location.x},{location.y}"
         # We skip e0,15 on wormhole devices since it is reserved for syseng use
         if coord_str == "e0,15" and device.is_wormhole() and device.is_local:
             continue
@@ -162,26 +152,27 @@ def _convert_to_on_chip_coordinates(
     return on_chip_coordinates
 
 
+def _make_device_map(devices: list[Device]) -> dict[int, Device]:
+    return {device.id: device for device in devices}
+
+
 def get_block_locations(
-    device_map: dict[int, Device],
-    metal_device_id_mapping: dict[int, int],
-    block_locations_map: dict[int, dict[BlockType, list[OnChipCoordinate]]],
+    devices: list[Device],
+    inspector_data: InspectorData,
+    metal_device_id_mapping: MetalDeviceIdMapping,
 ) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
-    block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {}
-    for i in range(len(block_locations_map.chips)):
-        metal_device_id = block_locations_map.chips[i].chipId
-        device_id = metal_device_id_mapping[metal_device_id]
+    device_map = _make_device_map(devices)
+    block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = defaultdict[Device, dict](dict)
+    chip_blocks_list = inspector_data.getBlocksByType().chips
+
+    for i in range(len(chip_blocks_list)):
+        metal_device_id = chip_blocks_list[i].chipId
+        device_id = metal_device_id_mapping.get_device_id(metal_device_id)
         if device_id in device_map:
             device = device_map[device_id]
-            block_locations[device] = {}
             for block_type in BLOCK_TYPES:
-                inspector_block_type = block_type
-                if block_type == "active_eth":
-                    inspector_block_type = "activeEth"
-                elif block_type == "idle_eth":
-                    inspector_block_type = "idleEth"
                 block_locations[device][block_type] = _convert_to_on_chip_coordinates(
-                    device, getattr(block_locations_map.chips[i].cores, inspector_block_type), block_type
+                    device, getattr(chip_blocks_list[i].blocks, block_type), block_type
                 )
 
     return block_locations
@@ -210,12 +201,11 @@ class RunChecks:
         devices: list[Device],
         block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]],
         metal_device_id_mapping: MetalDeviceIdMapping,
-        blocks_by_type,
     ):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
         # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
-        self._use_unique_id = metal_device_id_mapping.deivce_id_mismatch()
+        self._use_unique_id = metal_device_id_mapping.mismatch_exists()
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = block_locations
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
@@ -419,15 +409,9 @@ def run(args, context: Context):
     devices_to_check = args["--dev"]
     inspector_data = get_inspector_data(args, context)
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
-    devices = get_devices(
-        devices_to_check, inspector_data, metal_device_id_mapping.metal_device_id_to_device_id, context
-    )
-    block_locations_map = inspector_data.getCoresByBlockType()
-    device_map = {device.id: device for device in devices}
-    block_locations = get_block_locations(
-        device_map, metal_device_id_mapping.metal_device_id_to_device_id, block_locations_map
-    )
-    return RunChecks(devices, block_locations, metal_device_id_mapping, block_locations_map)
+    devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
+    block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
+    return RunChecks(devices, block_locations, metal_device_id_mapping)
 
 
 if __name__ == "__main__":

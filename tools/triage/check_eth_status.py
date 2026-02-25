@@ -210,7 +210,7 @@ def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Conte
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
-    BLOCK_TYPES_TO_CHECK = ["active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["activeEth"]
     run_checks.run_per_block_check(
         lambda location: get_eth_core_data(location._device, location, context), block_filter=BLOCK_TYPES_TO_CHECK
     )

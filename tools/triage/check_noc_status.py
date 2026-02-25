@@ -117,7 +117,7 @@ def run(args, context: Context):
         )
         return
 
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth"]
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
     NOC_IDS = [0, 1]
     # Dictionary of corresponding variables and registers to check

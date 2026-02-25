@@ -11,11 +11,9 @@
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
-#include "impl/debug/debug_helpers.hpp"
 #include <tt_stl/reflection.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "impl/dispatch/dispatch_core_common.hpp"
 
 namespace tt::tt_metal::inspector {
 
@@ -42,8 +40,7 @@ Data::Data()
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
             get_rpc_server().setGetAllDispatchCoreInfosCallback(
                 [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
-            get_rpc_server().setGetCoresByBlockTypeCallback(
-                [this](auto result) { this->rpc_get_cores_by_block_type(result); });
+            get_rpc_server().setGetBlocksByTypeCallback([this](auto result) { this->rpc_get_blocks_by_type(result); });
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
         } catch (const std::exception& e) {
@@ -289,7 +286,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
     }
 }
 
-void Data::rpc_get_cores_by_block_type(rpc::Inspector::GetCoresByBlockTypeResults::Builder results) {
+void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
     auto& cluster = tt_metal::MetalContext::instance().get_cluster();
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
@@ -322,7 +319,7 @@ void Data::rpc_get_cores_by_block_type(rpc::Inspector::GetCoresByBlockTypeResult
             eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
-        auto cores = chip_entry.initCores();
+        auto blocks = chip_entry.initBlocks();
         auto set_coords = [](auto list_builder, const std::vector<std::pair<uint32_t, uint32_t>>& xy) {
             auto list = list_builder(xy.size());
             for (size_t i = 0; i < xy.size(); ++i) {
@@ -330,10 +327,10 @@ void Data::rpc_get_cores_by_block_type(rpc::Inspector::GetCoresByBlockTypeResult
                 list[i].setY(xy[i].second);
             }
         };
-        set_coords([&cores](size_t n) { return cores.initTensix(n); }, tensix_xy);
-        set_coords([&cores](size_t n) { return cores.initActiveEth(n); }, active_eth_xy);
-        set_coords([&cores](size_t n) { return cores.initIdleEth(n); }, idle_eth_xy);
-        set_coords([&cores](size_t n) { return cores.initEth(n); }, eth_xy);
+        set_coords([&blocks](size_t n) { return blocks.initTensix(n); }, tensix_xy);
+        set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
+        set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
+        set_coords([&blocks](size_t n) { return blocks.initEth(n); }, eth_xy);
     }
 }
 

@@ -174,7 +174,7 @@ def check_core_magic(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth", "activeEth"]
     # Only check one RISC per core since magic is core-wide, not per-RISC
     # Use brisc for tensix, erisc/erisc0 for eth
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0"]

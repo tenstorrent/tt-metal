@@ -142,17 +142,17 @@ struct LogicalCoord {
 }
 
 # Per-chip: block type -> list of logical coordinates
-struct CoresByBlockTypePerChip {
+struct BlocksByTypePerChip {
     tensix @0 :List(LogicalCoord);
     activeEth @1 :List(LogicalCoord);
     idleEth @2 :List(LogicalCoord);
     eth @3 :List(LogicalCoord);
 }
 
-# One entry per chip: chipId -> cores by block type
-struct ChipCoresByBlockType {
+# One entry per chip: chipId -> blocks by type
+struct ChipBlocksByType {
     chipId @0 :UInt64;
-    cores @1 :CoresByBlockTypePerChip;
+    blocks @1 :BlocksByTypePerChip;
 }
 
 interface Inspector {
@@ -187,5 +187,5 @@ interface Inspector {
     getMeshWorkloadsRuntimeIds @8 () -> (runtimeIds :List(MeshWorkloadRuntimeIdEntry));
 
     # Chip -> block type -> list of logical (x,y). One entry per chip.
-    getCoresByBlockType @9 () -> (chips :List(ChipCoresByBlockType));
+    getBlocksByType @9 () -> (chips :List(ChipBlocksByType));
 }

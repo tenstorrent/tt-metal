@@ -61,7 +61,7 @@ def dump_callstacks(
 
 def run(args, context: Context):
     show_all_cores: bool = args["--all-cores"]
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth", "activeEth"]
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
     return run_checks.run_per_core_check(

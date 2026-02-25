@@ -106,7 +106,7 @@ def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth", "activeEth"]
     return run_checks.run_per_block_check(
         lambda location: read_ring_buffer_for_block(location, dispatcher_data, elfs_cache),
         block_filter=BLOCK_TYPES_TO_CHECK,
