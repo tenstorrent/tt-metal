@@ -178,7 +178,8 @@ CPMAddPackage(
     GITHUB_REPOSITORY fmtlib/fmt
     GIT_TAG 11.1.4
     EXCLUDE_FROM_ALL YES
-    OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    OPTIONS
+         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
 
 ############################################################################################################################
