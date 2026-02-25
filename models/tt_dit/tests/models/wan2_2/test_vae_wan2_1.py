@@ -29,7 +29,7 @@ from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_unpad_height, count_convs
-from ....utils.tensor import typed_tensor_2dshard
+from ....utils.tensor import bf16_tensor_2dshard, typed_tensor_2dshard
 
 
 def setup_hooks(model):
