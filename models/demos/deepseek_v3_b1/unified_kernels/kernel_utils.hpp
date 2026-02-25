@@ -77,16 +77,33 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
 // Cross-RISC synchronization
 // ============================================================================
 
-// Synchronization barrier using an atomic L1 semaphore.
-// NCRISC waits for BR + TR0 + TR2 (3 RISCs) to signal done, then resets.
-// Other RISCs (BR, TR0, TR2) atomically increment and proceed.
-FORCE_INLINE void sync_riscs(volatile uint32_t tt_l1_ptr* sem_addr) {
+// Full cross-RISC synchronization barrier using two atomic L1 semaphores.
+// sem_addr[0] = phase 1 (others → NC), sem_addr[1] = phase 2 (NC → others)
+//
+// Usage:
+//   sync_riscs_enter(sem);   // BR/TR0/TR2 signal done, NC waits for all 3
+//   // ... NC does exclusive work (stream reg reset, setup_sharded_buffer) ...
+//   sync_riscs_exit(sem);    // NC signals done, BR/TR0/TR2 wait then proceed
+
+// Phase 1: BR/TR0/TR2 signal done → NC waits for all 3
+FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-    __atomic_fetch_add(sem_addr, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
 #elif defined(COMPILE_FOR_NCRISC)
-    while (__atomic_load_n(sem_addr, __ATOMIC_RELAXED) < 3) {
+    while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) < 3) {
     }
-    *sem_addr = 0;
+    sem_addr[0] = 0;
+#endif
+}
+
+// Phase 2: NC signals done → BR/TR0/TR2 wait then proceed
+FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
+#if defined(COMPILE_FOR_NCRISC)
+    __atomic_fetch_add(&sem_addr[1], 3, __ATOMIC_RELAXED);
+#elif defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+    while (__atomic_load_n(&sem_addr[1], __ATOMIC_RELAXED) == 0) {
+    }
+    __atomic_fetch_sub(&sem_addr[1], 1, __ATOMIC_RELAXED);
 #endif
 }
 
@@ -164,10 +181,13 @@ FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
     constexpr bool do_reset_stream_regs = false;
 #endif
 
-    sync_riscs(reinterpret_cast<volatile uint32_t tt_l1_ptr*>(&cb_config[258]));
+    volatile uint32_t tt_l1_ptr* reconfig_sem = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(&cb_config[258]);
+    sync_riscs_enter(reconfig_sem);
 
     reconfig_cbs_for_mask<do_read, do_write, do_reset_stream_regs>(cb_config, cb_config[256], 0);
     reconfig_cbs_for_mask<do_read, do_write, do_reset_stream_regs>(cb_config, cb_config[257], 32);
+
+    sync_riscs_exit(reconfig_sem);
 }
 
 }  // namespace unified_kernels
