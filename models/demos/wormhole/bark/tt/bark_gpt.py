@@ -40,9 +40,9 @@ class BarkConfig:
 
     layer_norm_epsilon: float = 1e-5
 
-    # Optimization config (Stage 3)
+    # Optimization config (Stage 2 & 3)
     use_lofi: bool = True
-    use_sharding: bool = False
+    use_sharding: bool = True  # Enable sharding for Stage 3
     grid_size: Optional[Any] = None  # ttnn.CoreGrid
 
 
@@ -62,6 +62,16 @@ def preprocess_layernorm_weight(weight_tensor, device):
         w = w.unsqueeze(0).unsqueeze(0).unsqueeze(0)  # [1, 1, 1, hidden]
     tt_w = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return tt_w
+
+
+def preprocess_embedding_weight(weight_tensor, device):
+    """Preprocess embedding weights for ttnn.embedding (2D ROW_MAJOR).
+
+    Stage 2 optimization: keeps embeddings on device for on-device lookup
+    instead of CPU-side nn.Embedding.
+    """
+    w = weight_tensor.detach().float()
+    return ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 class TtBarkMLP:
     def __init__(self, device, parameters, config: BarkConfig):
@@ -91,7 +101,7 @@ class TtBarkMLP:
             packer_l1_acc=True,
         )
 
-    def __call__(self, hidden_states: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG) -> ttnn.Tensor:
         """Forward pass through MLP block with fused activation."""
         # Linear projection: hidden -> 4*hidden with fused GELU
         intermediate = ttnn.linear(
@@ -176,7 +186,7 @@ class TtBarkAttention:
         hidden_states: ttnn.Tensor,
         layer_past: Optional[tuple] = None,
         use_cache: bool = False,
-        memory_config: Optional[ttnn.MemoryConfig] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG,
     ) -> tuple:
         """Forward pass through attention. Fully on TTNN device."""
         # QKV projection in TTNN
@@ -277,7 +287,7 @@ class TtBarkBlock:
         hidden_states: ttnn.Tensor,
         layer_past: Optional[tuple] = None,
         use_cache: bool = False,
-        memory_config: Optional[ttnn.MemoryConfig] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG,
     ) -> tuple:
         """Forward pass through one transformer block."""
         # Fused MLP structure: Norm -> FC1 -> Activation -> FC2 -> Residual
@@ -336,12 +346,9 @@ class TtBarkGPT:
         self.config = config
         self.is_causal = is_causal
 
-        # Embedding layers (kept on CPU for token indexing)
-        self.input_embeds_layer = torch.nn.Embedding(config.input_vocab_size, config.hidden_size)
-        self.input_embeds_layer.weight = torch.nn.Parameter(parameters["input_embeds_layer"]["weight"])
-
-        self.position_embeds_layer = torch.nn.Embedding(config.block_size, config.hidden_size)
-        self.position_embeds_layer.weight = torch.nn.Parameter(parameters["position_embeds_layer"]["weight"])
+        # Embedding layers in TTNN (Stage 2 optimization)
+        self.input_embeds_weight = preprocess_embedding_weight(parameters["input_embeds_layer"]["weight"], device)
+        self.position_embeds_weight = preprocess_embedding_weight(parameters["position_embeds_layer"]["weight"], device)
 
         # Transformer blocks
         self.blocks = []
@@ -378,7 +385,7 @@ class TtBarkGPT:
         inputs_embeds: Optional[torch.Tensor] = None,
         layer_past: Optional[list] = None,
         use_cache: bool = False,
-        memory_config: Optional[ttnn.MemoryConfig] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG,
     ) -> tuple:
         """Forward pass through the full GPT model.
 
@@ -394,35 +401,42 @@ class TtBarkGPT:
             layer_present: List of updated (key, value) tuples
         """
         if inputs_embeds is None and input_ids is not None:
-            inputs_embeds = self.input_embeds_layer(input_ids)
+            # Handle both torch and ttnn input_ids
+            if isinstance(input_ids, torch.Tensor):
+                tt_input_ids = ttnn.from_torch(
+                    input_ids.to(torch.int32), device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            else:
+                tt_input_ids = input_ids
+
+            inputs_embeds = ttnn.embedding(
+                tt_input_ids, self.input_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            
+            if isinstance(input_ids, torch.Tensor):
+                ttnn.deallocate(tt_input_ids)
         elif inputs_embeds is None:
             raise ValueError("Either input_ids or inputs_embeds must be provided")
-
-        batch_size, seq_len = inputs_embeds.shape[0], inputs_embeds.shape[1]
 
         # Position embeddings (handle offset if caching)
         if layer_past is not None:
             past_len = layer_past[0][0].shape[-2]
-            position_ids = torch.arange(past_len, past_len + seq_len, dtype=torch.long)
+            position_ids = torch.arange(past_len, past_len + tt_input_ids.shape[-1], dtype=torch.int32)
         else:
-            position_ids = torch.arange(0, seq_len, dtype=torch.long)
+            position_ids = torch.arange(0, tt_input_ids.shape[-1], dtype=torch.int32)
 
-        position_embeds = self.position_embeds_layer(position_ids)  # [seq_len, hidden]
-
-        # Combine embeddings
-        hidden = inputs_embeds + position_embeds.unsqueeze(0)
-
-        # Convert to TTNN
-        if hidden.dim() == 3:
-            hidden = hidden.unsqueeze(0)  # [1, batch, seq, hidden]
-
-        tt_hidden = ttnn.from_torch(
-            hidden.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=memory_config,
+        tt_position_ids = ttnn.from_torch(
+            position_ids.unsqueeze(0).unsqueeze(0), device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
+        position_embeds = ttnn.embedding(
+            tt_position_ids, self.position_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        ttnn.deallocate(tt_position_ids)
+
+        # Combine embeddings on device
+        tt_hidden = ttnn.add(inputs_embeds, position_embeds, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(inputs_embeds)
+        ttnn.deallocate(position_embeds)
 
         # Transformer blocks
         layer_present = [] if use_cache else None
