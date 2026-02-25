@@ -16,12 +16,14 @@ autograd::TensorPtr scaled_dot_product_attention(
 
 // Fused implementation using custom sdpa_fw and sdpa_bw kernels
 // More efficient than composite implementation for training
+// When causal=true and no mask provided, generates causal mask on-device
 autograd::TensorPtr scaled_dot_product_attention_fused(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    float dropout_probability = 0.0F);
+    float dropout_probability = 0.0F,
+    bool causal = false);
 
 autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,

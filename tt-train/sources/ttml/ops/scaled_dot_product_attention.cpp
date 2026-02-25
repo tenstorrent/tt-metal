@@ -246,13 +246,15 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    float dropout_probability) {
+    float dropout_probability,
+    bool causal) {
     validate_qkv_shapes(query, key, value);
 
     // Get mask tensor if provided
     // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
     std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
+    ttml::metal::AttentionMaskType mask_type =
+        causal ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
     if (mask.has_value()) {
         mask_tensor = mask.value()->get_value();
         mask_type = ttml::metal::AttentionMaskType::Arbitrary;
@@ -303,6 +305,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
 
     return out;
 }
+
 
 autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,
