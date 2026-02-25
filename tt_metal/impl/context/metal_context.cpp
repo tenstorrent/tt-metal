@@ -354,7 +354,16 @@ void MetalContext::teardown() {
     // If simulator is enabled, force a teardown of active ethernet cores for WH
     if (rtoptions_.get_simulator_enabled()) {
         if (hal_->get_eth_fw_is_cooperative()) {
-            this->get_control_plane().set_teardown_in_progress(true);
+            // RAII guard to ensure teardown_in_progress is always reset, even if exceptions occur
+            struct TeardownInProgressGuard {
+                tt::tt_fabric::ControlPlane& control_plane_;
+                explicit TeardownInProgressGuard(tt::tt_fabric::ControlPlane& cp) : control_plane_(cp) {
+                    control_plane_.set_teardown_in_progress(true);
+                }
+                ~TeardownInProgressGuard() { control_plane_.set_teardown_in_progress(false); }
+            };
+
+            TeardownInProgressGuard guard(this->get_control_plane());
             for (ChipId device_id : all_devices) {
                 try {
                     for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
@@ -372,7 +381,6 @@ void MetalContext::teardown() {
                         e.what());
                 }
             }
-            this->get_control_plane().set_teardown_in_progress(false);
         }
     }
 

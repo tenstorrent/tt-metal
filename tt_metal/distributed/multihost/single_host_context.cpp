@@ -16,12 +16,21 @@ SingleHostContext::SingleHostContext() : rank_(0), size_(1) { id_ = DistributedC
 void SingleHostContext::create(int argc [[maybe_unused]], char** argv [[maybe_unused]]) {
     std::lock_guard<std::mutex> lock(current_world_mutex_);
     current_world_ = std::make_shared<SingleHostContext>();
+    current_world_initialized_.test_and_set(std::memory_order_release);
 }
 
 const ContextPtr& SingleHostContext::get_current_world() {
+    // Fast path: check atomic flag without acquiring mutex
+    // std::atomic_flag::test() returns true if the flag is set (C++20)
+    if (current_world_initialized_.test(std::memory_order_acquire)) {
+        // current_world_ is guaranteed to be initialized
+        return current_world_;
+    }
+
     std::lock_guard<std::mutex> lock(current_world_mutex_);
     if (!current_world_) {
         current_world_ = std::make_shared<SingleHostContext>();
+        current_world_initialized_.test_and_set(std::memory_order_release);
     }
     return current_world_;
 }
@@ -32,11 +41,13 @@ void SingleHostContext::set_current_world(const ContextPtr& ctx) {
         "SingleHostContext::set_current_world: context is not a SingleHostContext or a nullptr");
     std::lock_guard<std::mutex> lock(current_world_mutex_);
     SingleHostContext::current_world_ = ctx;
+    current_world_initialized_.test_and_set(std::memory_order_release);
 }
 
 bool SingleHostContext::is_initialized() {
-    std::lock_guard<std::mutex> lock(current_world_mutex_);
-    return current_world_ != nullptr;
+    // Lock-free check using atomic_flag::test() (C++20)
+    // Synchronizes with test_and_set(std::memory_order_release) in create/set_current_world/get_current_world
+    return current_world_initialized_.test(std::memory_order_acquire);
 }
 
 // basic info

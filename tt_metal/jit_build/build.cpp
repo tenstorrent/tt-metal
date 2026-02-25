@@ -142,7 +142,11 @@ void JitBuildEnv::init(
             }
         } catch (const std::filesystem::filesystem_error& e) {
             // Directory contents may change during iteration in multi-process scenarios
-            log_warning(tt::LogBuildKernels, "Cache cleanup interrupted (likely concurrent access): {}", e.what());
+            log_warning(
+                tt::LogBuildKernels,
+                "Cache cleanup interrupted for {} (likely concurrent access): {}",
+                root_path.string(),
+                e.what());
         }
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
