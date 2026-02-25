@@ -81,8 +81,8 @@ void kernel_main() {
     uint32_t trid = 1u;  // MUST START WITH ONE
     uint32_t trid_to_wait = trid;
 
-    constexpr uint32_t num_batches = 2;  // noc transcation must be overlapped
-    constexpr uint32_t max_num_tiles_per_batch = 4;
+    constexpr uint32_t num_batches = c_args.num_batches;  // noc transcation must be overlapped
+    constexpr uint32_t max_num_tiles_per_batch = c_args.num_tiles_per_batch;
     const uint32_t num_tiles_per_batch =
         args.num_tiles > max_num_tiles_per_batch ? max_num_tiles_per_batch : args.num_tiles;
 
@@ -127,6 +127,8 @@ void kernel_main() {
     auto num_tiles = args.num_tiles - num_tail_tiles;
     auto transfer_sz = n_tiles_proc * a_tile_size;
     for (auto i = 0u; i < num_tiles; i += n_tiles_proc) {
+        DPRINT << "1. reading range " << i << " of " << num_tiles << " with trid " << trid << " and n_tiles_proc "
+               << n_tiles_proc << ENDL();
         noc_async_read_set_trid(trid);
 
         // DeviceZoneScopedN("READ_TILES");
@@ -149,10 +151,10 @@ void kernel_main() {
             trid_to_wait = get_next_trid(trid_to_wait);
 
             // cb_push_back(c_args.a_tensor_cb, n_tiles_proc);
-            // cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
+            //  cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
 
             // cb_reserve_back(c_args.a_tensor_cb, n_tiles_proc);
-            // cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
+            //  cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
         }
         trid = get_next_trid(trid);
     }
@@ -166,6 +168,8 @@ void kernel_main() {
     num_tiles = num_tiles - num_tail_tiles;
 
     for (auto i = 0u; i < num_tiles; i += n_tiles_proc) {
+        DPRINT << "2. reading range " << i << " of " << num_tiles << " with trid " << trid << " and n_tiles_proc "
+               << n_tiles_proc << ENDL();
         noc_async_read_set_trid(trid);
 
         // DeviceZoneScopedN("READ_TILES");
@@ -210,6 +214,7 @@ void kernel_main() {
     transfer_sz = n_tiles_proc * a_tile_size;
     // handle tail tiles
     if (n_tiles_proc != 0) {
+        DPRINT << "3. reading tail tiles with trid " << trid << " and n_tiles_proc " << n_tiles_proc << ENDL();
         // DeviceZoneScopedN("READER_KERNEL_DATA_MOVEMENT");
         // DPRINT << "Schedule read with trid " << trid << ENDL();
         noc_async_read_set_trid(trid);

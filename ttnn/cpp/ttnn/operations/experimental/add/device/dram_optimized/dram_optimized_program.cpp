@@ -48,8 +48,6 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     // }
 
     /***************   CIRCULAR BUFFERS ***************/
-    constexpr uint32_t num_tiles_per_cycle = 1;  //
-    // constexpr uint32_t noc_page_size = 8192;
 
     auto createCircularBuffer = [&program, &all_device_cores, dtype = dtype](
                                     tt::CBIndex cb_idx, uint32_t tile_size, uint32_t num_input_tiles = 1) {
@@ -64,11 +62,9 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     auto b_tensor_cb = tt::CBIndex::c_1;
     auto output_cb_index = tt::CBIndex::c_2;
 
-    constexpr uint32_t max_num_tiles_per_noc_transaction = 4;
-    constexpr uint32_t num_ongoing_transactions = 2;
-    constexpr uint32_t num_reserved_transactions = 1;
-    constexpr uint32_t num_tiles_per_cb =
-        max_num_tiles_per_noc_transaction * (num_ongoing_transactions + num_reserved_transactions);  // 12 tiles per CB
+    constexpr uint32_t num_tiles_per_batch = 4;
+    constexpr uint32_t num_batches = 2;
+    constexpr uint32_t num_tiles_per_cb = num_tiles_per_batch * (num_batches + 1);  // 12 tiles per CB
 
     CBHandle a_tensor_cb_handle = createCircularBuffer(a_tensor_cb, single_tile_size, num_tiles_per_cb);
     CBHandle b_tensor_cb_handle = createCircularBuffer(b_tensor_cb, single_tile_size, num_tiles_per_cb);
@@ -79,6 +75,8 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     EltwiseReaderCTArgs reader_compile_time_args = {
         .a_tensor_cb = a_tensor_cb,
         .b_tensor_cb = b_tensor_cb,
+        .num_batches = num_batches,
+        .num_tiles_per_batch = num_tiles_per_batch,
     };
     std::vector<uint32_t> reader_compile_time_vec = ttnn::kernel_utils::to_vector(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(args.a_tensor.buffer()).append_to(reader_compile_time_vec);
@@ -97,7 +95,7 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     /***************   WRITER KERNEL ***************/
 
     EltwiseWriterCTArgs writer_compile_time_args = {
-        .cb_dst = output_cb_index, .num_tiles_per_cycle = num_tiles_per_cycle};
+        .cb_dst = output_cb_index, .num_batches = num_batches, .num_tiles_per_batch = num_tiles_per_batch};
 
     std::vector<uint32_t> writer_compile_time_vec = ttnn::kernel_utils::to_vector(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
@@ -115,7 +113,8 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
         .a_tensor_cb = a_tensor_cb,
         .b_tensor_cb = b_tensor_cb,
         .output_cb = output_cb_index,
-        .num_tiles_per_cycle = num_tiles_per_cycle};
+        .num_batches = num_batches,
+        .num_tiles_per_batch = num_tiles_per_batch};
     std::vector<uint32_t> compute_compile_time_vec = ttnn::kernel_utils::to_vector(compute_compile_time_args);
     KernelHandle compute_kernel_id = CreateKernel(
         program,

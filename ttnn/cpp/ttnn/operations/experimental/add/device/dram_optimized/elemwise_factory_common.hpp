@@ -102,7 +102,6 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     auto& cached_eltwise_args = GetRuntimeArgs(program, compute_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
-    // constexpr auto num_dram_banks = 12u;
     std::vector<uint32_t> core_ids;
     for (uint32_t core_id = 0; core_id < num_cores_total; ++core_id) {
         const CoreCoord& core = cores.at(core_id);
@@ -118,8 +117,9 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             auto& writer_args = cached_writer_args.at(core.x).at(core.y);
             writer_args[1] = 0;
         }
-        std::cout << "Assigning runtime args to core: " << core.str() << " num_tiles_per_core: " << num_tiles_per_core
-                  << " tile_ofs: " << core_id << std::endl;
+        // std::cout << "Assigning runtime args to core: " << core.str() << " num_tiles_per_core: " <<
+        // num_tiles_per_core
+        //           << " tile_ofs: " << core_id << std::endl;
 
         uint32_t vc = core_id & 0x3;
         core_ids.push_back(core_id);

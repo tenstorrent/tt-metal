@@ -35,18 +35,22 @@ struct EltwiseWriterArgs {
 struct EltwiseReaderCTArgs {
     uint32_t a_tensor_cb;
     uint32_t b_tensor_cb;
+    uint32_t num_batches;
+    uint32_t num_tiles_per_batch;
 };
 
 struct EltwiseComputeCTArgs {
     uint32_t a_tensor_cb;
     uint32_t b_tensor_cb;
     uint32_t output_cb;
-    uint32_t num_tiles_per_cycle;
+    uint32_t num_batches;
+    uint32_t num_tiles_per_batch;
 };
 
 struct EltwiseWriterCTArgs {
     uint32_t cb_dst;
-    uint32_t num_tiles_per_cycle;
+    uint32_t num_batches;
+    uint32_t num_tiles_per_batch;
 };
 
 static_assert(ttnn::kernel_utils::SerializableKernelArgs<EltwiseReaderArgs>);
