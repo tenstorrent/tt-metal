@@ -35,14 +35,15 @@ import pytest
 import ttnn
 from models.common.utility_functions import is_blackhole, skip_for_wormhole_b0
 
-from tests.didt.op_test_base import OpTestBase
-from tests.didt.test_deepseek_v3_128k_matmul import (
-    TILE_SIZE,
+from tests.didt.deepseek_v3_matmul_config import (
     DENSE_MLP_MATMUL_PARAMS,
+    GATE_MATMUL_CONFIG,
     MLA_MATMUL_PARAMS,
     ROUTED_EXPERT_MATMUL_PARAMS,
     SHARED_EXPERT_MATMUL_PARAMS,
+    TILE_SIZE,
 )
+from tests.didt.op_test_base import OpParameter, OpTestBase
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 
 
@@ -195,14 +196,11 @@ def _deepseek_v3_workloads() -> list[MatmulWorkload]:
     """All Deepseek V3 DIDT matmul workloads (MLA, gate, dense MLP, shared expert, routed expert)."""
     workloads: list[MatmulWorkload] = []
 
-    for param in MLA_MATMUL_PARAMS:
-        # pytest.param(M, K, N, batch, in1_dtype, id=...)
-        M, K, N = param.values[:3]
-        batch = param.values[3]
-        in1_dtype = param.values[4]
+    for row in MLA_MATMUL_PARAMS:
+        M, K, N, batch, in1_dtype, workload_id = row
         workloads.append(
             MatmulWorkload(
-                workload_id=param.id or f"mla_{M}_{K}_{N}",
+                workload_id=workload_id,
                 M=M,
                 K=K,
                 N=N,
@@ -212,23 +210,24 @@ def _deepseek_v3_workloads() -> list[MatmulWorkload]:
             )
         )
 
+    M, K, N, in1_dtype, workload_id = GATE_MATMUL_CONFIG
     workloads.append(
         MatmulWorkload(
-            workload_id="gate",
-            M=4096,
-            K=1792,
-            N=256,
+            workload_id=workload_id,
+            M=M,
+            K=K,
+            N=N,
             batch=1,
-            in1_dtype=ttnn.DataType.BFLOAT4_B,
+            in1_dtype=in1_dtype,
             math_fidelity=ttnn.MathFidelity.HiFi2,
         )
     )
 
-    for param in DENSE_MLP_MATMUL_PARAMS:
-        M, K, N = param.values[:3]
+    for row in DENSE_MLP_MATMUL_PARAMS:
+        M, K, N, workload_id = row
         workloads.append(
             MatmulWorkload(
-                workload_id=param.id or f"dense_mlp_{M}_{K}_{N}",
+                workload_id=workload_id,
                 M=M,
                 K=K,
                 N=N,
@@ -238,11 +237,11 @@ def _deepseek_v3_workloads() -> list[MatmulWorkload]:
             )
         )
 
-    for param in SHARED_EXPERT_MATMUL_PARAMS:
-        M, K, N = param.values[:3]
+    for row in SHARED_EXPERT_MATMUL_PARAMS:
+        M, K, N, workload_id = row
         workloads.append(
             MatmulWorkload(
-                workload_id=param.id or f"shared_expert_{M}_{K}_{N}",
+                workload_id=workload_id,
                 M=M,
                 K=K,
                 N=N,
@@ -252,11 +251,11 @@ def _deepseek_v3_workloads() -> list[MatmulWorkload]:
             )
         )
 
-    for param in ROUTED_EXPERT_MATMUL_PARAMS:
-        M, K, N = param.values[:3]
+    for row in ROUTED_EXPERT_MATMUL_PARAMS:
+        M, K, N, workload_id = row
         workloads.append(
             MatmulWorkload(
-                workload_id=param.id or f"routed_expert_{M}_{K}_{N}",
+                workload_id=workload_id,
                 M=M,
                 K=K,
                 N=N,
@@ -362,18 +361,14 @@ def _run_single_config(
     memory_configs = "in0:DRAM in1:DRAM out:DRAM"
 
     try:
+        activation = OpParameter(in0_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, dram_mem_config)
+        arguments = [OpParameter(in1_shape, wl.in1_dtype, ttnn.TILE_LAYOUT, dram_mem_config)]
         test = OpTestBase(
             mesh_device,
-            in0_shape=in0_shape,
-            in1_shape=in1_shape,
-            in0_mem_config=dram_mem_config,
-            in1_mem_config=dram_mem_config,
+            activation=activation,
+            arguments=arguments,
             out_mem_config=dram_mem_config,
-            in0_dtype=ttnn.DataType.BFLOAT16,
-            in1_dtype=wl.in1_dtype,
             out_dtype=ttnn.DataType.BFLOAT16,
-            in0_layout=ttnn.TILE_LAYOUT,
-            in1_layout=ttnn.TILE_LAYOUT,
             program_config=program_config,
             compute_config=compute_config,
             loop_count=iterations,
@@ -381,12 +376,20 @@ def _run_single_config(
             determinism_check_interval=False,
         )
         test.set_seed()
-        a_shape = test.in0_shape
-        b_shape = test.in1_shape
+        a_shape = test.activation.shape
+        b_shape = test.arguments[0].shape
         A = test.generate_torch_activations(a_shape)
-        B = test.generate_torch_weights(b_shape)
+        B = test.generate_torch_input(b_shape)
         a_t = test.generate_tt_activations_from_torch(A)
-        test.weights = test.generate_tt_weights_from_torch(B)
+        test.inputs = [
+            test.generate_tt_input_from_torch(
+                B,
+                test.arguments[0].dtype,
+                test.arguments[0].layout,
+                test.arguments[0].mem_config,
+                0,
+            )
+        ]
         test.activations = test.convert_activations_to_memory_config(a_t)
 
         start = start_measuring_time()
@@ -418,7 +421,7 @@ def _run_single_config(
         )
 
         test.deallocate_activations()
-        test.weights.deallocate(True)
+        test.inputs[0].deallocate(True)
 
         return SweepResult(
             workload_id=wl.workload_id,
