@@ -19,7 +19,7 @@ double measure_time(
     return std::chrono::duration<double>(end - start).count();
 }
 
-void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshDevice>& device, int batch_size) {
+void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshDevice>& device, int batch_size, const std::string& model_path) {
     // Prepare input tensor
     torch::Tensor torch_input_tensor =
         torch::randn({batch_size, 3, 224, 224}, torch::TensorOptions().dtype(torch::kFloat32));
@@ -44,7 +44,7 @@ void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshD
     MobileNetV2Trace2CQ mobilenetv2_trace_2cq;
 
     // Initialize MobileNetV2 inference
-    mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(device, batch_size);
+    mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(device, batch_size, model_path);
 
     // Perform inference iterations
     int inference_iter_count = 10;
@@ -79,7 +79,7 @@ void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshD
               << std::endl;
 }
 
-int main() {
+int main(int argc, char** argv) {
     auto device = ttnn::MeshDevice::create_unit_mesh(
         0,
         /*l1_small_size=*/24576,
@@ -89,7 +89,12 @@ int main() {
     int batch_size = 1;
     device->enable_program_cache();
 
-    test_run_mobilenetv2_trace_2cqs_inference(device, batch_size);
+    std::string model_path = "";
+    if (argc > 1) {
+        model_path = argv[1];
+    }
+
+    test_run_mobilenetv2_trace_2cqs_inference(device, batch_size, model_path);
 
     device->disable_and_clear_program_cache();
     return 0;

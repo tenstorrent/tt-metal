@@ -8,7 +8,7 @@
 #include "inference/mobilenetv2_infra.h"
 #include "util/profiler.hpp"
 
-int main() {
+int main(int argc, char** argv) {
     auto device = ttnn::MeshDevice::create_unit_mesh(
         0,
         /*l1_small_size=*/24576,
@@ -16,7 +16,13 @@ int main() {
         /*num_command_queues=*/2,
         /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
     int batch_size = 1;
-    auto infra = std::make_shared<MobileNetv2TestInfra>(device, batch_size);
+
+    std::string model_path = "";
+    if (argc > 1) {
+        model_path = argv[1];
+    }
+
+    auto infra = std::make_shared<MobileNetv2TestInfra>(device, batch_size, model_path);
 
     // First run configures convs JIT
     (*infra).run();

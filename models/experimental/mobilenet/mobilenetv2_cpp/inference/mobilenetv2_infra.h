@@ -17,7 +17,7 @@ public:
     using OneConfResult = std::pair<ttnn::Tensor, ttnn::MemoryConfig>;
     using TwoConfResult = std::tuple<ttnn::Tensor, ttnn::MemoryConfig, ttnn::MemoryConfig>;
 
-    MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size);
+    MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size, const std::string& model_path = "");
 
     void setInputTensor(const ttnn::Tensor& input_tensor) { input_tensor_ = std::move(input_tensor); }
 

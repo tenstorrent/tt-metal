@@ -6,12 +6,12 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "helper_funcs.h"
 
-MobileNetv2TestInfra::MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size) :
+MobileNetv2TestInfra::MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size, const std::string& model_path) :
     device_(std::move(device)), batch_size_(batch_size) {
     torch::manual_seed(0);
 
     // Load Torch model
-    torch_model_ = loadTorchModel();
+    torch_model_ = loadTorchModel(model_path);
 
     // Load TTNN model
     ttnn_mobilenetv2_model_ = loadTtnnModel(device_, torch_model_, batch_size_);
