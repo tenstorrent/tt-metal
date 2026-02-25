@@ -37,7 +37,6 @@ public:
         std::shared_ptr<const ContextDescriptor> descriptor,
         const GetControlPlaneFn& get_control_plane,
         dispatch_core_manager& dispatch_core_manager,
-        size_t fw_compile_hash,
         std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores = std::nullopt);
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
@@ -99,7 +98,6 @@ private:
     GetControlPlaneFn get_control_plane_;
     dispatch_core_manager& dispatch_core_manager_;
     std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores_;
-    [[maybe_unused]] size_t fw_compile_hash_;
     uint8_t num_hw_cqs_;
     size_t worker_l1_unreserved_start_;
 

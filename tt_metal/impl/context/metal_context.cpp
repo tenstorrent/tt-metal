@@ -259,7 +259,6 @@ void MetalContext::initialize(
         risc_fw_context_descriptor_,
         std::bind(&MetalContext::get_control_plane, this),
         *dispatch_core_manager_,
-        fw_compile_hash,
         get_dispatch_ignore_cores);
 
     risc_firmware_initializer_->run_async_build_phase(device_ids);
