@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <string>
-
 #include "debug_tools_fixture.hpp"
 
 using namespace tt;

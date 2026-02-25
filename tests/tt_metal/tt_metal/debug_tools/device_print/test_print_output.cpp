@@ -2,26 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <sys/types.h>
-#include <tt-metalium/host_api.hpp>
-#include <string>
-#include <string_view>
-#include <vector>
-
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "tt_metal/llrt/tt_elffile.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace ll_api;
-using namespace std::string_view_literals;
-
-struct DevicePrintStringInfo {
-    std::uint32_t format_string_ptr;
-    std::uint32_t file;
-    std::uint32_t line;
-};
 
 class DevicePrintOutputFixture : public DevicePrintFixture {
 public:

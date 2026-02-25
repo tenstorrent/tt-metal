@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <string>
-#include <string_view>
-#include <vector>
-
 #include "debug_tools_fixture.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 
