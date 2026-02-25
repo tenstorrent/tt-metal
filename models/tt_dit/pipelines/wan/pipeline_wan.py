@@ -254,6 +254,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
+            # This is the best dynamic loading strategy across all supported device configurations.
             self.tt_umt5_encoder.set_unload_set(self.transformer_2)
             self.transformer.set_unload_set(self.transformer_2)
             self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
