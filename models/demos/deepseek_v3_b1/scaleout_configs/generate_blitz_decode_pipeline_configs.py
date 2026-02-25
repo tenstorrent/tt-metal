@@ -14,18 +14,15 @@ from loguru import logger
 
 def generate_pcie_to_logical_mappings(host_vector, mpi_user=None, worker_tt_metal_home=None, output_dir=None):
     """Run on each host to collect PCI->logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs."""
-    # Script path for remote execution (worker) or local
     if worker_tt_metal_home:
         wh = Path(worker_tt_metal_home)
-        python_script = wh / "models/demos/deepseek_v3_b1/scaleout_configs/output_pcie_to_logical_mapping.py"
+        test_executable = wh / "build/test/tt_metal/tt_fabric/test_physical_discovery"
     else:
-        python_script = Path(__file__).parent / "output_pcie_to_logical_mapping.py"
-
-    # Existence check uses local path: runner has checkout, worker has copy at worker_tt_metal_home
-    local_script = Path(__file__).parent / "output_pcie_to_logical_mapping.py"
-    if not local_script.exists():
-        logger.error(f"Mapping script not found: {local_script}")
-        sys.exit(1)
+        test_executable = Path("build/test/tt_metal/tt_fabric/test_physical_discovery")
+        if not test_executable.exists():
+            logger.error(f"Test executable not found at {test_executable}")
+            logger.info("Please build with: ./build_metal.sh --build-tests")
+            sys.exit(1)
 
     base_dir = output_dir or "."
     mappings = {}
@@ -55,16 +52,7 @@ def generate_pcie_to_logical_mappings(host_vector, mpi_user=None, worker_tt_meta
         if worker_tt_metal_home:
             wh = Path(worker_tt_metal_home)
             cmd.extend(["-x", f"LD_LIBRARY_PATH={wh / 'build/lib'}", "-x", f"TT_METAL_RUNTIME_ROOT={wh}"])
-        cmd.extend(
-            [
-                "python3",
-                str(python_script),
-                "--hostname",
-                host,
-                "--output",
-                output_file,
-            ]
-        )
+        cmd.extend([str(test_executable), "--gtest_filter=*GeneratePCIeToLogicalMapping*"])
 
         logger.info(f"Running PCI->logical mapping on {host}: {' '.join(cmd)}")
         result = subprocess.run(cmd)
@@ -164,7 +152,12 @@ def generate_rank_bindings(
         # UMD TT_VISIBLE_DEVICES expects logical IDs (BDF-sorted indices), not PCI device IDs
         if pcie_to_logical_mappings and stage_host in pcie_to_logical_mappings:
             mapping = pcie_to_logical_mappings[stage_host]
-            devices_for_stage = sorted(mapping.get(int(pcie_id), pcie_id) for pcie_id in devices_for_stage)
+
+            def to_logical(pcie_id):
+                pid = int(pcie_id)
+                return mapping.get(pid, mapping.get(str(pid), pid))
+
+            devices_for_stage = sorted(to_logical(p) for p in devices_for_stage)
 
         rank_bindings.append(
             {
