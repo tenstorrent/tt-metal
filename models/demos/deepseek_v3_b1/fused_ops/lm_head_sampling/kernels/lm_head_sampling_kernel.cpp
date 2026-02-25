@@ -323,11 +323,7 @@ void kernel_main() {
                        << iteration_count << ENDL();
                 auto next_iteration_semaphore =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
-                while (*next_iteration_semaphore != 1) {
-                    invalidate_l1_cache();
-                    DPRINT << "NEXT ITERATION SEMAPHORE NOT READY AT ITERATION" << iteration_count << " "
-                           << *next_iteration_semaphore << ENDL();
-                }
+                DPRINT << "NEXT ITERATION SEMAPHORE WAITING " << iteration_count << ENDL();
                 noc_semaphore_wait(next_iteration_semaphore, 1);
                 noc_semaphore_set(next_iteration_semaphore, 0);
                 DPRINT << "NEXT ITERATION SEMAPHORE WAIT COMPLETE " << iteration_count << ENDL();
@@ -366,6 +362,16 @@ void kernel_main() {
 #endif
             }
         }
+
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_input_core && Core::persistent_mode) {
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+            constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+            if (iteration_count > 1) {
+                unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+            }
+        }
+#endif
 
         // DPRINT << "RMSNorm" << ENDL();
         deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
