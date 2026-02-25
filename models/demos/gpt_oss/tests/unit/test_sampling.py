@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end on-device sampling test for GPT-OSS on Galaxy [4,8] mesh.
+End-to-end on-device sampling tests for GPT-OSS on Galaxy [4,8] mesh.
 
-Tests TTSampling with GPT-OSS vocab dimensions (201088, TP=8) to verify:
+Tests TTSampling, TTPenalties, and LogProbsCalculator with GPT-OSS
+vocab dimensions (201088, TP=8) to verify:
 - Greedy (argmax) sampling matches torch reference
-- Stochastic sampling token distribution matches reference within KL threshold
+- Stochastic sampling distribution matches reference within KL threshold
+- Various top-k and top-p configurations work correctly
+- Presence/frequency/repetition penalties suppress targeted tokens
+- Log probabilities are correctly computed
 - Sampled token IDs are always < vocab_size (no padding tokens leak through)
 """
 
@@ -19,6 +23,7 @@ from loguru import logger
 from scipy.stats import entropy
 
 import ttnn
+from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gpt_oss.tt.model import compute_per_device_vocab
 
@@ -117,36 +122,76 @@ def kl_divergence(p, q, *, base=None, eps=1e-12):
     return entropy(p, q, base=base)
 
 
-# --- TTSampling args for GPT-OSS ---
+# --- Constants & helpers ---
 
 VOCAB_SIZE = 201088
 MAX_TOP_K = 32
 BATCH_SIZE = 32
 
+# GPT-OSS device params: FABRIC_1D_RING + large trace region.
+# NOT Llama Galaxy's dispatch_core_axis/worker_l1_size/small trace.
+GPT_OSS_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "trace_region_size": 30000000,
+}
 
-def make_gpt_oss_sampling_args(mesh_device):
-    """Create args matching GPT-OSS model on Galaxy [4,8] mesh."""
+
+def make_gpt_oss_sampling_args(mesh_device, sampling_dp=1):
+    """Create args matching GPT-OSS model on Galaxy [4,8] mesh.
+
+    Args:
+        mesh_device: TTNN mesh device.
+        sampling_dp: Number of independent sampling groups (1 for basic tests,
+            mesh_device.shape[0] for row-sharded production config).
+    """
 
     class _Args:
         pass
 
     args = _Args()
     args.vocab_size = VOCAB_SIZE
-    num_tp = mesh_device.shape[1]
+    num_tp = mesh_device.shape[1]  # TP along cols
     per_device_vocab = compute_per_device_vocab(args.vocab_size, num_tp)
     args.padded_vocab_size = per_device_vocab * num_tp
     args.cluster_shape = tuple(mesh_device.shape)
-    args.sampling_all_gather_axis = 1
+    args.sampling_all_gather_axis = 1  # gather along cols (TP axis)
     args.num_devices = mesh_device.get_num_devices()
     args.is_galaxy = mesh_device.shape[0] > 1
     args.model_config = {}
-    args.sampling_dp = mesh_device.shape[0]
+    args.sampling_dp = sampling_dp
     args.max_top_k = MAX_TOP_K
     args.sub_core_grids = None
     return args
 
 
-# --- Tests ---
+def make_sharded_logits(torch_input, mesh_device, cluster_shape, dtype=ttnn.bfloat8_b):
+    """Shard logits across cols (TP axis) for GPT-OSS [4,8] mesh.
+
+    GPT-OSS shards vocab across mesh columns (axis 1). dims=(None, 3) means
+    replicate across rows, shard tensor dim 3 across cols.
+    """
+    return ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 3),  # replicate rows, shard vocab across cols
+            mesh_shape=cluster_shape,
+        ),
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+
+def extract_token(tt_out_tok, device_idx=0):
+    """Extract user-0 token ID from a multi-device sampling output tensor."""
+    device_tensor = ttnn.get_device_tensors(tt_out_tok)[device_idx]
+    torch_tensor = ttnn.to_torch(device_tensor)
+    return torch_tensor[0, 0, :, :].reshape(-1, 1)[0].item()
+
+
+# --- Test: basic sampling (greedy & stochastic with various top-k/top-p) ---
 
 
 @torch.no_grad()
@@ -154,8 +199,8 @@ def make_gpt_oss_sampling_args(mesh_device):
 @pytest.mark.parametrize(
     "num_samples_with_threshold",
     [
-        (10, 25.5),  # Quick smoke test — loose KL threshold
-        (1000, 2.0),  # Statistical test — tight KL threshold
+        (10, 25.5),  # Quick smoke — loose KL threshold
+        (1000, 2.0),  # Statistical — tight KL threshold
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
@@ -164,34 +209,23 @@ def make_gpt_oss_sampling_args(mesh_device):
     [
         {"temperature": 0.0, "top_k": 32, "top_p": 0.00, "seed": 42},  # Greedy
         {"temperature": 0.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # Greedy (top_p ignored)
-        {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # Stochastic
+        {"temperature": 1.0, "top_k": 1, "top_p": 0.00, "seed": 42},  # top-k=1 (always argmax)
+        {"temperature": 1.0, "top_k": 8, "top_p": 0.95, "seed": 42},  # Stochastic, small top-k
+        {"temperature": 1.0, "top_k": 32, "top_p": 0.50, "seed": 42},  # Stochastic, tight top-p
+        {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # Stochastic, standard
         {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # Stochastic, no top-p filter
     ],
 )
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 8)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 31744,
-            "worker_l1_size": 1344544,
-            "fabric_config": True,
-        }
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
 def test_gpt_oss_sampling(
     dtype, sampling_params, batch_size, num_samples_with_threshold, mesh_device, device_params, reset_seeds
 ):
     """Test on-device sampling with GPT-OSS vocab dimensions on Galaxy mesh."""
     num_samples, kl_required = num_samples_with_threshold
-    args = make_gpt_oss_sampling_args(mesh_device)
+    args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
     max_top_k = args.max_top_k
+    num_tp = mesh_device.shape[1]  # 8 cols = TP dimension
 
     # Prepare sampling parameters
     top_k = sampling_params["top_k"]
@@ -215,25 +249,14 @@ def test_gpt_oss_sampling(
     # Zero out padding region so padded tokens can't win argmax
     torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
 
-    # Reference sampling uses the full padded input (mimics multi-device gather)
+    # Reference sampling — split across num_tp (cols) to match device TP sharding
     reference_outputs = []
     for i in range(num_samples):
-        ref = reference_sampling(torch_input, sampling_params, args.cluster_shape[0], args.padded_vocab_size, max_top_k)
+        ref = reference_sampling(torch_input, sampling_params, num_tp, args.padded_vocab_size, max_top_k)
         reference_outputs.append(ref[0].item())
 
-    # Shard input across Galaxy mesh columns (TP axis = dim 1 = cols)
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(3, None),
-            mesh_shape=args.cluster_shape,
-        ),
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    # Shard input across Galaxy mesh columns (TP axis)
+    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype)
 
     # Initialize TTSampling
     tt_sampling = TTSampling(
@@ -250,12 +273,8 @@ def test_gpt_oss_sampling(
     for i in range(num_samples):
         if i == 0:
             ttnn.manual_seed(seed, device=mesh_device, sub_core_grids=args.sub_core_grids)
-            tt_outputs = tt_sampling(tt_input)
-        else:
-            tt_outputs = tt_sampling(tt_input)
-        tt_output = ttnn.get_device_tensors(tt_outputs)[0]
-        tt_output_torch = ttnn.to_torch(tt_output)
-        token_id = tt_output_torch[0, 0, :, :].reshape(-1, 1)[0].item()
+        tt_out_tok, _tt_log_probs = tt_sampling(tt_input)
+        token_id = extract_token(tt_out_tok)
         tt_outputs_torch.append(token_id)
 
     # Verify all sampled tokens are within vocab bounds
@@ -272,7 +291,7 @@ def test_gpt_oss_sampling(
 
     passing = True
     d_kl = kl_divergence(reference_freqs, tt_freqs, base=2)
-    logger.info(f"KL(ref‖device) = {d_kl:.4f} bits (threshold: {kl_required})")
+    logger.info(f"KL(ref||device) = {d_kl:.4f} bits (threshold: {kl_required})")
 
     if d_kl > kl_required:
         logger.warning(f"KL divergence {d_kl:.4f} exceeds threshold {kl_required}!")
@@ -292,3 +311,137 @@ def test_gpt_oss_sampling(
         f"params={sampling_params}, num_samples={num_samples}"
     )
     logger.info("GPT-OSS sampling test passed!")
+
+
+# --- Test: penalties suppress previously-seen tokens ---
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "penalty_params",
+    [
+        {"presence_penalty": 1000.0, "frequency_penalty": 0.0, "repetition_penalty": 1.0},
+        {"presence_penalty": 0.0, "frequency_penalty": 1000.0, "repetition_penalty": 1.0},
+        {"presence_penalty": 0.0, "frequency_penalty": 0.0, "repetition_penalty": 1000.0},
+    ],
+    ids=["presence", "frequency", "repetition"],
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
+def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_seeds):
+    """Test that penalties suppress previously-seen tokens.
+
+    Creates logits where a single target token dominates (logit=10.0 vs 0.1
+    for all others). After marking the target as seen in both prompt and
+    output, greedy sampling with a large penalty value should select a
+    different token.
+
+    Presence penalty subtracts from output tokens, frequency penalty subtracts
+    proportional to count, and repetition penalty divides positive logits.
+    """
+    args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
+    target_token = 5000
+
+    # All valid tokens at 0.1, target dominates at 10.0
+    torch_input = torch.full((1, 1, BATCH_SIZE, args.padded_vocab_size), 0.1)
+    torch_input[:, :, :, target_token] = 10.0
+    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
+
+    # Confirm target_token is the host-side argmax
+    assert torch.argmax(torch_input[0, 0, 0, :]).item() == target_token
+
+    # Shard and create SamplingGenerator with penalties
+    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
+
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+
+    params = format_sampling_params(
+        SamplingParams(
+            temperature=0.0,
+            top_k=32,
+            top_p=0.0,
+            presence_penalty=penalty_params["presence_penalty"],
+            frequency_penalty=penalty_params["frequency_penalty"],
+            repetition_penalty=penalty_params["repetition_penalty"],
+            seed=42,
+        ),
+        BATCH_SIZE,
+    )
+    sg.reset_sampling_params(params)
+    sg.seed_manager.get_new_values()
+
+    # Mark target_token as seen in both prompt and output so all penalty
+    # types can trigger (presence/frequency use output_mask/output_counts,
+    # repetition uses prompt_mask + output_mask).
+    target_tokens = torch.full((BATCH_SIZE, 1), target_token, dtype=torch.int64)
+    sg.reset_prompt_tokens(target_tokens)
+    sg.reset_output_state(tokens=target_tokens)
+
+    ttnn.manual_seed(42, device=mesh_device, sub_core_grids=args.sub_core_grids)
+    tokens, _log_probs = sg.sample(tt_input, enable_trace=False)
+    token = extract_token(tokens)
+
+    assert token != target_token, (
+        f"Penalty {penalty_params} failed to suppress token {target_token} — " f"got {token}. Penalty not effective."
+    )
+    assert 0 <= token < VOCAB_SIZE, f"Penalized token {token} outside vocab range"
+    logger.info(f"Penalty test passed: {penalty_params} changed {target_token} -> {token}")
+
+
+# --- Test: log probabilities ---
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
+def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
+    """Test that log probability calculation produces valid results.
+
+    Verifies that with enable_log_probs=True:
+    - Log probs are finite
+    - Log probs are <= 0 (log of probability)
+    - Log probs are not all identical (actual computation ran)
+    """
+    args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
+
+    torch_input = torch.randn(1, 1, BATCH_SIZE, args.padded_vocab_size)
+    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
+
+    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
+
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+
+    params = format_sampling_params(
+        SamplingParams(
+            temperature=1.0,
+            top_k=32,
+            top_p=0.95,
+            enable_log_probs=True,
+            seed=42,
+        ),
+        BATCH_SIZE,
+    )
+    sg.reset_sampling_params(params)
+    sg.seed_manager.get_new_values()
+    ttnn.manual_seed(42, device=mesh_device, sub_core_grids=args.sub_core_grids)
+
+    tokens, log_probs = sg.sample(tt_input, enable_trace=False)
+
+    # Extract log probs from first device
+    log_probs_device = ttnn.get_device_tensors(log_probs)[0]
+    log_probs_torch = ttnn.to_torch(log_probs_device).float()
+
+    logger.info(f"Log probs shape: {log_probs_torch.shape}")
+    logger.info(f"Log probs range: [{log_probs_torch.min().item():.4f}, {log_probs_torch.max().item():.4f}]")
+
+    assert torch.isfinite(log_probs_torch).all(), "Log probs contain non-finite values"
+    assert (log_probs_torch <= 0).all(), f"Log probs should be <= 0, got max={log_probs_torch.max().item():.4f}"
+
+    unique_vals = log_probs_torch.unique()
+    assert len(unique_vals) > 1, "All log probs identical — computation may not have run"
+
+    # Extract token to verify it's valid
+    token = extract_token(tokens)
+    assert 0 <= token < VOCAB_SIZE, f"Sampled token {token} outside vocab range"
+
+    logger.info("Log probs test passed!")
