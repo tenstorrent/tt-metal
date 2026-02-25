@@ -1904,9 +1904,6 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
             p2_entry_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, lmhead_input_core)
             p2_exit_upstream = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, argmax_final_core)
 
-            print(f"p2_entry_core: {p2_entry_core}")
-            print(f"p2_exit_upstream: {p2_exit_upstream}")
-
             logger.info(f"Creating PipelineBlock for P{my_mesh_id}")
             pipeline_block = PipelineBlock(
                 mesh_device,
@@ -2082,7 +2079,7 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
 
         if my_mesh_id == 1:
             logger.info(f"Running LMHeadSampling for P{my_mesh_id}")
-            print("LAUNCHING LM HEAD OP")
+
             LMHeadSampling.op(
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
@@ -2103,7 +2100,6 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
                 socket_input=lmhead_input_socket,
                 socket_output=lmhead_output_socket,
             )
-            print("LM HEAD OP LAUNCH COMPLETE")
 
         if my_mesh_id == 0:
             torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
@@ -2215,7 +2211,6 @@ def test_persistent_mode(mesh_device, use_fp32):
             )
             embedding_tensor = ttnn.to_device(embedding_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            logger.info(f"Creating PipelineBlock for P{my_mesh_id}")
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core_coord,
@@ -2233,10 +2228,9 @@ def test_persistent_mode(mesh_device, use_fp32):
             p2_entry_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, lmhead_input_core)
             p2_exit_upstream = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, argmax_final_core)
 
-            print(f"p2_entry_core: {p2_entry_core}")
-            print(f"p2_exit_upstream: {p2_exit_upstream}")
+            logger.info(f"P2 entry core (broadcaster): {p2_entry_core}")
+            logger.info(f"P2 exit core (argmax final core): {p2_exit_upstream}")
 
-            logger.info(f"Creating PipelineBlock for P{my_mesh_id}")
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core_coord,
@@ -2249,7 +2243,6 @@ def test_persistent_mode(mesh_device, use_fp32):
             )
         else:
             # P3/P4: token forward stages.
-            logger.info(f"Creating PipelineBlock for P{my_mesh_id}")
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core_coord,
@@ -2405,13 +2398,12 @@ def test_persistent_mode(mesh_device, use_fp32):
             secondary_sync_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 0)
             global_semaphore = ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0)
             global_stage2_semaphore = ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0)
+            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
 
         logger.info(f"Running PipelineBlock for P{my_mesh_id}")
         pipeline_block.run()
 
         if my_mesh_id == 1:
-            logger.info(f"Running LMHeadSampling for P{my_mesh_id}")
-            print("LAUNCHING LM HEAD OP")
             LMHeadSampling.op(
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
@@ -2432,28 +2424,32 @@ def test_persistent_mode(mesh_device, use_fp32):
                 socket_input=lmhead_input_socket,
                 socket_output=lmhead_output_socket,
                 persistent_mode=True,
+                persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             )
-            print("LM HEAD OP LAUNCH COMPLETE")
 
         if my_mesh_id == 0:
-            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
-            torch_token[0, 0] = 0
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            for i in range(5):
+                logger.info(f"Writing token to PipelineBlock for P{my_mesh_id} iteration {i}")
+                torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+                torch_token[0, 0] = 0
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            logger.info(f"Writing token to PipelineBlock for P{my_mesh_id}")
-            pipeline_block.write_token(token_tensor)
-            logger.info(f"Reading output from PipelineBlock for P{my_mesh_id}")
-            pipeline_block.read_output(output_tensor)
-            logger.info(f"Converting output to torch for P{my_mesh_id}")
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            assert torch.equal(
-                got, torch_expected_idx
-            ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                logger.info(f"Writing token to PipelineBlock for P{my_mesh_id}")
+                pipeline_block.write_token(token_tensor)
+                logger.info(f"Reading output from PipelineBlock for P{my_mesh_id}")
+                pipeline_block.read_output(output_tensor)
+                logger.info(f"Converting output to torch for P{my_mesh_id}")
+                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+                logger.info(f"Got token: {got}")
+                logger.info(f"Expected token: {torch_expected_idx}")
+                assert torch.equal(
+                    got, torch_expected_idx
+                ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
 
         logger.info(f"Barrier for P{my_mesh_id}")
         ttnn.distributed_context_barrier()

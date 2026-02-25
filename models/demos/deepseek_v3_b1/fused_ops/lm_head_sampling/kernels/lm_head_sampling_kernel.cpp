@@ -57,13 +57,11 @@ struct Core {
         get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
     static constexpr bool persistent_mode = get_named_compile_time_arg_val("persistent_mode") == 1;
-    static constexpr uint32_t persistent_next_iter_semaphore_id =
-        get_named_compile_time_arg_val("persistent_next_iter_semaphore_id");
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
 };
 
 void kernel_main() {
-    DPRINT << "Starting lm_head_sampling kernel" << ENDL();
+    // DPRINT << "Starting lm_head_sampling kernel" << ENDL();
 // ============================================================================
 // Per-RISC compile-time arg setup
 // Each RISC receives different named compile-time args from op.py and
@@ -171,8 +169,6 @@ void kernel_main() {
         .global_stage2_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .gather_addr = 0,
     };
-    const uint32_t input_core_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-    const uint32_t input_core_noc_y = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
     // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
     // or intermediate_tensor (CCL mode, where broadcast placed the data)
@@ -197,7 +193,8 @@ void kernel_main() {
         (get_named_compile_time_arg_val("input_socket_mode") == 2 ? 1 : 0)>;
 
     // BRISC common args layout:
-    // [0..3] argmax writer args, [4..6] optional socket-input reader args.
+    // [0..3] argmax writer args, [4..6] optional socket-input reader args,
+    // [7..12] persistent signal routing metadata.
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
         get_common_arg_val<uint32_t>(4),  // socket_config_addr
         get_common_arg_val<uint32_t>(5),  // socket_page_size
@@ -241,11 +238,18 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_socket_page_size_bytes")>;
 
     deepseek_b1_ops::Sampling::WriterArgs sampling_args{
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .final_noc_y = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .scratch_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .socket_config_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .persistent_enable = get_common_arg_val<uint32_t>(7),
+        .persistent_dst_noc_x = get_common_arg_val<uint32_t>(8),
+        .persistent_dst_noc_y = get_common_arg_val<uint32_t>(9),
+        .persistent_dst_mesh_id = get_common_arg_val<uint32_t>(10),
+        .persistent_dst_chip_id = get_common_arg_val<uint32_t>(11),
+        .persistent_dst_sem_addr = get_common_arg_val<uint32_t>(12),
     };
+    const uint32_t persistent_next_iter_global_sem_addr = get_common_arg_val<uint32_t>(12);
 
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---
@@ -301,20 +305,26 @@ void kernel_main() {
         Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
             sampling_op;
 
+    uint32_t iteration_count = 0;
     while (true) {
+        iteration_count++;
         // ====================================================================
         // Phase 0: broadcast_rms-style combined path.
         // ====================================================================
         if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
 #if defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::persistent_mode && Core::is_input_core) {
-                auto next_iteration_semaphore = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    get_semaphore(Core::persistent_next_iter_semaphore_id));
+            constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
+            if constexpr (Core::persistent_mode && is_sender) {
+                DPRINT << "Iteration " << iteration_count << ENDL();
+                DPRINT << "WAITING FOR NEXT ITERATION SEMAPHORE" << ENDL();
+                auto next_iteration_semaphore =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
                 noc_semaphore_wait(next_iteration_semaphore, 1);
                 noc_semaphore_set(next_iteration_semaphore, 0);
+                DPRINT << "NEXT ITERATION SEMAPHORE WAIT COMPLETE" << ENDL();
             }
 #endif
-
+            // DPRINT << "CCL Broadcast" << ENDL();
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
                 DeviceZoneScopedN("CCL_BROADCAST");
@@ -322,12 +332,14 @@ void kernel_main() {
             }
         }
 
+        // DPRINT << "RMSNorm" << ENDL();
         deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
         {
             DeviceZoneScopedN("RMSNORM");
             rmsnorm(rmsnorm_args);
         }
 
+        // DPRINT << "MCAST" << ENDL();
         // Keep mcast init/teardown in-loop to preserve prior ordering semantics.
         mcast.init(mcast_args);
         {
@@ -336,11 +348,13 @@ void kernel_main() {
         }
         mcast.teardown();
 
+        // DPRINT << "MATMUL" << ENDL();
         {
             DeviceZoneScopedN("MATMUL");
             matmul(matmul_args);
         }
 
+        // DPRINT << "ARGMAX" << ENDL();
         {
             DeviceZoneScopedN("ARGMAX");
             sampling_op(sampling_args);
@@ -348,13 +362,11 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::persistent_mode && Core::is_argmax_final_core) {
-            noc_semaphore_inc(
-                get_noc_addr(
-                    input_core_noc_x, input_core_noc_y, get_semaphore(Core::persistent_next_iter_semaphore_id)),
-                1);
-            noc_async_atomic_barrier();
+            DPRINT << "END OF ITERATION " << iteration_count << ENDL();
+            DPRINT << ENDL() << ENDL();
         }
 #endif
+
         if constexpr (!Core::persistent_mode) {
             break;
         }

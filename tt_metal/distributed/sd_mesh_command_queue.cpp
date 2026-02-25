@@ -68,9 +68,9 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
     // Wait for idle here to ensure that a previous program potentially using this address space
     // is complete.
-    // std::cout << "Wait for Idle during write" << std::endl;
+    //
     wait_for_cores_idle();
-    // std::cout << "Wait for Idle during write complete" << std::endl;
+    //
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->view(region_value);
@@ -98,9 +98,9 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;  // Skip hardware read for mock devices
     }
     // Wait for idle here to ensure that programs emitting this data are complete.
-    // std::cout << "Wait for Idle during read" << std::endl;
+    //
     wait_for_cores_idle();
-    // std::cout << "Wait for Idle during read complete" << std::endl;
+    //
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
@@ -131,10 +131,8 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip workload execution for mock devices
     }
-    std::cout << "Enqueuing mesh workload" << std::endl;
-    auto lock = lock_api_function_();
 
-    std::cout << "Async Slow Dispatch Enabled: " << asynchronous_slow_dispatch_enabled_ << std::endl;
+    auto lock = lock_api_function_();
 
     if (!asynchronous_slow_dispatch_enabled_) {
         wait_for_cores_idle();
@@ -146,7 +144,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             if (!mesh_device_->impl().is_local(coord)) {
                 continue;
             }
-            std::cout << "Get Device for coord: " << coord << std::endl;
+
             auto* device = mesh_device_->impl().get_device(coord);
             if (asynchronous_slow_dispatch_enabled_) {
                 auto it = logical_cores_for_previous_workload_.find(device->id());
@@ -154,21 +152,19 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                     const auto& previous_cores = it->second;
                     // Only block before launching the current program if the previous program used the same cores
                     if (logical_cores_intersect(previous_cores, program_cores)) {
-                        std::cout << "Logical cores intersect, waiting for idle" << std::endl;
                         tt::llrt::internal_::wait_for_idle(device->id(), previous_cores);
-                        std::cout << "Logical cores idle, clearing previous workload" << std::endl;
+
                         // Clear the active cores in use for this device, since we blocked
                         // on them
                         logical_cores_for_previous_workload_.erase(device->id());
                     }
                 }
             }
-            std::cout << "Launch Program for coord: " << coord << std::endl;
+
             tt_metal::detail::LaunchProgram(device, program, false);
-            std::cout << "Launch Program for coord complete: " << coord << std::endl;
         }
     }
-    std::cout << "Post Program Launch" << std::endl;
+
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->impl().is_local(coord)) {
@@ -197,7 +193,6 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             }
         }
     }
-    std::cout << "Post Program Launch complete" << std::endl;
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
