@@ -559,6 +559,7 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    std::string_view init_phase = "start";
     const auto& cluster = this->cluster_.get();
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
@@ -569,89 +570,121 @@ void ControlPlane::init_control_plane(
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
 
-    // Create mesh_graph first
-    this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
+    try {
+        init_phase = "construct_mesh_graph";
+        // Create mesh_graph first
+        this->mesh_graph_ =
+            std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &this->hal_.get(), rtoptions);
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+        init_phase = "construct_physical_system_descriptor";
+        this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+            driver, distributed_context, &this->hal_.get(), rtoptions);
+        init_phase = "initialize_local_mesh_binding";
+        this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
-    if (topology_mapping_timeout.count() <= 0.0f) {
-        topology_mapping_timeout = std::chrono::duration<float>(60.0f);
-    }
-
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
-        // Initialize topology mapper with provided mapping, skipping discovery
-        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            this->cluster_.get(),
-            this->distributed_context_.get(),
-            *this->mesh_graph_,
-            *this->physical_system_descriptor_,
-            this->local_mesh_binding_,
-            logical_mesh_chip_id_to_physical_chip_id_mapping->get(),
-            topology_mapping_timeout);
-        this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
-    } else {
-        // Generate corner pinning for full host galaxy systems
-        const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
-                           this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
-        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-        const size_t total_num_chips = cluster.get_unique_chip_ids().size();
-
-        if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
-            fixed_asic_position_pinnings.insert(
-                fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
+        auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
+        if (topology_mapping_timeout.count() <= 0.0f) {
+            topology_mapping_timeout = std::chrono::duration<float>(60.0f);
         }
 
-        // Add MGD pinnings to the topology mapper
-        const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-        for (const auto& [pos, fabric_node] : pinnings) {
-            fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
+        if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+            init_phase = "construct_topology_mapper_with_explicit_mapping";
+            // Initialize topology mapper with provided mapping, skipping discovery
+            this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+                this->cluster_.get(),
+                this->distributed_context_.get(),
+                *this->mesh_graph_,
+                *this->physical_system_descriptor_,
+                this->local_mesh_binding_,
+                logical_mesh_chip_id_to_physical_chip_id_mapping->get(),
+                topology_mapping_timeout);
+            init_phase = "load_physical_chip_mapping_from_explicit_mapping";
+            this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
+        } else {
+            // Generate corner pinning for full host galaxy systems
+            const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
+                               this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
+            std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+            const size_t total_num_chips = cluster.get_unique_chip_ids().size();
+
+            if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
+                auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
+                fixed_asic_position_pinnings.insert(
+                    fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
+            }
+
+            // Add MGD pinnings to the topology mapper
+            const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            for (const auto& [pos, fabric_node] : pinnings) {
+                fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
+            }
+
+            init_phase = "construct_topology_mapper_with_discovery";
+            this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+                this->cluster_.get(),
+                this->distributed_context_.get(),
+                *this->mesh_graph_,
+                *this->physical_system_descriptor_,
+                this->local_mesh_binding_,
+                fixed_asic_position_pinnings,
+                topology_mapping_timeout);
+            init_phase = "load_physical_chip_mapping_from_topology_mapper";
+            this->load_physical_chip_mapping(
+                topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
         }
 
-        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            this->cluster_.get(),
-            this->distributed_context_.get(),
-            *this->mesh_graph_,
-            *this->physical_system_descriptor_,
-            this->local_mesh_binding_,
-            fixed_asic_position_pinnings,
-            topology_mapping_timeout);
-        this->load_physical_chip_mapping(
-            topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
+        // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology
+        // mapper is created This ensures ttnn-visualizer topology remains functional
+        std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                            ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) +
+                                             "_of_" + std::to_string(world_size) + ".yaml");
+        try {
+            tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
+        }
+
+        std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+                                                  "fabric" /
+                                                  ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) +
+                                                   "_of_" + std::to_string(world_size) + ".yaml");
+        try {
+            tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
+        }
+
+        init_phase = "construct_routing_table_generator";
+        // Initialize routing table generator after topology_mapper is created
+        this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
+
+        init_phase = "initialize_distributed_contexts";
+        // Initialize distributed contexts after topology_mapper is created so we can use its helper function
+        this->initialize_distributed_contexts();
+        init_phase = "generate_intermesh_connectivity";
+        this->generate_intermesh_connectivity();
+
+        // Printing, only enabled with log_debug
+        init_phase = "print_connectivity";
+        this->mesh_graph_->print_connectivity();
+    } catch (const std::out_of_range& e) {
+        const auto descriptor =
+            this->mesh_graph_ != nullptr && this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()
+                ? this->mesh_graph_->get_mesh_graph_descriptor_path().value().string()
+                : mesh_graph_desc_file;
+        log_error(
+            tt::LogFabric,
+            "ControlPlaneInitOutOfRange phase={} descriptor={} local_mesh_bindings=[{}] what={}",
+            init_phase,
+            descriptor,
+            mesh_ids_to_csv(this->local_mesh_binding_.mesh_ids),
+            e.what());
+        TT_THROW(
+            "ControlPlane init failed with out_of_range during phase '{}' for descriptor '{}': {}",
+            init_phase,
+            descriptor,
+            e.what());
     }
-
-    // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
-    // created This ensures ttnn-visualizer topology remains functional
-    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
-                                        ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
-                                         std::to_string(world_size) + ".yaml");
-    try {
-        tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
-    } catch (const std::exception& e) {
-        log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
-    }
-
-    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
-                                              ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
-                                               std::to_string(world_size) + ".yaml");
-    try {
-        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
-    } catch (const std::exception& e) {
-        log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
-    }
-
-    // Initialize routing table generator after topology_mapper is created
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
-
-    // Initialize distributed contexts after topology_mapper is created so we can use its helper function
-    this->initialize_distributed_contexts();
-    this->generate_intermesh_connectivity();
-
-    // Printing, only enabled with log_debug
-    this->mesh_graph_->print_connectivity();
 }
 
 void ControlPlane::init_control_plane_auto_discovery() {
@@ -1168,7 +1201,24 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
         auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-        const auto src_asic_id = tt::tt_metal::AsicID{this->cluster_.get().get_unique_chip_ids().at(phys_chip_id)};
+        const auto& unique_chip_ids = this->cluster_.get().get_unique_chip_ids();
+        auto src_asic_it = unique_chip_ids.find(phys_chip_id);
+        if (src_asic_it == unique_chip_ids.end()) {
+            log_error(
+                tt::LogFabric,
+                "order_ethernet_channels: physical chip {} for fabric node M{}D{} is missing in unique chip id map "
+                "(size={})",
+                phys_chip_id,
+                *fabric_node_id.mesh_id,
+                fabric_node_id.chip_id,
+                unique_chip_ids.size());
+            TT_THROW(
+                "order_ethernet_channels: physical chip {} for fabric node M{}D{} is not present in unique chip id map",
+                phys_chip_id,
+                *fabric_node_id.mesh_id,
+                fabric_node_id.chip_id);
+        }
+        const auto src_asic_id = tt::tt_metal::AsicID{src_asic_it->second};
         const auto& asic_neighbors = physical_system_descriptor_->get_asic_neighbors(src_asic_id);
         for (auto& [direction, eth_chans] : eth_chans_by_dir) {
             std::optional<tt::tt_metal::AsicID> neighbor_asic_id;
@@ -2394,7 +2444,14 @@ void ControlPlane::initialize_fabric_tensix_datamover_config() {
 }
 
 bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const {
-    auto asic_id = this->cluster_.get().get_unique_chip_ids().at(chip_id);
+    const auto& unique_chip_ids = this->cluster_.get().get_unique_chip_ids();
+    auto asic_it = unique_chip_ids.find(chip_id);
+    TT_FATAL(
+        asic_it != unique_chip_ids.end(),
+        "is_cross_host_eth_link: chip_id {} not present in unique chip id map (size={})",
+        chip_id,
+        unique_chip_ids.size());
+    auto asic_id = asic_it->second;
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
 
