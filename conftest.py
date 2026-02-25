@@ -739,6 +739,42 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
         yield mesh_device
 
 
+def _check_requires_grid_size(device_or_mesh, marker):
+    """Skip the test if device worker grid (compute_with_storage_grid_size) is smaller than required by the mark."""
+    if marker is None or len(marker.args) == 0:
+        return
+    required = marker.args[0]
+    grid = device_or_mesh.compute_with_storage_grid_size()
+    if isinstance(required, tuple):
+        min_x, min_y = required
+        if grid.x < min_x or grid.y < min_y:
+            pytest.skip(
+                f"Test requires device worker grid at least {min_x}x{min_y} but "
+                f"got {grid.x}x{grid.y} ({grid.x * grid.y} cores)"
+            )
+    else:
+        min_cores = int(required)
+        total = grid.x * grid.y
+        if total < min_cores:
+            pytest.skip(f"Test requires at least {min_cores} worker cores but got {total} ({grid.x}x{grid.y})")
+
+
+@pytest.fixture(autouse=True)
+def check_requires_grid_size(request):
+    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores)."""
+    marker = request.node.get_closest_marker("requires_grid_size")
+    if marker is None:
+        return
+    for name in ("bh_2d_mesh_device", "mesh_device", "device"):
+        if name in request.fixturenames:
+            device_or_mesh = request.getfixturevalue(name)
+            _check_requires_grid_size(device_or_mesh, marker)
+            return
+    pytest.skip(
+        "requires_grid_size mark requires one of: device, bh_2d_mesh_device, mesh_device (none requested by test)"
+    )
+
+
 @pytest.fixture()
 def ensure_devices_tg():
     import ttnn

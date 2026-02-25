@@ -42,12 +42,9 @@ from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertO
         (8, 256, 64, ttnn.bfloat8_b),  # 8 collections, 64+64 A/B grid, N=7168
     ],
 )
+@pytest.mark.requires_grid_size((13, 10))
 def test_gated_local_reduce_down_proj(device, tiles_per_k, K, N_per_core, weights_dtype):
     """Test fused input gather + gated local reduce + down projection."""
-
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     N = N_per_core * DownProj.NUM_MATMUL_CORES  # 112 cores
     k_num_tiles = K // 32

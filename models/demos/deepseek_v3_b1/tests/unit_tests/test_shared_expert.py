@@ -37,12 +37,9 @@ from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertO
         (7168, 64, ttnn.bfloat4_b),  # bfloat4 weights
     ],
 )
+@pytest.mark.requires_grid_size((13, 10))
 def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     """Test shared expert: activation → gate/up matmul → gated reduce → down proj + bias."""
-
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     M = 1
     cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
