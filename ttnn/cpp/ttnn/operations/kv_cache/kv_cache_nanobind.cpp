@@ -91,7 +91,7 @@ void bind_update_cache(nb::module_& mod) {
 
     )doc";
 
-    ttnn::bind_function<"update_cache", "ttnn.kv_cache.">(
+    ttnn::bind_function<"update_cache">(
         mod,
         doc,
         &ttnn::update_cache,
