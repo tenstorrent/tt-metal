@@ -18,10 +18,9 @@ void kernel_main() {
     cb_wait_front(cb_id_out, num_pages);
 #else
 
-    // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
-    constexpr uint32_t onepage = 1;
-
     const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
+
+    constexpr uint32_t batch_size = 2;
 
 #ifdef STRIDED_L1_ACCESS
     // Strided access: each core writes only to its local L1 bank.
@@ -29,12 +28,17 @@ void kernel_main() {
     const uint32_t total_pages = get_arg_val<uint32_t>(1);
     const uint32_t bank_id = get_arg_val<uint32_t>(2);
     const uint32_t stride = get_arg_val<uint32_t>(3);
-    for (uint32_t i = bank_id; i < total_pages; i += stride) {
-        cb_wait_front(cb_id_out, onepage);
-        const auto l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_page(i, s, l1_read_addr);
+    for (uint32_t i = bank_id; i < total_pages; i += stride * batch_size) {
+        const uint32_t remaining = (total_pages - i + stride - 1) / stride;
+        const uint32_t cur_batch = remaining < batch_size ? remaining : batch_size;
+        cb_wait_front(cb_id_out, cur_batch);
+        auto l1_read_addr = get_read_ptr(cb_id_out);
+        for (uint32_t j = 0; j < cur_batch; ++j) {
+            noc_async_write_page(i + j * stride, s, l1_read_addr);
+            l1_read_addr += page_bytes;
+        }
         noc_async_writes_flushed();
-        cb_pop_front(cb_id_out, onepage);
+        cb_pop_front(cb_id_out, cur_batch);
     }
     noc_async_write_barrier();
 #else
@@ -46,10 +50,7 @@ void kernel_main() {
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
     for (uint32_t i = start_id; i != end_id; --i) {
-#else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-#endif
+        constexpr uint32_t onepage = 1;
         cb_wait_front(cb_id_out, onepage);
         const auto l1_read_addr = get_read_ptr(cb_id_out);
         noc_async_write_page(i, s, l1_read_addr);
@@ -57,6 +58,21 @@ void kernel_main() {
         cb_pop_front(cb_id_out, onepage);
     }
     noc_async_write_barrier();
+#else
+    const uint32_t end_id = start_id + num_pages;
+    for (uint32_t i = start_id; i < end_id; i += batch_size) {
+        const uint32_t cur_batch = (end_id - i < batch_size) ? (end_id - i) : batch_size;
+        cb_wait_front(cb_id_out, cur_batch);
+        auto l1_read_addr = get_read_ptr(cb_id_out);
+        for (uint32_t j = 0; j < cur_batch; ++j) {
+            noc_async_write_page(i + j, s, l1_read_addr);
+            l1_read_addr += page_bytes;
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_id_out, cur_batch);
+    }
+    noc_async_write_barrier();
+#endif
 #endif
 #endif
 }

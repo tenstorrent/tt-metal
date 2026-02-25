@@ -49,7 +49,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = 2;
+    constexpr uint32_t num_input_tiles = 4;
     // For bitcast, use output format for input CB to avoid unpacker conversion
     // This ensures raw bit copying without conversion
     Buffer* src_buffer = input.buffer();
@@ -76,7 +76,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     }
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = 2;
+    constexpr uint32_t num_output_tiles = 4;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * output_cb_page_size, {{output_cb_index, cb_data_format_output}})
