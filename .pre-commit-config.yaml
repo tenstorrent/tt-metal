@@ -5,7 +5,9 @@ repos:
   rev: v3.2.0
   hooks:
     - id: trailing-whitespace
+      exclude: \.patch$
     - id: end-of-file-fixer
+      exclude: \.patch$
     - id: check-yaml
       args: ["--unsafe"]
     - id: check-added-large-files
