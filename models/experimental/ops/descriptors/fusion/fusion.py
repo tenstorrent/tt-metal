@@ -18,12 +18,263 @@ Usage (branching tree):
 """
 
 import os
-from typing import Any, List, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Set, Tuple
 
 import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
-from models.experimental.ops.descriptors.fusion.common import _get_risc_type
+from models.experimental.ops.descriptors.fusion.common import (
+    _get_risc_type,
+)
+from models.experimental.ops.descriptors.fusion.codegen.args import (
+    _get_core_coords_from_ranges,
+)
+
+
+# =============================================================================
+# Address-Patching Build Cache
+# =============================================================================
+
+# Caches the entire built FusedOp keyed by structural hash of input ops.
+# On cache hit, skips all of _build_fused_descriptor and
+# OpGraphBuilder._build_internal, only patching RT args and
+# CB buffer pointers via C++ helpers.
+_PATCH_CACHE: Dict[tuple, "_CacheEntry"] = {}
+
+
+@dataclass
+class _CacheEntry:
+    """Metadata for patching a cached FusedOp on cache hit."""
+
+    fused_op: "FusedOp"
+    # Per fused kernel: ordered list of (op_idx, kernel_idx_in_op)
+    # telling which source kernels contributed to this fused kernel's RT args.
+    # op_idx indexes into the flattened ops list from _flatten_ops().
+    role_map: List[List[Tuple[int, int]]]
+    # Per fused kernel: fixed barrier address values (appended uniformly).
+    barrier_suffix: List[List[int]]
+    # Per fused kernel: rebind spec entries [(op_idx, cb_idx, total_size)]
+    # for recomputing sharded CB address RT args.
+    rebind_spec: List[List[Tuple[int, int, int]]]
+    # (merged_cb_idx, op_idx, orig_cb_idx) for updating sharded CB buffer ptrs.
+    sharded_cb_map: List[Tuple[int, int, int]]
+    # Which ops contribute to the FusedOp's output_tensors:
+    # [(op_idx, tensor_idx_within_op), ...]
+    output_sources: List[Tuple[int, int]]
+
+
+def _flatten_ops(items) -> List[OpDescriptor]:
+    """Recursively flatten Sequential/Parallel items into an ordered list of OpDescriptors."""
+    result = []
+    for item in items:
+        if isinstance(item, OpDescriptor):
+            result.append(item)
+        elif isinstance(item, Sequential):
+            result.extend(_flatten_ops(item._items))
+        elif isinstance(item, Parallel):
+            result.extend(_flatten_ops(item._items))
+    return result
+
+
+def _cache_key(items) -> tuple:
+    """Compute a hash key from the input items."""
+    ops = _flatten_ops(items)
+    h = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
+    return tuple(h(op.descriptor) for op in ops)
+
+
+def _setup_cache_entry(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_phase_map) -> _CacheEntry:
+    """Record metadata from a freshly-built FusedOp for future cache hits.
+
+    Extracts the role_map (which phase kernels map to each fused kernel),
+    barrier suffix (fixed barrier addresses), rebind spec (sharded CB info),
+    sharded CB map (merged CB indices needing buffer pointer updates), and
+    output tensor sources (which phases produce the FusedOp's outputs).
+
+    Args:
+        kernel_phase_map: Builder-provided mapping. Per fused kernel, a list
+            of (OpDescriptor, kernel_index) tuples identifying which source
+            phase kernels' RT args were concatenated into that fused kernel.
+    """
+    desc = fused_op.descriptor
+
+    # --- Build role_map from builder-provided kernel_phase_map ---
+    op_id_to_idx = {id(op): idx for idx, op in enumerate(ops)}
+    role_map: List[List[Tuple[int, int]]] = [
+        [(op_id_to_idx[id(od)], ki) for od, ki in sources] for sources in kernel_phase_map
+    ]
+
+    # --- Extract barrier_suffix and rebind spec per fused kernel ---
+    # Uses named CT args (barrier_rt_offset, rebind_rt_offset) for precise split.
+    barrier_suffix: List[List[int]] = []
+    rebind_spec: List[List[Tuple[int, int, int]]] = []
+
+    for role_idx, fused_kernel in enumerate(desc.kernels):
+        # Find barrier_rt_offset and rebind_rt_offset from named CT args
+        barrier_offset = None
+        rebind_offset = None
+        for name, value in fused_kernel.named_compile_time_args:
+            if name == "barrier_rt_offset":
+                barrier_offset = value
+            elif name == "rebind_rt_offset":
+                rebind_offset = value
+
+        # Get the full RT args from first core of the fused kernel.
+        # RuntimeArgsView supports [x][y] access but not .get() or iteration.
+        coords = _get_core_coords_from_ranges(fused_kernel.core_ranges)
+        if coords:
+            c = coords[0]
+            all_args = list(fused_kernel.runtime_args[c.x][c.y])
+        else:
+            all_args = []
+
+        # Extract barrier portion (constant across builds — semaphore addrs)
+        if barrier_offset is not None:
+            if rebind_offset is not None:
+                barrier_vals = all_args[barrier_offset:rebind_offset]
+                rebind_vals = all_args[rebind_offset:]
+            else:
+                barrier_vals = all_args[barrier_offset:]
+                rebind_vals = []
+        else:
+            barrier_vals = []
+            rebind_vals = []
+
+        barrier_suffix.append(barrier_vals)
+
+        # Map rebind values back to source op CBs by address matching.
+        # Rebind values are [addr, size, addr, size, ...] pairs.
+        role_rebind_entries: List[Tuple[int, int, int]] = []
+        for i in range(0, len(rebind_vals), 2):
+            addr = rebind_vals[i]
+            size = rebind_vals[i + 1]
+            found = False
+            for op_idx, op in enumerate(ops):
+                for cb_idx, cb in enumerate(op.descriptor.cbs):
+                    if cb.has_buffer() and cb.buffer_address() == addr and cb.total_size == size:
+                        role_rebind_entries.append((op_idx, cb_idx, size))
+                        found = True
+                        break
+                if found:
+                    break
+
+        rebind_spec.append(role_rebind_entries)
+
+    # --- Build sharded_cb_map ---
+    # Track which merged CB descriptors have buffers and map to source op CBs.
+    sharded_cb_map: List[Tuple[int, int, int]] = []
+    for merged_idx, merged_cb in enumerate(desc.cbs):
+        if not merged_cb.has_buffer():
+            continue
+        merged_addr = merged_cb.buffer_address()
+        found = False
+        for op_idx, op in enumerate(ops):
+            for cb_idx, cb in enumerate(op.descriptor.cbs):
+                if cb.has_buffer() and cb.buffer_address() == merged_addr:
+                    sharded_cb_map.append((merged_idx, op_idx, cb_idx))
+                    found = True
+                    break
+            if found:
+                break
+
+    # --- Record output tensor sources ---
+    output_sources: List[Tuple[int, int]] = []
+    for out_t in fused_op.output_tensors:
+        out_id = id(out_t)
+        found = False
+        for op_idx, op in enumerate(ops):
+            for t_idx, t in enumerate(op.output_tensors):
+                if id(t) == out_id:
+                    output_sources.append((op_idx, t_idx))
+                    found = True
+                    break
+            if found:
+                break
+
+    return _CacheEntry(
+        fused_op=fused_op,
+        role_map=role_map,
+        barrier_suffix=barrier_suffix,
+        rebind_spec=rebind_spec,
+        sharded_cb_map=sharded_cb_map,
+        output_sources=output_sources,
+    )
+
+
+def _patch_cached(entry: _CacheEntry, ops: List[OpDescriptor]) -> "FusedOp":
+    """Patch a cached FusedOp with new tensor addresses from fresh ops.
+
+    Uses C++ helpers for efficient RT arg rebuilding (~50us total).
+    """
+    fused = entry.fused_op
+    desc = fused.descriptor
+
+    # 1. Rebuild per-kernel RT args via C++ helpers
+    for role_idx, fused_kernel in enumerate(desc.kernels):
+        fused_kernel.clear_runtime_args()
+        for op_idx, k_idx in entry.role_map[role_idx]:
+            fused_kernel.append_runtime_args_from(ops[op_idx].descriptor.kernels[k_idx])
+        if entry.barrier_suffix[role_idx]:
+            fused_kernel.extend_runtime_args_uniform(entry.barrier_suffix[role_idx])
+        rebind_vals = _recompute_rebind(entry.rebind_spec[role_idx], ops)
+        if rebind_vals:
+            fused_kernel.extend_runtime_args_uniform(rebind_vals)
+
+    # 2. Rebuild common_runtime_args
+    for role_idx, fused_kernel in enumerate(desc.kernels):
+        common: List[int] = []
+        for op_idx, k_idx in entry.role_map[role_idx]:
+            src_kernel = ops[op_idx].descriptor.kernels[k_idx]
+            try:
+                common.extend(list(src_kernel.common_runtime_args))
+            except (AttributeError, TypeError):
+                pass
+        fused_kernel.common_runtime_args = common
+
+    # 3. Update sharded CB buffer pointers
+    for merged_cb_idx, op_idx, orig_cb_idx in entry.sharded_cb_map:
+        new_cb = ops[op_idx].descriptor.cbs[orig_cb_idx]
+        desc.cbs[merged_cb_idx].set_buffer_from_cb(new_cb)
+
+    # 4. Update tensor lists
+    all_inputs: List = []
+    seen_ids: Set[int] = set()
+    for op in ops:
+        for t in op.input_tensors:
+            tid = id(t)
+            if tid not in seen_ids:
+                all_inputs.append(t)
+                seen_ids.add(tid)
+    all_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+    fused.op = OpDescriptor(desc, all_inputs, all_outputs)
+
+    return fused
+
+
+def _recompute_rebind(spec_entries: List[Tuple[int, int, int]], ops: List[OpDescriptor]) -> List[int]:
+    """Recompute rebind RT args from new ops' CB buffer addresses.
+
+    Each spec entry is (op_idx, cb_idx, total_size). On cache hit,
+    reads the new buffer address from the op's CB descriptor.
+    """
+    result: List[int] = []
+    for op_idx, cb_idx, total_size in spec_entries:
+        cb = ops[op_idx].descriptor.cbs[cb_idx]
+        addr = cb.buffer_address()
+        if addr is not None:
+            result.extend([addr, total_size])
+    return result
+
+
+def clear_build_cache() -> None:
+    """Clear the patch cache."""
+    _PATCH_CACHE.clear()
+
+
+# =============================================================================
+# FusedOp
+# =============================================================================
 
 
 class FusedOp:
@@ -191,6 +442,9 @@ class Sequential:
     def build(self, device=None, kernel_dir: str = None) -> FusedOp:
         """Build the fused op.  Device is auto-extracted from tensors if not provided.
 
+        On repeated calls with the same structural hash, skips the full
+        build and patches only RT args and CB buffer pointers (~0.1ms).
+
         Args:
             device: Target device.  Auto-extracted from tensors if None.
             kernel_dir: Optional directory for file-based kernel sources.
@@ -198,12 +452,29 @@ class Sequential:
                 compiles from disk instead of in-memory strings.  Existing
                 files are NOT overwritten — delete them to force regeneration.
         """
+        # Try patch cache first (fast path: ~50us)
+        key = _cache_key(self._items)
+        entry = _PATCH_CACHE.get(key)
+        if entry is not None:
+            ops = _flatten_ops(self._items)
+            result = _patch_cached(entry, ops)
+            if kernel_dir is not None:
+                result._apply_kernel_dir(kernel_dir)
+            return result
+
+        # Cache miss: full build
         r = self._build_internal(device)
         fused = FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
             semaphores=r.semaphores,
             kernel_labels=r.kernel_labels,
         )
+
+        # Record cache entry for future hits
+        ops = _flatten_ops(self._items)
+        if len(ops) > 1:
+            _PATCH_CACHE[key] = _setup_cache_entry(fused, ops, r.kernel_phase_map)
+
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
         return fused
@@ -256,12 +527,29 @@ class Parallel:
                 compiles from disk instead of in-memory strings.  Existing
                 files are NOT overwritten — delete them to force regeneration.
         """
+        # Try patch cache first (fast path)
+        key = _cache_key(self._items)
+        entry = _PATCH_CACHE.get(key)
+        if entry is not None:
+            ops = _flatten_ops(self._items)
+            result = _patch_cached(entry, ops)
+            if kernel_dir is not None:
+                result._apply_kernel_dir(kernel_dir)
+            return result
+
+        # Cache miss: full build
         r = self._build_internal(device)
         fused = FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
             semaphores=r.semaphores,
             kernel_labels=r.kernel_labels,
         )
+
+        # Record cache entry for future hits
+        ops = _flatten_ops(self._items)
+        if len(ops) > 1:
+            _PATCH_CACHE[key] = _setup_cache_entry(fused, ops, r.kernel_phase_map)
+
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
         return fused
@@ -368,10 +656,12 @@ def _build_item(item, device):
     from models.experimental.ops.descriptors.fusion.common import _BuildResult
 
     if isinstance(item, OpDescriptor):
+        kpm = tuple([(item, k_idx)] for k_idx in range(len(item.descriptor.kernels)))
         return _BuildResult(
             descriptor=item.descriptor,
             input_tensors=item.input_tensors,
             output_tensors=item.output_tensors,
+            kernel_phase_map=kpm,
         )
     if isinstance(item, (Sequential, Parallel)):
         return item._build_internal(device)
@@ -390,4 +680,5 @@ __all__ = [
     "Sequential",
     "Parallel",
     "FusedOp",
+    "clear_build_cache",
 ]

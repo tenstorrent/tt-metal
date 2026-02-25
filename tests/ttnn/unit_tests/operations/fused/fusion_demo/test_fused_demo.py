@@ -442,7 +442,7 @@ class TestFusedDemo:
         torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
 
         # ---- Build + launch fused ----
-        build_start = time.perf_counter()
+        factory_start = time.perf_counter()
         r1 = rms_norm.rms_norm(
             _tt(torch_input, device),
             core_range_set=core_range,
@@ -462,6 +462,8 @@ class TestFusedDemo:
             weight=_tt(torch_w, device),
             epsilon=1e-5,
         )
+        factory_time = time.perf_counter() - factory_start
+        build_start = time.perf_counter()
         fused = Sequential(r1, m, r2).build(device)
         build_time = time.perf_counter() - build_start
 
@@ -473,9 +475,20 @@ class TestFusedDemo:
         tt_w = _tt(torch_w, device)
         tt_B = _tt(torch_b, device)
 
+        # Warmup unfused ops (populate C++ program cache)
+        _u0 = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
+        _u0 = ttnn.matmul(_u0, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
+        _u0 = ttnn.rms_norm(_u0, weight=tt_w, epsilon=1e-5)
+        del _u0
+
+        # Timed unfused path (C++ program cache hit)
+        t_u0 = time.perf_counter()
         u1 = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
+        t_u1 = time.perf_counter()
         u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
+        t_u2 = time.perf_counter()
         u3 = ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
+        t_u3 = time.perf_counter()
         unfused_result = ttnn.to_torch(u3)
 
         # ---- Golden ----
@@ -489,7 +502,13 @@ class TestFusedDemo:
         if iteration == 2:
             print(f"\n{'='*60}")
             print(f"Demo 1: RMS -> Matmul -> RMS (4x2 grid, DRAM)")
-            print(f"  Fused compile: {build_time*1000:.2f} ms")
+            print(f"  Factory (tensor alloc + descriptors): {factory_time*1000:.2f} ms")
+            print(f"  Build (Sequential.build): {build_time*1000:.2f} ms")
+            print(f"  Unfused host time per op (C++ cache hit):")
+            print(f"    rms_norm: {1000*(t_u1-t_u0):.3f} ms")
+            print(f"    matmul:   {1000*(t_u2-t_u1):.3f} ms")
+            print(f"    rms_norm: {1000*(t_u3-t_u2):.3f} ms")
+            print(f"    total:    {1000*(t_u3-t_u0):.3f} ms")
             print(f"  PCC: fused={pcc_f:.6f}  unfused={pcc_u:.6f}")
             print(f"{'='*60}")
 
