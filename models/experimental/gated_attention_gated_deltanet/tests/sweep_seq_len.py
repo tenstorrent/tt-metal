@@ -58,7 +58,10 @@ def sweep_gated_attention(device, seq_lens, warmup=2, iterations=3, batch_size=2
             torch_min = min(torch_times)
 
             ttnn_params = {}
+            skip_keys = {"attention_mask"}
             for key, val in params.items():
+                if key in skip_keys:
+                    continue
                 if isinstance(val, torch.Tensor):
                     if key.endswith("_proj_weight"):
                         val = val.T.contiguous()

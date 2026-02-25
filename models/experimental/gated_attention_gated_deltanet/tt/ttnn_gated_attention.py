@@ -19,10 +19,10 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
     sin = ttnn.unsqueeze(sin, 1)
 
     rotary_dim = cos.shape[-1]
+    full_dim = q.shape[-1]
+
     q_rot = q[..., :rotary_dim]
-    q_pass = q[..., rotary_dim:]
     k_rot = k[..., :rotary_dim]
-    k_pass = k[..., rotary_dim:]
 
     q_embed = ttnn.add(
         ttnn.multiply(q_rot, cos),
@@ -33,8 +33,12 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
         ttnn.multiply(rotate_half_ttnn(k_rot), sin),
     )
 
-    q_embed = ttnn.concat([q_embed, q_pass], dim=-1)
-    k_embed = ttnn.concat([k_embed, k_pass], dim=-1)
+    if rotary_dim < full_dim:
+        q_pass = q[..., rotary_dim:]
+        k_pass = k[..., rotary_dim:]
+        q_embed = ttnn.concat([q_embed, q_pass], dim=-1)
+        k_embed = ttnn.concat([k_embed, k_pass], dim=-1)
+
     return q_embed, k_embed
 
 
@@ -50,11 +54,31 @@ def rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     return ttnn.multiply(x_normed, scale)
 
 
-def repeat_kv_ttnn(hidden_states, n_rep):
-    """Expand KV heads to match Q heads for GQA."""
-    if n_rep == 1:
-        return hidden_states
-    return ttnn.repeat_interleave(hidden_states, n_rep, dim=1)
+def _get_sdpa_program_config(device, seq_len):
+    """Build SDPAProgramConfig with chunk sizes tuned to sequence length.
+
+    Follows the same pattern as tt_transformers model_config.py:
+      - T >= 2048 -> q/k chunk = 256
+      - T < 2048  -> q/k chunk = 64
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    q_chunk = 256 if seq_len >= 2048 else 64
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=q_chunk,
+        k_chunk_size=q_chunk,
+        exp_approx_mode=False,
+    )
+
+
+def _get_sdpa_compute_kernel_config():
+    """WormholeComputeKernelConfig for SDPA -- HiFi4 with fp32 accumulation."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
 
 def gated_attention_forward_ttnn(
@@ -71,13 +95,15 @@ def gated_attention_forward_ttnn(
     num_key_value_heads,
     head_dim,
     device,
-    attention_mask=None,
     norm_eps=1e-6,
 ):
     """
     TTNN forward pass for Gated Attention.
 
-    All operations use TTNN equivalents for execution on Tenstorrent hardware.
+    Uses ttnn.transformer.scaled_dot_product_attention (FlashAttention-2 kernel)
+    with SDPAProgramConfig for tiling and WormholeComputeKernelConfig for precision.
+    The fused kernel handles causal masking and GQA (num_q_heads != num_kv_heads)
+    internally, avoiding explicit repeat_kv and O(T^2) attention-matrix allocation.
 
     Args:
         hidden_states: ttnn.Tensor [B, T, hidden_size]
@@ -89,7 +115,6 @@ def gated_attention_forward_ttnn(
         num_key_value_heads: number of KV heads
         head_dim: dimension per head
         device: ttnn device
-        attention_mask: ttnn.Tensor [B, 1, T, S] or None
         norm_eps: RMSNorm epsilon
 
     Returns:
@@ -97,7 +122,6 @@ def gated_attention_forward_ttnn(
     """
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
-    num_kv_groups = num_attention_heads // num_key_value_heads
     scaling = head_dim**-0.5
 
     # Q projection: 2x wide
@@ -107,17 +131,17 @@ def gated_attention_forward_ttnn(
     query_states, gate = ttnn.chunk(qg, 2, dim=-1)
     gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
-    # Q norm + transpose to [B, H, T, D]
+    # Q norm + transpose to [B, H_q, T, D]
     query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
-    query_states = ttnn.transpose(query_states, 1, 2)  # [B, H, T, D]
+    query_states = ttnn.transpose(query_states, 1, 2)
 
-    # K projection + norm + transpose
+    # K projection + norm + transpose to [B, H_kv, T, D]
     key_states = ttnn.linear(hidden_states, k_proj_weight)
     key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
     key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
     key_states = ttnn.transpose(key_states, 1, 2)
 
-    # V projection + transpose
+    # V projection + transpose to [B, H_kv, T, D]
     value_states = ttnn.linear(hidden_states, v_proj_weight)
     value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
     value_states = ttnn.transpose(value_states, 1, 2)
@@ -125,23 +149,18 @@ def gated_attention_forward_ttnn(
     # RoPE
     query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos, sin)
 
-    # Expand KV for GQA
-    key_states = repeat_kv_ttnn(key_states, num_kv_groups)
-    value_states = repeat_kv_ttnn(value_states, num_kv_groups)
-
-    # Attention: Q @ K^T * scale
-    key_t = ttnn.transpose(key_states, 2, 3)
-    attn_weights = ttnn.matmul(query_states, key_t)
-    attn_weights = ttnn.multiply(attn_weights, scaling)
-
-    if attention_mask is not None:
-        attn_weights = ttnn.add(attn_weights, attention_mask)
-
-    # Softmax
-    attn_weights = ttnn.softmax(attn_weights, dim=-1)
-
-    # Attention output: weights @ V
-    attn_output = ttnn.matmul(attn_weights, value_states)  # [B, H, T, D]
+    # Fused scaled dot-product attention
+    # SDPAProgramConfig sets chunk tiling; WormholeComputeKernelConfig sets fp32 accum.
+    # The kernel handles GQA (num_q_heads != num_kv_heads) and causal masking internally.
+    attn_output = ttnn.transformer.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        is_causal=True,
+        scale=scaling,
+        program_config=_get_sdpa_program_config(device, T),
+        compute_kernel_config=_get_sdpa_compute_kernel_config(),
+    )
 
     # Transpose back and reshape: [B, T, H*D]
     attn_output = ttnn.transpose(attn_output, 1, 2)

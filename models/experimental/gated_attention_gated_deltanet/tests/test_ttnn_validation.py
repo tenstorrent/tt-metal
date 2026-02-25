@@ -79,7 +79,10 @@ def test_gated_attention_ttnn():
     device = ttnn.open_device(device_id=0)
     try:
         ttnn_params = {}
+        skip_keys = {"attention_mask"}
         for key, val in params.items():
+            if key in skip_keys:
+                continue
             if isinstance(val, torch.Tensor):
                 # ttnn.linear expects [in, out]; PyTorch uses [out, in]
                 if key.endswith("_proj_weight"):
@@ -257,7 +260,10 @@ def benchmark_gated_attention(warmup=3, iterations=10):
     device = ttnn.open_device(device_id=0)
     try:
         ttnn_params = {}
+        skip_keys = {"attention_mask"}
         for key, val in params.items():
+            if key in skip_keys:
+                continue
             if isinstance(val, torch.Tensor):
                 if key.endswith("_proj_weight"):
                     val = val.T.contiguous()
