@@ -1,3 +1,9 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
 #include <tt-metalium/global_semaphore.hpp>
 
 namespace tt::tt_metal::experimental {
