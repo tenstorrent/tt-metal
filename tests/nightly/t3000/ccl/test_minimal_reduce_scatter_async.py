@@ -1427,3 +1427,37 @@ def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
     assert torch.allclose(
         torch_reference, torch_output, atol=1e-1, rtol=1e-2
     ), "Output mismatch between torch and ttnn reduce-scatter"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("input_shape", [[1, 1, 8192, 392]])
+def test_reduce_scatter_composite_repro_1x2(mesh_device, input_shape):
+    torch.manual_seed(520)
+    devices = mesh_device.get_num_devices()
+    assert devices == 2
+
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for _ in range(devices)]
+    torch_reference = torch.zeros_like(torch_inputs_per_device[0])
+    for torch_input in torch_inputs_per_device:
+        torch_reference += torch_input
+
+    tt_input = ttnn.from_torch(
+        torch.cat(torch_inputs_per_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )
+
+    tt_output = ttnn.reduce_scatter(
+        tt_input,
+        dim=3,
+        topology=ttnn.Topology.Linear,
+    )
+    torch_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+
+    assert torch.allclose(
+        torch_reference, torch_output, atol=1e-2, rtol=1e-2
+    ), "Output mismatch between torch and ttnn reduce-scatter"
