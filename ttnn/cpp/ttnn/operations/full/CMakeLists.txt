@@ -26,7 +26,9 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/full_device_operation.cpp
-        device/full_program_factory.cpp
+        device/full_program_factory_interleaved.cpp
+        device/full_program_factory_nd_sharded.cpp
+        device/full_program_factory_sharded.cpp
         full.cpp
 )
 
