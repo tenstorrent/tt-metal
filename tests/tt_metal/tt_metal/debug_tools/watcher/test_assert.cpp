@@ -24,6 +24,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
+#include "impl/kernels/kernel.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.

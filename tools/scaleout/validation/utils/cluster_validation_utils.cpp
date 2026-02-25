@@ -18,6 +18,7 @@
 
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>

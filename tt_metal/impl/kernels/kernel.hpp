@@ -26,6 +26,46 @@
 
 namespace tt::tt_metal {
 
+enum Eth : uint8_t {
+    SENDER = 0,
+    RECEIVER = 1,
+    IDLE = 2,
+};
+
+struct EthernetConfig {
+    Eth eth_mode = Eth::SENDER;
+    NOC noc = NOC::NOC_0;
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
+    std::vector<uint32_t> compile_args;
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    std::map<std::string, std::string> defines;
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, EthernetConfig{.compile_args = compile_args, .named_compile_args =
+    //     named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+    NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+};
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config);
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config);
+
 struct KernelSource {
     enum SourceType { FILE_PATH, SOURCE_CODE };
 

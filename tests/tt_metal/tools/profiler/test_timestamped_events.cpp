@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,16 +10,20 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 void RunFillUpAllBuffers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
+    IDevice* device = mesh_device->get_devices()[0];
+
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
+    auto eth_cores = device->get_active_ethernet_cores(true);
 
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
@@ -33,7 +37,7 @@ void RunFillUpAllBuffers(
 
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events.cpp",
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -41,7 +45,7 @@ void RunFillUpAllBuffers(
             .defines = kernel_defines});
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events.cpp",
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -50,9 +54,17 @@ void RunFillUpAllBuffers(
     std::vector<uint32_t> trisc_kernel_args = {};
     tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events_compute.cpp",
+        "tests/tt_metal/tools/profiler/kernels/timestamped_events_compute.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
+
+    for (auto core : eth_cores) {
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tools/profiler/kernels/timestamped_events.cpp",
+            (CoreCoord){core.x, core.y},
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
+    }
 
     workload.add_program(device_range, std::move(program));
     if (fast_dispatch) {

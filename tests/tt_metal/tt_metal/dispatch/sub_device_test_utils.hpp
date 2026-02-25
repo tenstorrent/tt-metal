@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "sub_device.hpp"
 
 namespace tt::tt_metal {

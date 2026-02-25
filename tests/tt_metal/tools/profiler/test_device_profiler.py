@@ -300,7 +300,9 @@ def test_full_buffer():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_full_buffer", setupAutoExtract=True
+    )
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
@@ -1146,7 +1148,9 @@ def test_timestamped_events():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_timestamped_events", setupAutoExtract=True
+    )
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(

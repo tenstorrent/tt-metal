@@ -11,6 +11,7 @@
 #include <kernel_types.hpp>
 #include <sub_device_types.hpp>
 #include <buffer.hpp>
+#include "kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
