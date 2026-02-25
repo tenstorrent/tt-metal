@@ -37,6 +37,9 @@ project(
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
+# Fix RPATH handling for Ninja generator
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 

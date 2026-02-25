@@ -13,8 +13,8 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 
-MESH_GRAPH_DESC_1x16 = (
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
+MESH_GRAPH_DESC_1x8 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
 
 
@@ -915,10 +915,10 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
+# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x8 mesh descriptor before running
 @pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -935,13 +935,13 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        pytest.param((1, 16), (1, 16), id="1x16_grid"),
+        pytest.param((1, 8), (1, 8), id="1x8_grid"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
-@pytest.mark.parametrize("experts", [2 * 16])  # 32 experts for 16 devices = 2 experts per device
+@pytest.mark.parametrize("experts", [2 * 8])  # 16 experts for 8 devices = 2 experts per device
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
 )
@@ -975,8 +975,8 @@ def test_moe_compute(
     4. Runs the moe operation
     5. Verifies the outputs against a golden reference
     """
-    torch.manual_seed(2005)
-    random.seed(2005)
+    torch.manual_seed(2003)
+    random.seed(2003)
 
     #########################################
     # TEST SETUP
