@@ -70,7 +70,6 @@ void bind_full(nb::module_& mod) {
                     memory_config,
                     optional_output_tensor);
             },
-            nb::keep_alive<0, 6>(),
             nb::arg("shape"),
             nb::arg("fill_value"),
             nb::arg("dtype") = nb::none(),
@@ -95,7 +94,6 @@ void bind_full(nb::module_& mod) {
                     memory_config,
                     optional_output_tensor);
             },
-            nb::keep_alive<0, 6>(),
             nb::arg("shape"),
             nb::arg("fill_value"),
             nb::arg("dtype") = nb::none(),
@@ -141,7 +139,6 @@ void bind_zeros(nb::module_& mod) {
                 const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
                 return ttnn::zeros(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
             },
-            nb::keep_alive<0, 5>(),
             nb::arg("shape"),
             nb::arg("dtype") = nb::none(),
             nb::arg("layout") = nb::none(),
@@ -180,7 +177,6 @@ void bind_ones(nb::module_& mod) {
                 const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
                 return ttnn::ones(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
             },
-            nb::keep_alive<0, 5>(),
             nb::arg("shape"),
             nb::arg("dtype") = nb::none(),
             nb::arg("layout") = nb::none(),
@@ -220,7 +216,6 @@ void bind_full_like(nb::module_& mod) {
                 return ttnn::full_like(
                     tensor, fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
             },
-            nb::keep_alive<0, 6>(),
             nb::arg("tensor"),
             nb::arg("fill_value"),
             nb::arg("dtype") = nb::none(),
@@ -239,7 +234,6 @@ void bind_full_like(nb::module_& mod) {
                 return ttnn::full_like(
                     tensor, fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
             },
-            nb::keep_alive<0, 6>(),
             nb::arg("tensor"),
             nb::arg("fill_value"),
             nb::arg("dtype") = nb::none(),
@@ -287,7 +281,6 @@ void bind_zeros_like(nb::module_& mod) {
                 std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return ttnn::zeros_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
             },
-            nb::keep_alive<0, 5>(),
             nb::arg("tensor"),
             nb::arg("dtype") = nb::none(),
             nb::arg("layout") = nb::none(),
@@ -325,7 +318,6 @@ void bind_ones_like(nb::module_& mod) {
                 std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return ttnn::ones_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
             },
-            nb::keep_alive<0, 5>(),
             nb::arg("tensor"),
             nb::arg("dtype") = nb::none(),
             nb::arg("layout") = nb::none(),
@@ -365,7 +357,6 @@ void bind_arange(nb::module_& mod) {
                 const Layout layout) -> ttnn::Tensor {
                 return ttnn::arange(start, end, step, dtype, nbh::rewrap_optional(device), memory_config, layout);
             },
-            nb::keep_alive<0, 6>(),
             nb::arg("start"),
             nb::arg("end"),
             nb::arg("step") = 1,
@@ -382,7 +373,6 @@ void bind_arange(nb::module_& mod) {
                 const Layout layout) -> ttnn::Tensor {
                 return ttnn::arange(end, dtype, nbh::rewrap_optional(device), memory_config, layout);
             },
-            nb::keep_alive<0, 4>(),
             nb::arg("end"),
             nb::kw_only(),
             nb::arg("dtype") = DataType::BFLOAT16,
@@ -429,7 +419,6 @@ void bind_empty(nb::module_& mod) {
                 const MemoryConfig& memory_config) -> ttnn::Tensor {
                 return ttnn::empty(ttnn::Shape{shape}, dtype, layout, device, memory_config);
             },
-            nb::keep_alive<0, 5>(),
             nb::arg("shape"),
             nb::arg("dtype") = DataType::BFLOAT16,
             nb::arg("layout") = Layout::ROW_MAJOR,
@@ -466,7 +455,6 @@ void bind_empty_like(nb::module_& mod) {
                 const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
                 return ttnn::empty_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config);
             },
-            nb::keep_alive<0, 5>(),
             nb::arg("tensor"),
             nb::kw_only(),
             nb::arg("dtype") = DataType::BFLOAT16,
@@ -535,7 +523,6 @@ void bind_from_buffer(nb::module_& mod) {
                 }
                 TT_THROW("Unreachable");
             },
-            nb::keep_alive<0, 5>(),
             nb::arg("buffer"),
             nb::arg("shape"),
             nb::arg("dtype"),
