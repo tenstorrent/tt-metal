@@ -677,27 +677,6 @@ def test_decode(
 ):
     mesh_device.disable_and_clear_program_cache()
 
-    worker_core_coords = [
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(0, 1),
-        ttnn.CoreCoord(0, 2),
-        ttnn.CoreCoord(0, 3),
-        ttnn.CoreCoord(0, 4),
-        ttnn.CoreCoord(0, 5),
-        ttnn.CoreCoord(0, 6),
-        ttnn.CoreCoord(0, 7),
-        ttnn.CoreCoord(1, 0),
-        ttnn.CoreCoord(1, 1),
-        ttnn.CoreCoord(1, 2),
-        ttnn.CoreCoord(1, 3),
-        ttnn.CoreCoord(1, 4),
-        ttnn.CoreCoord(1, 5),
-        ttnn.CoreCoord(1, 6),
-        ttnn.CoreCoord(1, 7),
-    ]
-
-    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(coord, coord) for coord in worker_core_coords])
-
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
     mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
 
