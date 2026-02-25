@@ -456,11 +456,6 @@ struct Sampling {
                         DPRINT << "NCRISC mesh=(" << my_row << "," << my_col
                                << "): Waiting for stage1 mesh data (expect " << CTArgs::stage1_expected_remote_incs
                                << " incs, current=" << *global_sem_ptr << ")" << ENDL();
-                        while (*global_sem_ptr < CTArgs::stage1_expected_remote_incs) {
-                            invalidate_l1_cache();
-                            DPRINT << "NCRISC mesh=(" << my_row << "," << my_col << "): stage1 sem=" << *global_sem_ptr
-                                   << ENDL();
-                        }
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
                         DPRINT << "NCRISC mesh=(" << my_row << "," << my_col << "): Stage1 mesh data received"
                                << ENDL();
