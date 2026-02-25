@@ -80,7 +80,7 @@ def _flatten_ops(items) -> List[OpDescriptor]:
 def _cache_key(items) -> tuple:
     """Compute a hash key from the input items."""
     ops = _flatten_ops(items)
-    h = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
+    h = ttnn.compute_program_descriptor_hash
     return tuple(h(op.descriptor) for op in ops)
 
 
