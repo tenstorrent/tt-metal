@@ -136,12 +136,16 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     # Concatenate kernel labels
     all_labels = tuple(label for r in results for label in r.kernel_labels)
 
+    # Concatenate kernel_phase_map (order matches merge_program_descriptors)
+    all_kpm = tuple(entry for r in results for entry in r.kernel_phase_map)
+
     return _BuildResult(
         descriptor=merged_desc,
         input_tensors=all_inputs,
         output_tensors=all_outputs,
         semaphores=all_semaphores,
         kernel_labels=all_labels,
+        kernel_phase_map=all_kpm,
     )
 
 

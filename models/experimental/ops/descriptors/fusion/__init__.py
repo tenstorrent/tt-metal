@@ -13,6 +13,7 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     FusedOp,
     Parallel,
     Sequential,
+    clear_build_cache,
 )
 from models.experimental.ops.descriptors.fusion.graph import (
     CoreGroup,
@@ -55,6 +56,7 @@ __all__ = [
     # Functions
     "extract_cb_info",
     "extract_cb_names_from_kernel",
+    "clear_build_cache",
     # C++ parsing
     "extract_kernel_body",
     "inline_local_includes",
