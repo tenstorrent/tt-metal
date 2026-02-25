@@ -84,16 +84,9 @@ def create_optimizer(model, yaml_config: dict):
 
     cfg = OptimizerConfig(yaml_config)
 
-    if cfg.type in ("AdamW", "MorehAdamW"):
-        if cfg.type == "MorehAdamW":
-            adamw_cfg = ttml.optimizers.AdamWCompositeConfig.make(
-                cfg.lr,
-                cfg.beta1,
-                cfg.beta2,
-                cfg.epsilon,
-                cfg.weight_decay,
-            )
-            return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
+    params = model.parameters()
+
+    if cfg.type == "AdamW":
         adamw_cfg = ttml.optimizers.AdamWConfig.make(
             cfg.lr,
             cfg.beta1,
@@ -101,7 +94,17 @@ def create_optimizer(model, yaml_config: dict):
             cfg.epsilon,
             cfg.weight_decay,
         )
-        return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
+        return ttml.optimizers.AdamW(params, adamw_cfg)
+
+    if cfg.type == "MorehAdamW":
+        adamw_cfg = ttml.optimizers.AdamWCompositeConfig.make(
+            cfg.lr,
+            cfg.beta1,
+            cfg.beta2,
+            cfg.epsilon,
+            cfg.weight_decay,
+        )
+        return ttml.optimizers.MorehAdamW(params, adamw_cfg)
 
     if cfg.type == "SGD":
         sgd_cfg = ttml.optimizers.SGDConfig.make(
@@ -111,7 +114,7 @@ def create_optimizer(model, yaml_config: dict):
             cfg.weight_decay,
             cfg.nesterov,
         )
-        return ttml.optimizers.SGD(model.parameters(), sgd_cfg)
+        return ttml.optimizers.SGD(params, sgd_cfg)
 
     raise ValueError(f"Unsupported optimizer type: {cfg.type}")
 
