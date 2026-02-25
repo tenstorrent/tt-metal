@@ -31,11 +31,13 @@ void bind_prefill_dispatch(nb::module_& mod) {
             input_tensor (ttnn.Tensor): Input tensor of shape (num_chips, seq_len, hidden_dim)
             weights_tensor (ttnn.Tensor): Router weights of shape (num_chips, seq_len, num_experts_per_tok)
             indices_tensor (ttnn.Tensor): Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
+            chip_to_n_routed_expert_offset_tensor (ttnn.Tensor): Base offset for each expert from each chip in the dispatched buffer, shape (num_chips, n_routed_experts), dtype int32
 
         Keyword Args:
             num_chips (int): Number of chips in the system
             experts_per_chip (int): Number of experts per chip
             n_routed_experts (int): Total number of routed experts across all chips
+            num_experts_per_tok (int): Number of experts each token is routed to
             metadata_len (int): Length of metadata per token (stores: chip, token, topk_indice, routed_expert, weight)
             max_dispatched_tokens_per_expert (int): Maximum number of tokens that can be dispatched to each expert
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to None.
@@ -52,6 +54,7 @@ void bind_prefill_dispatch(nb::module_& mod) {
                     input_tensor,
                     weights_tensor,
                     indices_tensor,
+                    chip_to_n_routed_expert_offset_tensor,
                     num_chips=2,
                     experts_per_chip=8,
                     n_routed_experts=16,
@@ -69,9 +72,11 @@ void bind_prefill_dispatch(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weights_tensor,
                const ttnn::Tensor& indices_tensor,
+               const ttnn::Tensor& chip_to_n_routed_expert_offset_tensor,
                uint32_t num_chips,
                uint32_t experts_per_chip,
                uint32_t n_routed_experts,
+               uint32_t num_experts_per_tok,
                uint32_t metadata_len,
                uint32_t max_dispatched_tokens_per_expert,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -80,9 +85,11 @@ void bind_prefill_dispatch(nb::module_& mod) {
                     input_tensor,
                     weights_tensor,
                     indices_tensor,
+                    chip_to_n_routed_expert_offset_tensor,
                     num_chips,
                     experts_per_chip,
                     n_routed_experts,
+                    num_experts_per_tok,
                     metadata_len,
                     max_dispatched_tokens_per_expert,
                     memory_config,
@@ -91,10 +98,12 @@ void bind_prefill_dispatch(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("weights_tensor").noconvert(),
             nb::arg("indices_tensor").noconvert(),
+            nb::arg("chip_to_n_routed_expert_offset_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("num_chips"),
             nb::arg("experts_per_chip"),
             nb::arg("n_routed_experts"),
+            nb::arg("num_experts_per_tok"),
             nb::arg("metadata_len"),
             nb::arg("max_dispatched_tokens_per_expert"),
             nb::arg("memory_config") = nb::none(),
