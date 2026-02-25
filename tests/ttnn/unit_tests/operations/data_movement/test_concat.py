@@ -362,23 +362,20 @@ def test_concat_1d(device, layout, dim, input_shapes):
     "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
     [
         # 2 tensors - basic ND sharding concat
-        # (3, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # -
-        #        (2, [3, 128, 160], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        # (2, [3, 128, 160], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on height dim
-        #        (2, [3, 128, 160], [3, 128, 32], 2, ttnn.TILE_LAYOUT),  # concat on width dim
-        #        (2, [3, 4, 5], [1, 1, 5], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on batch
-        #        (2, [3, 4, 5], [3, 1, 5], 1, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on height
+        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        #        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
         # 3 tensors - ND sharding concat
-        #        (3, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 3 tensors on batch     # +
-        #        (3, [2, 64, 64], [2, 32, 32], 1, ttnn.TILE_LAYOUT),    # concat 3 tensors on height
-        #        (3, [2, 64, 64], [2, 64, 32], 2, ttnn.TILE_LAYOUT),    # concat 3 tensors on width
-        #        (3, [2, 4, 8], [1, 4, 8], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat 3 tensors
+        (3, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (3, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (3, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        #        (3, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
         # 4 tensors - ND sharding concat
-        #         (4, [2, 32, 32], [1, 32, 32], 0, ttnn.TILE_LAYOUT),    # concat 4 tensors on batch  # -
-        #        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),    # concat 4 tensors on height
-        #        (4, [1, 64, 64], [1, 64, 32], 2, ttnn.TILE_LAYOUT),    # concat 4 tensors on width
-        #        (4, [2, 4, 8], [2, 4, 8], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat 4 tensors on batch
+        (4, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 4 tensors on batch  # -
+        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 4 tensors on height
+        (4, [1, 64, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat 4 tensors on width
+        #                (4, [1, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),    # RM concat 4 tensors on batch
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])

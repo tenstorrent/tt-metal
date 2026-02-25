@@ -45,7 +45,8 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         CONCAT_ND_SHARDED_MAX_NUM_INPUTS,
         num_input_tensors);
 
-    const auto& nd_shard_spec = input_tensors[0].nd_shard_spec().value();
+    const Tensor& input_t0 = input_tensors[0];
+    const auto& nd_shard_spec = input_t0.nd_shard_spec().value();
     const CoreRangeSet all_cores = nd_shard_spec.grid;
     const std::vector<CoreCoord> cores =
         corerange_to_cores(all_cores, std::nullopt, nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
@@ -66,8 +67,15 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     const uint32_t output_page_size = output.buffer()->aligned_page_size();
     std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> input_page_sizes;
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
-        const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
+        const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_t0.buffer();
         input_page_sizes[i] = buf->aligned_page_size();
+        // TODO - move to the verification part
+        TT_ASSERT(
+            input_page_sizes[i] == input_page_sizes[0],
+            "input page sizes should match {}:{} != 0:{}",
+            i,
+            input_page_sizes[i],
+            input_page_sizes[0]);
     }
 
     // some debug information about output tensor
@@ -88,7 +96,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     }
     std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> initial_offsets_bytes{0};
     std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> to_write_bytes{0};
-    std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> to_skip_bytes{0};
+    //    std::array<uint32_t, CONCAT_ND_SHARDED_MAX_NUM_INPUTS> to_skip_bytes{0};
     {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             const uint32_t sz_to_fill =
@@ -133,7 +141,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     // TensorAccessor parameters come from tensor buffers only; no Circular Buffer required.
     TensorAccessorArgs(*output.buffer()).append_to(reader_compile_time_args);
     for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
-        const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
+        const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_t0.buffer();
         TensorAccessorArgs(*buf).append_to(reader_compile_time_args);
     }
 
@@ -146,16 +154,74 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     // Runtime args for the single core: scratch_l1_addr, output addr, then per-input (addr, absolute_offset_to_start,
     // amount_to_write, amount_to_skip), then shard_id
     {
+        uint32_t dim_pages{0};  // how many pages I need to write from every Tensor, sequentially
+        const uint32_t num_dims = output.padded_shape().rank();
+        const uint32_t dim = operation_attributes.dim;
+        const bool rm_layout = (output.layout() == Layout::ROW_MAJOR);
+        uint32_t scale_factor = 1;
+        if (!rm_layout) {
+            if (dim == num_dims - 2) {
+                scale_factor = TILE_HEIGHT;
+            } else if (dim == num_dims - 1) {
+                scale_factor = TILE_WIDTH;
+            }
+        }
+        uint32_t num_accum_pages = 1;
+        for (uint32_t i = dim + 1; i < num_dims; ++i) {
+            num_accum_pages *= output.padded_shape()[i];
+            std::cout << "num_acum_pages at " << i << ": " << num_accum_pages;
+        }
+        std::cout << "\n";
+
+        if (rm_layout) {
+            if (num_dims > 1 && dim < num_dims - 1) {
+                num_accum_pages /= output.padded_shape()[-1];
+            }
+        } else {
+            if (dim < num_dims - 2) {
+                num_accum_pages /= TILE_HW;
+            } else if (dim == num_dims - 2) {
+                num_accum_pages /= TILE_WIDTH;
+            }
+        }
+        std::cout << "result acum_pages: " << num_accum_pages << "\n";
+        uint32_t num_output_pages_per_block_total = 0;
+
+        if (rm_layout) {
+            dim_pages = input_t0.padded_shape()[dim];
+        } else {
+            dim_pages = input_t0.padded_shape()[dim] / scale_factor;
+        }
+        if (rm_layout && dim == num_dims - 1) {
+            num_output_pages_per_block_total += num_accum_pages;
+        } else {
+            num_output_pages_per_block_total += num_accum_pages * dim_pages;
+        }
+        if (rm_layout && dim == num_dims - 1) {
+            num_output_pages_per_block_total = 1;
+        }
+
+        std::cout << "dim pages: " << dim_pages << ". pages per block: " << num_output_pages_per_block_total << "\n";
+
         std::vector<uint32_t> runtime_args;
         runtime_args.push_back(scratch_l1_addr);
         runtime_args.push_back(output.buffer()->address());
+        const uint32_t per_tensor_to_write = num_output_pages_per_block_total * input_page_sizes[0];
+        const uint32_t per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
+        std::cout << "per tensor write " << per_tensor_to_write << "  per tensor to skip " << per_tensor_to_skip
+                  << "\n";
         for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
-            const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_tensors[0].buffer();
+            const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_t0.buffer();
             runtime_args.push_back(buf->address());
 
-            runtime_args.push_back(initial_offsets_bytes[i]);
-            runtime_args.push_back(to_write_bytes[i]);
-            runtime_args.push_back(to_skip_bytes[i]);
+            runtime_args.push_back(i * per_tensor_to_write);
+            runtime_args.push_back(per_tensor_to_write);
+            runtime_args.push_back(per_tensor_to_skip);
+            std::cout << i << ". ao " << i * per_tensor_to_write << "\n";
+
+            // runtime_args.push_back(initial_offsets_bytes[i]);
+            // runtime_args.push_back(to_write_bytes[i]);
+            // runtime_args.push_back(to_skip_bytes[i]);
         }
         runtime_args.push_back(static_cast<uint32_t>(max_core_index));
         SetRuntimeArgs(program, reader_kernel_id, max_core, runtime_args);
