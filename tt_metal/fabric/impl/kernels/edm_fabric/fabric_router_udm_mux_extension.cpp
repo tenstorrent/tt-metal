@@ -390,27 +390,27 @@ void kernel_main() {
     constexpr size_t STREAM_REG_BASE = 0xFFB00000;
     bool worker_ch0_uses_stream_reg = (worker_connection_handshake_address >= STREAM_REG_BASE);
 
-    // Setup channel 0 (may use stream register)
-    setup_channel<NUM_BUFFERS_WORKER>(
-        &worker_channels[0],
-        &worker_channel_interfaces[0],
-        worker_channel_connection_established[0],
-        0,
-        BUFFER_SIZE_WORKER,
-        worker_channel_base_address,
-        worker_connection_info_address,
-        worker_connection_handshake_address,
-        worker_flow_control_address,
-        StreamId{worker_stream_ids[0]},
-        worker_is_persistent[0] == 1);
-
-    // If channel 0 uses stream register, reset to L1 base for channels 1+
     if (worker_ch0_uses_stream_reg) {
+        // Setup channel 0 (may use stream register)
+        setup_channel<NUM_BUFFERS_WORKER>(
+            &worker_channels[0],
+            &worker_channel_interfaces[0],
+            worker_channel_connection_established[0],
+            0,
+            BUFFER_SIZE_WORKER,
+            worker_channel_base_address,
+            worker_connection_info_address,
+            worker_connection_handshake_address,
+            worker_flow_control_address,
+            StreamId{worker_stream_ids[0]},
+            worker_is_persistent[0] == 1);
+
+        // If channel 0 uses stream register, reset to L1 base for channels 1+
         worker_connection_handshake_address = worker_connection_handshake_l1_base;
     }
 
     // Setup remaining worker channels (always use L1)
-    for (uint32_t i = 1; i < NUM_WORKER_CHANNELS; i++) {
+    for (uint32_t i = worker_ch0_uses_stream_reg; i < NUM_WORKER_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_WORKER>(
             &worker_channels[i],
             &worker_channel_interfaces[i],
