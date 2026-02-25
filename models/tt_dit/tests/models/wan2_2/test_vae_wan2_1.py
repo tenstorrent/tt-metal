@@ -308,11 +308,13 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
         shard_mapping={h_axis: 2, w_axis: 3},
         dtype=tt_input_dtype,
     )
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
     tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
 
+    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
     concat_dims = [None, None]
     concat_dims[h_axis] = 2
     concat_dims[w_axis] = 3
@@ -554,6 +556,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         shard_mapping={h_axis: 2, w_axis: 3},
         dtype=tt_input_dtype,
     )
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
 
@@ -603,6 +606,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         feat_idx=tt_feat_idx,
     )
 
+    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
     concat_dims = [None, None]
     concat_dims[h_axis] = 2
     concat_dims[w_axis] = 3
@@ -713,6 +717,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         shard_mapping={h_axis: 2, w_axis: 3},
         dtype=tt_input_dtype,
     )
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
     torch_feat_cache = []
     tt_feat_cache = []
@@ -753,6 +758,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         feat_idx=tt_feat_idx,
     )
 
+    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
     concat_dims = [None, None]
     concat_dims[h_axis] = 2
     concat_dims[w_axis] = 3
@@ -1029,6 +1035,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=tt_input_dtype,
         )
+        tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
         logger.info(f"running torch model")
         with torch.no_grad():
@@ -1046,6 +1053,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             feat_idx=tt_feat_idx,
         )
 
+        tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
         concat_dims = [None, None]
         concat_dims[h_axis] = 2
         concat_dims[w_axis] = 3
