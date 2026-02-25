@@ -281,6 +281,7 @@ from ttnn.device import (
     synchronize_device,
     dump_device_memory_state,
     get_memory_view,
+    reset_peak_memory_allocated,
     get_max_worker_l1_unreserved_size,
     get_optimal_dram_bank_to_logical_worker_assignment,
     enable_asynchronous_slow_dispatch,

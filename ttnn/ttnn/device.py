@@ -275,6 +275,10 @@ def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
+def reset_peak_memory_allocated(device, buffer_type):
+    ttnn._ttnn.device.ResetPeakMemoryAllocated(device, buffer_type)
+
+
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice

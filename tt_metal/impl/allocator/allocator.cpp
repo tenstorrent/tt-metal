@@ -357,6 +357,19 @@ void AllocatorImpl::mark_allocations_safe() {
     allocations_unsafe_ = false;
 }
 
+void AllocatorImpl::reset_peak_allocated_bytes(const BufferType& buffer_type) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    switch (buffer_type) {
+        case BufferType::DRAM: dram_manager_->reset_peak_allocated_bytes(); break;
+        case BufferType::L1: l1_manager_->reset_peak_allocated_bytes(); break;
+        case BufferType::L1_SMALL: l1_small_manager_->reset_peak_allocated_bytes(); break;
+        case BufferType::TRACE: trace_buffer_manager_->reset_peak_allocated_bytes(); break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->begin_high_water_mark_tracking();
@@ -519,6 +532,10 @@ DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const 
 uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl->get_alignment(buffer_type); }
 
 Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl->get_statistics(buffer_type); }
+
+void Allocator::reset_peak_allocated_bytes(const BufferType& buffer_type) {
+    impl->reset_peak_allocated_bytes(buffer_type);
+}
 
 AllocatorState Allocator::extract_state() const { return impl->extract_state(); }
 

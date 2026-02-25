@@ -132,6 +132,10 @@ public:
     DeviceAddr get_allocation_high_water_mark() const;
     DeviceAddr get_deletion_high_water_mark() const;
 
+    // Peak allocated bytes tracking (always-on, per bank)
+    // Resets peak to the current allocated level
+    void reset_peak_allocated_bytes();
+
     // AllocatorState Methods
     // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
@@ -179,6 +183,10 @@ private:
     bool tracking_high_water_mark_ = false;
     DeviceAddr allocation_high_water_mark_ = 0;
     DeviceAddr deletion_high_water_mark_ = 0;
+
+    // Peak allocated bytes tracking (always-on, per bank)
+    size_t current_allocated_bytes_ = 0;
+    size_t peak_allocated_bytes_ = 0;
 
     /*********************************
      * Allocator-independent methods *
