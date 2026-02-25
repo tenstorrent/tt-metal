@@ -508,6 +508,7 @@ FORCE_INLINE void noc_async_read_one_packet(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    DPRINT << "noc: " << (uint32_t)noc << ENDL();
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, src_noc_addr, size, -1, false, noc);
     }

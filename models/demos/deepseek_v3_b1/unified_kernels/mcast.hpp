@@ -91,6 +91,7 @@ template <
     uint8_t cmd_buf>
 FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     constexpr uint32_t noc = noc_index;
+    DPRINT << "Mcast noc: " << (uint32_t)noc << ENDL();
     if constexpr (loopback) {
         static_assert(is_part_of_receiver_grid, "Loopback mode is only supported for receiver grid");
     }
@@ -98,33 +99,45 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
         loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        DPRINT << "Dynamic NoC" << ENDL();
         if constexpr (posted) {
+            DPRINT << "Posted" << ENDL();
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
+            DPRINT << "Non-posted" << ENDL();
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
         }
+        DPRINT << "After inc_noc_counter_val" << ENDL();
     }
 
+    DPRINT << "Before noc_cmd_buf_ready" << ENDL();
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+    DPRINT << "After noc_cmd_buf_ready" << ENDL();
 
     if constexpr (set_size) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+        DPRINT << "After NOC_CMD_BUF_WRITE_REG(NOC_AT_LEN_BE)" << ENDL();
     }
     if constexpr (set_addresses) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+        DPRINT << "After NOC_CMD_BUF_WRITE_REG(NOC_RET_ADDR_LO)" << ENDL();
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    DPRINT << "After NOC_CMD_BUF_WRITE_REG(NOC_CMD_CTRL)" << ENDL();
 
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if constexpr (posted) {
             noc_posted_writes_num_issued[noc] += 1;
+            DPRINT << "After noc_posted_writes_num_issued" << ENDL();
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += num_dests;
+            DPRINT << "After noc_nonposted_writes_acked" << ENDL();
         }
     }
+    DPRINT << "Kernel ends" << ENDL();
 }
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid, bool linked, bool posted>

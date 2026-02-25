@@ -13,8 +13,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <array>
 #include "llrt/struct_view_driver.hpp"
+#include <array>
 namespace tt::tt_fabric::fabric_telemetry {
 static constexpr uint32_t FABRIC_TELEMETRY_VERSION = 1;
 namespace types {
