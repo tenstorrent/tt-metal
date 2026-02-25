@@ -422,55 +422,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenCircularDependency) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Circular dependencies detected")));
 }
 
-TEST(PhysicalGroupingDescriptorTests, DuplicateNamesAreUniquified) {
-    const std::string text_proto = wrap_with_required_groupings(R"proto(
-        groupings {
-          name: "duplicate_name"
-          custom_type: "meshes"
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-        }
-        groupings {
-          name: "duplicate_name"
-          custom_type: "pods"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { custom_type: "meshes" }
-          }
-            , {
-              id: 1
-              grouping_ref { custom_type: "meshes" }
-            }]
-          all_to_all {}
-        }
-    )proto");
-
-    // Duplicate names should be automatically uniquified, not cause an error
-    EXPECT_NO_THROW({
-        PhysicalGroupingDescriptor desc(text_proto);
-
-        // Verify that names were uniquified (look up by type since both had same name initially)
-        auto meshes_groupings = desc.get_groupings_by_type("meshes");
-        auto pods_groupings = desc.get_groupings_by_type("pods");
-
-        EXPECT_EQ(meshes_groupings.size(), 1u);
-        EXPECT_EQ(pods_groupings.size(), 1u);
-
-        // First occurrence keeps original name, second gets uniquified
-        EXPECT_EQ(meshes_groupings[0].name, "duplicate_name");
-        EXPECT_EQ(pods_groupings[0].name, "duplicate_name_1");
-
-        // Verify all names are unique
-        std::set<std::string> all_names;
-        auto all_groupings = desc.get_all_groupings();
-        for (const auto& grouping : all_groupings) {
-            EXPECT_FALSE(all_names.contains(grouping.name)) << "Duplicate name found: " << grouping.name;
-            all_names.insert(grouping.name);
-        }
-    });
-}
-
 // ============================================================================
 // API TESTS
 // ============================================================================
@@ -1355,11 +1306,9 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
         auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
 
-        auto mesh_grouping = mesh_groupings[0];
-
         std::vector<std::string> errors;
 
-        auto asic_ids = pgd.find_all_in_psd(mesh_grouping, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
 
         log_critical(tt::LogTest, "Errors: {}", errors);
 
@@ -1369,18 +1318,16 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
     }
 
     {
-        // Test 2x4_Mesh_2tray grouping with find_all_in_psd
+        // Test 4x4_Mesh BH groupings with find_all_in_psd (two variants: TRAY_3/TRAY_1 and TRAY_4/TRAY_2)
         auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh BH");
-        ASSERT_FALSE(mesh_groupings.empty()) << "4x4_mesh BH grouping not found";
-
-        auto mesh_grouping = mesh_groupings[0];
+        ASSERT_EQ(mesh_groupings.size(), 2u) << "4x4_Mesh BH grouping not found";
 
         std::vector<std::string> errors;
 
-        auto asic_ids = pgd.find_all_in_psd(mesh_grouping, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
 
-        EXPECT_EQ(asic_ids.size(), 12u)
-            << "Expected validation to pass: 4x4_mesh BH grouping should map to triple-16x8 PSD";
+        EXPECT_EQ(asic_ids.size(), 24u)
+            << "Expected validation to pass: 2x 4x4_Mesh BH groupings should map to triple-16x8 PSD (12 mappings each)";
     }
 }
 
@@ -1514,18 +1461,16 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_4x4Mesh) {
         }
     }
 
-    // Should have at least two valid grouping matches (there are two 4x4_Mesh definitions in the file, and dual_4x4 has
-    // 2 meshes)
-    ASSERT_GE(total_groupings, 2u) << "Should have at least two valid grouping matches";
+    // Golden: total_groupings=3, 1 MESH instance, 2 4x4 matches (two 4x4_Mesh WH defs in PGD)
+    EXPECT_EQ(total_groupings, 3u) << "Regolden: total valid grouping matches";
 
     // Check that we have matches for MESH instances
-    ASSERT_GE(valid_groupings.size(), 1u) << "Should have at least one instance type (MESH)";
+    ASSERT_EQ(valid_groupings.size(), 2u) << "Regolden: instance types (MESH, FABRIC)";
     ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
-    // dual_4x4 has 2 meshes in a graph, so we should have 2 MESH instances
-    ASSERT_GE(valid_groupings.at("MESH").size(), 1u) << "Should have at least one MESH instance";
+    EXPECT_EQ(valid_groupings.at("MESH").size(), 1u) << "Regolden: mesh instance count";
 
     // Check that we have matches for the 4x4 mesh grouping (16 ASICs)
-    // Names in triple_16x8 are "4x4_Mesh WH", "4x4_Mesh BH", etc.
+    // Names in triple_16x8 are "4x4_Mesh WH", "4x4_Mesh BH", etc. (2 defs with duplicate names)
     size_t total_4x4_matches = 0;
     for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
         for (const auto& grouping : groupings) {
@@ -1535,7 +1480,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_4x4Mesh) {
             }
         }
     }
-    EXPECT_GE(total_4x4_matches, 2u) << "Should have at least two 4x4 mesh matches";
+    EXPECT_EQ(total_4x4_matches, 2u) << "Regolden: 4x4 mesh matches";
 
     // Check that we have FABRIC level grouping (G0)
     ASSERT_EQ(valid_groupings.count("FABRIC"), 1u) << "Should have FABRIC instance type";
