@@ -91,10 +91,13 @@ struct SdpaDecodeProgramFactory {
         uint32_t num_cores_per_batch = 0;
         uint32_t num_cores_per_head = 0;
         uint32_t num_output_cores = 0;
-        tt::tt_metal::CBHandle cb_in8_id{};
-        tt::tt_metal::CBHandle cb_in9_id{};
+        tt::tt_metal::CBHandle cb_q_in_id{};        // CB for Q input tensor (c_0)
+        tt::tt_metal::CBHandle cb_cur_pos_id{};     // CB for position indices tensor
+        tt::tt_metal::CBHandle cb_page_table_id{};  // CB for page table tensor (paged attention)
+        bool is_q_sharded = false;
         bool is_output_sharded = false;
-        tt::tt_metal::CBHandle cb_out4_id{};
+        bool q_locally_available = false;
+        tt::tt_metal::CBHandle cb_out_final_id{};  // CB for final output tensor
         uint32_t B = 0;
         uint32_t q_heads_parallel_factor = 0;
         bool use_cur_pos_tensor = false;
@@ -103,6 +106,8 @@ struct SdpaDecodeProgramFactory {
         bool is_paged_attention = false;
         bool is_causal = false;
         bool use_mla = false;
+        bool use_col_major_group_indexing = false;  // Column-major batch indexing for spatial locality
+        CoreCoord grid_size{0, 0};                  // Grid dimensions for spatial calculations
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

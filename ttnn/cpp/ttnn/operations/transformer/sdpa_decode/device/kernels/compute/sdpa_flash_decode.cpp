@@ -64,6 +64,7 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
     constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
+    constexpr bool reuse_k = get_compile_time_arg_val(32) == 1;
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -146,7 +147,6 @@ void kernel_main() {
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-
             cb_wait_front(cb_index_id, 1);
             cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
             cb_pop_front(cb_index_id, 1);
@@ -239,6 +239,7 @@ void kernel_main() {
     const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
     const uint32_t out_num_blocks_dynamic = 1;
     const uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t_dynamic;
+    const uint32_t k_chunk_tiles_dynamic = Sk_chunk_t_dynamic * DHt;
 #else
     constexpr uint32_t qk_subblock_h_dynamic = qk_subblock_h;
     constexpr uint32_t qk_subblock_w_dynamic = qk_subblock_w;
@@ -412,7 +413,6 @@ void kernel_main() {
                  */
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
-
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -661,7 +661,6 @@ void kernel_main() {
             //   - cb_out_accumulate_im: O
             //   - cb_prev_sum: L
             //   - cb_prev_max: M
-
             // Move O to output CB
             move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
             // Move M to output CB
