@@ -173,6 +173,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
     }
+
+    if (operation_attributes.norm_type == LayerNormType::RMSNORM) {
+        TT_FATAL(
+            !operation_attributes.compute_kernel_config.fp32_dest_acc_en,
+            "fp32_dest_acc_en is not supported for RMSNorm");
+    }
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
