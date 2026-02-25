@@ -179,7 +179,7 @@ class WanAttentionBlock(Module):
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.DataType.FLOAT32 else (8, 8, 8)
+        default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.float32 else (8, 8, 8)
         x_TND = self.to_qkv(
             x_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
         )
@@ -288,7 +288,7 @@ class WanCausalConv3d(Module):
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or ttnn.float32)
+            if (is_blackhole() or dtype == ttnn.float32)
             else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
