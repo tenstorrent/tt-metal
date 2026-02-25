@@ -20,21 +20,18 @@ void kernel_main() {
 
 #ifdef STRIDED_L1_ACCESS
     // Strided access: each core reads only from its local L1 bank.
+    // Single-tile loop — local L1 reads have zero NOC latency so
+    // batching overhead hurts more than it helps.
     // Args: {src_addr, total_pages, bank_id, num_l1_banks}
     const uint32_t total_pages = get_arg_val<uint32_t>(1);
     const uint32_t bank_id = get_arg_val<uint32_t>(2);
     const uint32_t stride = get_arg_val<uint32_t>(3);
-    for (uint32_t i = bank_id; i < total_pages; i += stride * batch_size) {
-        const uint32_t remaining = (total_pages - i + stride - 1) / stride;
-        const uint32_t cur_batch = remaining < batch_size ? remaining : batch_size;
-        cb_reserve_back(cb_id_in0, cur_batch);
-        auto l1_write_addr = get_write_ptr(cb_id_in0);
-        for (uint32_t j = 0; j < cur_batch; ++j) {
-            noc_async_read_page(i + j * stride, s, l1_write_addr);
-            l1_write_addr += page_bytes;
-        }
+    for (uint32_t i = bank_id; i < total_pages; i += stride) {
+        cb_reserve_back(cb_id_in0, 1);
+        const auto l1_write_addr = get_write_ptr(cb_id_in0);
+        noc_async_read_page(i, s, l1_write_addr);
         noc_async_read_barrier();
-        cb_push_back(cb_id_in0, cur_batch);
+        cb_push_back(cb_id_in0, 1);
     }
 #else
     // Contiguous access: each core reads a sequential range of pages.
