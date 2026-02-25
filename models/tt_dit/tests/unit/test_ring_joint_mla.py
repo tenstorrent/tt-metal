@@ -86,6 +86,9 @@ def run_ring_joint_sdpa(
     print("ag_output_shape_k = ", ag_output_shape_k)
     print("ag_output_shape_v = ", ag_output_shape_v)
 
+    persistent_k_output_shard_dims = [None, None]
+    persistent_k_output_shard_dims[up_axis] == 1 if nhk != 1 else None
+
     persistent_output_buffers = [
         [
             ttnn.from_torch(
@@ -94,7 +97,9 @@ def run_ring_joint_sdpa(
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    submesh, mesh_shape=tuple(submesh.shape), dims=persistent_k_output_shard_dims
+                ),
             ),
             ttnn.from_torch(
                 torch.zeros(ag_output_shape_v),
@@ -153,6 +158,13 @@ def run_ring_joint_sdpa(
     sdpa_joint_shard_dims = [None, None]
     sdpa_joint_shard_dims[up_axis] = 1  # head dim
 
+    sdpa_k_input_shard_dims = [None, None]
+    sdpa_k_input_shard_dims[rp_axis] = 2  # sequence dim
+    if nhk == 1:
+        sdpa_k_input_shard_dims[up_axis] = None  # Do not shard on head_dim, as there is 1 k head for all q heads in MLA
+    else:
+        sdpa_k_input_shard_dims[up_axis] = 1  # head dim
+
     tt_Q = ttnn.from_torch(
         padded_Q,
         dtype=dtype,
@@ -165,7 +177,7 @@ def run_ring_joint_sdpa(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims),
     )
     tt_V = ttnn.from_torch(
         padded_V,
@@ -181,12 +193,18 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
+    # split on head if there is nh > 1, else replicate
+    joint_k_mesh_mapper = (
+        ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims)
+        if nhk > 1
+        else ttnn.ReplicateTensorToMesh(submesh)
+    )
     tt_joint_K = ttnn.from_torch(
         joint_K,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+        mesh_mapper=joint_k_mesh_mapper,
     )
     tt_joint_V = ttnn.from_torch(
         joint_V,
@@ -261,6 +279,7 @@ def run_ring_joint_sdpa(
         print("Running on host...")
         gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=is_causal)
         print("Done running on host...")
+        print("Host output shape: ", gt.shape)
         gt_out = gt[:, :, :base_seq_len, :]
         gt_joint_out = gt[:, :, base_seq_len:, :]
 
@@ -320,8 +339,8 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
     [
-        (1, 32, 1, 32, 4 * 4 * 1024, 576, 576, 128),
-        (1, 32, 1, 32, 4 * 32, 64, 64, 32),
+        (1, 64, 1, 64, 4 * 4 * 1024, 576, 576, 128),
+        (1, 64, 1, 64, 4 * 32, 64, 64, 32),
         # base case
         (1, 2, 1, 2, 4 * 32, 32, 32, 32),
     ],
@@ -351,17 +370,17 @@ def run_ring_joint_sdpa(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(1, 4)],
-    ids=["1x4"],
+    [(2, 4)],
+    ids=["2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "rp_axis, rp_factor, up_axis, up_factor",
     [
-        [1, 4, 0, 1],
+        [1, 4, 0, 2],
     ],
     ids=[
-        "4rpx1p",
+        "4rpx2p",
     ],
 )
 def test_mla_sdpa(
@@ -423,5 +442,5 @@ def test_mla_sdpa(
         all_gather_topology,
         skip_check,
         0.999,
-        is_causal=True,
+        is_causal=False,
     )
