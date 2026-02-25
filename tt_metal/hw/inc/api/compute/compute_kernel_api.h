@@ -671,9 +671,6 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
             pool_type == PoolType::MIN,
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
-    static_assert(
-        reduce_dim != ReduceDim::REDUCE_ROW || pool_type == PoolType::SUM,
-        "REDUCE_ROW supports SUM only");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
     MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, ct_dim, rt_dim, VectorMode::RC_custom)));
