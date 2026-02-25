@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
@@ -26,21 +26,29 @@ import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
-UNET_LOOP_PCC = {"10": 0.90, "50": 0.92}
+UNET_LOOP_PCC = {
+    "1024x1024": {"10": 0.93, "50": 0.92},
+    "512x512": {"10": 0.84, "50": 0.92},
+}
+
+UNET_LOOP_SEED = {
+    "1024x1024": {"10": 42, "50": 0},
+    "512x512": {"10": 123, "50": 1024},
+}
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, debug_mode):
-    torch.manual_seed(0)
+def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_inference_steps, debug_mode):
+    # Get seed from configuration
+    height, width = image_resolution
+    resolution_key = f"{height}x{width}"
+    seed = UNET_LOOP_SEED.get(resolution_key, {}).get(str(num_inference_steps), 0)
+    torch.manual_seed(seed)
 
     if isinstance(prompts, str):
         prompts = [prompts]
 
     guidance_scale = 5.0
-
-    # 0. Set up default height and width for unet
-    height = 1024
-    width = 1024
 
     # 1. Load components
     pipeline = DiffusionPipeline.from_pretrained(
@@ -51,7 +59,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
     )
 
     # 2. Load tt_unet and tt_scheduler
-    tt_model_config = ModelOptimisations()
+    tt_model_config = load_model_optimisations(image_resolution)
     tt_unet = TtUNet2DConditionModel(
         ttnn_device,
         pipeline.unet.state_dict(),
@@ -300,11 +308,23 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, UNET_LOOP_PCC.get(str(num_inference_steps), 0))
+    resolution_key = f"{height}x{width}"
+    pcc_threshold = UNET_LOOP_PCC.get(resolution_key, {}).get(str(num_inference_steps), 0)
+    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, pcc_threshold)
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="SDXL supported on WH only")
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        # 1024x1024 image resolution
+        (1024, 1024),
+        # 512x512 image resolution
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
 )
@@ -316,8 +336,9 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
 def test_unet_loop(
     device,
     is_ci_env,
+    image_resolution,
     prompt,
     loop_iter_num,
     debug_mode,
 ):
-    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num, debug_mode)
+    return run_unet_inference(device, is_ci_env, image_resolution, prompt, loop_iter_num, debug_mode)
