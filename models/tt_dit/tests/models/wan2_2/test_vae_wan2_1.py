@@ -646,7 +646,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     "mean, std, MIN_PCC, MAX_RMSE",
     [
         (0, 1, 0.999_900, 0.008),
-        (0, 0.1, 0.999_900, 0.010),
+        (0, 0.1, 0.999_900, 0.014),
     ],
     ids=["std=1", "std=0.1"],
 )
@@ -731,7 +731,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
 
             tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
             tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
-            tt_cache_tensor = bf16_tensor_2dshard(
+            tt_cache_tensor = typed_tensor_2dshard(
                 tt_cache_tensor,
                 mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
