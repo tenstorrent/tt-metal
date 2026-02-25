@@ -286,6 +286,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     // columns, so applying it would incorrectly zero valid data that becomes output rows
     // after the compute kernel transposes the tile.
     const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
     const auto in0_tensor_stride_h = transpose_a ? 1 : K;
@@ -308,6 +314,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
 
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
@@ -341,6 +348,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)in0_block_h,          // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
             (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
             (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
@@ -1132,6 +1140,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     // columns, so applying it would incorrectly zero valid data that becomes output rows
     // after the compute kernel transposes the tile.
     const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
@@ -1227,6 +1241,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in0_block_h,                // in0_block_h
         (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)in0_last_ktile_h,
 
         (std::uint32_t)extract_shard_sub_blocks,
         (std::uint32_t)in0_shard_width_in_tiles,

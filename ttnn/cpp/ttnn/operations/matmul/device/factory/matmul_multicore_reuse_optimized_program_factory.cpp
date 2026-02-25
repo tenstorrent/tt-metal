@@ -35,6 +35,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
+    uint32_t in0_last_ktile_h,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t per_core_M,
@@ -171,6 +172,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
         (std::uint32_t)per_core_M_per_batch,  // in0_block_h
         (std::uint32_t)in0_block_num_tiles,
         (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)in0_last_ktile_h,
         (std::uint32_t)num_blocks,
         (std::uint32_t)bcast_batch,
         (std::uint32_t)M * K,  // MtKt
@@ -601,6 +603,12 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     // columns, so applying it would incorrectly zero valid data that becomes output rows
     // after the compute kernel transposes the tile.
     const auto in0_last_ktile_w = transpose_a ? 0 : ashape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? ashape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");
@@ -636,6 +644,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
         ttnn::get_throttle_level(compute_kernel_config),
         in0_block_w,
         in0_last_ktile_w,
+        in0_last_ktile_h,
         out_subblock_h,
         out_subblock_w,
         per_core_M,
