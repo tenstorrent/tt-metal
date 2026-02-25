@@ -196,6 +196,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             dtype="bf16",
             get_torch_state_dict=lambda: self.vae.state_dict(),
+            create_cache=False,
         )
 
         self.register_to_config(boundary_ratio=boundary_ratio)
@@ -333,6 +334,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
+            create_cache=False,
         )
 
     def _load_transformer2(self):
@@ -363,6 +365,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
+            create_cache=False,
         )
 
     def _get_t5_prompt_embeds(
