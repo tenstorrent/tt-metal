@@ -464,7 +464,6 @@ def test_qwen_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
-    print_outputs = True
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True
@@ -1047,9 +1046,10 @@ def test_qwen_demo_text(
 
     total_inference_prefill_time = profiler.get_duration("inference_prefill")
     total_inference_decode_time = 0
+    all_iter_times = []
     for i in range(1, iteration):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
-
+        all_iter_times.append(profiler.get_duration(f"inference_decode_time_{i}"))
     # Average prefill time for each user
     avg_time_to_first_token = total_inference_prefill_time
     # Average decode time per batch iteration
@@ -1127,7 +1127,7 @@ def test_qwen_demo_text(
         target_decode_tok_s = target_decode_tok_s_u * batch_size
         assert (
             decode_tok_s_user >= target_decode_tok_s_u
-        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be < {target_decode_tok_s_u}."
+        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be > {target_decode_tok_s_u}."
         assert (
             decode_tok_s >= target_decode_tok_s
         ), f"Decode throughput {decode_tok_s} tok/s is too low, should be > {target_decode_tok_s}."
