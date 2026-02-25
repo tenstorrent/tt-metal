@@ -12,12 +12,12 @@ on:
           - all
           - falcon7b
           - falcon40b
-          - llama3.1-8b
+          - llama3-small
           - llama3.2-11b
           - llama3.2-11b-vision
           - n300 mesh llama3.2-11b-vision
           - llama3.2-90b-vision
-          - llama3.3-70b
+          # - llama3.1-70b
           - llama3.2-90b
           - mistral
           - mixtral
@@ -25,8 +25,6 @@ on:
           - unet shallow
           - qwen25_vl
           - qwen3_vl
-          - qwen3-32b
-          - qwen25-coder-32b
           - gemma3-small
           - dits
           - deepseek

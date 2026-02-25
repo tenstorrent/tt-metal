@@ -25,7 +25,7 @@ on:
           - all
           - falcon7b
           - falcon40b
-          - llama3.1-8b
+          - llama3-small
           - llama3.2-11b
           - llama3.2-11b-vision
           - n300 mesh llama3.2-11b-vision
