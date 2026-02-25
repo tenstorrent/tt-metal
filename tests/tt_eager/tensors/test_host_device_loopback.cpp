@@ -5,7 +5,6 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <cstring>
 #include <exception>
 
