@@ -107,8 +107,8 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
         core_x = 7;
         core_y = 6;
     } else if (arch_name == "blackhole") {
-        // Two columns and one row harvested.
-        core_x = 11;
+        // Two columns harvested, plus a row and column used for dispatch cores.
+        core_x = 10;
         core_y = 8;
     } else {
         log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
@@ -699,6 +699,18 @@ static int pgm_dispatch(T& state, TestInfo info) {
         mesh_device = MeshDevice::create_unit_mesh(
             device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
+
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (info.workers.end_coord.x >= grid_size.x || info.workers.end_coord.y >= grid_size.y) {
+            log_fatal(
+                LogTest,
+                "Requested worker range ({},{}) exceeds device grid ({}x{})",
+                info.workers.end_coord.x,
+                info.workers.end_coord.y,
+                grid_size.x,
+                grid_size.y);
+            return 1;
+        }
 
         std::vector<tt_metal::SubDevice> sub_devices;
         if (info.n_subdevice_ranges > 1) {
