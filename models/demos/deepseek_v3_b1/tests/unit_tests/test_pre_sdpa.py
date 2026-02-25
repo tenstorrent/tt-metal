@@ -17,7 +17,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import shuffle_weights_for_interleaved_qnope_qrope
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
@@ -256,11 +256,6 @@ def test_pre_sdpa(
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
     torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
-    matmul_h, matmul_w = matmul_weights_shape
-    # Pack [H, W] -> [H/2, 2W] by pairing each row i from K-half0 and K-half1 as [half0_i | half1_i].
-    torch_matmul_weights_packed = (
-        torch_matmul_weights.reshape(2, matmul_h // 2, matmul_w).permute(1, 0, 2).reshape(matmul_h // 2, 2 * matmul_w)
-    )
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
@@ -273,31 +268,22 @@ def test_pre_sdpa(
         (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
-    per_tp_qnope_dim = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM
-    per_tp_qrope_dim = NUM_QROPE_HEADS * QROPE_HEAD_DIM
-    full_qnope = torch_matmul2_weights_full_unshuffled[:, :total_qnope_dim]
-    full_qrope = torch_matmul2_weights_full_unshuffled[:, total_qnope_dim:]
-
-    matmul2_tp_slices_shuffled = []
-    for tp in range(num_tp):
-        tp_qnope = full_qnope[:, tp * per_tp_qnope_dim : (tp + 1) * per_tp_qnope_dim]
-        tp_qrope = full_qrope[:, tp * per_tp_qrope_dim : (tp + 1) * per_tp_qrope_dim]
-        tp_unshuffled = torch.cat([tp_qnope, tp_qrope], dim=1)
-        shuffled = shuffle_weights_for_interleaved_qnope_qrope(
-            tp_unshuffled,
-            num_qnope_heads=NUM_QNOPE_HEADS,
-            num_qrope_heads=NUM_QROPE_HEADS,
-            qnope_head_dim=QNOPE_HEAD_DIM,
-            qrope_head_dim=QROPE_HEAD_DIM,
-            heads_per_row=HEADS_PER_ROW,
-        )
-        matmul2_tp_slices_shuffled.append(shuffled)
-
-    torch_matmul2_weights_shuffled = torch.cat(matmul2_tp_slices_shuffled, dim=1)
-
     # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
     # Each TP slice of 64 heads is height-sharded on 64 cores per device.
     torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+
+    # kv_b2_proj weights (placeholder — not consumed by pre-SDPA but required by the fused buffer)
+    torch_kv_b2_proj_weights = torch.zeros(
+        (QNOPE_OUT_DIM, num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM), dtype=torch.bfloat16
+    )
+
+    # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
+    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+
+    # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
+    torch_o_proj_weights = torch.zeros((num_tp * 8192, 7168), dtype=torch.bfloat16)
+    torch_gate_mm_weights = torch.zeros((7168, 256), dtype=torch.bfloat16)
+    torch_ffn_norm = torch.zeros((1, 7168), dtype=torch.bfloat16)
 
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
@@ -370,111 +356,24 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
+    # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
+    bdw = BlitzDecodeWeights(submesh)
+    (
+        matmul_weights_overlapped,
+        matmul2_weights_overlapped,
+        dkv_matmul_weights_overlapped,
+    ) = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
+        torch_matmul_weights,
+        torch_matmul2_weights_full_unshuffled,
+        torch_dkv_matmul_weights,
     )
 
-    # Matmul1 packed weights tensor
-    # Pack [7168, 1536] -> [3584, 3072] by concatenating K-halves across width.
-    # Width-shard over full 96-core grid, giving per-core shard [3584, 32].
-    matmul_grid_x = 12
-    matmul_grid_y = 8
-    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul_grid_x - 1, matmul_grid_y - 1))
-    num_matmul_cores = matmul_grid_x * matmul_grid_y
-    # WIDTH_SHARDED requires shard height == tensor height.
-    # Packed tensor is [3584, 3072], so per-core shard is [3584, 32].
-    matmul_packed_shard_shape = (
-        matmul_weights_shape[0] // 2,
-        (matmul_weights_shape[1] * 2) // num_matmul_cores,
-    )
-    matmul_packed_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul_grid}),
-        matmul_packed_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul_packed_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_packed_shard_spec
-    )
-
-    ttnn_matmul_weights = ttnn.from_torch(
-        torch_matmul_weights_packed,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul_packed_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # Matmul2 weights tensor (shuffled) - width sharded on 8x12 grid
-    matmul2_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul2_grid_x - 1, matmul2_grid_y - 1))
-    matmul2_num_cores = matmul2_grid_x * matmul2_grid_y
-    matmul2_shard_shape = (matmul2_weights_shape[0], matmul2_weights_shape[1] // matmul2_num_cores)
-    matmul2_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul2_grid}),
-        matmul2_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul2_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul2_shard_spec
-    )
-
-    ttnn_matmul2_weights = ttnn.from_torch(
-        torch_matmul2_weights_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul2_mem_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(None, 1)),
-    )
-
-    # RMSNorm2 gamma tensor
-    rmsnorm2_gamma_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
-        (1, rmsnorm2_width),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    rmsnorm2_gamma_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, rmsnorm2_gamma_shard_spec
-    )
-    ttnn_rmsnorm2_gamma = ttnn.from_torch(
-        torch_rmsnorm2_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=rmsnorm2_gamma_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # Matmul3 weights tensor - height sharded on Qnope grid (64 cores)
-    # Each core gets [128, 512] = shape per core
-    qnope_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(QNOPE_GRID_COLS - 1, matmul2_grid_y - 1))
-    # Flatten matmul3 weights for height sharding: [num_tp * num_heads * K, N] = [num_tp * 8192, 512]
-    # Each TP slice of 64 heads ([8192, 512]) is height-sharded on 64 cores per device.
+    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj via BlitzDecodeWeights
     torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
-    matmul3_shard_shape = (QNOPE_HEAD_DIM, QNOPE_OUT_DIM)  # [128, 512] per core
-    matmul3_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({qnope_grid}),
-        matmul3_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul3_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, matmul3_shard_spec
-    )
-
-    ttnn_matmul3_weights = ttnn.from_torch(
+    matmul3_weights_overlapped, _ = bdw.get_tt_kv_b12_proj_weights(
         torch_matmul3_weights_flat,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul3_mem_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(None, 0)),
+        torch_kv_b2_proj_weights,
     )
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
@@ -571,54 +470,24 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # KV Cache Branch
-    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
-    num_shards = kv_cache_branch_crs.num_cores()
-    shard_width = dkv_matmul_weights_shape[1] // num_shards
-    # new_shard_order = [0, 15, 1, 14, 2, 13, 3, 12, 4, 11, 5, 10, 6, 9, 7, 8, 16, 17]
-    new_shard_order = [0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17]
-    torch_dkv_matmul_weights_shards = torch_dkv_matmul_weights.reshape(
-        dkv_matmul_weights_shape[0], num_shards, shard_width
-    )
-    torch_dkv_matmul_weights_shuffled = torch_dkv_matmul_weights_shards[:, new_shard_order, :].reshape(
-        dkv_matmul_weights_shape[0], dkv_matmul_weights_shape[1]
-    )
-    dkv_matmul_weights_shard_spec = ttnn.ShardSpec(
-        kv_cache_branch_crs,
-        (dkv_matmul_weights_shape[0], shard_width),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-    dkv_matmul_weights_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, dkv_matmul_weights_shard_spec
-    )
-    ttnn_dkv_matmul_weights = ttnn.from_torch(
-        torch_dkv_matmul_weights_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=dkv_matmul_weights_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
+    # KV Cache Branch RMSNorm gamma
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
-    dkv_rmsnorm_gamma_shard_spec = ttnn.ShardSpec(
-        kv_cache_branch_rms_crs,
-        (1, KNOPE_DIM),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    dkv_rmsnorm_gamma_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, dkv_rmsnorm_gamma_shard_spec
-    )
 
-    ttnn_dkv_rmsnorm_gamma = ttnn.from_torch(
+    # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
+    (
+        _,  # o_proj
+        _,  # gate_mm
+        gamma_overlapped,
+        rmsnorm2_gamma_overlapped,
+        dkv_rmsnorm_gamma_overlapped,
+        _,  # ffn_norm
+    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+        torch_o_proj_weights,
+        torch_gate_mm_weights,
+        torch_gamma,
+        torch_rmsnorm2_gamma,
         torch_dkv_rmsnorm_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=dkv_rmsnorm_gamma_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        torch_ffn_norm,
     )
 
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
@@ -718,18 +587,18 @@ def test_pre_sdpa(
         ttnn_output_result = PreSDPA.op(
             input_tensor_mesh,
             intermediate_tensor_mesh,
-            ttnn_gamma,
-            ttnn_matmul_weights,
-            ttnn_rmsnorm2_gamma,
-            ttnn_matmul2_weights,
-            ttnn_matmul3_weights,
+            gamma_overlapped,
+            matmul_weights_overlapped,
+            rmsnorm2_gamma_overlapped,
+            matmul2_weights_overlapped,
+            matmul3_weights_overlapped,
             ttnn_qrope_sin,
             ttnn_qrope_cos,
             ttnn_trans_mat,
             ttnn_krope_cos,
             ttnn_krope_sin,
-            ttnn_dkv_matmul_weights,
-            ttnn_dkv_rmsnorm_gamma,
+            dkv_matmul_weights_overlapped,
+            dkv_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
             position_id,
             ttnn_position_ids,
