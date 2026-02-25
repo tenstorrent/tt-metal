@@ -10,7 +10,6 @@
 // DRAM writes are handled by the paired writer (minimal_default_writer).
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 
@@ -62,7 +61,6 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
     }
-    DPRINT << "WR:bar" << ENDL();
 
     // Main loop: read boundary sticks from output DRAM → CB for the paired writer.
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
@@ -111,8 +109,6 @@ void kernel_main() {
         }
     }
 
-    DPRINT << "WR:out" << ENDL();
-
     // Incoming W padding from neighbor: wait for fabric data in L1 recv buffer, push to CB.
     // The paired writer will pop from CB and write to output DRAM.
     // Use per-outer_dim incremental sem waiting (matching H reader pattern) — each
@@ -122,14 +118,11 @@ void kernel_main() {
     if (!is_first_chip) {
         volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
-        uint32_t cur_val = *w_neighbor_sem_ptr;
-        DPRINT << "WR:in s=" << cur_val << ENDL();
 
         uint32_t recv_buf_addr = get_write_ptr(recv_cb_id);
         uint32_t buf_offset = 0;
         for (uint32_t od = 0; od < outer_dim_size; od++) {
             // Wait for this outer_dim's data using cumulative count
-            DPRINT << " od=" << od << "/" << outer_dim_size << ENDL();
             noc_semaphore_wait_min(w_neighbor_sem_ptr, od + 1);
 
             for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
@@ -144,5 +137,4 @@ void kernel_main() {
         // Reset after all waits complete (safe: no more fabric increments expected)
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr), 0);
     }
-    DPRINT << "WR:ok" << ENDL();
 }

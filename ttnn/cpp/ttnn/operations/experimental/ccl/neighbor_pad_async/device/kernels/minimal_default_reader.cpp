@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include <cstdint>
 
 using address_t = uint32_t;
@@ -124,7 +123,7 @@ void kernel_main() {
     if (!is_first_chip) {
         if constexpr (use_l1_intermediate) {
             // L1 intermediate: fabric delivered H halo data to our L1 recv buffer.
-            // Push it into CB for the paired writer to write to output DRAM + W boundary L1.
+            // Push it into CB for the paired writer to write to output DRAM.
             uint32_t recv_buf_addr = get_write_ptr(recv_cb_id);
             uint32_t buf_offset = 0;  // Accumulates across all outer_dims (no L1 reuse)
 
@@ -154,5 +153,4 @@ void kernel_main() {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         }
     }
-    DPRINT << "HR:ok" << ENDL();
 }

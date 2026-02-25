@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -130,8 +129,6 @@ void kernel_main() {
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     uint32_t l1_buf_offset = 0;  // L1 intermediate: accumulates across all outer_dims (no reuse)
-    uint32_t fab_data_pkts_sent = 0;
-    uint32_t fab_sem_pkts_sent = 0;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
         if (is_first_chip) {
             if (!is_padding_zeros) {
@@ -149,7 +146,6 @@ void kernel_main() {
                         if (!fabric_opened) {
                             fabric_connection.open();
                             fabric_opened = true;
-                            DPRINT << "WW:opn" << ENDL();
                         }
                     }
                     uint32_t l1_read_addr = get_read_ptr(cb_output_id);
@@ -177,7 +173,6 @@ void kernel_main() {
                     if (!fabric_opened) {
                         fabric_connection.open();
                         fabric_opened = true;
-                        DPRINT << "WW:opn" << ENDL();
                     }
                 }
                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
@@ -212,7 +207,6 @@ void kernel_main() {
                         if (!fabric_opened) {
                             fabric_connection.open();
                             fabric_opened = true;
-                            DPRINT << "WW:opn" << ENDL();
                         }
                     }
                     uint32_t l1_read_addr = get_read_ptr(cb_output_id);
@@ -242,7 +236,6 @@ void kernel_main() {
                             (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
                     }
                     noc_async_writes_flushed();
-                    fab_data_pkts_sent++;
 
                     dst_stick_id++;
 
@@ -270,16 +263,11 @@ void kernel_main() {
                     (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
             }
             noc_async_writes_flushed();
-            fab_sem_pkts_sent++;
         }
 
         // No local interior copy in this kernel. Dedicated local-copy kernels handle that work.
 
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
-    }
-
-    if constexpr (is_w_fabric_writer) {
-        DPRINT << "WW:s " << fab_data_pkts_sent << "d" << fab_sem_pkts_sent << "s" << ENDL();
     }
 
     // Ensure all DRAM writes from main loop are complete.
@@ -317,11 +305,6 @@ void kernel_main() {
         }
     }
 
-    // Debug delay: uncomment to add temporal separation before Phase 2 signal
-    // if constexpr (!is_w_fabric_writer) {
-    //     for (volatile uint32_t delay = 0; delay < 100000; delay++) {}
-    // }
-
     // Close fabric connection.
     if (fabric_opened) {
         noc_async_write_barrier();
@@ -335,8 +318,4 @@ void kernel_main() {
         noc_semaphore_inc(sem_noc_addr, 1);
     }
     noc_async_write_barrier();
-
-    if constexpr (is_w_fabric_writer) {
-        DPRINT << "WW:ok" << ENDL();
-    }
 }

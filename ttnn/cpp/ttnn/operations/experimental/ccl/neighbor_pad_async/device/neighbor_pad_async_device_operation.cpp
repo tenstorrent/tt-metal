@@ -180,9 +180,8 @@ Tensor neighbor_pad_async(
     using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
-    uint32_t num_devices;
     const auto& mesh_view = mesh_device->get_view();
-    num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     TT_FATAL(num_devices > 1, "neighbor_pad_async op will only work for num_devices > 1, but has {}", num_devices);
 

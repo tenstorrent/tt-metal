@@ -190,7 +190,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     if (operation_attributes.secondary_cluster_axis.has_value()) {
         // secondary_cluster_axis==1, devices on row
         // secondary_mesh_shape(0) == number of rows, (1) is number of cols
-        uint32_t secondary_cluster_axis_val = operation_attributes.secondary_cluster_axis.value_or((uint32_t)0);
+        uint32_t secondary_cluster_axis_val = operation_attributes.secondary_cluster_axis.value();
         uint32_t row_index = device_index / operation_attributes.secondary_mesh_shape.value().at(1);
         uint32_t col_index = device_index % operation_attributes.secondary_mesh_shape.value().at(1);
         if (secondary_cluster_axis_val) {
@@ -225,8 +225,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         }
     }
 
-    // Debug logging: device topology for H fabric
-    log_info(
+    log_trace(
         tt::LogOp,
         "NeighborPad H-fabric: mesh_coord=({},{}), device_index={}, src_node_id={}, "
         "fwd_offset={}, bwd_offset={}, is_first={}, is_last={}, cluster_axis={}",
@@ -240,7 +239,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         is_last_device,
         operation_attributes.cluster_axis);
     if (forward_coord.has_value()) {
-        log_info(
+        log_trace(
             tt::LogOp,
             "  forward_coord=({},{}), fwd_node_id={}",
             (*forward_coord)[0],
@@ -248,7 +247,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             mesh_device->get_fabric_node_id(forward_coord.value()));
     }
     if (backward_coord.has_value()) {
-        log_info(
+        log_trace(
             tt::LogOp,
             "  backward_coord=({},{}), bwd_node_id={}",
             (*backward_coord)[0],
@@ -268,7 +267,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         output_num_sticks_per_halo_dim =
             num_sticks_per_halo_dim + operation_attributes.pad2_left + operation_attributes.pad2_right;
         writer_stick_start_id = operation_attributes.pad2_left;
-        writer_num_sticks_to_read = num_sticks_per_halo_dim;  // still read original W sticks per row
     }
 
     // Get worker cores
@@ -352,7 +350,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             w_backward_device_offset = 1;
         }
 
-        log_info(
+        log_trace(
             tt::LogOp,
             "NeighborPad W-fabric: mesh_coord=({},{}), "
             "w_fwd_offset={}, w_bwd_offset={}, is_first_w={}, is_last_w={}",
@@ -664,7 +662,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         // Each H fabric writer and local copy writer signals Phase 2 exactly once,
         // after ALL their work is complete (main loop + handle_incoming_writes).
         uint32_t barrier_count = static_cast<uint32_t>(writer_kernel_ids.size() + local_writer_kernel_ids.size());
-        log_info(
+        log_trace(
             tt::LogOp,
             "NeighborPad2D: barrier_count={} (h_writers={} local_writers={}), "
             "w_outer_dim_size={}, is_first_h={}, is_last_h={}, is_first_w={}, is_last_w={}, "
@@ -686,7 +684,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 uint32_t w_core_idx = w_link * 2 + w_direction;
                 CoreCoord w_core = w_fabric_logical_cores[w_core_idx];
                 CoreCoord w_virtual_core = w_fabric_virtual_cores[w_core_idx];
-                // CoreCoord w_opposite_virtual_core = w_fabric_virtual_cores[w_link * 2 + (1 - w_direction)];
 
                 // Phase 2 W reader kernel — reads boundary sticks from output DRAM.
                 auto w_reader_kernel_config = ReaderDataMovementConfig{};

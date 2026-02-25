@@ -1,19 +1,18 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-//
+
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
-//
+
 using address_t = uint32_t;
-//
+
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr uint32_t stick_size = get_compile_time_arg_val(1);
 // TensorAccessorArgs at index 2 (variable length)
 constexpr auto dst_args = TensorAccessorArgs<2>();
-//
+
 void kernel_main() {
     DeviceZoneScopedN("NPAD-WRITER");
     // Args
@@ -38,10 +37,9 @@ void kernel_main() {
         signal_noc_y[t] = get_arg_val<uint32_t>(arg_idx++);
         barrier_sem_addr[t] = get_arg_val<uint32_t>(arg_idx++);
     }
-    //
+
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
-    //
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)
         const uint32_t outer_idx = linear_row / input_halo_dim_size;
@@ -71,5 +69,4 @@ void kernel_main() {
     }
     // Ensure sem inc signals are delivered before kernel exits.
     noc_async_write_barrier();
-    DPRINT << "LC:ok" << ENDL();
 }
