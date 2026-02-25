@@ -142,11 +142,8 @@ void MetalContext::initialize_device_manager(
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-    device_manager_->initialize(
-        device_ids,
-        init_profiler,
-        initialize_fabric_and_dispatch_fw,
-        create_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size));
+    context_descriptor_ = create_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size);
+    device_manager_->initialize(device_ids, init_profiler, initialize_fabric_and_dispatch_fw, context_descriptor_);
 }
 
 void MetalContext::initialize(
@@ -258,8 +255,9 @@ void MetalContext::initialize(
         return out;
     };
     // Use a different descriptor for risc firmware. l1/trace size/fabric settings don't matter for this.
+    risc_fw_context_descriptor_ = create_context_descriptor(num_hw_cqs_, 0, 0, worker_l1_size_);
     risc_firmware_initializer_ = std::make_unique<RiscFirmwareInitializer>(
-        create_context_descriptor(num_hw_cqs_, 0, 0, worker_l1_size_),
+        risc_fw_context_descriptor_,
         std::bind(&MetalContext::get_control_plane, this),
         *dispatch_core_manager_,
         fw_compile_hash,
@@ -335,6 +333,7 @@ void MetalContext::teardown() {
 
     risc_firmware_initializer_->teardown();
     risc_firmware_initializer_.reset();
+    risc_fw_context_descriptor_.reset();
 
     if (profiler_state_manager_) {
         profiler_state_manager_.reset();
