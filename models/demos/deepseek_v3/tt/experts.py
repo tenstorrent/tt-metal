@@ -73,7 +73,7 @@ class Experts(AbstractModule):
                     .transpose(-1, -2),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b if hf_name == "up_proj" else ttnn.bfloat4_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }
