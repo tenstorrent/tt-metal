@@ -770,7 +770,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         }
         log_info(tt::LogFabric, "Found {} best matches", best_matches.size());
 
-        // Store all best matches (add all entries that are possible)
+        // Store all best matches
         if (best_matches.empty()) {
             // No match found - use the MGD grouping info itself
             result[instance_type][instance_name].push_back(mgd_grouping_info);
