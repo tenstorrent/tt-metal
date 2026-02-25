@@ -290,10 +290,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 3. Enough work for all cores (total_pairs >= num_available_cores)
     const uint32_t pairs_per_seq = St / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
-    // const bool use_balanced_parallelism = (mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
-    //                                       (total_pairs >= num_available_cores) && (St > 0);
-
-    const bool use_balanced_parallelism = false;  // for testing
+    const bool use_balanced_parallelism =
+        (mask_type == AttentionMaskType::Causal) && (St % 2 == 0) && (total_pairs >= num_available_cores) && (St > 0);
 
     // Variables for work distribution (will be set based on parallelism mode)
     uint32_t num_cores = 0;

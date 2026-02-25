@@ -30,8 +30,6 @@
 #include "api/debug/dprint.h"
 #include "sdpa_compute_utils.hpp"
 
-namespace NAMESPACE {
-
 // For standard mode: num_rows_per_core = rows to process
 // For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
@@ -61,9 +59,6 @@ constexpr uint32_t cb_prev_mm_out = tt::CBIndex::c_13;   // used for holding pre
 constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding current matmul output
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
-
-<<<<<<< HEAD
-const uint32_t onetile = 1U;
 
 /**
  * Process a single row of the SDPA computation.
