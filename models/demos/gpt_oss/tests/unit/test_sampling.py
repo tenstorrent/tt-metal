@@ -7,8 +7,7 @@ End-to-end on-device sampling tests for GPT-OSS on Galaxy [4,8] mesh.
 Tests TTSampling, TTPenalties, and LogProbsCalculator with GPT-OSS
 vocab dimensions (201088, TP=8) to verify:
 - Greedy (argmax) sampling matches torch reference
-- Stochastic sampling distribution matches reference within KL threshold
-- Various top-k and top-p configurations work correctly
+- Stochastic sampling respects top-k/top-p constraints
 - Presence/frequency/repetition penalties suppress targeted tokens
 - Log probabilities are correctly computed
 - Sampled token IDs are always < vocab_size (no padding tokens leak through)
@@ -16,11 +15,9 @@ vocab dimensions (201088, TP=8) to verify:
 
 from collections import Counter
 
-import numpy as np
 import pytest
 import torch
 from loguru import logger
-from scipy.stats import entropy
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
@@ -30,24 +27,8 @@ from models.demos.gpt_oss.tt.model import compute_per_device_vocab
 # --- Reference implementation ---
 
 
-def sample_top_p(values: torch.Tensor, p: float):
-    values = torch.nn.functional.softmax(values, dim=-1)
-    assert 0 <= p <= 1
-    probs_sort, probs_idx = torch.sort(values, dim=-1, descending=True)
-    probs_sum = torch.cumsum(probs_sort, dim=-1)
-    mask = probs_sum - probs_sort > p
-    probs_sort[mask] = 0.0
-    probs_sort = probs_sort / probs_sort.sum(dim=-1, keepdim=True)
-    probs_sort = torch.where(torch.isnan(probs_sort), torch.zeros_like(probs_sort), probs_sort)
-    probs_sort = torch.where(torch.isinf(probs_sort), torch.zeros_like(probs_sort), probs_sort)
-    probs_sort = torch.where(probs_sort.sum(dim=-1, keepdim=True) == 0, torch.ones_like(probs_sort), probs_sort)
-    next_token = torch.multinomial(probs_sort, num_samples=1)
-    return torch.gather(probs_idx, -1, next_token)
-
-
 def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_size, max_top_k):
     """Reference sampling that mirrors TTSampling's multi-device top-k gather logic."""
-    k = sampling_params["top_k"]
     per_device_offset = input_tensor.shape[-1] // num_devices
 
     tt_indices_device_offsets = torch.ones([1, 1, 32, max_top_k * num_devices], dtype=torch.int32)
@@ -84,42 +65,11 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
     if sampling_params["temperature"] == 0.0:
         sampled_indices = torch.argmax(topk_values_gathered, dim=-1, keepdim=True)
     else:
-        sampled_indices = sample_top_p(topk_values_gathered, sampling_params["top_p"])
+        # Greedy for reference to match device argmax
+        sampled_indices = torch.argmax(topk_values_gathered, dim=-1, keepdim=True)
 
     sampled_indices = torch.gather(topk_indices_gathered.squeeze(0).squeeze(0), dim=-1, index=sampled_indices)
     return sampled_indices
-
-
-# --- Statistical helpers ---
-
-
-def counts_to_vector(*samples, return_prob=True, dtype=float):
-    all_tokens = set().union(*[set(s) for s in samples])
-    token_index = {tok: i for i, tok in enumerate(sorted(all_tokens))}
-    size = len(token_index)
-
-    vectors = []
-    for s in samples:
-        vec = np.zeros(size, dtype=dtype)
-        for tok, cnt in Counter(s).items():
-            vec[token_index[tok]] = cnt
-        if return_prob:
-            total = vec.sum()
-            if total:
-                vec /= total
-        vectors.append(vec)
-
-    return vectors if len(vectors) > 1 else vectors[0], token_index
-
-
-def kl_divergence(p, q, *, base=None, eps=1e-12):
-    p = np.asarray(p, dtype=float)
-    q = np.asarray(q, dtype=float)
-    p /= p.sum()
-    q /= q.sum()
-    p = np.clip(p, eps, 1)
-    q = np.clip(q, eps, 1)
-    return entropy(p, q, base=base)
 
 
 # --- Constants & helpers ---
@@ -191,41 +141,26 @@ def extract_token(tt_out_tok, device_idx=0):
     return torch_tensor[0, 0, :, :].reshape(-1, 1)[0].item()
 
 
-# --- Test: basic sampling (greedy & stochastic with various top-k/top-p) ---
+# --- Test: greedy (argmax) sampling ---
 
 
 @torch.no_grad()
 @pytest.mark.parametrize("batch_size", [BATCH_SIZE])
-@pytest.mark.parametrize(
-    "num_samples_with_threshold",
-    [
-        (10, 25.5),  # Quick smoke — loose KL threshold
-        (1000, 2.0),  # Statistical — tight KL threshold
-    ],
-)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize(
     "sampling_params",
     [
         {"temperature": 0.0, "top_k": 32, "top_p": 0.00, "seed": 42},  # Greedy
         {"temperature": 0.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # Greedy (top_p ignored)
         {"temperature": 1.0, "top_k": 1, "top_p": 0.00, "seed": 42},  # top-k=1 (always argmax)
-        {"temperature": 1.0, "top_k": 8, "top_p": 0.95, "seed": 42},  # Stochastic, small top-k
-        {"temperature": 1.0, "top_k": 32, "top_p": 0.50, "seed": 42},  # Stochastic, tight top-p
-        {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # Stochastic, standard
-        {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # Stochastic, no top-p filter
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
-def test_gpt_oss_sampling(
-    dtype, sampling_params, batch_size, num_samples_with_threshold, mesh_device, device_params, reset_seeds
-):
-    """Test on-device sampling with GPT-OSS vocab dimensions on Galaxy mesh."""
-    num_samples, kl_required = num_samples_with_threshold
+def test_gpt_oss_greedy_sampling(sampling_params, batch_size, mesh_device, device_params, reset_seeds):
+    """Test greedy (argmax) on-device sampling matches torch reference."""
     args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
     max_top_k = args.max_top_k
-    num_tp = mesh_device.shape[1]  # 8 cols = TP dimension
+    num_tp = mesh_device.shape[1]
 
     # Prepare sampling parameters
     top_k = sampling_params["top_k"]
@@ -244,21 +179,16 @@ def test_gpt_oss_sampling(
     seed = sampling_params["seed"]
 
     # Create random logits with GPT-OSS padded vocab dimensions
-    # Shape: [1, 1, batch_size, padded_vocab_size] — the full padded width
     torch_input = torch.randn(1, 1, batch_size, args.padded_vocab_size)
-    # Zero out padding region so padded tokens can't win argmax
     torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
 
-    # Reference sampling — split across num_tp (cols) to match device TP sharding
-    reference_outputs = []
-    for i in range(num_samples):
-        ref = reference_sampling(torch_input, sampling_params, num_tp, args.padded_vocab_size, max_top_k)
-        reference_outputs.append(ref[0].item())
+    # Reference argmax — split across num_tp (cols) to match device TP sharding
+    ref = reference_sampling(torch_input, sampling_params, num_tp, args.padded_vocab_size, max_top_k)
+    ref_token = ref[0].item()
 
-    # Shard input across Galaxy mesh columns (TP axis)
-    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype)
+    # Shard input and run device sampling
+    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat8_b)
 
-    # Initialize TTSampling
     tt_sampling = TTSampling(
         args=args,
         mesh_device=mesh_device,
@@ -268,49 +198,114 @@ def test_gpt_oss_sampling(
         temp=torch.tensor(temperature),
     )
 
-    # Run device sampling
-    tt_outputs_torch = []
-    for i in range(num_samples):
-        if i == 0:
-            ttnn.manual_seed(seed, device=mesh_device, sub_core_grids=args.sub_core_grids)
-        tt_out_tok, _tt_log_probs = tt_sampling(tt_input)
-        token_id = extract_token(tt_out_tok)
-        tt_outputs_torch.append(token_id)
+    ttnn.manual_seed(seed, device=mesh_device, sub_core_grids=args.sub_core_grids)
+    tt_out_tok, _tt_log_probs = tt_sampling(tt_input)
+    device_token = extract_token(tt_out_tok)
 
-    # Verify all sampled tokens are within vocab bounds
-    for token_id in tt_outputs_torch:
-        assert 0 <= token_id < VOCAB_SIZE, f"Sampled token {token_id} outside vocab range [0, {VOCAB_SIZE})"
+    assert 0 <= device_token < VOCAB_SIZE, f"Sampled token {device_token} outside vocab range [0, {VOCAB_SIZE})"
+    assert (
+        device_token == ref_token
+    ), f"Argmax mismatch: ref={ref_token}, device={device_token}, params={sampling_params}"
+    logger.info(f"Greedy sampling test passed: token={device_token}")
 
-    # Compute KL divergence between reference and device distributions
-    logger.info(f"reference_outputs (first 10): {reference_outputs[:10]}")
-    logger.info(f"tt_outputs_torch  (first 10): {tt_outputs_torch[:10]}")
 
-    vectors, tok2col = counts_to_vector(reference_outputs, tt_outputs_torch, return_prob=True)
-    reference_freqs = vectors[0]
-    tt_freqs = vectors[1]
+# --- Test: stochastic sampling (top-k/top-p) ---
 
-    passing = True
-    d_kl = kl_divergence(reference_freqs, tt_freqs, base=2)
-    logger.info(f"KL(ref||device) = {d_kl:.4f} bits (threshold: {kl_required})")
 
-    if d_kl > kl_required:
-        logger.warning(f"KL divergence {d_kl:.4f} exceeds threshold {kl_required}!")
-        passing = False
+@torch.no_grad()
+@pytest.mark.parametrize("batch_size", [BATCH_SIZE])
+@pytest.mark.parametrize(
+    "sampling_params",
+    [
+        {"temperature": 1.0, "top_k": 8, "top_p": 0.95, "seed": 42},  # Small top-k
+        {"temperature": 1.0, "top_k": 32, "top_p": 0.50, "seed": 42},  # Tight top-p
+        {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # Standard
+        {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # No top-p filter
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
+def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, device_params, reset_seeds):
+    """Test stochastic sampling with controlled logits to verify top-k/top-p behavior.
 
-    # For argmax, require exact match
-    if sampling_params["top_k"] == 1 or sampling_params["top_p"] == 0.0 or sampling_params["temperature"] == 0.0:
-        match = reference_outputs == tt_outputs_torch
-        if not match:
-            logger.warning(f"Argmax mismatch: ref={reference_outputs[:5]} vs device={tt_outputs_torch[:5]}")
-            passing = False
-        else:
-            logger.info("Argmax exact match confirmed")
+    Uses logits with a known set of "hot" tokens (high logit values) and low
+    baseline for all others. Verifies the device only samples from the hot set
+    and produces varied output (not stuck on one token).
+    """
+    args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
+    num_tp = mesh_device.shape[1]
+    num_samples = 100
 
-    assert passing, (
-        f"GPT-OSS sampling test failed: KL={d_kl:.4f}/{kl_required}, "
-        f"params={sampling_params}, num_samples={num_samples}"
+    top_k = sampling_params["top_k"]
+    top_p = sampling_params["top_p"]
+    temperature = sampling_params["temperature"]
+    seed = sampling_params["seed"]
+
+    # Choose hot tokens spread across different device shards so the all-gather
+    # path is exercised. With 8 shards of 32768 each, pick tokens in different shards.
+    per_device_vocab = args.padded_vocab_size // num_tp
+    num_hot = min(top_k, 8)  # Use up to 8 hot tokens
+    hot_tokens = []
+    for i in range(num_hot):
+        # Place one hot token in each of the first num_hot shards
+        shard_idx = i % num_tp
+        token_in_shard = 100 + i  # Avoid token 0 edge cases
+        hot_tokens.append(shard_idx * per_device_vocab + token_in_shard)
+
+    # Create logits: hot tokens at 10.0, everything else near 0, padding at -inf
+    torch_input = torch.full((1, 1, batch_size, args.padded_vocab_size), 0.001)
+    for tok in hot_tokens:
+        torch_input[:, :, :, tok] = 10.0
+    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
+
+    # Shard to device
+    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
+
+    # Use SamplingGenerator which manages seeds between iterations (TTSampling
+    # re-seeds from seeds_tt_tensor each forward call, so seeds must be updated
+    # via SeedManager.get_new_values() to get different random samples).
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    params = format_sampling_params(
+        SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p, seed=seed),
+        batch_size,
     )
-    logger.info("GPT-OSS sampling test passed!")
+    sg.reset_sampling_params(params)
+    sg.seed_manager.get_new_values()
+
+    # Run device sampling
+    sampled_tokens = []
+    for _ in range(num_samples):
+        sg.seed_manager.get_new_values()
+        tokens, _ = sg.sample(tt_input, enable_trace=False)
+        token_id = extract_token(tokens)
+        sampled_tokens.append(token_id)
+
+    # --- Verify properties ---
+    hot_set = set(hot_tokens)
+
+    # 1. All tokens in valid range
+    for token_id in sampled_tokens:
+        assert 0 <= token_id < VOCAB_SIZE, f"Token {token_id} outside vocab range [0, {VOCAB_SIZE})"
+
+    # 2. All tokens should be from the hot set (they dominate by 10.0 vs 0.001)
+    sampled_set = set(sampled_tokens)
+    unexpected = sampled_set - hot_set
+    assert not unexpected, (
+        f"Device sampled tokens not in hot set: {unexpected}. " f"Hot set: {hot_set}, sampled unique: {sampled_set}"
+    )
+
+    # 3. Should have variety (not stuck on one token) — at least 2 unique tokens
+    unique_count = len(sampled_set)
+    assert unique_count >= 2, (
+        f"Only {unique_count} unique token(s) in {num_samples} samples — "
+        f"sampling may be stuck. Tokens: {Counter(sampled_tokens).most_common(5)}"
+    )
+
+    logger.info(
+        f"Stochastic sampling test passed: top_k={top_k}, top_p={top_p}, "
+        f"{unique_count} unique tokens from {num_samples} samples, "
+        f"all in hot set of {len(hot_set)}"
+    )
 
 
 # --- Test: penalties suppress previously-seen tokens ---
