@@ -27,12 +27,6 @@ add_executable(nano_gpt ${MAIN_SOURCES})
 target_link_libraries(nano_gpt PRIVATE ttml)
 add_executable(llama_inference ${llama_inference_SOURCES})
 target_link_libraries(llama_inference PRIVATE ttml)
-target_compile_definitions(
-    llama_inference
-    PRIVATE
-        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
-)
 add_executable(nano_gpt_aggregator ${AGGREGATOR_SOURCES})
 target_link_libraries(nano_gpt_aggregator PRIVATE ttml)
 add_executable(nano_gpt_optimizer ${OPTIMIZER_SOURCES})
