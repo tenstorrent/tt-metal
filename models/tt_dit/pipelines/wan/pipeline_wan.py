@@ -396,6 +396,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
+            create_cache=False,
         )
 
     def _prepare_transformer2(self):
@@ -406,6 +407,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
+            create_cache=False,
         )
 
     def _prepare_vae(self):
