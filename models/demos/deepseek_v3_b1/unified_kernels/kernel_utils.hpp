@@ -77,13 +77,16 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
 // Cross-RISC synchronization
 // ============================================================================
 
-// Full cross-RISC synchronization barrier using two atomic L1 semaphores.
-// sem_addr[0] = phase 1 (others → NC), sem_addr[1] = phase 2 (NC → others)
+// Two-phase cross-RISC synchronization barrier using atomic L1 semaphores.
+// Used by reconfig_cb_interfaces to ensure NC resets stream regs only after
+// all other RISCs (BR/TR0/TR2) have completed prior work.
 //
-// Usage:
-//   sync_riscs_enter(sem);   // BR/TR0/TR2 signal done, NC waits for all 3
-//   // ... NC does exclusive work (stream reg reset, setup_sharded_buffer) ...
-//   sync_riscs_exit(sem);    // NC signals done, BR/TR0/TR2 wait then proceed
+// Phase 1 (enter): BR/TR0/TR2 signal done → NC waits for all 3, then proceeds.
+// Phase 2 (exit):  NC signals done → BR/TR0/TR2 wait, then all proceed together.
+//
+// Safe for repeated use: the full MoE body executes between exit and the next
+// enter, so sem[0] is always 0 when the next iteration's enter begins.
+// sem[0] reset is non-atomic but safe because others are blocked on sem[1].
 
 // Phase 1: BR/TR0/TR2 signal done → NC waits for all 3
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
@@ -112,8 +115,8 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 // ============================================================================
 
 // Minimal CB reconfig: reset fifo pointers from a config tensor in L1.
-// Only sets fifo_rd_ptr, fifo_wr_ptr, fifo_size, fifo_limit, fifo_page_size, fifo_num_pages.
-// Does NOT touch tiles_acked_received_init or fifo_wr_tile_ptr.
+// Sets fifo_rd_ptr, fifo_wr_ptr, fifo_size, fifo_limit, fifo_page_size, fifo_num_pages,
+// tiles_acked_received_init, and fifo_wr_tile_ptr. Also resets stream regs on NCRISC.
 //
 // Config tensor layout per core (264 uint32):
 //   Words 0-255: 64 CB configs, 4 words each [addr, size, num_pages, page_size] (bytes)
