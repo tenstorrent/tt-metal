@@ -735,7 +735,7 @@ TEST_F(GeluBwUlpTest, SummaryStatistics) {
 
 /**
  * Helper function to run experimental GELU backward with polynomial approximation.
- * Uses ttnn::experimental::gelu_bw with approximate="poly"
+ * Uses ttnn::experimental::gelu_bw with approximate="none" (default polynomial path)
  */
 float run_gelu_bw_poly_single(tt::tt_metal::distributed::MeshDevice& device, float input_val, float grad_val = 1.0f) {
     std::array<uint32_t, 4> dims = {1, 1, 32, 32};
@@ -744,8 +744,8 @@ float run_gelu_bw_poly_single(tt::tt_metal::distributed::MeshDevice& device, flo
     auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     auto grad_tensor = ttnn::full(shape, grad_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
 
-    // Call experimental gelu_bw with approximate="poly" (polynomial approximation)
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "poly");
+    // Call experimental gelu_bw with approximate="none" (polynomial approximation)
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
 
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
@@ -896,7 +896,7 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     // Run experimental GELU backward with polynomial approximation
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "poly");
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1073,7 +1073,7 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "poly");
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1261,7 +1261,7 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
     auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "poly");
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 

@@ -234,7 +234,7 @@ GELU BACKWARD ULP ANALYSIS BY REGION (DAZ+FTZ MODEL)
 
 #### Root Cause Analysis
 
-The GELU backward kernel is located at:
+The GELU backward kernel was located at (now deleted, replaced by polynomial kernel):
 `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp`
 
 ```cpp
@@ -333,6 +333,7 @@ P1
 
 ### References
 
-- **GELU backward kernel:** `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp`
+- **GELU backward kernel (old, deleted):** `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp`
+- **GELU backward kernel (new, polynomial):** `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_poly.cpp`
 - **erf/erfc API:** `tt_metal/include/compute_kernel_api/eltwise_unary/erf_erfc.h`
 - **Hardware special values:** `tech_reports/Handling_Special_Value/special_values.md`

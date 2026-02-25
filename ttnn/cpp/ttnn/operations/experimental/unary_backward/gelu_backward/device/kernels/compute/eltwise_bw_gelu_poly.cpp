@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute kernel for GELU backward using polynomial-based GELU derivative
-// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 54)
+// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
