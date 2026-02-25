@@ -81,8 +81,10 @@ void kernel_main() {
     uint32_t trid = 1u;  // MUST START WITH ONE
     uint32_t trid_to_wait = trid;
 
+    constexpr uint32_t num_batches = 2;  // noc transcation must be overlapped
     constexpr uint32_t max_num_tiles_per_batch = 4;
-    uint32_t num_tiles_per_batch = args.num_tiles > max_num_tiles_per_batch ? max_num_tiles_per_batch : args.num_tiles;
+    const uint32_t num_tiles_per_batch =
+        args.num_tiles > max_num_tiles_per_batch ? max_num_tiles_per_batch : args.num_tiles;
 
     cb_reserve_back(c_args.a_tensor_cb, num_tiles_per_batch);
     cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
@@ -92,19 +94,23 @@ void kernel_main() {
     uint32_t a_write_end_ptr = a_write_base_ptr + CB_PAGE_COUNT(c_args.a_tensor_cb) * a_tile_size;
     uint32_t b_write_end_ptr = b_write_base_ptr + CB_PAGE_COUNT(c_args.a_tensor_cb) * b_tile_size;
 
-    auto next_a_cb_addr = [&](uint32_t addr) {
-        addr += a_tile_size;
-
-        if (addr >= a_write_end_ptr) {
-            addr = a_write_base_ptr;
+    auto next_a_cb_addr = [&](uint32_t addr, uint32_t num_tiles = 1) {
+        for (auto j = 0u; j < num_tiles; j++) {
+            addr += a_tile_size;
+            if (addr >= a_write_end_ptr) {
+                addr = a_write_base_ptr;
+            }
         }
+
         return addr;
     };
 
-    auto next_b_cb_addr = [&](uint32_t addr) {
-        addr += b_tile_size;
-        if (addr >= b_write_end_ptr) {
-            addr = b_write_base_ptr;
+    auto next_b_cb_addr = [&](uint32_t addr, uint32_t num_tiles = 1) {
+        for (auto j = 0u; j < num_tiles; j++) {
+            addr += b_tile_size;
+            if (addr >= b_write_end_ptr) {
+                addr = b_write_base_ptr;
+            }
         }
         return addr;
     };
@@ -115,14 +121,12 @@ void kernel_main() {
     // DPRINT << "Reader kernel. num_tiles: " << args.num_tiles << ", num_tiles_to_read: " << num_tiles_per_batch
     //        << ENDL();
 
-    // auto debug_cb_tile_id = 3;
+    auto n_tiles_proc = num_batches * num_tiles_per_batch;
 
-    constexpr uint32_t num_batches = 4;
-    auto num_tail_tiles = args.num_tiles % (num_batches * num_tiles_per_batch);
+    auto num_tail_tiles = args.num_tiles % n_tiles_proc;
     auto num_tiles = args.num_tiles - num_tail_tiles;
-
-    auto transfer_sz = num_batches * num_tiles_per_batch * a_tile_size;
-    for (auto i = 0u; i < num_tiles; i += num_batches * num_tiles_per_batch) {
+    auto transfer_sz = n_tiles_proc * a_tile_size;
+    for (auto i = 0u; i < num_tiles; i += n_tiles_proc) {
         noc_async_read_set_trid(trid);
 
         // DeviceZoneScopedN("READ_TILES");
@@ -130,9 +134,7 @@ void kernel_main() {
         noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz, args.vc);
         noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
         a_addr_ofs += transfer_sz;
-        for (auto j = 0u; j < num_tiles_per_batch; j++) {
-            a_write_ptr = next_a_cb_addr(a_write_ptr);
-        }
+        a_write_ptr = next_a_cb_addr(a_write_ptr, n_tiles_proc);
 
         // noc_async_read_one_packet_set_state<true>(b_noc_addr, num_tiles_per_batch * b_tile_size, args.vc);
         // noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_write_ptr, trid);
@@ -146,21 +148,24 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(trid_to_wait);
             trid_to_wait = get_next_trid(trid_to_wait);
 
-            // cb_push_back(c_args.a_tensor_cb, num_tiles_per_batch);
+            // cb_push_back(c_args.a_tensor_cb, n_tiles_proc);
             // cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
 
-            // cb_reserve_back(c_args.a_tensor_cb, num_tiles_per_batch);
+            // cb_reserve_back(c_args.a_tensor_cb, n_tiles_proc);
             // cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
         }
         trid = get_next_trid(trid);
     }
 
+    auto prev_n_tiles_proc = n_tiles_proc;
+    n_tiles_proc = num_tiles_per_batch;
+
+    transfer_sz = n_tiles_proc * a_tile_size;
     num_tiles = args.num_tiles - num_tiles;
-    num_tail_tiles = num_tiles % (num_tiles_per_batch);
+    num_tail_tiles = num_tiles % n_tiles_proc;
     num_tiles = num_tiles - num_tail_tiles;
 
-    transfer_sz = num_tiles * a_tile_size;
-    for (auto i = 0u; i < num_tiles; i += num_tiles_per_batch) {
+    for (auto i = 0u; i < num_tiles; i += n_tiles_proc) {
         noc_async_read_set_trid(trid);
 
         // DeviceZoneScopedN("READ_TILES");
@@ -168,9 +173,7 @@ void kernel_main() {
         noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz, args.vc);
         noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
         a_addr_ofs += transfer_sz;
-        for (auto j = 0u; j < num_tiles_per_batch; j++) {
-            a_write_ptr = next_a_cb_addr(a_write_ptr);
-        }
+        a_write_ptr = next_a_cb_addr(a_write_ptr, n_tiles_proc);
 
         // noc_async_read_one_packet_set_state<true>(b_noc_addr, num_tiles_per_batch * b_tile_size, args.vc);
         // noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_write_ptr, trid);
@@ -184,27 +187,37 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(trid_to_wait);
             trid_to_wait = get_next_trid(trid_to_wait);
 
-            // cb_push_back(c_args.a_tensor_cb, num_tiles_per_batch);
-            // cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
+            // cb_push_back(c_args.a_tensor_cb, n_tiles_proc);
+            // cb_push_back(c_args.b_tensor_cb, n_tiles_proc);
 
-            // cb_reserve_back(c_args.a_tensor_cb, num_tiles_per_batch);
-            // cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
+            // cb_reserve_back(c_args.a_tensor_cb, n_tiles_proc);
+            // cb_reserve_back(c_args.b_tensor_cb, n_tiles_proc);
+        } else {
+            noc_async_read_barrier_with_trid(trid_to_wait);
+            trid_to_wait = get_next_trid(trid_to_wait);
+
+            // cb_push_back(c_args.a_tensor_cb, prev_n_tiles_proc);
+            // cb_push_back(c_args.b_tensor_cb, prev_n_tiles_proc);
+
+            // cb_reserve_back(c_args.a_tensor_cb, prev_n_tiles_proc);
+            // cb_reserve_back(c_args.b_tensor_cb, prev_n_tiles_proc);
         }
         trid = get_next_trid(trid);
     }
 
+    prev_n_tiles_proc = n_tiles_proc;
+    n_tiles_proc = num_tail_tiles;
+    transfer_sz = n_tiles_proc * a_tile_size;
     // handle tail tiles
-    if (num_tail_tiles != 0) {
+    if (n_tiles_proc != 0) {
         // DeviceZoneScopedN("READER_KERNEL_DATA_MOVEMENT");
         // DPRINT << "Schedule read with trid " << trid << ENDL();
         noc_async_read_set_trid(trid);
 
-        noc_async_read_one_packet_set_state<true>(a_noc_addr, num_tiles_per_batch * a_tile_size, args.vc);
+        noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz, args.vc);
         noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
-        for (auto j = 0u; j < num_tiles_per_batch; j++) {
-            a_addr_ofs += a_tile_size;
-            a_write_ptr = next_a_cb_addr(a_write_ptr);
-        }
+        a_addr_ofs += transfer_sz;
+        a_write_ptr = next_a_cb_addr(a_write_ptr, n_tiles_proc);
 
         // noc_async_read_one_packet_set_state<true>(b_noc_addr, b_tile_size, args.vc);
         // for (auto j = 0u; j < num_tiles_per_batch; j++) {
@@ -215,21 +228,17 @@ void kernel_main() {
         // }
 
         trid = get_next_trid(trid);
-        {
-            // DeviceZoneScopedN("READER_KERNEL_BARRIER_TAIL");
-            noc_async_read_barrier_with_trid(trid_to_wait);
-        }
+        noc_async_read_barrier_with_trid(trid_to_wait);
+
         trid_to_wait = get_next_trid(trid_to_wait);
 
         // DPRINT << "2.push data from trid " << trid_to_wait << ENDL();
 
-        // cb_push_back(c_args.a_tensor_cb, num_tiles_per_batch);
-        // cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
+        // cb_push_back(c_args.a_tensor_cb, prev_n_tiles_proc);
+        // cb_push_back(c_args.b_tensor_cb, prev_n_tiles_proc);
 
-        // cb_reserve_back(c_args.a_tensor_cb, num_tail_tiles);
-        // cb_reserve_back(c_args.b_tensor_cb, num_tail_tiles);
-
-        num_tiles_per_batch = num_tail_tiles;
+        // cb_reserve_back(c_args.a_tensor_cb, n_tiles_proc);
+        // cb_reserve_back(c_args.b_tensor_cb, n_tiles_proc);
     }
 
     {
@@ -239,8 +248,8 @@ void kernel_main() {
 
     // DPRINT << "3.push data from trid " << trid_to_wait << ENDL();
 
-    // cb_push_back(c_args.a_tensor_cb, num_tiles_per_batch);
-    // cb_push_back(c_args.b_tensor_cb, num_tiles_per_batch);
+    // cb_push_back(c_args.a_tensor_cb, n_tiles_proc);
+    // cb_push_back(c_args.b_tensor_cb, n_tiles_proc);
 
 #endif
 
