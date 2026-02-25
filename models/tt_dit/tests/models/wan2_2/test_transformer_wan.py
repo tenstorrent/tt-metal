@@ -96,9 +96,9 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
 @pytest.mark.parametrize(
     ("B", "T", "H", "W", "prompt_seq_len"),
     [
-        pytest.param(1, 31, 40, 80, 118, id="5b-720p"),
-        pytest.param(1, 21, 60, 104, 118, id="14b-480p"),
-        pytest.param(1, 21, 90, 160, 118, id="14b-720p"),
+        pytest.param(1, 31, 40, 80, 512, id="5b-720p"),
+        pytest.param(1, 21, 60, 104, 512, id="14b-480p"),
+        pytest.param(1, 21, 90, 160, 512, id="14b-720p"),
     ],
 )
 def test_wan_transformer_block(
