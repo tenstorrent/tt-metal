@@ -548,9 +548,11 @@ namespace {
 ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
     const ::tt::tt_fabric::AdjacencyGraph<MeshId>& mesh_physical_graph, const TopologyMappingConfig& config) {
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
-    // TODO: Remove this once rank bindings file is removed from multi-host systems
-    // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
+
+    // Only add required constraints when rank bindings are enabled
     if (!config.disable_rank_bindings) {
+        // TODO: Remove this once rank bindings file is removed from multi-host systems
+        // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
         for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
             if (!inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id)) {
                 TT_THROW("Failed to add required constraint for mesh {}", mesh_id.get());
@@ -613,9 +615,94 @@ void add_rank_binding_constraints(
     if (!config.disable_rank_bindings) {
         // Check that rank mappings are provided
         if (fabric_node_id_to_mesh_rank.contains(logical_mesh_id) && asic_id_to_mesh_rank.contains(logical_mesh_id)) {
-            if (!intra_mesh_constraints.add_required_trait_constraint(
-                    fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id))) {
-                TT_THROW("Failed to add required trait constraint for rank bindings in mesh {}", logical_mesh_id.get());
+            const auto& fabric_node_ranks = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
+            const auto& asic_ranks = asic_id_to_mesh_rank.at(logical_mesh_id);
+
+            // Group fabric nodes by rank
+            std::map<MeshHostRankId, std::set<FabricNodeId>> rank_to_fabric_nodes;
+            for (const auto& [fabric_node, rank] : fabric_node_ranks) {
+                rank_to_fabric_nodes[rank].insert(fabric_node);
+            }
+
+            // Group ASICs by rank.
+            // - hostname_to_asics empty: add non-UNSET ASICs directly (original behavior).
+            // - hostname_to_asics non-empty: legacy ASICs (not in config) go by rank; hosts with one rank get that
+            //   rank; UNSET-only hosts pool to any unclaimed rank.
+            std::map<MeshHostRankId, std::set<tt::tt_metal::AsicID>> rank_to_asics;
+            std::set<MeshHostRankId> claimed_ranks;
+            std::unordered_set<tt::tt_metal::AsicID> asics_in_host_config;
+            for (const auto& [_, asic_set] : config.hostname_to_asics) {
+                for (const auto& a : asic_set) {
+                    asics_in_host_config.insert(a);
+                }
+            }
+
+            // Legacy ASICs (not in host config): add non-UNSET by rank.
+            for (const auto& [asic_id, rank] : asic_ranks) {
+                if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET && !asics_in_host_config.contains(asic_id)) {
+                    rank_to_asics[rank].insert(asic_id);
+                }
+            }
+
+            if (!config.hostname_to_asics.empty()) {
+                std::set<tt::tt_metal::AsicID> unset_asic_pool;
+                for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
+                    std::vector<std::pair<tt::tt_metal::AsicID, MeshHostRankId>> host_pairs;
+                    for (const auto& asic_id : asic_set) {
+                        auto it = asic_ranks.find(asic_id);
+                        if (it != asic_ranks.end()) {
+                            host_pairs.emplace_back(asic_id, it->second);
+                        }
+                    }
+                    if (host_pairs.empty()) {
+                        continue;
+                    }
+                    std::optional<MeshHostRankId> host_rank;
+                    for (const auto& [_, rank] : host_pairs) {
+                        if (rank != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+                            if (host_rank.has_value() && host_rank.value() != rank) {
+                                TT_THROW(
+                                    "Host consistency violated: host {} has ASICs with inconsistent ranks ({} and {}). "
+                                    "Each host in the PSD must have exactly one rank binding.",
+                                    hostname,
+                                    host_rank->get(),
+                                    rank.get());
+                            }
+                            host_rank = rank;
+                        }
+                    }
+                    if (host_rank.has_value()) {
+                        claimed_ranks.insert(host_rank.value());
+                        for (const auto& [asic_id, _] : host_pairs) {
+                            rank_to_asics[host_rank.value()].insert(asic_id);
+                        }
+                    } else {
+                        for (const auto& [asic_id, _] : host_pairs) {
+                            unset_asic_pool.insert(asic_id);
+                        }
+                    }
+                }
+                for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
+                    if (!fn_set.empty() && !claimed_ranks.contains(r)) {
+                        for (const auto& asic_id : unset_asic_pool) {
+                            rank_to_asics[r].insert(asic_id);
+                        }
+                    }
+                }
+            }
+
+            // Add many-to-many required constraints for each rank
+            // This allows any fabric node with a given rank to map to any ASIC with the same rank
+            for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
+                auto asic_it = rank_to_asics.find(rank);
+                if (asic_it != rank_to_asics.end()) {
+                    if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, asic_it->second)) {
+                        TT_THROW(
+                            "Failed to add required constraint for rank bindings in mesh {} for rank {}",
+                            logical_mesh_id.get(),
+                            rank);
+                    }
+                }
             }
         }
     }
@@ -934,18 +1021,6 @@ TopologyMappingResult map_multi_mesh_to_physical(
         "Starting multi-mesh mapping: {} logical mesh(es) to {} physical mesh(es)",
         logical_meshes.size(),
         physical_meshes.size());
-
-    // If rank bindings are disabled, initialize valid mappings for all logical meshes
-    // to all physical meshes so that forbidden constraints can be applied
-    if (config.disable_rank_bindings) {
-        std::set<MeshId> physical_mesh_set(physical_meshes.begin(), physical_meshes.end());
-        for (const auto& logical_mesh_id : logical_meshes) {
-            if (!inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_mesh_set)) {
-                TT_THROW("Failed to add required constraint for logical mesh {}", logical_mesh_id.get());
-            }
-        }
-        log_debug(tt::LogFabric, "Rank bindings disabled - all logical meshes can map to any physical mesh");
-    }
 
     bool success = false;
 
