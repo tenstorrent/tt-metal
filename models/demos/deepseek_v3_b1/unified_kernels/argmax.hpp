@@ -274,26 +274,37 @@ struct Sampling {
             auto fabric_sender =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             fabric_sender.open();
-            DPRINT << "Fabric sender opened" << ENDL();
+            DPRINT << "mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                   << get_named_compile_time_arg_val("mesh_col")
+                   << "): Fabric sender opened, dst_mesh=" << metadata.dst_mesh_id
+                   << " dst_chip=" << metadata.dst_chip_id << ENDL();
             fabric_sender.wait_for_empty_write_slot();
-            DPRINT << "Fabric sender waited for empty write slot" << ENDL();
+            DPRINT << "mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                   << get_named_compile_time_arg_val("mesh_col") << "): Fabric sender sending payload" << ENDL();
             fabric_sender.send_payload_without_header_non_blocking_from_address(
                 local_slot_addr, CTArgs::winner_page_bytes);
-            DPRINT << "Fabric sender sent payload without header non-blocking" << ENDL();
             fabric_sender.send_payload_flush_blocking_from_address(
                 reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
-            DPRINT << "Fabric sender sent payload flush blocking" << ENDL();
+            DPRINT << "mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                   << get_named_compile_time_arg_val("mesh_col") << "): Fabric sender flush done" << ENDL();
             fabric_sender.close();
-            DPRINT << "Fabric sender closed" << ENDL();
+            DPRINT << "mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                   << get_named_compile_time_arg_val("mesh_col") << "): Fabric sender closed" << ENDL();
             noc_async_full_barrier();
         }
 
         FORCE_INLINE void send_persistent_next_iter_inc_via_fabric_brisc(const WriterArgs& args, size_t& arg_idx) {
-            DPRINT << "Sending persistent next iteration increment via fabric BRISC" << ENDL();
+            constexpr uint32_t pr = get_named_compile_time_arg_val("mesh_row");
+            constexpr uint32_t pc = get_named_compile_time_arg_val("mesh_col");
+            DPRINT << "mesh=(" << pr << "," << pc << "): persistent inc via fabric, enable=" << args.persistent_enable
+                   << ENDL();
             if (args.persistent_enable == 0) {
                 return;
             }
-            DPRINT << "Persistent next iteration increment enabled" << ENDL();
+            DPRINT << "mesh=(" << pr << "," << pc << "): persistent inc dst_noc=(" << args.persistent_dst_noc_x << ","
+                   << args.persistent_dst_noc_y << ") dst_mesh=" << args.persistent_dst_mesh_id
+                   << " dst_chip=" << args.persistent_dst_chip_id << " sem_addr=" << args.persistent_dst_sem_addr
+                   << ENDL();
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
@@ -313,7 +324,7 @@ struct Sampling {
                 reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
             fabric_sender.close();
             noc_async_full_barrier();
-            DPRINT << "Persistent next iteration increment sent via fabric BRISC" << ENDL();
+            DPRINT << "mesh=(" << pr << "," << pc << "): persistent inc sent" << ENDL();
         }
 
         FORCE_INLINE void send_d2h_token_from_cb_brisc(const WriterArgs& args) {
@@ -346,17 +357,19 @@ struct Sampling {
 
         FORCE_INLINE void send_d2d_token_from_cb_brisc(const WriterArgs& args) {
             const uint32_t socket_config_addr = args.socket_config_addr;
-            DPRINT << "Creating sender socket interface" << ENDL();
+            constexpr uint32_t mr = get_named_compile_time_arg_val("mesh_row");
+            constexpr uint32_t mc = get_named_compile_time_arg_val("mesh_col");
+            DPRINT << "D2D mesh=(" << mr << "," << mc << "): Creating sender socket" << ENDL();
             SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
-            DPRINT << "Setting sender socket page size" << ENDL();
+            DPRINT << "D2D mesh=(" << mr << "," << mc << "): Setting page size" << ENDL();
             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
 
-            DPRINT << "Reserving pages on sender socket" << ENDL();
+            DPRINT << "D2D mesh=(" << mr << "," << mc << "): Reserving pages" << ENDL();
             socket_reserve_pages(sender_socket, 1);
-            DPRINT << "Pages reserved on sender socket" << ENDL();
+            DPRINT << "D2D mesh=(" << mr << "," << mc << "): Pages reserved, waiting cb_wait_front" << ENDL();
             cb_wait_front(CTArgs::socket_cb_id, 1);
             const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
-            DPRINT << "Read address: " << read_addr << ENDL();
+            DPRINT << "D2D mesh=(" << mr << "," << mc << "): Read addr=" << read_addr << ENDL();
             for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
                 sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
                 DPRINT << "Writing to downstream socket" << ENDL();
@@ -418,12 +431,14 @@ struct Sampling {
 
             // Phase 2: final-core intra-device reduction across all active cores.
             if constexpr (IsFinalCore) {
-                DPRINT << "NCRISC: Waiting for intra-device reduction (expect " << CTArgs::expected_remote_incs
-                       << " incs)" << ENDL();
+                DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): Waiting for intra-device reduction (expect "
+                       << CTArgs::expected_remote_incs << " incs)" << ENDL();
                 auto recv_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs);
-                DPRINT << "NCRISC: Intra-device reduction complete" << ENDL();
+                DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): Intra-device reduction complete" << ENDL();
 
                 uint16_t global_best_score = NEG_INF_BFLOAT16;
                 uint32_t global_best_index = 0xFFFFFFFF;
@@ -432,13 +447,22 @@ struct Sampling {
                 // Phase 3: mesh-only inter-device reductions (stage-1 then stage-2).
                 if constexpr (CTArgs::mesh_mode) {
                     if constexpr (CTArgs::stage1_receiver) {
-                        DPRINT << "NCRISC: Waiting for stage1 mesh data (expect " << CTArgs::stage1_expected_remote_incs
-                               << " incs)" << ENDL();
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage1_local_slot_offset, global_best_score, global_best_index);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
+                        constexpr uint32_t my_row = get_named_compile_time_arg_val("mesh_row");
+                        constexpr uint32_t my_col = get_named_compile_time_arg_val("mesh_col");
+                        DPRINT << "NCRISC mesh=(" << my_row << "," << my_col
+                               << "): Waiting for stage1 mesh data (expect " << CTArgs::stage1_expected_remote_incs
+                               << " incs, current=" << *global_sem_ptr << ")" << ENDL();
+                        while (*global_sem_ptr < CTArgs::stage1_expected_remote_incs) {
+                            invalidate_l1_cache();
+                            DPRINT << "NCRISC mesh=(" << my_row << "," << my_col << "): stage1 sem=" << *global_sem_ptr
+                                   << ENDL();
+                        }
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
-                        DPRINT << "NCRISC: Stage1 mesh data received" << ENDL();
+                        DPRINT << "NCRISC mesh=(" << my_row << "," << my_col << "): Stage1 mesh data received"
+                               << ENDL();
                         uint16_t stage1_best_score = NEG_INF_BFLOAT16;
                         uint32_t stage1_best_index = 0xFFFFFFFF;
                         phase3_reduce_mesh_stage_slots(
@@ -471,18 +495,24 @@ struct Sampling {
                         auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                             get_semaphore(CTArgs::local_ready_semaphore_id));
                         noc_semaphore_set(local_ready_sem_ptr, 1);
-                        DPRINT << "NCRISC: Mesh sender signaled local_ready_sem" << ENDL();
+                        DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                               << get_named_compile_time_arg_val("mesh_col")
+                               << "): Mesh sender signaled local_ready_sem" << ENDL();
                     }
 
                     if constexpr (CTArgs::stage2_receiver) {
-                        DPRINT << "NCRISC: Waiting for stage2 mesh data (expect " << CTArgs::stage2_expected_remote_incs
+                        DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                               << get_named_compile_time_arg_val("mesh_col")
+                               << "): Waiting for stage2 mesh data (expect " << CTArgs::stage2_expected_remote_incs
                                << " incs)" << ENDL();
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage2_local_slot_offset, global_best_score, global_best_index);
                         auto global_stage2_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
                         wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
-                        DPRINT << "NCRISC: Stage2 mesh data received" << ENDL();
+                        DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                               << get_named_compile_time_arg_val("mesh_col") << "): Stage2 mesh data received"
+                               << ENDL();
                         uint16_t stage2_best_score = NEG_INF_BFLOAT16;
                         uint32_t stage2_best_index = 0xFFFFFFFF;
                         phase3_reduce_mesh_stage_slots(
@@ -499,7 +529,9 @@ struct Sampling {
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                             d2h_ptr[0] = stage2_best_index;
                             cb_push_back(CTArgs::socket_cb_id, 1);
-                            DPRINT << "NCRISC: Pushed result to socket CB" << ENDL();
+                            DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                                   << get_named_compile_time_arg_val("mesh_col") << "): Pushed result to socket CB"
+                                   << ENDL();
                         }
                     }
                 }
@@ -508,29 +540,38 @@ struct Sampling {
             invalidate_l1_cache();
             size_t arg_idx = 0;
             if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
-                DPRINT << "This core should be sending to the socket (D2H)" << ENDL();
+                DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): sending to socket (D2H)" << ENDL();
                 send_d2h_token_from_cb_brisc(args);
             } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
-                DPRINT << "This core should be sending to the socket (D2D)" << ENDL();
+                DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): sending to socket (D2D)" << ENDL();
                 send_d2d_token_from_cb_brisc(args);
-                DPRINT << "Socket send complete" << ENDL();
+                DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): Socket send complete" << ENDL();
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
-                DPRINT << "BRISC: Mesh sender waiting for local_ready_sem" << ENDL();
+                DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): Mesh sender waiting for local_ready_sem"
+                       << ENDL();
                 auto local_ready_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::local_ready_semaphore_id));
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
                 noc_semaphore_set(local_ready_sem_ptr, 0);
-                DPRINT << "BRISC: Local ready semaphore set" << ENDL();
+                DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): Local ready semaphore set" << ENDL();
 
                 const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
                 const uint32_t local_slot_addr = args.scratch_addr + metadata.local_slot_offset;
                 send_mesh_winner_via_fabric_brisc(
                     args.final_noc_x, args.final_noc_y, local_slot_addr, metadata, arg_idx);
-                DPRINT << "BRISC: Mesh fabric send complete" << ENDL();
+                DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): Mesh fabric send complete" << ENDL();
             }
             if constexpr (IsFinalCore) {
-                DPRINT << "Sanity check: persistent next iteration increment via fabric BRISC" << ENDL();
+                DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
+                       << get_named_compile_time_arg_val("mesh_col") << "): persistent next iter inc via fabric"
+                       << ENDL();
                 send_persistent_next_iter_inc_via_fabric_brisc(args, arg_idx);
             }
 #elif defined(COMPILE_FOR_TRISC)

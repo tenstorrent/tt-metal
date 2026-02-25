@@ -57,11 +57,12 @@ struct Core {
         get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
     static constexpr bool persistent_mode = get_named_compile_time_arg_val("persistent_mode") == 1;
+    static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
+    static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
 };
 
 void kernel_main() {
-    // DPRINT << "Starting lm_head_sampling kernel" << ENDL();
 // ============================================================================
 // Per-RISC compile-time arg setup
 // Each RISC receives different named compile-time args from op.py and
@@ -316,8 +317,10 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
             constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
             if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
-                DPRINT << "Iteration " << iteration_count << ENDL();
-                DPRINT << "WAITING FOR NEXT ITERATION SEMAPHORE " << iteration_count << ENDL();
+                DPRINT << "mesh=(" << Core::mesh_row << "," << Core::mesh_col << ") Iteration " << iteration_count
+                       << ENDL();
+                DPRINT << "mesh=(" << Core::mesh_row << "," << Core::mesh_col << ") WAITING FOR NEXT ITER SEM "
+                       << iteration_count << ENDL();
                 auto next_iteration_semaphore =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
                 while (*next_iteration_semaphore != 1) {
@@ -342,6 +345,11 @@ void kernel_main() {
                     DPRINT << "NCRISC(input): Entering BROADCAST" << ENDL();
                 }
 #endif
+#if defined(COMPILE_FOR_BRISC)
+                if constexpr (Core::is_input_core) {
+                    DPRINT << "BRISC(input): Entering BROADCAST" << ENDL();
+                }
+#endif
                 bcast(bcast_args);
 #if defined(COMPILE_FOR_NCRISC)
                 if constexpr (Core::is_argmax_final_core) {
@@ -349,6 +357,11 @@ void kernel_main() {
                 }
                 if constexpr (Core::is_input_core) {
                     DPRINT << "NCRISC(input): BROADCAST complete" << ENDL();
+                }
+#endif
+#if defined(COMPILE_FOR_BRISC)
+                if constexpr (Core::is_input_core) {
+                    DPRINT << "BRISC(input): BROADCAST complete" << ENDL();
                 }
 #endif
             }
@@ -380,6 +393,11 @@ void kernel_main() {
                 DPRINT << "NCRISC(input): RMSNORM complete" << ENDL();
             }
 #endif
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::is_input_core) {
+                DPRINT << "BRISC(input): RMSNORM complete" << ENDL();
+            }
+#endif
 #if defined(COMPILE_FOR_TRISC)
             if constexpr (Core::is_input_core) {
                 DPRINT << "TRISC(input): RMSNORM complete" << ENDL();
@@ -399,6 +417,11 @@ void kernel_main() {
                 DPRINT << "NCRISC(input): Entering MCAST" << ENDL();
             }
 #endif
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::is_input_core) {
+                DPRINT << "BRISC(input): Entering MCAST" << ENDL();
+            }
+#endif
 #if defined(COMPILE_FOR_TRISC)
             if constexpr (Core::is_input_core) {
                 DPRINT << "TRISC(input): Entering MCAST" << ENDL();
@@ -413,14 +436,17 @@ void kernel_main() {
                 DPRINT << "NCRISC(input): MCAST complete" << ENDL();
             }
 #endif
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::is_input_core) {
+                DPRINT << "BRISC(input): MCAST complete" << ENDL();
+            }
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "BRISC: Entering MCAST" << ENDL();
+            }
+#endif
 #if defined(COMPILE_FOR_TRISC)
             if constexpr (Core::is_input_core) {
                 DPRINT << "TRISC(input): MCAST complete" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "BRISC: Entering MCAST" << ENDL();
             }
 #endif
 #if defined(COMPILE_FOR_TRISC)

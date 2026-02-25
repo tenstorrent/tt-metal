@@ -52,41 +52,53 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
     // Set guaranteed 16B aligned to true if the source and destination are externally guaranteed to be 16B aligned
     // (dangerous) Set copy_async to true if you wish to perform the operation asynchronously, in this case you can add
     // a noc_async_read_barrier to synchronize later
+    DPRINT << "tt_memmove: dst_l1_addr=" << dst_l1_addr << " src_l1_addr=" << src_l1_addr << " bytes=" << bytes
+           << ENDL();
     if constexpr (use_read_datamover) {
+        DPRINT << "tt_memmove: use_read_datamover=true" << ENDL();
         if constexpr (guaranteed_16B_aligned) {
             enhanced_noc_async_read<max_transfer_size, false>(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
             if constexpr (!copy_async) {
                 noc_async_read_barrier();
             }
         } else {
+            DPRINT << "tt_memmove: guaranteed_16B_aligned=false" << ENDL();
             if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
+                DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)" << ENDL();
                 enhanced_noc_async_read<max_transfer_size, false>(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
                 if constexpr (!copy_async) {
                     noc_async_read_barrier();
                 }
             } else {
+                DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) != (src_l1_addr & OFFSET_16)" << ENDL();
                 invalidate_l1_cache();
                 memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
             }
         }
     } else {
         if constexpr (guaranteed_16B_aligned) {
+            DPRINT << "tt_memmove: guaranteed_16B_aligned=true" << ENDL();
             enhanced_noc_async_write<max_transfer_size, false>(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
             if constexpr (!copy_async) {
+                DPRINT << "tt_memmove: noc_async_write_barrier" << ENDL();
                 noc_async_write_barrier();
             }
         } else {
+            DPRINT << "tt_memmove: guaranteed_16B_aligned=false" << ENDL();
             if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
+                DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)" << ENDL();
                 enhanced_noc_async_write<max_transfer_size, false>(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
                 if constexpr (!copy_async) {
                     noc_async_write_barrier();
                 }
             } else {
+                DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) != (src_l1_addr & OFFSET_16)" << ENDL();
                 invalidate_l1_cache();
                 memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
             }
         }
     }
+    DPRINT << "tt_memmove: done" << ENDL();
 }
 
 // this function is useful for converting bfloat16 values to float32

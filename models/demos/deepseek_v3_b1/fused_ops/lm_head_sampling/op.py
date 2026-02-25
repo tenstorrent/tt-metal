@@ -707,6 +707,8 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("mesh_row", row),
+                    ("mesh_col", col),
                 ]
 
                 # ================================================================
@@ -740,6 +742,8 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("mesh_row", row),
+                    ("mesh_col", col),
                 ]
 
                 # ================================================================
@@ -761,6 +765,8 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("mesh_row", row),
+                    ("mesh_col", col),
                 ]
 
                 # ================================================================

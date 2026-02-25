@@ -350,9 +350,11 @@ struct Mcast {
                 uint32_t data_receiver_semaphore_addr = get_semaphore(args.data_receiver_semaphore_id);
 
                 // Wait for source CB data to be ready
+                DPRINT << "Waiting for src CB data to be ready" << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
                 // Send data with state
+                DPRINT << "Sending data with state" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -362,6 +364,7 @@ struct Mcast {
                     true,
                     true,
                     write_cmd_buf>(args.input_data_addr, args.mcast_receiver_data_addr, args.data_size_bytes);
+                DPRINT << "Sending data with state done" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -371,11 +374,12 @@ struct Mcast {
                     true,
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(data_sender_semaphore_addr, data_receiver_semaphore_addr, 4);
-
+                DPRINT << "Sending data with state done" << ENDL();
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
+                DPRINT << "Mcast done" << ENDL();
             }
 #elif defined(COMPILE_FOR_NCRISC)
             // ================================================================
@@ -385,17 +389,23 @@ struct Mcast {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(get_semaphore(args.data_receiver_semaphore_id));
                 // Reserve space in destination CB before mcast writes to it
+                DPRINT << "Reserving destination CB (receiver core)" << ENDL();
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
+                DPRINT << "Waiting for semaphore (receiver core)" << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
 
                 // Push to destination CB after data arrived
+                DPRINT << "Pushing to destination CB (receiver core)" << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
+                DPRINT << "Mcast done (receiver core)" << ENDL();
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(get_semaphore(args.data_receiver_semaphore_id));
+                DPRINT << "Waiting for semaphore (grid core)" << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
+                DPRINT << "Mcast done (grid core)" << ENDL();
             }
 #endif
         }
