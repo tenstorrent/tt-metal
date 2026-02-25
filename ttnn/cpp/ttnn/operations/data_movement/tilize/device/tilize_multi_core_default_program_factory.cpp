@@ -66,7 +66,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
                                        shard_width);  // Compute number of sticks in one tensor row.
         uint32_t padding_size =
             (num_sticks_in_row * stick_size) -
-            a.logical_shape()[-1] * a.element_size();  // Compute padding size for the last stick in the row.
+            (a.logical_shape()[-1] * a.element_size());  // Compute padding size for the last stick in the row.
         stick_size_of_last_stick_in_row = stick_size - padding_size;
     }
     std::vector<uint32_t> reader_ct_args = {stick_size, num_sticks_in_row, stick_size_of_last_stick_in_row};
