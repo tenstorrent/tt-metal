@@ -400,8 +400,8 @@ def vit_layer(hidden_states, parameters, config):
         parameters["intermediate"]["dense"]["weight"],
         bias=parameters["intermediate"]["dense"]["bias"],
         memory_config=sharded_config,
+        activation="gelu",
     )
-    mlp_out = ttnn.gelu(mlp_out)
 
     mlp_out = ttnn.linear(
         mlp_out,
