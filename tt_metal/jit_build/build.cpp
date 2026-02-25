@@ -124,29 +124,33 @@ void JitBuildEnv::init(
     std::filesystem::path git_hash_path(this->out_root_ + git_hash);
     std::filesystem::path root_path(this->out_root_);
     if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        try {
-            std::error_code ec;
-            auto it = std::filesystem::directory_iterator(
-                root_path, std::filesystem::directory_options::skip_permission_denied, ec);
-            if (ec) {
-                log_warning(
-                    tt::LogBuildKernels,
-                    "Cache cleanup: failed to open cache directory {}: {}",
-                    root_path.string(),
-                    ec.message());
-            } else {
-                std::ranges::for_each(
-                    it, std::filesystem::directory_iterator{}, [&git_hash_path](const auto& dir_entry) {
-                        check_built_dir(dir_entry.path(), git_hash_path);
-                    });
-            }
-        } catch (const std::filesystem::filesystem_error& e) {
-            // Directory contents may change during iteration in multi-process scenarios
+        std::error_code ec;
+        auto it = std::filesystem::directory_iterator(
+            root_path, std::filesystem::directory_options::skip_permission_denied, ec);
+        if (ec) {
             log_warning(
                 tt::LogBuildKernels,
-                "Cache cleanup interrupted for {} (likely concurrent access): {}",
+                "Cache cleanup: failed to open cache directory {}: {}",
                 root_path.string(),
-                e.what());
+                ec.message());
+        } else {
+            // Using a manual while loop instead of std::ranges::for_each to handle
+            // race conditions where another process might delete a directory while
+            // we are iterating. it.increment(ec) will safely capture the error code
+            // rather than throwing a std::filesystem::filesystem_error and aborting
+            // the entire cache cleanup.
+            while (it != std::filesystem::directory_iterator()) {
+                check_built_dir(it->path(), git_hash_path);
+                it.increment(ec);
+                if (ec) {
+                    log_warning(
+                        tt::LogBuildKernels,
+                        "Cache cleanup interrupted during iteration for {} (likely concurrent access): {}",
+                        root_path.string(),
+                        ec.message());
+                    break;
+                }
+            }
         }
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");

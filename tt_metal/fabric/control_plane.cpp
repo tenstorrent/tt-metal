@@ -2640,6 +2640,19 @@ ControlPlane::get_global_logical_bindings() const {
     return global_logical_bindings_;
 }
 
+std::optional<std::pair<MeshId, MeshHostRankId>> ControlPlane::get_global_logical_binding(
+    tt::tt_metal::distributed::multihost::Rank rank) const {
+    std::shared_lock lock(global_bindings_mutex_);
+    if (!global_bindings_initialized_) {
+        return std::nullopt;
+    }
+    auto it = global_logical_bindings_.find(rank);
+    if (it != global_logical_bindings_.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
 // Helper function to fill connection info with common fields for fabric router configs
 void fill_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,

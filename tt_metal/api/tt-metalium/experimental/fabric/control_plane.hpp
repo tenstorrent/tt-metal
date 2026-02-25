@@ -265,6 +265,10 @@ public:
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
     get_global_logical_bindings() const;
 
+    // Get the logical node id to mesh id and mesh host rank id mapping for a specific rank
+    std::optional<std::pair<MeshId, MeshHostRankId>> get_global_logical_binding(
+        tt_metal::distributed::multihost::Rank rank) const;
+
     // Check if the physical system supports the specified fabric configuration
     // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
