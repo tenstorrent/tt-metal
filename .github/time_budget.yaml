@@ -92,6 +92,7 @@ scaleout:
     wh_llmbox: 20
   unit:
     wh_llmbox: 20
+    wh_llmbox_civ2: 10
   integration:
     wh_llmbox: 30
 
