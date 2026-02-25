@@ -105,9 +105,10 @@ do_build() {
 if [[ "$FOREGROUND" == "true" ]]; then
     do_build
 else
-    do_build &
+    # Fully detach: redirect all fds so the hook caller doesn't block
+    # waiting for inherited pipes to close.
+    do_build </dev/null >/dev/null 2>&1 &
     disown
-    echo "Build running in background (PID $!) — check ${WORKTREE_PATH}/.worktree_setup.log"
 fi
 
 # Print the worktree path (hook contract: stdout = path)
