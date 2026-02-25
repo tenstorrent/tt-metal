@@ -74,6 +74,10 @@ do_build() {
         echo "Base branch: $BASE_BRANCH"
         echo ""
 
+        echo "=== Initializing git submodules ==="
+        git submodule update --init --recursive 2>&1
+
+        echo ""
         echo "=== Running build_metal.sh ==="
         ./build_metal.sh --debug --enable-ccache --cpm-source-cache "${REPO_DIR}/.cpmcache" 2>&1
 
