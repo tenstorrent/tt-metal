@@ -404,6 +404,9 @@ def test_gpt_oss_demo(
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
 
+    if mesh_shape[0] == 1 and max_seq_len > 16 * 1024:
+        pytest.skip(f"Prefill >16k demo skipped for single-row mesh since it doesn't fit in memory.")
+
     if os.environ.get("CI", None) and long_context_mode:
         pytest.skip(f"Long-context mode skipped for CI environment.")
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))

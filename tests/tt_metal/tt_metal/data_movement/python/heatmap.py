@@ -38,7 +38,7 @@ if __name__ == "__main__":
     collector = StatsCollector(file_path, test_id_to_name={}, test_type_attributes={}, verbose=True)
     result, attrs = collector.gather_bw_per_core(args.num_transactions, args.transaction_size, args.risc, args.test_id)
 
-    arch, _ = extract_device_info(file_path)
+    arch, _, _ = extract_device_info(file_path)
     print(f"Detected architecture: {arch}")
     output_dir = os.path.join(DEFAULT_OUTPUT_DIR, "heatmap", arch)
     output_file = os.path.join(

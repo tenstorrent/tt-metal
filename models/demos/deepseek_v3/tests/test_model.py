@@ -439,7 +439,14 @@ def run_test_forward_pass_dpmodel(
         )
 
     weight_config = get_test_weight_config(
-        RowBatchedModel, hf_config_short, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        RowBatchedModel,
+        hf_config_short,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_model",
+        real_weights=True,
     )
     model_config = get_model_config(RowBatchedModel, mode, hf_config_short, mesh_device)
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)

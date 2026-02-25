@@ -449,8 +449,7 @@ struct SdpaReduceWorker {
         uint32_t scatterFaceSize,
         uint32_t scatterRowFaceSize,
         uint32_t scatterNumRows,
-        uint32_t scatterArrivalEnabled = 0,
-        uint32_t scatterArrivalSemaphoreId = 0>
+        uint32_t scatterArrivalEnabled = 0>
     struct WriterCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
@@ -474,7 +473,6 @@ struct SdpaReduceWorker {
         // Optional scatter arrival semaphore: when enabled, signals each destination core
         // after scatter write completes (used by fused ops to synchronize downstream stages)
         static constexpr bool scatter_arrival_enabled = scatterArrivalEnabled != 0;
-        static constexpr uint32_t scatter_arrival_semaphore_id = scatterArrivalSemaphoreId;
     };
 
     // Compute CTArgs (TRISC)
@@ -517,6 +515,48 @@ struct SdpaReduceWorker {
     };
 
     // ========================================================================
+    // Runtime args structs
+    // ========================================================================
+
+    // Reader args (NCRISC): semaphore and buffer addresses for neighbor data
+    struct ReaderArgs {
+        uint32_t r1_neighbor_sem_addr;
+        uint32_t r2_neighbor_sem_addr;
+        uint32_t r1_recv_buffer_addr;
+        uint32_t r2_recv_buffer_addr;
+    };
+
+    // Writer args (BRISC): fabric destinations, core coordinates, forwarder config
+    struct WriterArgs {
+        uint32_t r1_dst_mesh_id;
+        uint32_t r1_dst_chip_id;
+        uint32_t r1_neighbor_dst_addr;
+        uint32_t r1_neighbor_sem_addr;
+        uint32_t r2_dst_mesh_id;
+        uint32_t r2_dst_chip_id;
+        uint32_t r2_neighbor_dst_addr;
+        uint32_t r2_neighbor_sem_addr;
+        uint32_t current_core_x;
+        uint32_t current_core_y;
+        uint32_t fwd_core_x;
+        uint32_t fwd_core_y;
+        uint32_t r1_fwd_slot_addr;
+        uint32_t r1_fwd_sem_addr;
+        uint32_t r1_base_slot_idx;
+        uint32_t r2_fwd_slot_addr;
+        uint32_t r2_fwd_sem_addr;
+        uint32_t r2_base_slot_idx;
+        uint32_t scatter_dest_l1_addr;
+        uint32_t scatter_dest_coords_addr;
+        uint32_t scatter_arrival_sem_addr;
+    };
+
+    // Compute args (TRISC): position args loaded conditionally via get_arg_val
+    struct ComputeArgs {};
+
+    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
+
+    // ========================================================================
     // Op - unified worker operation
     //
     // ReaderCT: compile-time args for NCRISC reader
@@ -526,11 +566,11 @@ struct SdpaReduceWorker {
     template <typename ReaderCT, typename WriterCT, typename ComputeCT>
     class Op {
     public:
-        void operator()() {
+        void operator()([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-            reader_impl();
+            reader_impl(args);
 #elif defined(COMPILE_FOR_BRISC)
-            writer_impl();
+            writer_impl(args);
 #elif defined(COMPILE_FOR_TRISC)
             compute_impl();
 #endif
@@ -567,13 +607,7 @@ struct SdpaReduceWorker {
             noc_semaphore_set(sem_ptr, 0);
         }
 
-        void reader_impl() {
-            size_t arg_idx = 0;
-            const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
-
+        void reader_impl(const ReaderArgs& args) {
             // Push local input (aliased CBs, no copy needed)
             cb_reserve_back(ReaderCT::cb_local_l, ReaderCT::out_tiles);
             cb_push_back(ReaderCT::cb_local_l, ReaderCT::out_tiles);
@@ -585,6 +619,7 @@ struct SdpaReduceWorker {
             bool r1_neighbor_valid = true;
 
             if constexpr (ReaderCT::position_enabled) {
+                size_t arg_idx = sizeof(ReaderArgs) / sizeof(uint32_t);
                 uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
                 uint32_t r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
                 uint32_t r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
@@ -601,7 +636,10 @@ struct SdpaReduceWorker {
             // Prepare R1 neighbor data for compute
             if (r1_neighbor_valid) {
                 prepare_data_for_compute(
-                    ReaderCT::cb_r1_neighbor_l, ReaderCT::cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+                    ReaderCT::cb_r1_neighbor_l,
+                    ReaderCT::cb_r1_neighbor_ms,
+                    args.r1_neighbor_sem_addr,
+                    args.r1_recv_buffer_addr);
             } else {
                 cb_reserve_back(ReaderCT::cb_r1_neighbor_ms, 1);
                 cb_push_back(ReaderCT::cb_r1_neighbor_ms, 1);
@@ -612,7 +650,10 @@ struct SdpaReduceWorker {
             // Prepare R2 neighbor data for compute
             if (r2_neighbor_r1_valid) {
                 prepare_data_for_compute(
-                    ReaderCT::cb_r2_neighbor_l, ReaderCT::cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+                    ReaderCT::cb_r2_neighbor_l,
+                    ReaderCT::cb_r2_neighbor_ms,
+                    args.r2_neighbor_sem_addr,
+                    args.r2_recv_buffer_addr);
             } else {
                 cb_reserve_back(ReaderCT::cb_r2_neighbor_ms, 1);
                 cb_push_back(ReaderCT::cb_r2_neighbor_ms, 1);
@@ -626,7 +667,7 @@ struct SdpaReduceWorker {
         // ==================================================================
         // BRISC (Writer) - sends data to neighbors, scatters output
         // ==================================================================
-        void writer_impl() {
+        void writer_impl(const WriterArgs& args) {
             using Sender = SdpaChunkSender<
                 WriterCT::cb_packet_slot,
                 WriterCT::l1_alignment,
@@ -636,50 +677,20 @@ struct SdpaReduceWorker {
                 WriterCT::num_l_chunks,
                 WriterCT::tiles_per_l_chunk>;
 
-            size_t arg_idx = 0;
-
-            // R1 destination
-            const uint32_t r1_dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-
-            // R2 destination
-            const uint32_t r2_dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-
-            // Core coordinates
-            const uint32_t current_core_x = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t current_core_y = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t fwd_core_x = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t fwd_core_y = get_arg_val<uint32_t>(arg_idx++);
-
-            // R1 forwarder slot info
-            const uint32_t r1_fwd_slot_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-            const uint32_t r1_base_slot_idx = get_arg_val<uint32_t>(arg_idx++);
-
-            // R2 forwarder slot info
-            const uint32_t r2_fwd_slot_addr = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-            const uint32_t r2_base_slot_idx = get_arg_val<uint32_t>(arg_idx++);
-
             // Initialize sender with core coordinates
-            Sender sender{current_core_x, current_core_y, fwd_core_x, fwd_core_y};
+            Sender sender{args.current_core_x, args.current_core_y, args.fwd_core_x, args.fwd_core_y};
 
             // ROUND 1: Send local input to R1 neighbor
             sender.setup_round(
                 {WriterCT::cb_local_l,
                  WriterCT::cb_local_ms,
-                 r1_dst_mesh_id,
-                 r1_dst_chip_id,
-                 r1_neighbor_dst_addr,
-                 r1_neighbor_sem_addr,
-                 r1_fwd_slot_addr,
-                 r1_fwd_sem_addr,
-                 r1_base_slot_idx});
+                 args.r1_dst_mesh_id,
+                 args.r1_dst_chip_id,
+                 args.r1_neighbor_dst_addr,
+                 args.r1_neighbor_sem_addr,
+                 args.r1_fwd_slot_addr,
+                 args.r1_fwd_sem_addr,
+                 args.r1_base_slot_idx});
             sender.send_all();
             sender.finish_round();
 
@@ -687,13 +698,13 @@ struct SdpaReduceWorker {
             sender.setup_round(
                 {WriterCT::cb_r1_result_l,
                  WriterCT::cb_r1_result_ms,
-                 r2_dst_mesh_id,
-                 r2_dst_chip_id,
-                 r2_neighbor_dst_addr,
-                 r2_neighbor_sem_addr,
-                 r2_fwd_slot_addr,
-                 r2_fwd_sem_addr,
-                 r2_base_slot_idx});
+                 args.r2_dst_mesh_id,
+                 args.r2_dst_chip_id,
+                 args.r2_neighbor_dst_addr,
+                 args.r2_neighbor_sem_addr,
+                 args.r2_fwd_slot_addr,
+                 args.r2_fwd_sem_addr,
+                 args.r2_base_slot_idx});
             sender.send_streaming();
             sender.finish_round();
 
@@ -704,12 +715,12 @@ struct SdpaReduceWorker {
 
             // SCATTER PHASE: Distribute output rows to destination cores
             if constexpr (WriterCT::scatter_num_rows > 0) {
-                const uint32_t scatter_dest_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+                tt_l1_ptr uint32_t* scatter_dest_coords = (tt_l1_ptr uint32_t*)(args.scatter_dest_coords_addr);
                 uint32_t scatter_dest_noc_x[WriterCT::scatter_num_rows];
                 uint32_t scatter_dest_noc_y[WriterCT::scatter_num_rows];
                 for (uint32_t i = 0; i < WriterCT::scatter_num_rows; i++) {
-                    scatter_dest_noc_x[i] = get_arg_val<uint32_t>(arg_idx++);
-                    scatter_dest_noc_y[i] = get_arg_val<uint32_t>(arg_idx++);
+                    scatter_dest_noc_x[i] = scatter_dest_coords[i * 2];
+                    scatter_dest_noc_y[i] = scatter_dest_coords[i * 2 + 1];
                 }
 
                 cb_wait_front(WriterCT::cb_l_out, WriterCT::scatter_num_tiles);
@@ -720,7 +731,7 @@ struct SdpaReduceWorker {
 
                 for (uint32_t row = 0; row < WriterCT::scatter_num_rows; row++) {
                     uint64_t dest_noc_addr =
-                        get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], scatter_dest_l1_addr);
+                        get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_dest_l1_addr);
                     noc_async_write(src_addr, dest_noc_addr, scatter_payload_bytes);
                     src_addr += scatter_payload_bytes;
 
@@ -728,9 +739,7 @@ struct SdpaReduceWorker {
                     // to synchronize downstream stages like matmul1)
                     if constexpr (WriterCT::scatter_arrival_enabled) {
                         uint64_t sem_addr = get_noc_addr(
-                            scatter_dest_noc_x[row],
-                            scatter_dest_noc_y[row],
-                            get_semaphore(WriterCT::scatter_arrival_semaphore_id));
+                            scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_arrival_sem_addr);
                         noc_semaphore_inc(sem_addr, 1);
                     }
                 }
