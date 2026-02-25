@@ -70,6 +70,17 @@ class TTSampling(LightweightModule):
             and is_default_value(temp, 1.0)
         )
 
+    def _select_topk_indices_dtype(self, per_device_vocab_size: int, multi_step_reduction: bool):
+        # if vocab is larger than uint16 max, return uint32 for indices
+        if per_device_vocab_size > torch.iinfo(torch.uint16).max:
+            return ttnn.uint32
+
+        # if vocab size is missaligned with tile size and multi-step reduction is used, we need uint32 because of slice op compatibility
+        if multi_step_reduction and (per_device_vocab_size // 2) % ttnn.TILE_SIZE != 0:
+            return ttnn.uint32
+
+        return ttnn.uint16
+
     @property
     def force_argmax_sampling(self) -> bool:
         return self._force_argmax_sampling
@@ -259,9 +270,10 @@ class TTSampling(LightweightModule):
         indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
         for i in range(padded_per_device):
             indices_tensor_torch[:, :, :, i] = i
+        indices_dtype = self._select_topk_indices_dtype(per_device_vocab_size, self.multi_step_reduction)
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
-            dtype=ttnn.uint16,
+            dtype=indices_dtype,
             layout=ttnn.Layout.TILE,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
