@@ -329,7 +329,7 @@ void MetalContext::teardown() {
     }
     watcher_server_.reset();
 
-    risc_firmware_initializer_->teardown();
+    risc_firmware_initializer_->teardown(risc_fw_init_done_);
     risc_firmware_initializer_.reset();
     risc_fw_context_descriptor_.reset();
 
