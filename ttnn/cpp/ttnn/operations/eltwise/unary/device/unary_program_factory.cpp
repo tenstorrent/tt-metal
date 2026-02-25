@@ -48,45 +48,51 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t num_input_tiles = 4;
+
     // For bitcast, use output format for input CB to avoid unpacker conversion
     // This ensures raw bit copying without conversion
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    // Set CB page size correctly based on layout (tile size for tile layout, buffer page size for row-major)
-    const uint32_t input_cb_page_size = is_row_major ? src_buffer->page_size() : single_tile_size;
-    const uint32_t output_cb_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
-
-    tt::DataFormat cb_data_format_for_input =
-        (ops_chain[0].type() == UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * input_cb_page_size, {{src0_cb_index, cb_data_format_for_input}})
-            .set_page_size(src0_cb_index, input_cb_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-    uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
-        tt::tt_metal::CircularBufferConfig cb_tmp0_config =
-            tt::tt_metal::CircularBufferConfig(num_input_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
-                .set_page_size(tmp0_cb_index, input_cb_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
-    }
-
-    uint32_t output_cb_index = tt::CBIndex::c_2;
-    constexpr uint32_t num_output_tiles = 4;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * output_cb_page_size, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, output_cb_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-
+    // Detect dataflow path early so CB depth can match.
     const uint32_t num_l1_banks = (src_buffer->is_l1() && dst_buffer->is_l1())
                                       ? device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1)
                                       : 0;
     const bool use_strided_l1 = num_l1_banks > 0 && !is_row_major && num_pages >= num_l1_banks;
+    const bool use_trid =
+        !use_strided_l1 && !is_row_major && src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    // TRID pipelining keeps 2 batches of 2 tiles in flight → needs CB depth 4.
+    // All other paths use single-tile or batch=2 with immediate barrier → depth 2 suffices.
+    const uint32_t num_cb_tiles = use_trid ? 4 : 2;
+
+    // Set CB page size correctly based on layout (tile size for tile layout, buffer page size for row-major)
+    const uint32_t input_cb_page_size = is_row_major ? src_buffer->page_size() : single_tile_size;
+    const uint32_t output_cb_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
+
+    const uint32_t src0_cb_index = tt::CBIndex::c_0;
+    tt::DataFormat cb_data_format_for_input =
+        (ops_chain[0].type() == UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(
+            num_cb_tiles * input_cb_page_size, {{src0_cb_index, cb_data_format_for_input}})
+            .set_page_size(src0_cb_index, input_cb_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    const uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
+        tt::tt_metal::CircularBufferConfig cb_tmp0_config =
+            tt::tt_metal::CircularBufferConfig(num_cb_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
+                .set_page_size(tmp0_cb_index, input_cb_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
+    }
+
+    const uint32_t output_cb_index = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig cb_output_config =
+        tt::tt_metal::CircularBufferConfig(
+            num_cb_tiles * output_cb_page_size, {{output_cb_index, cb_data_format_output}})
+            .set_page_size(output_cb_index, output_cb_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // For strided L1 mode, build core groups based on per-bank tile count.
     // Each core processes tiles from its local L1 bank (stride = num_l1_banks).
@@ -129,7 +135,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     std::map<std::string, std::string> dataflow_defines;
     if (use_strided_l1) {
         dataflow_defines["STRIDED_L1_ACCESS"] = "1";
-    } else if (!is_row_major && src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM) {
+    } else if (use_trid) {
         dataflow_defines["TRID_PIPELINED"] = "1";
     }
 
