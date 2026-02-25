@@ -79,9 +79,6 @@ class DecoderBlock2D(DecoderBlock2DBase):
             Gathered tensor if all_gather was performed, None otherwise.
         """
         ccl = cfg.get("ccl")
-        if ccl is None:
-            return None
-
         return ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg[all_gather_config_key]))
 
     @classmethod
@@ -131,9 +128,6 @@ class DecoderBlock2D(DecoderBlock2DBase):
         if x_dim == hidden_size // tp_size:
             # Input is TP-sharded, need to gather
             x_gathered = cls._all_gather_helper(x, cfg)
-            if x_gathered is None:
-                # If no CCL object, can't do collective ops
-                return forward_fn(x, cfg)
 
             # Run NonExpert with gathered input
             output = forward_fn(x_gathered, cfg)
@@ -147,32 +141,19 @@ class DecoderBlock2D(DecoderBlock2DBase):
                 ttnn.deallocate(x_gathered)
 
             return output_scattered
-        elif x_dim == hidden_size:
-            # Already full hidden size, no collective ops needed
-            return forward_fn(x, cfg)
         else:
             # Unexpected dimension
-            from loguru import logger
-
-            logger.warning(
+            assert False, (
                 f"DecoderBlock2D forward_mlp_{mode_name}: Unexpected input dimension {x_dim}. "
-                f"Expected either {hidden_size} (full) or {hidden_size // tp_size} (TP-sharded). "
-                f"Proceeding without collective operations."
+                f"Expected either {hidden_size} (full) or {hidden_size // tp_size} (TP-sharded)."
             )
-            return forward_fn(x, cfg)
 
     @classmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         # Get dimensions for tensor parallel check
         mesh_device = cfg.get(MESH_DEVICE_STATE_DICT_KEY)
-        if mesh_device is None:
-            # If no mesh device, no tensor parallelism
-            return NonExpert.forward_prefill(x, cfg)
 
         tp_size = mesh_device.shape[1]  # Width of mesh is TP size
-        if tp_size == 1:
-            # No tensor parallelism
-            return NonExpert.forward_prefill(x, cfg)
 
         # Calculate expected dimensions
         # NonExpert/MLP expects full hidden_size, not the sharded size
@@ -193,14 +174,8 @@ class DecoderBlock2D(DecoderBlock2DBase):
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # Get dimensions for tensor parallel check
         mesh_device = cfg.get(MESH_DEVICE_STATE_DICT_KEY)
-        if mesh_device is None:
-            # If no mesh device, no tensor parallelism
-            return NonExpert.forward_decode(x, cfg)
 
         tp_size = mesh_device.shape[1]  # Width of mesh is TP size
-        if tp_size == 1:
-            # No tensor parallelism
-            return NonExpert.forward_decode(x, cfg)
 
         # For decode, we need to check the actual hidden size
         # The w1 weight shape tells us the input dimension
