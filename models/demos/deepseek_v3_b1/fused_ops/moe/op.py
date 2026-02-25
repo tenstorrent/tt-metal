@@ -41,6 +41,95 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 from models.demos.deepseek_v3_b1.utils import build_cb_reconfig_tensor, float_to_uint32, record_cb_metadata
 
 
+class MoeCB:
+    """CB ID constants for the fused MoE op (single source of truth).
+
+    All routed + shared expert CB IDs are defined here, grouped by tile dimension
+    for dense packing (fewer gaps → faster setup_local_cb_read_write_interfaces).
+    To reorder CB IDs, change values here only.
+    """
+
+    # ── 1x32 tiles (IDs 0-16) ──
+    GATE_MM_INPUT = 0  # also mcast dst for gate_proj/up_proj input
+    GATE_MM_OUTPUT = 1  # routing-only
+    GATE_PROJ_IN1 = 2  # DRAM matmul in1, shared with up_proj
+    GATE_PROJ_OUT = 3
+    UP_PROJ_IN1 = 2  # alias: same as GATE_PROJ_IN1
+    UP_PROJ_OUT = 4
+    DOWN_PROJ_GATHER_DST = 5
+    DOWN_PROJ_MCAST_DST = 6
+    DOWN_PROJ_IN1 = 7  # DRAM matmul in1, aliases GATE_PROJ_IN1 address
+    DOWN_PROJ_OUT = 8
+    RESIDUAL_MCAST_SRC = 9  # tensor-backed, sender core
+    RESIDUAL_MCAST_DST = 10
+    RMSNORM_GAMMA = 11  # tensor-backed, sender core
+    SHARED_GU_OUT = 12
+    SHARED_DOWN_MCAST_DST = 13
+    SHARED_DOWN_OUT = 14
+    SHARED_RESIDUAL_ADD_OUT = 15
+    SHARED_OUTPUT_GATHER_DST = 16
+
+    # ── 1x16 tiles (IDs 17-20, routing-only) ──
+    GATE_PROJ_INDEX = 17
+    MUL_SCALAR_SRC = 18
+    GATE_OUTPUT = 19
+    GATE_OUTPUT_INDICES = 20
+
+    # ── 16x16 tiles (IDs 21-31) ──
+    MUL_IN0 = 21  # aliases UP_PROJ_OUT address
+    MUL_IN1 = 22  # aliases GATE_PROJ_OUT address
+    MUL_OUT = 23
+    SHARED_GROUP1 = 24  # gate gather dst on sender
+    SHARED_GROUP2 = 25  # up gather dst on sender
+    SHARED_INTERMED = 26  # gated reduce intermediate on sender
+    SHARED_MCAST_SRC = 27  # gated reduce output on sender
+    GATE_INPUT = 28  # routing-only
+    MUL_SCALAR = 29  # routing-only
+    GATE_BIAS = 30  # routing-only, tensor-backed
+    GATE_INDICES = 31  # routing-only, tensor-backed
+
+    # ── 32x32 tiles (IDs 32-45) ──
+    RMSNORM_OUTPUT = 32
+    ADD_IN0 = 33  # aliases DOWN_PROJ_OUT address
+    ADD_IN1 = 34
+    ADD_OUT = 35
+    GATE_MM_WEIGHTS = 36  # routing-only, tensor-backed
+    SHARED_GU_WEIGHTS = 37  # tensor-backed, compute cores
+    SHARED_DOWN_IN1 = 38  # tensor-backed, matmul cores
+    # Reduce CBs (32x32)
+    REDUCE_LOCAL = ADD_OUT  # aliases add output
+    REDUCE_R1 = 39
+    REDUCE_R2 = 40
+    REDUCE_R3 = 41
+    REDUCE_OUTPUT = 42
+    REDUCE_SCRATCH = 43
+    REDUCE_PACKET = 44
+    REDUCE_PACKET_HEADER = 45
+
+
+class MoeSem:
+    """Semaphore ID constants for the fused MoE op.
+
+    Gather sems overlap with mcast receiver sems (different physical cores).
+    noc1_num_senders=0 for all gathers, so only noc0 sem is used.
+    """
+
+    MCAST_SENDER = 0
+    MCAST_DATA_RECEIVER = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER on sender
+    DOWN_PROJ_GATHER = 1  # sender core
+    RESIDUAL_MCAST_RECEIVER = 2  # mcast grid; overlaps with AG_GATHER on sender
+    AG_GATHER = 2  # sender core
+    SHARED_DOWN_MCAST_RECEIVER = 3  # mcast grid; overlaps with BG_GATHER on sender
+    BG_GATHER = 3  # sender core
+    SHARED_OUTPUT_MCAST_RECEIVER = 4  # mcast grid; overlaps with OUTPUT_GATHER on sender
+    OUTPUT_GATHER = 4  # sender core
+    # MoE-only mcast receivers (separate, not overlapped)
+    EXPERT_SCALE_MCAST_RECEIVER = 5
+    INDEX_MCAST_RECEIVER = 6
+    DOWN_PROJ_MCAST_RECEIVER = 7
+    REDUCE_WORKER_FABRIC_BASE = 8  # on fabric cores only (8, 9, 10, 11 per worker slot)
+
+
 @dataclass
 class MoeContext:
     """Top-level context for the fused MoE op. Hides routed/shared split from op()."""
@@ -785,50 +874,49 @@ class MoeRoutedExpertOp:
         expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender semaphore
 
         # ==================================================================
-        # CB indices
+        # CB indices (from MoeOp class constants)
         # ==================================================================
-        rmsnorm_output_cb = 0
-        gate_mm_input_cb = 1  # Also used as mcast destination for gate_proj/up_proj input
-        gate_proj_cb_in1 = 9
-        gate_proj_cb_out = 11
-        up_proj_cb_in1 = gate_proj_cb_in1  # Shared CB: same buffer, kernel resets pointers between uses
-        up_proj_cb_mm_out = 12
-        mul_cb_in0 = 13
-        mul_cb_in1 = 14
-        mul_cb_out = 15
-        down_proj_gather_dst_cb = 16
-        down_proj_mcast_dst_cb = 17
-        down_proj_cb_in1 = 18
-        down_proj_cb_out = 19
-        add_cb_in0 = 22
-        add_cb_in1 = 23
-        add_cb_out = 24
+        rmsnorm_output_cb = MoeCB.RMSNORM_OUTPUT
+        gate_mm_input_cb = MoeCB.GATE_MM_INPUT
+        gate_proj_cb_in1 = MoeCB.GATE_PROJ_IN1
+        gate_proj_cb_out = MoeCB.GATE_PROJ_OUT
+        up_proj_cb_in1 = MoeCB.UP_PROJ_IN1
+        up_proj_cb_mm_out = MoeCB.UP_PROJ_OUT
+        mul_cb_in0 = MoeCB.MUL_IN0
+        mul_cb_in1 = MoeCB.MUL_IN1
+        mul_cb_out = MoeCB.MUL_OUT
+        down_proj_gather_dst_cb = MoeCB.DOWN_PROJ_GATHER_DST
+        down_proj_mcast_dst_cb = MoeCB.DOWN_PROJ_MCAST_DST
+        down_proj_cb_in1 = MoeCB.DOWN_PROJ_IN1
+        down_proj_cb_out = MoeCB.DOWN_PROJ_OUT
+        add_cb_in0 = MoeCB.ADD_IN0
+        add_cb_in1 = MoeCB.ADD_IN1
+        add_cb_out = MoeCB.ADD_OUT
 
         # Routing-only CB indices (0 when routing disabled)
-        gate_mm_weights_cb = 2 if enable_routing else 0
-        gate_mm_output_cb = 3 if enable_routing else 0
-        gate_input_cb = 4 if enable_routing else 0
-        gate_bias_cb = 5 if enable_routing else 0
-        gate_indices_cb = 6 if enable_routing else 0
-        gate_output_cb = 7 if enable_routing else 0
-        gate_output_indices_cb = 8 if enable_routing else 0
-        gate_proj_cb_index = 10 if enable_routing else 0
-        mul_cb_scalar_src = 20 if enable_routing else 0
-        mul_cb_scalar = 21 if enable_routing else 0
-        # ReduceToOne CBs (for multi-device reduce)
-        # Must be after shared expert CBs (25-38) to avoid conflicts
-        reduce_local_cb = add_cb_out  # Local data CB (same as add_cb_out for fusion)
-        reduce_received_cb_r1 = 39  # Round 1: receives LEAF data
-        reduce_received_cb_r2 = 40  # Round 2: receives ROOT3 data
-        reduce_received_cb_r3 = 41  # Round 3: receives ROOT2 data
-        reduce_output_cb = 42  # Final reduced output
-        reduce_scratch_cb = 43  # Scratch for compute
-        reduce_packet_cb = 44  # Scratch for sending packets
-        reduce_packet_header_cb = 45  # Packet header (persistent)
-        # Shared expert CBs (defined in MoeSharedExpertOp)
-        residual_mcast_src_cb = MoeSharedExpertOp.RESIDUAL_MCAST_SRC_CB
-        residual_mcast_dst_cb = MoeSharedExpertOp.RESIDUAL_MCAST_DST_CB
-        rmsnorm_gamma_cb = MoeSharedExpertOp.RMSNORM_GAMMA_CB
+        gate_mm_weights_cb = MoeCB.GATE_MM_WEIGHTS if enable_routing else 0
+        gate_mm_output_cb = MoeCB.GATE_MM_OUTPUT if enable_routing else 0
+        gate_input_cb = MoeCB.GATE_INPUT if enable_routing else 0
+        gate_bias_cb = MoeCB.GATE_BIAS if enable_routing else 0
+        gate_indices_cb = MoeCB.GATE_INDICES if enable_routing else 0
+        gate_output_cb = MoeCB.GATE_OUTPUT if enable_routing else 0
+        gate_output_indices_cb = MoeCB.GATE_OUTPUT_INDICES if enable_routing else 0
+        gate_proj_cb_index = MoeCB.GATE_PROJ_INDEX if enable_routing else 0
+        mul_cb_scalar_src = MoeCB.MUL_SCALAR_SRC if enable_routing else 0
+        mul_cb_scalar = MoeCB.MUL_SCALAR if enable_routing else 0
+        # ReduceToOne CBs
+        reduce_local_cb = MoeCB.REDUCE_LOCAL
+        reduce_received_cb_r1 = MoeCB.REDUCE_R1
+        reduce_received_cb_r2 = MoeCB.REDUCE_R2
+        reduce_received_cb_r3 = MoeCB.REDUCE_R3
+        reduce_output_cb = MoeCB.REDUCE_OUTPUT
+        reduce_scratch_cb = MoeCB.REDUCE_SCRATCH
+        reduce_packet_cb = MoeCB.REDUCE_PACKET
+        reduce_packet_header_cb = MoeCB.REDUCE_PACKET_HEADER
+        # Shared expert CBs
+        residual_mcast_src_cb = MoeCB.RESIDUAL_MCAST_SRC
+        residual_mcast_dst_cb = MoeCB.RESIDUAL_MCAST_DST
+        rmsnorm_gamma_cb = MoeCB.RMSNORM_GAMMA
 
         # ==================================================================
         # RMSNorm tile reinterpretation (compute kernel needs 32x32 or 16x32 tiles)
@@ -1824,9 +1912,9 @@ class MoeSharedExpertOp:
     """
 
     # CB indices for shared expert CBs referenced by routed expert setup
-    RESIDUAL_MCAST_SRC_CB = 25  # raw input on sender (residual mcast source)
-    RESIDUAL_MCAST_DST_CB = 26  # residual destination on mcast grid
-    RMSNORM_GAMMA_CB = 27  # RMSNorm gamma weights on sender
+    RESIDUAL_MCAST_SRC_CB = MoeCB.RESIDUAL_MCAST_SRC
+    RESIDUAL_MCAST_DST_CB = MoeCB.RESIDUAL_MCAST_DST
+    RMSNORM_GAMMA_CB = MoeCB.RMSNORM_GAMMA
 
     # ========================================================================
     # Setup APIs
@@ -2148,20 +2236,20 @@ class MoeSharedExpertOp:
         """
 
         # ==================================================================
-        # CB indices
+        # CB indices (from MoeOp class constants)
         # ==================================================================
-        shared_gu_weights_cb = 28
-        shared_gu_out_cb = 29
-        shared_group1_cb = 30  # gate gather dst on sender
-        shared_group2_cb = 31  # up gather dst on sender
-        shared_intermed_cb = 32  # gated reduce intermediate on sender
-        shared_mcast_src_cb = 33  # gated reduce output on sender
-        shared_residual_cb = MoeSharedExpertOp.RESIDUAL_MCAST_DST_CB  # = residual_mcast_dst_cb
-        shared_down_mcast_dst_cb = 34  # down mcast destination (gated reduce output → all 130 cores)
-        shared_down_matmul_in1_cb = 35  # down proj weights (112 matmul cores, tensor-backed)
-        shared_down_matmul_out_cb = 36  # down proj matmul output (112 matmul cores, tensor-backed)
-        shared_residual_add_out_cb = 37  # residual add output (112 matmul cores, tensor-backed)
-        shared_output_gather_dst_cb = 38  # output gather destination (sender core, tensor-backed)
+        shared_gu_weights_cb = MoeCB.SHARED_GU_WEIGHTS
+        shared_gu_out_cb = MoeCB.SHARED_GU_OUT
+        shared_group1_cb = MoeCB.SHARED_GROUP1
+        shared_group2_cb = MoeCB.SHARED_GROUP2
+        shared_intermed_cb = MoeCB.SHARED_INTERMED
+        shared_mcast_src_cb = MoeCB.SHARED_MCAST_SRC
+        shared_residual_cb = MoeCB.RESIDUAL_MCAST_DST
+        shared_down_mcast_dst_cb = MoeCB.SHARED_DOWN_MCAST_DST
+        shared_down_matmul_in1_cb = MoeCB.SHARED_DOWN_IN1
+        shared_down_matmul_out_cb = MoeCB.SHARED_DOWN_OUT
+        shared_residual_add_out_cb = MoeCB.SHARED_RESIDUAL_ADD_OUT
+        shared_output_gather_dst_cb = MoeCB.SHARED_OUTPUT_GATHER_DST
 
         # ==================================================================
         # Dimensions
@@ -2599,23 +2687,20 @@ class MoeOp:
     single unified kernel invocation.
     """
 
-    # Semaphore IDs (top-level definition)
-    # Gather sems overlap with mcast receiver sems (different physical cores).
-    # noc1_num_senders=0 for all gathers, so only noc0 sem is used.
-    MCAST_SENDER_SEM = 0
-    MCAST_DATA_RECEIVER_SEM = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER_SEM on sender core
-    DOWN_PROJ_GATHER_SEM = 1  # sender core
-    RESIDUAL_MCAST_RECEIVER_SEM = 2  # mcast grid; overlaps with AG_GATHER_SEM on sender core
-    AG_GATHER_SEM = 2  # sender core
-    SHARED_DOWN_MCAST_RECEIVER_SEM = 3  # mcast grid; overlaps with BG_GATHER_SEM on sender core
-    BG_GATHER_SEM = 3  # sender core
-    SHARED_OUTPUT_MCAST_RECEIVER_SEM = 4  # mcast grid; overlaps with OUTPUT_GATHER_SEM on sender core
-    OUTPUT_GATHER_SEM = 4  # sender core
-    # MoE-only mcast receivers (separate, not overlapped)
-    EXPERT_SCALE_MCAST_RECEIVER_SEM = 5
-    INDEX_MCAST_RECEIVER_SEM = 6
-    DOWN_PROJ_MCAST_RECEIVER_SEM = 7
-    REDUCE_WORKER_FABRIC_SEM_BASE = 8  # on fabric cores only (8, 9, 10, 11 per worker slot)
+    # Semaphore IDs (from MoeSem class constants)
+    MCAST_SENDER_SEM = MoeSem.MCAST_SENDER
+    MCAST_DATA_RECEIVER_SEM = MoeSem.MCAST_DATA_RECEIVER
+    DOWN_PROJ_GATHER_SEM = MoeSem.DOWN_PROJ_GATHER
+    RESIDUAL_MCAST_RECEIVER_SEM = MoeSem.RESIDUAL_MCAST_RECEIVER
+    AG_GATHER_SEM = MoeSem.AG_GATHER
+    SHARED_DOWN_MCAST_RECEIVER_SEM = MoeSem.SHARED_DOWN_MCAST_RECEIVER
+    BG_GATHER_SEM = MoeSem.BG_GATHER
+    SHARED_OUTPUT_MCAST_RECEIVER_SEM = MoeSem.SHARED_OUTPUT_MCAST_RECEIVER
+    OUTPUT_GATHER_SEM = MoeSem.OUTPUT_GATHER
+    EXPERT_SCALE_MCAST_RECEIVER_SEM = MoeSem.EXPERT_SCALE_MCAST_RECEIVER
+    INDEX_MCAST_RECEIVER_SEM = MoeSem.INDEX_MCAST_RECEIVER
+    DOWN_PROJ_MCAST_RECEIVER_SEM = MoeSem.DOWN_PROJ_MCAST_RECEIVER
+    REDUCE_WORKER_FABRIC_SEM_BASE = MoeSem.REDUCE_WORKER_FABRIC_BASE
 
     # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
