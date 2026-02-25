@@ -32,6 +32,29 @@ inline void zeroPad(uint32_t cb_write_addr) {
     }
 }
 
+template <bool is_sharded, typename Reader>
+FORCE_INLINE void compute_page_id_and_offset_for_c_in_block(
+    const Reader& reader,
+    uint32_t in_page_idx,
+    uint32_t c_in_offset_bytes,
+    uint32_t in_row_size_bytes,
+    uint32_t& in_page_id,
+    uint32_t& in_offset_bytes) {
+    if constexpr (is_sharded) {
+        // For width/block sharded RowMajor tensors, a "row" is split into multiple pages of size in_row_size_bytes.
+        // TensorAccessor expects page_id to be flattened over (row_idx, col_page_idx).
+        //
+        // For height sharded layouts, col_page_idx is always 0 and the channel selection is done via offset.
+        const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
+        in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
+        const uint32_t width_in_pages = reader.dspec().tensor_shape()[1];
+        in_page_id = in_page_idx * width_in_pages + col_page_idx;
+    } else {
+        in_page_id = in_page_idx;
+        in_offset_bytes = c_in_offset_bytes;
+    }
+}
+
 void kernel_main() {
     DeviceZoneScopedN("CONV3D-READER");
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
@@ -62,12 +85,15 @@ void kernel_main() {
     constexpr uint32_t stride_t = get_compile_time_arg_val(25);
     constexpr uint32_t stride_h = get_compile_time_arg_val(26);
     constexpr uint32_t stride_w = get_compile_time_arg_val(27);
+    constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
 
     // L1 prefetch buffer parameters
-    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(28);
-    constexpr uint32_t T_shard_max = get_compile_time_arg_val(29);
-    constexpr uint32_t H_shard_max = get_compile_time_arg_val(30);
-    constexpr uint32_t W_shard_max = get_compile_time_arg_val(31);
+    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
+    constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
+    constexpr uint32_t H_shard_max = get_compile_time_arg_val(33);
+    constexpr uint32_t W_shard_max = get_compile_time_arg_val(34);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -83,8 +109,8 @@ void kernel_main() {
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
-    // Tensor accessor for input tensor (offset 32 = 28 original + 4 new prefetch args)
-    constexpr auto in_args = TensorAccessorArgs<32>();
+    // Tensor accessor for input tensor
+    constexpr auto in_args = TensorAccessorArgs<35>();
     const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
@@ -92,7 +118,8 @@ void kernel_main() {
     constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
 
     // L1 prefetch: enabled for kernels > 1x1x1 (spatial reuse > 1)
-    constexpr bool use_l1_prefetch = (kT > 1 || kH > 1 || kW > 1);
+    constexpr bool use_l1_prefetch =
+        (kT > 1 || kH > 1 || kW > 1) && (dilation_t == 1 && dilation_h == 1 && dilation_w == 1);
     constexpr uint32_t H_shard_max_W_shard_max = H_shard_max * W_shard_max;
 
     // Reserve shard buffer once (used as scratch space, not streaming CB)
@@ -269,7 +296,7 @@ void kernel_main() {
 
                             } else {
                                 // ============================================================
-                                // DIRECT READER (for 1x1x1 kernels, no spatial reuse)
+                                // DIRECT READER (for 1x1x1 or dilated kernels, no spatial reuse)
                                 // ============================================================
                                 const uint32_t t_block_s_start = t_block * stride_t;
                                 const uint32_t t_block_s_end = t_block_end * stride_t;
@@ -284,35 +311,47 @@ void kernel_main() {
                                 for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {
                                     for (uint32_t h = h_block_s_start; h < h_block_s_end; h += stride_h) {
                                         for (uint32_t w = w_block_s_start; w < w_block_s_end; w += stride_w) {
-                                            int32_t t_idx = static_cast<int32_t>(t) - static_cast<int32_t>(padding_t);
-                                            int32_t h_idx = static_cast<int32_t>(h) - static_cast<int32_t>(padding_h);
-                                            int32_t w_idx = static_cast<int32_t>(w) - static_cast<int32_t>(padding_w);
+                                            for (uint32_t kt = 0; kt < kT; kt++) {
+                                                int32_t t_idx = static_cast<int32_t>(t + kt * dilation_t) -
+                                                                static_cast<int32_t>(padding_t);
+                                                const bool outside_t =
+                                                    (t_idx < 0 || t_idx >= static_cast<int32_t>(T_in));
+                                                t_idx = clampIndex(t_idx, 0, static_cast<int32_t>(T_in) - 1);
 
-                                            const bool in_padding = t_idx < 0 || t_idx >= static_cast<int32_t>(T_in) ||
-                                                                    h_idx < 0 || h_idx >= static_cast<int32_t>(H_in) ||
-                                                                    w_idx < 0 || w_idx >= static_cast<int32_t>(W_in);
+                                                for (uint32_t kh = 0; kh < kH; kh++) {
+                                                    int32_t h_idx = static_cast<int32_t>(h + kh * dilation_h) -
+                                                                    static_cast<int32_t>(padding_h);
+                                                    const bool outside_h =
+                                                        (h_idx < 0 || h_idx >= static_cast<int32_t>(H_in));
+                                                    h_idx = clampIndex(h_idx, 0, static_cast<int32_t>(H_in) - 1);
 
-                                            if constexpr (is_padding_zeros) {
-                                                if (in_padding) {
-                                                    zeroPad<C_in_block_bytes>(cb_write_addr);
-                                                    cb_write_addr += C_in_block_bytes;
-                                                    continue;
+                                                    for (uint32_t kw = 0; kw < kW; kw++) {
+                                                        int32_t w_idx = static_cast<int32_t>(w + kw * dilation_w) -
+                                                                        static_cast<int32_t>(padding_w);
+                                                        const bool outside_w =
+                                                            (w_idx < 0 || w_idx >= static_cast<int32_t>(W_in));
+                                                        const bool in_padding = outside_t || outside_h || outside_w;
+                                                        w_idx = clampIndex(w_idx, 0, static_cast<int32_t>(W_in) - 1);
+
+                                                        if constexpr (is_padding_zeros) {
+                                                            if (in_padding) {
+                                                                zeroPad<C_in_block_bytes>(cb_write_addr);
+                                                                cb_write_addr += C_in_block_bytes;
+                                                                continue;
+                                                            }
+                                                        }
+
+                                                        const uint32_t page_idx =
+                                                            batch_page_base + static_cast<uint32_t>(t_idx) * H_in_W_in +
+                                                            static_cast<uint32_t>(h_idx) * W_in +
+                                                            static_cast<uint32_t>(w_idx);
+                                                        const uint64_t noc_addr =
+                                                            in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
+                                                        noc_async_read(noc_addr, cb_write_addr, C_in_block_bytes);
+                                                        cb_write_addr += C_in_block_bytes;
+                                                    }
                                                 }
                                             }
-
-                                            if (in_padding) {
-                                                t_idx = clampIndex(t_idx, 0, static_cast<int32_t>(T_in) - 1);
-                                                h_idx = clampIndex(h_idx, 0, static_cast<int32_t>(H_in) - 1);
-                                                w_idx = clampIndex(w_idx, 0, static_cast<int32_t>(W_in) - 1);
-                                            }
-
-                                            const uint32_t page_idx =
-                                                batch_page_base + static_cast<uint32_t>(t_idx) * H_in_W_in +
-                                                static_cast<uint32_t>(h_idx) * W_in + static_cast<uint32_t>(w_idx);
-                                            const uint64_t noc_addr =
-                                                in_reader.get_noc_addr(page_idx, c_in_offset_bytes);
-                                            noc_async_read(noc_addr, cb_write_addr, C_in_block_bytes);
-                                            cb_write_addr += C_in_block_bytes;
                                         }
                                     }
                                 }

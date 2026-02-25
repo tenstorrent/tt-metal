@@ -29,6 +29,7 @@
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include "impl/dispatch/kernels/cq_prefetch.hpp"
 #include <impl/debug/inspector/inspector.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -202,11 +203,13 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
 
         this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
-        // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping Plus
-        // 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue
+        // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping plus
+        // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
+        // before we reserve space in the prefetch queue
         TT_FATAL(
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() *
-                    (MetalContext::instance().dispatch_mem_map().prefetch_q_entries() + 2) <=
+                    (MetalContext::instance().dispatch_mem_map().prefetch_q_entries() + 1U +
+                     PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) <=
                 this->get_issue_queue_size(cq_id),
             "Issue queue for cq_id {} has size of {} which is too small",
             cq_id,

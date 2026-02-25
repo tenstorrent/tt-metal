@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cstdint>
-#include <tt-metalium/event.hpp>
 #include <algorithm>
 #include <memory>
 #include <numeric>
@@ -13,7 +12,6 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "gmock/gmock.h"

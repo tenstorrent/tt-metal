@@ -31,12 +31,14 @@ struct LayerNormPreAllGatherProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output);
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormPreAllGatherParams& operation_attributes,
-        const Tensor& tensor_args,
+        const LayerNormPreAllGatherInputs& tensor_args,
         Tensor& output);
 };
 
@@ -46,12 +48,14 @@ struct LayerNormPreAllGather2DProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output);
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormPreAllGatherParams& operation_attributes,
-        const Tensor& tensor_args,
+        const LayerNormPreAllGatherInputs& tensor_args,
         Tensor& output);
 };
 

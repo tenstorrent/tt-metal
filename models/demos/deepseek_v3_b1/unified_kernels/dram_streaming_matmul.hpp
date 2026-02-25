@@ -7,13 +7,13 @@
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -115,8 +115,21 @@ struct DRAMStreamingMatmul {
     // Op - the actual operation, templated on CTArgs and IsActiveCore
     // PopIn0: If true (default), pops in0 after compute. Set to false to reuse
     //         in0 for multiple matmuls (e.g., gate_proj and up_proj).
+    // ResetCBIn1: If true, uses CB-boundary wrapping so the write address
+    //             correctly wraps within [CBIn1ResetAddr, CBIn1ResetAddr+CB_size)
+    //             across loop iterations. No CB pointer reset needed — fifo_wr_ptr
+    //             and fifo_rd_ptr naturally wrap at the same boundary via cb_push/pop.
+    // PopIndex: If true, pops the index CB after reading the expert index.
+    //           Only the last consumer (e.g., down_proj) should set this to true.
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool PopIn0 = true>
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool PopIn0 = true,
+        bool ResetCBIn1 = false,
+        uint32_t CBIn1ResetAddr = 0,
+        bool PopIndex = false,
+        bool WaitForOutput = false>
     class Op {
     public:
         void operator()() {
@@ -163,6 +176,9 @@ struct DRAMStreamingMatmul {
                 expert_offset_bytes = expert_idx * expert_size_bytes;
             }
 
+            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
+            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
             // Setup DRAM read for in1
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
             uint32_t l1_write_addr_in1;
@@ -171,17 +187,24 @@ struct DRAMStreamingMatmul {
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
 
-            // Multi-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3 * CTArgs::num_subblocks_k;
-            constexpr uint32_t extra_blocks_in_flight = 2;
+            // Triple-buffering with transaction IDs for pipelining
+            constexpr uint32_t num_buffers = 3;
+            constexpr uint32_t extra_blocks_in_flight = 1;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
 
-            cb_reserve_back(CTArgs::cb_in1, num_free_blocks_in_buffer);
-            uint32_t l1_write_addr_in1_offset = 0;
-            uint32_t l1_write_addr_in1_start = get_write_ptr(CTArgs::cb_in1);
-            l1_write_addr_in1 = l1_write_addr_in1_start;
+            cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
+            l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+
+            // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
+            uint32_t cb_in1_base;
+            if constexpr (ResetCBIn1) {
+                cb_in1_base = CBIn1ResetAddr;
+            } else {
+                cb_in1_base = l1_write_addr_in1;  // fresh kernel: get_write_ptr == CB base
+            }
+            uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
             // Read in1: for each N column, read num_subblocks_k K subblocks
             for (uint32_t n = 0; n < num_iterations; ++n) {
@@ -203,14 +226,11 @@ struct DRAMStreamingMatmul {
                     num_free_blocks_in_buffer -= 1;
                 }
 
-                if (curr_block_trid == num_buffers) {
-                    l1_write_addr_in1_offset = 0;
-                    curr_block_trid = 1;
-                } else {
-                    l1_write_addr_in1_offset += CTArgs::in1_block_size_bytes;
-                    curr_block_trid += 1;
+                curr_block_trid = (curr_block_trid == num_buffers) ? 1 : (curr_block_trid + 1);
+                // Address naturally advanced by inner page loop; wrap at CB boundary
+                if (l1_write_addr_in1 >= cb_in1_end) {
+                    l1_write_addr_in1 = cb_in1_base;
                 }
-                l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
             }
 
             // Push remaining blocks
@@ -220,20 +240,40 @@ struct DRAMStreamingMatmul {
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
 
+            // Pop index CB after the last consumer is done reading
+            if constexpr (PopIndex && CTArgs::enable_indexing) {
+                cb_pop_front(CTArgs::cb_index, 1);
+            }
+
+            // Optionally wait for compute to finish writing output
+            if constexpr (WaitForOutput) {
+                cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
+            }
+
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC: Matmul compute with optional fused SiLU
             // ================================================================
             constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_w;
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
+            constexpr bool transpose = false;
+            constexpr bool split_acc = true;
+            constexpr bool dense_packing = false;
+
+            if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
+                custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
+                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            } else {
+                reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+                pack_reconfig_data_format<true>(CTArgs::cb_out);
+                custom_mm_block_init_short<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
+                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            }
 
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             }
 
-            // template params: transpose=false, split_acc=true, dense_packing=false, fp32_dest_acc_en
-            custom_mm_block_init<false, true, false, CTArgs::fp32_dest_acc_en>(
-                CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
@@ -318,6 +358,11 @@ struct DRAMStreamingMatmul {
                 }
 
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
+            }
+            custom_mm_block_uninit<dense_packing>();
+            // Reset FP32 accum mode if different from DST_ACCUM_MODE
+            if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
+                deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
 
             if constexpr (PopIn0) {

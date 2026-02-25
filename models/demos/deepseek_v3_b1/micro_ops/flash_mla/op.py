@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
@@ -329,82 +330,6 @@ class FlashMLADecode:
         return output
 
     @staticmethod
-    def golden_dummy(
-        q: torch.Tensor,
-        kv_cache: torch.Tensor,
-        position_ids: torch.Tensor,
-        head_dim_v: int,
-        kv_chunk_size: int,
-    ) -> torch.Tensor:
-        """
-        Simplified golden matching the dummy compute kernel (no softmax, no scale).
-
-        For each KV chunk:
-            QK = Q @ K_chunk^T          -> [num_heads, 1, chunk_len]
-            OUT_chunk = QK @ V_chunk     -> [num_heads, 1, head_dim_v]
-        Final output = sum of all chunk outputs.
-
-        Args:
-            q: Query tensor [1, batch_size, num_heads, kvpe_dim]
-            kv_cache: KV cache tensor [batch_size, 1, max_seq_len, kvpe_dim]
-            position_ids: Position indices [batch_size]
-            head_dim_v: The value head dimension (first head_dim_v elements of kvpe_dim)
-            kv_chunk_size: Size of each KV chunk (must match k_chunk_size in ProgramConfig)
-
-        Returns:
-            Attention output [1, batch_size, num_heads, head_dim_v]
-        """
-        batch_size = q.shape[1]
-        num_heads = q.shape[2]
-        kvpe_dim = q.shape[3]
-
-        # Reshape Q: [1, batch, num_heads, kvpe_dim] -> [batch, num_heads, 1, kvpe_dim]
-        q = q.permute(1, 2, 0, 3)  # [batch, num_heads, 1, kvpe_dim]
-
-        outputs = []
-        for b in range(batch_size):
-            seq_len = position_ids[b].item() + 1
-
-            # Get KV for this batch: [1, seq_len, kvpe_dim]
-            kv = kv_cache[b, :, :seq_len, :]  # [1, seq_len, kvpe_dim]
-
-            # Expand KV to num_heads: [num_heads, seq_len, kvpe_dim]
-            kv_expanded = kv.expand(num_heads, seq_len, kvpe_dim)
-
-            # Q for this batch: [num_heads, 1, kvpe_dim]
-            q_b = q[b]
-
-            # Break into chunks and accumulate (no softmax, no scale)
-            num_chunks = (seq_len + kv_chunk_size - 1) // kv_chunk_size
-            out_b = torch.zeros(num_heads, 1, head_dim_v, dtype=q.dtype)
-
-            for c in range(num_chunks):
-                start = c * kv_chunk_size
-                end = min(start + kv_chunk_size, seq_len)
-
-                k_chunk = kv_expanded[:, start:end, :]  # [num_heads, chunk_len, kvpe_dim]
-                v_chunk = k_chunk[:, :, :head_dim_v]  # [num_heads, chunk_len, head_dim_v]
-
-                # QK = Q @ K_chunk^T (no scale!)
-                qk = torch.matmul(q_b, k_chunk.transpose(-2, -1))  # [num_heads, 1, chunk_len]
-
-                # OUT_chunk = QK @ V_chunk
-                out_chunk = torch.matmul(qk, v_chunk)  # [num_heads, 1, head_dim_v]
-
-                out_b += out_chunk
-
-            outputs.append(out_b)
-
-        # Stack outputs: [batch, num_heads, 1, head_dim_v]
-        output = torch.stack(outputs, dim=0)
-
-        # Reshape to [1, batch, num_heads, head_dim_v]
-        output = output.squeeze(2)  # [batch, num_heads, head_dim_v]
-        output = output.unsqueeze(0)  # [1, batch, num_heads, head_dim_v]
-
-        return output
-
-    @staticmethod
     def op(
         q_tensor: ttnn.Tensor,
         kv_cache_tensor: ttnn.Tensor,
@@ -452,10 +377,17 @@ class FlashMLADecode:
         assert device_grid.x >= 11, f"Device must have at least 11 columns, got {device_grid.x}"
         assert device_grid.y == 10, f"Device must have exactly 10 rows, got {device_grid.y}"
 
+        full_device_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))
+
+        full_grid_mcast_start_core = device.worker_core_from_logical_core(full_device_grid.start)
+        full_grid_mcast_end_core = device.worker_core_from_logical_core(full_device_grid.end)
+        full_grid_mcast_num_dests = device_grid.x * device_grid.y
+
         # Compute kernel config
         math_fidelity = compute_kernel_config.math_fidelity
         math_approx_mode = compute_kernel_config.math_approx_mode
         fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en
+        dst_full_sync_en = compute_kernel_config.dst_full_sync_en
 
         # =========================================================================
         # Shape extraction (matching C++ lines 70-114)
@@ -562,42 +494,25 @@ class FlashMLADecode:
         # =========================================================================
         # CB tile counts (matching C++ lines 285-299)
         # =========================================================================
-        dst_size = 4 if fp32_dest_acc_en else 8
+        if dst_full_sync_en:
+            dst_size = 8 if fp32_dest_acc_en else 16
+        else:
+            dst_size = 4 if fp32_dest_acc_en else 8
+
+        assert dst_size >= 8, f"dst_size must be >= 8, got {dst_size}"
 
         q_tiles = PNHt * DHt
         # Double buffer K for overlap between DRAM reads and compute.
         # Receivers signal sender when ready (CB reserved) to ensure consistent addresses.
         k_tiles = Sk_chunk_t * DHt * 2
-        qk_tiles = PNHt * Sk_chunk_t
-        out_im_tiles = PNHt * vDHt
         out0_t = PNHt * vDHt
         statistics_tiles = PNHt
-
-        # =========================================================================
-        # Matmul configs (matching C++ lines 310-371)
-        # =========================================================================
-        qk_in0_block_w = DHt
-        qk_num_blocks = DHt // qk_in0_block_w
-
-        qk_out_subblock_w = min(Sk_chunk_t, dst_size)
-        qk_out_subblock_h = min(PNHt, dst_size // qk_out_subblock_w) if qk_out_subblock_w == Sk_chunk_t else 1
-        qk_in0_num_subblocks = PNHt // qk_out_subblock_h
-        qk_in1_num_subblocks = Sk_chunk_t // qk_out_subblock_w
-
-        out_in0_block_w = Sk_chunk_t
-        out_num_blocks = Sk_chunk_t // out_in0_block_w
-
-        out_out_subblock_w = min(vDHt, dst_size)
-        out_out_subblock_h = min(PNHt, dst_size // out_out_subblock_w) if out_out_subblock_w == vDHt else 1
-        out_in0_num_subblocks = PNHt // out_out_subblock_h
-        out_in1_num_subblocks = vDHt // out_out_subblock_w
 
         # =========================================================================
         # Data formats (matching C++ lines 374-426)
         # =========================================================================
         q_df = input_tensor_q.dtype
         k_df = input_tensor_k.dtype
-        im_df = ttnn.bfloat16
         stats_df = ttnn.bfloat16
 
         # Create tile objects - Q uses tiny tiles, K/V use full tiles
@@ -613,37 +528,35 @@ class FlashMLADecode:
 
         # Create tile descriptors for CB setup
         q_tile_descriptor = ttnn.TileDescriptor(q_tiny_tile)
-        im_tile_descriptor = ttnn.TileDescriptor(im_tile)
         stats_tile_descriptor = ttnn.TileDescriptor(stats_tile)
 
         # Tile sizes - use tile.get_tile_size(dtype) for proper sizing
         q_tile_size = q_tiny_tile.get_tile_size(q_df)
         k_tile_size = k_tile_obj.get_tile_size(k_df)
-        im_tile_size = im_tile.get_tile_size(im_df)
         stats_tile_size = stats_tile.get_tile_size(stats_df)
 
         # =========================================================================
         # CB IDs - used by both CB descriptors and kernel compile-time args
         # =========================================================================
-        cb_q_in = 0  # Q input
+        cb_q_in = 0  # Q  input
+        cb_compute_in = 9  # Compute input
         cb_k_in = 1  # K/V cache input
-        cb_ms_in = 6  # m/s stats input (from sender in tree reduction)
-        cb_index_id = 8  # cur_pos tensor
-        cb_out_o = 16  # output O from compute
-        cb_out_ms = 17  # output m/s stats from compute
-        cb_intermed_out = 19  # intermediate output for tree reduction
-        cb_out_final = 20  # final sharded output
-        cb_qk_im = 24  # QK intermediate
-        cb_out_im = 25  # output intermediate
-        cb_out_accumulate_im = 26  # output accumulate intermediate
+        cb_ms_in = 2  # m/s stats input (from sender in tree reduction)
+        cb_out_in = 3  # output input for tree reduction
+        # cb_index_id removed - position is now read directly from sharded L1
+        cb_out_o = 4  # output O from compute
+        cb_out_ms = 5  # output m/s stats from compute
+        cb_interm_out = 6  # intermediate output for tree reduction
+        cb_interm_ms = 7  # intermediate m/s stats for tree reduction
+        cb_out_final = 8  # final sharded output
 
         # Intermediate output tiles for tree reduction
         # With tree reduction, senders can complete their steps out of order (e.g., S5 may send
         # in step 3 before S3 sends in step 2). To prevent data corruption, each tree reduction
         # step uses a separate buffer slot. This requires num_tree_reduction_steps * per_step_tiles.
         # Each transfer contains: output tiles (out0_t) + m/s stats (PNHt, packed into single tile)
-        per_step_tiles = out0_t + PNHt
-        intermed_output_tiles = per_step_tiles * grid.NUM_TREE_REDUCTION_STEPS
+        intermed_output_tiles = out0_t * grid.NUM_TREE_REDUCTION_STEPS
+        intermed_ms_tiles = PNHt * grid.NUM_TREE_REDUCTION_STEPS
 
         # =========================================================================
         # DRAM Streaming Optimization: Calculate page size for K chunk reads
@@ -654,9 +567,8 @@ class FlashMLADecode:
         k_page_size, k_num_pages = get_max_page_size_and_num_pages(noc_max_page_size, k_chunk_tiles, k_tile_size)
 
         # KV cache is always ND sharded (validated above) - page-level pipelining enabled
-        # Index stick size for position tensor (C++ lines 429-445)
-        index_stick_size = B * 4  # int32 = 4 bytes per element
-        index_stick_size = ((index_stick_size + 31) // 32) * 32  # Align to 32 bytes
+        # Position tensor is now height-sharded with value replicated on every core
+        # Each core reads position directly from its local L1 shard (no CB needed)
 
         # =========================================================================
         # Create output core lists (matching C++ lines 671-721)
@@ -674,113 +586,106 @@ class FlashMLADecode:
         # Compile time args (simplified for Deepseek V3 B1)
         # Assumptions: PNHt=1, num_kv_heads=1, num_heads_per_core=1, Bkv=1
         # =========================================================================
-        # Q is always tilized (TILE_LAYOUT)
         assert input_tensor_q.layout == ttnn.TILE_LAYOUT, "Q tensor must be TILE_LAYOUT (tilized)"
         assert PNHt == 1, f"PNHt must be 1, got {PNHt}"
         assert num_kv_heads == 1, f"num_kv_heads must be 1, got {num_kv_heads}"
         assert num_heads_per_core == 1, f"num_heads_per_core must be 1, got {num_heads_per_core}"
         assert Bkv == 1, f"Bkv must be 1, got {Bkv}"
 
-        # Q chunk size bytes (PNHt=1, so q_tiles = DHt)
         q_chunk_size_bytes = q_tiles * q_tile_size
 
         # =========================================================================
-        # Semaphore IDs (used in both descriptors and compile-time args)
+        # Semaphore IDs
         # =========================================================================
         reducer_semaphore_id = 0
-        output_semaphore_id = 1
-        mcast_semaphore_id = 2
-        ncrisc_brisc_sync_semaphore_id = 3
-        receiver_ready_semaphore_id = 4
+        mcast_semaphore_id = 1
+        ncrisc_brisc_sync_semaphore_id = 2
+        receiver_ready_semaphore_id = 3
+        q_input_mcast_semaphore_id = 4
+        kv_cache_cur_pos_ready_semaphore_id = 5
 
-        # Reader compile time args (simplified - V is read from K by compute kernel)
-        reader_compile_time_args = [
-            St,  # 0: full sequence length in tiles
-            DHt,  # 1: head dim in tiles (K width, V read as first vDHt columns)
-            Sk_chunk_t,  # 2: tiles per K chunk
-            num_cores_per_head,  # 3: cores for seq len parallelism (8)
-            k_chunk_size,  # 4: K chunk size
-            q_chunk_size_bytes,  # 5: Q chunk size in bytes
-            num_mcast_dests,  # 6: multicast destinations (7)
-            mcast_semaphore_id,  # 7: mcast_semaphore_id
-            k_page_size,  # 8: page size for DRAM streaming
-            k_num_pages,  # 9: pages per K chunk
-            ncrisc_brisc_sync_semaphore_id,  # 10: ncrisc_brisc_sync_semaphore_id
-            receiver_ready_semaphore_id,  # 11: receiver_ready_semaphore_id (for double-buffer sync)
-            cb_index_id,  # 12: cur_pos tensor CB index
-            cb_q_in,  # 13: Q input CB index
-            cb_k_in,  # 14: K input CB index
+        # Value to wait on for KV cache cur pos, this is based on the number of cores that increment in the fused sdpa
+        kv_cache_cur_pos_ready_value = 3
+
+        # =========================================================================
+        # Named compile-time args per RISC (for UnifiedKernelDescriptor)
+        # =========================================================================
+        # NCRISC (reader) named compile-time args
+        ncrisc_named_compile_time_args = [
+            ("St", St),
+            ("DHt", DHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("num_cores_per_head", num_cores_per_head),
+            ("k_chunk_size", k_chunk_size),
+            ("num_mcast_dests", num_mcast_dests),
+            ("mcast_semaphore_id", mcast_semaphore_id),
+            ("k_page_size", k_page_size),
+            ("k_num_pages", k_num_pages),
+            ("q_chunk_size_bytes", q_chunk_size_bytes),
+            ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
+            ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
+            ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
+            ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
+            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests - 1),
+            ("q_input_mcast_semaphore_id", q_input_mcast_semaphore_id),
+            ("ncrisc_brisc_sync_semaphore_id", ncrisc_brisc_sync_semaphore_id),
+            ("receiver_ready_semaphore_id", receiver_ready_semaphore_id),
+            ("kv_cache_cur_pos_ready_semaphore_id", kv_cache_cur_pos_ready_semaphore_id),
+            ("kv_cache_cur_pos_ready_value", kv_cache_cur_pos_ready_value),
+            ("cb_k_in", cb_k_in),
+            ("cb_q_in", cb_q_in),
+            ("cb_compute_in", cb_compute_in),
         ]
-        # TensorAccessorArgs for K (KV cache) and pos tensor
-        reader_compile_time_args.extend(get_tensor_accessor_args(kv_cache_tensor))  # K
-        reader_compile_time_args.extend(
-            get_interleaved_tensor_accessor_args(cur_pos_tensor)
-        )  # pos (always DRAM interleaved)
+        # TensorAccessorArgs for K (indexed, starting at index 0)
+        ncrisc_compile_time_args = list(get_tensor_accessor_args(kv_cache_tensor))
 
-        # Writer compile time args (simplified)
-        writer_compile_time_args = [
-            vDHt,  # 0: V head dim in tiles
-            Sk_chunk_t,  # 1: tiles per K chunk
-            num_cores_per_head,  # 2: cores for seq len parallelism (8)
-            reducer_semaphore_id,  # 3: reducer_semaphore_id
-            k_chunk_size,  # 4: K chunk size
-            Q_TILE_HEIGHT,  # 5: Q tile height
-            DHt,  # 6: head dim in tiles
-            num_mcast_dests,  # 7: multicast destinations (7)
-            mcast_semaphore_id,  # 8: mcast_semaphore_id
-            ncrisc_brisc_sync_semaphore_id,  # 9: ncrisc_brisc_sync_semaphore_id
-            k_page_size,  # 10: page size for pipelining
-            k_num_pages,  # 11: pages per K chunk
-            grid.NUM_TREE_REDUCTION_STEPS,  # 12: tree reduction steps (3)
-            receiver_ready_semaphore_id,  # 13: receiver_ready_semaphore_id (for double-buffer sync)
-            cb_index_id,  # 14: cur_pos tensor CB index
-            cb_k_in,  # 15: K input CB index
-            cb_ms_in,  # 16: m/s stats input CB index
-            cb_out_o,  # 17: output O CB index
-            cb_out_ms,  # 18: output m/s stats CB index
-            cb_intermed_out,  # 19: intermediate output CB index
-        ]
-
-        # Compute compile time args (keep existing interface for compute kernel)
-        compute_compile_time_args = [
-            St,  # 0
-            DHt,  # 1
-            vDHt,  # 2
-            PNHt,  # 3
-            Sk_chunk_t,  # 4
-            qk_in0_block_w,  # 5
-            qk_out_subblock_w,  # 6
-            qk_out_subblock_h,  # 7
-            qk_in0_num_subblocks,  # 8
-            qk_in1_num_subblocks,  # 9
-            qk_num_blocks,  # 10
-            out_in0_block_w,  # 11
-            out_out_subblock_w,  # 12
-            out_out_subblock_h,  # 13
-            out_in0_num_subblocks,  # 14
-            out_in1_num_subblocks,  # 15
-            out_num_blocks,  # 16
-            num_cores_per_batch,  # 17
-            k_chunk_size,  # 18
-            num_cores_per_head,  # 19
-            num_heads_per_core,  # 20 (always 1)
-            B,  # 21: q_heads_parallel_factor
-            Q_TILE_HEIGHT,  # 22: Q tile height
-            float_to_uint32(scale),  # scale_fp32 (unused by simplified compute)
-            grid.NUM_TREE_REDUCTION_STEPS,  # 24: tree reduction steps (3)
-            cb_q_in,  # 25: Q input CB index
-            cb_k_in,  # 26: K input CB index
-            cb_ms_in,  # 27: m/s stats input CB index
-            cb_index_id,  # 28: cur_pos tensor CB index
-            cb_qk_im,  # 29: QK intermediate CB index
-            cb_out_im,  # 30: output intermediate CB index
-            cb_out_accumulate_im,  # 31: output accumulate intermediate CB index
-            cb_out_o,  # 32: output O CB index
-            cb_out_ms,  # 33: output m/s stats CB index
-            cb_out_final,  # 34: final sharded output CB index
+        # BRISC (writer) named compile-time args
+        brisc_named_compile_time_args = [
+            ("vDHt", vDHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("num_cores_per_head", num_cores_per_head),
+            ("reducer_semaphore_id", reducer_semaphore_id),
+            ("k_chunk_size", k_chunk_size),
+            ("q_tile_height", Q_TILE_HEIGHT),
+            ("DHt", DHt),
+            ("num_mcast_dests", num_mcast_dests),
+            ("mcast_semaphore_id", mcast_semaphore_id),
+            ("ncrisc_brisc_sync_semaphore_id", ncrisc_brisc_sync_semaphore_id),
+            ("k_page_size", k_page_size),
+            ("k_num_pages", k_num_pages),
+            ("num_tree_reduction_steps", grid.NUM_TREE_REDUCTION_STEPS),
+            ("receiver_ready_semaphore_id", receiver_ready_semaphore_id),
+            ("cb_k_in", cb_k_in),
+            ("cb_out_in", cb_out_in),
+            ("cb_ms_in", cb_ms_in),
+            ("cb_out_o", cb_out_o),
+            ("cb_out_ms", cb_out_ms),
         ]
 
-        # No compute defines needed for simplified kernel (no softmax)
+        # TRISC (compute) named compile-time args
+        trisc_named_compile_time_args = [
+            ("St", St),
+            ("DHt", DHt),
+            ("vDHt", vDHt),
+            ("PNHt", PNHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("k_chunk_size", k_chunk_size),
+            ("num_cores_per_head", num_cores_per_head),
+            ("q_heads_parallel_factor", B),
+            ("scale_fp32", float_to_uint32(scale)),
+            ("num_tree_reduction_steps", grid.NUM_TREE_REDUCTION_STEPS),
+            ("dst_size", dst_size),
+            ("cb_q_in", cb_q_in),
+            ("cb_compute_in", cb_compute_in),
+            ("cb_k_in", cb_k_in),
+            ("cb_interm_out", cb_interm_out),
+            ("cb_interm_ms", cb_interm_ms),
+            ("cb_out_in", cb_out_in),
+            ("cb_ms_in", cb_ms_in),
+            ("cb_out_o", cb_out_o),
+            ("cb_out_ms", cb_out_ms),
+            ("cb_out_final", cb_out_final),
+        ]
 
         # =========================================================================
         # Create CB descriptors (matching C++ lines 475-655)
@@ -788,11 +693,16 @@ class FlashMLADecode:
         cb_descriptors = []
 
         # cb_q_in: Q input (tiny tile)
+        q_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_q_in, input_tensor_q)
+        q_input_cb_descriptor.core_ranges = core_grid
+        cb_descriptors.append(q_input_cb_descriptor)
+
+        # cb_compute_in: Compute input (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=q_tiles * q_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_q_in, q_df, q_tile_size, q_tile_descriptor)],
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_compute_in, q_df, q_tile_size, q_tile_descriptor)],
             )
         )
 
@@ -807,88 +717,54 @@ class FlashMLADecode:
 
         # V is read directly from K buffer (strided matmul) - no separate V CB needed
 
-        # cb_ms_in: m/s stats input (m and s are packed into single tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_ms_in, stats_df, stats_tile_size, stats_tile_descriptor)
-                ],
-            )
-        )
-
-        # cb_index_id: cur_pos input
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=index_stick_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_index_id, ttnn.int32, index_stick_size)],
-            )
-        )
-
-        # cb_qk_im: QK intermediate (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=qk_tiles * im_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_qk_im, im_df, im_tile_size, im_tile_descriptor)],
-            )
-        )
-
-        # cb_out_im: output intermediate (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=out_im_tiles * im_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_out_im, im_df, im_tile_size, im_tile_descriptor)],
-            )
-        )
-
-        # cb_out_accumulate_im: output accumulate intermediate (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=out_im_tiles * im_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_out_accumulate_im, im_df, im_tile_size, im_tile_descriptor)
-                ],
-            )
-        )
-
-        # cb_out_o: output O (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=out0_t * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_out_o, stats_df, stats_tile_size, stats_tile_descriptor)
-                ],
-            )
-        )
-
-        # cb_out_ms: output m/s stats (tiny tile, shared for both m and s)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_out_ms, stats_df, stats_tile_size, stats_tile_descriptor)
-                ],
-            )
-        )
-
-        # cb_intermed_out: tree reduction intermediate (tiny tile, only if intermed_output_tiles > 0)
-        if intermed_output_tiles > 0:
+        if grid.NUM_TREE_REDUCTION_STEPS > 0:
+            # cb_out_in: output input (tiny tile)
             cb_descriptors.append(
                 ttnn.CBDescriptor(
                     total_size=intermed_output_tiles * stats_tile_size,
                     core_ranges=core_grid,
                     format_descriptors=[
-                        ttnn.CBFormatDescriptor(cb_intermed_out, stats_df, stats_tile_size, stats_tile_descriptor)
+                        ttnn.CBFormatDescriptor(cb_out_in, stats_df, stats_tile_size, stats_tile_descriptor)
                     ],
                 )
             )
+
+            # cb_ms_in: m/s stats input (m and s are packed into single tile)
+            cb_descriptors.append(
+                ttnn.CBDescriptor(
+                    total_size=intermed_ms_tiles * stats_tile_size,
+                    core_ranges=core_grid,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(cb_ms_in, stats_df, stats_tile_size, stats_tile_descriptor)
+                    ],
+                )
+            )
+
+        # Position tensor is now height-sharded - no CB needed, read directly from L1
+
+        # cb_out_o/cb_interm_out: output O (tiny tile)
+        cb_descriptors.append(
+            ttnn.CBDescriptor(
+                total_size=out0_t * stats_tile_size,
+                core_ranges=core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(cb_out_o, stats_df, stats_tile_size, stats_tile_descriptor),
+                    ttnn.CBFormatDescriptor(cb_interm_out, stats_df, stats_tile_size, stats_tile_descriptor),
+                ],
+            )
+        )
+
+        # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
+        cb_descriptors.append(
+            ttnn.CBDescriptor(
+                total_size=statistics_tiles * stats_tile_size,
+                core_ranges=core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(cb_out_ms, stats_df, stats_tile_size, stats_tile_descriptor),
+                    ttnn.CBFormatDescriptor(cb_interm_ms, stats_df, stats_tile_size, stats_tile_descriptor),
+                ],
+            )
+        )
 
         # cb_out_final: final sharded output
         cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_final, output_tensor)
@@ -897,9 +773,12 @@ class FlashMLADecode:
         # =========================================================================
         # Create semaphore descriptors (matching C++ lines 724-725)
         # =========================================================================
+        full_device_grid_crs = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))]
+        )
+
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(reducer_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # reducer_semaphore
-            ttnn.SemaphoreDescriptor(output_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # output_semaphore
             ttnn.SemaphoreDescriptor(
                 mcast_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
             ),  # mcast_semaphore for KV cache
@@ -909,74 +788,71 @@ class FlashMLADecode:
             ttnn.SemaphoreDescriptor(
                 receiver_ready_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
             ),  # receiver_ready for double-buffer sync
+            ttnn.SemaphoreDescriptor(
+                q_input_mcast_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
+            ),  # q_input_mcast_semaphore for Q input mcast
+            ttnn.SemaphoreDescriptor(
+                kv_cache_cur_pos_ready_semaphore_id, ttnn.CoreType.WORKER, core_grid, kv_cache_cur_pos_ready_value
+            ),  # kv_cache_cur_pos_ready_semaphore for KV cache cur pos ready, start at the value that is being waited on
         ]
 
         # =========================================================================
-        # Create kernel descriptors (matching C++ lines 894-918)
+        # Build per-core runtime args for each RISC
         # =========================================================================
-        # Addresses for runtime args
-        q_addr = q_tensor.buffer_address()
         k_addr = kv_cache_tensor.buffer_address()
         pos_addr = cur_pos_tensor.buffer_address()
 
-        # Create single RuntimeArgs objects for all cores (matching C++ pattern)
-        reader_rtargs = ttnn.RuntimeArgs()
-        writer_rtargs = ttnn.RuntimeArgs()
-        compute_rtargs = ttnn.RuntimeArgs()
+        ncrisc_per_core_args = []
+        brisc_per_core_args = []
+        trisc_per_core_args = []
 
-        # Add runtime args for active cores (simplified for Deepseek V3 B1)
         for i in range(num_active_cores):
             core = core_group[i]
 
-            # Calculate per-core values
-            # Core layout: [S1[0], S2[0], ..., S8[0], S1[1], S2[1], ..., S8[1], ...]
             s_block_idx = i % num_s_blocks
             cur_batch = i // num_cores_per_batch
             core_num_in_reduce = i % num_cores_per_head
             core_num_in_output = i % num_cores_per_batch
 
-            # Tree reduction: do_reduce is true for any S block that receives from others
             do_reduce = 1 if grid.is_tree_reduction_receiver(s_block_idx) else 0
-            # S1 (s_block_idx == 0) is both the output core and the final reducer
             is_output_core = 1 if s_block_idx == 0 else 0
             is_mcast_sender = 1 if i < num_s_blocks else 0
 
-            # Get multicast coordinates for this core's S block
             mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, _ = s_block_mcast_coords[s_block_idx]
 
-            # Virtual channel for DRAM streaming
             if s_block_idx < 4:
                 vc = s_block_idx & 0x1
             else:
                 vc = 2 + ((s_block_idx - 4) & 0x1)
 
-            # Output core NOC coordinates (S1 core for this batch)
             output_core_noc_x = output_core_physical_xs[cur_batch] if cur_batch < len(output_core_physical_xs) else 0
             output_core_noc_y = output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
 
-            # Reader runtime args (simplified)
-            reader_runtime_args = [
-                q_addr,
-                k_addr,
-                pos_addr,
-                is_output_core,
-                cur_batch,
-                core_num_in_reduce,
-                is_mcast_sender,
-                mcast_start_x,
-                mcast_start_y,
-                mcast_end_x,
-                mcast_end_y,
-                vc,
-                output_core_noc_x,
-                output_core_noc_y,
-            ]
+            # NCRISC per-core runtime args (common args: k_addr, pos_addr)
+            ncrisc_per_core_args.append(
+                (
+                    core,
+                    [
+                        cur_batch,
+                        core_num_in_reduce,
+                        is_mcast_sender,
+                        is_output_core,
+                        output_core_noc_x,
+                        output_core_noc_y,
+                        mcast_start_x,
+                        mcast_start_y,
+                        mcast_end_x,
+                        mcast_end_y,
+                        vc,
+                    ],
+                )
+            )
 
             # Tree reduction partner coordinates
             tree_reduction_info = grid.get_tree_reduction_partner_coords(device, s_block_idx, cur_batch)
 
-            # Writer runtime args (simplified)
-            writer_runtime_args = [
+            # BRISC per-core runtime args (common args: pos_addr)
+            brisc_args = [
                 cur_batch,
                 core_num_in_reduce,
                 is_mcast_sender,
@@ -985,15 +861,14 @@ class FlashMLADecode:
                 mcast_end_x,
                 mcast_end_y,
             ]
-            # Tree reduction info: 3 steps × 4 values
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                writer_runtime_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+                brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+            brisc_per_core_args.append((core, brisc_args))
 
-            # Is this core a sender after receiving? (intermediate node)
             is_sender_after_reduce = 1 if (do_reduce and grid.is_tree_reduction_sender(s_block_idx)) else 0
 
-            # Compute runtime args (unchanged interface)
-            compute_runtime_args = [
+            # TRISC per-core runtime args (common args: pos_addr)
+            trisc_args = [
                 do_reduce,
                 is_output_core,
                 0,  # cur_head (always 0, num_heads_per_core=1)
@@ -1003,52 +878,37 @@ class FlashMLADecode:
                 is_sender_after_reduce,
             ]
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                compute_runtime_args.extend([role_code, partner_s_block_idx])
+                trisc_args.extend([role_code, partner_s_block_idx])
+            trisc_per_core_args.append((core, trisc_args))
 
-            reader_rtargs.append(core, reader_runtime_args)
-            writer_rtargs.append(core, writer_runtime_args)
-            compute_rtargs.append(core, compute_runtime_args)
+        # =========================================================================
+        # Create unified kernel descriptor
+        # =========================================================================
+        unified_kernel = UnifiedKernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/flash_mla_kernel.cpp",
+            core_ranges=core_grid,
+            ncrisc_compile_time_args=ncrisc_compile_time_args,
+            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_named_compile_time_args=brisc_named_compile_time_args,
+            trisc_named_compile_time_args=trisc_named_compile_time_args,
+            ncrisc_common_runtime_args=[k_addr, pos_addr],
+            brisc_common_runtime_args=[pos_addr],
+            trisc_common_runtime_args=[pos_addr],
+            trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=math_fidelity,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+                math_approx_mode=math_approx_mode,
+            ),
+            per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                ncrisc_args=ncrisc_per_core_args,
+                brisc_args=brisc_per_core_args,
+                trisc_args=trisc_per_core_args,
+            ),
+            noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        )
 
-        # Create 3 kernel descriptors covering ALL cores (not per-core)
-        kernel_descriptors = [
-            # Reader kernel (use NOC_0 explicitly for DRAM reads)
-            ttnn.KernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/dataflow/reader_decode_all.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_grid,
-                compile_time_args=reader_compile_time_args,
-                runtime_args=reader_rtargs,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1,
-                    noc=ttnn.NOC.NOC_0,
-                ),
-            ),
-            # Writer kernel (use NOC_1 to avoid conflict with reader on NOC_0)
-            ttnn.KernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/dataflow/writer_decode_all.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_grid,
-                compile_time_args=writer_compile_time_args,
-                runtime_args=writer_rtargs,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0,
-                    noc=ttnn.NOC.NOC_1,
-                ),
-            ),
-            # Compute kernel
-            ttnn.KernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/compute/sdpa_flash_decode.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_grid,
-                compile_time_args=compute_compile_time_args,
-                runtime_args=compute_rtargs,
-                config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=math_fidelity,
-                    fp32_dest_acc_en=fp32_dest_acc_en,
-                    math_approx_mode=math_approx_mode,
-                ),
-            ),
-        ]
+        kernel_result = unified_kernel.get_kernel_descriptors()
+        kernel_descriptors = kernel_result.kernels
 
         # =========================================================================
         # Create and execute program

@@ -41,9 +41,15 @@ def get_current_run(conn, github_run_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def get_previous_run(conn, run_contents: str, card_type: str, current_run_id: int) -> Optional[dict]:
-    """Find previous run of same type for comparison."""
+def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, current_run_id: int) -> Optional[dict]:
+    """Find previous run of same type for comparison.
+
+    Selection order:
+    1) Same run_contents, card_type, and git_branch
+    2) If none found, same run_contents/card_type on 'main' branch
+    """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # First try: previous run on the same branch.
         cur.execute(
             """
             SELECT run_id, run_start_ts,
@@ -52,6 +58,27 @@ def get_previous_run(conn, run_contents: str, card_type: str, current_run_id: in
             FROM sweep_run
             WHERE run_contents = %s
               AND card_type = %s
+              AND git_branch = %s
+              AND run_id < %s
+            ORDER BY run_id DESC
+            LIMIT 1
+            """,
+            (run_contents, card_type, git_branch, current_run_id),
+        )
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+
+        # Fallback: previous run on main branch.
+        cur.execute(
+            """
+            SELECT run_id, run_start_ts,
+                   test_count, pass_count, fail_count,
+                   ROUND(pass_count * 100.0 / NULLIF(test_count, 0), 2) AS pass_pct
+            FROM sweep_run
+            WHERE run_contents = %s
+              AND card_type = %s
+              AND git_branch = 'main'
               AND run_id < %s
             ORDER BY run_id DESC
             LIMIT 1
@@ -269,9 +296,9 @@ def get_models_tested(conn, current_run_id: int) -> list[str]:
 
 
 def main():
-    github_run_id = int(os.environ.get("GITHUB_RUN_ID", 0))
+    github_run_id = int(os.environ.get("SOURCE_GITHUB_RUN_ID", os.environ.get("GITHUB_RUN_ID", 0)))
     if not github_run_id:
-        print("ERROR: GITHUB_RUN_ID environment variable not set", file=sys.stderr)
+        print("ERROR: SOURCE_GITHUB_RUN_ID environment variable not set", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -281,7 +308,8 @@ def main():
         sys.exit(1)
 
     try:
-        # Get current run
+        # Get current run by source workflow run id.
+        # This must match the exact run pushed by ttnn-run-sweeps.
         current_run = get_current_run(conn, github_run_id)
         if not current_run:
             print(f"ERROR: No run found for github_pipeline_id={github_run_id}", file=sys.stderr)
@@ -295,6 +323,7 @@ def main():
             conn,
             current_run["run_contents"],
             current_run["card_type"],
+            current_run["git_branch"],
             current_run_id,
         )
 

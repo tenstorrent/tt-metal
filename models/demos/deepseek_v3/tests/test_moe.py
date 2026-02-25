@@ -37,18 +37,18 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
-    "mode,num_tokens",
-    [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
-    ],
-)
-@pytest.mark.parametrize(
     "device_params",
     [
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode,num_tokens",
+    [
+        ("decode", 128),
+        ("prefill", _prefill_seq_len),
+    ],
 )
 @pytest.mark.parametrize(
     "topk_fallback",
@@ -85,7 +85,14 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     weight_config = get_test_weight_config(
-        MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoE,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_moe",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function

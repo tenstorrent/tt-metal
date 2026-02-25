@@ -3,6 +3,11 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/firmware_initializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/fabric_firmware_initializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/dispatch_kernel_initializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/command_queue_initializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/profiler_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
@@ -172,6 +177,7 @@ add_library(Metalium::Metal::Impl ALIAS impl)
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(impl)
+target_precompile_headers(impl REUSE_FROM metal_common_pch)
 
 target_link_libraries(
     impl

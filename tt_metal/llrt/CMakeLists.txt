@@ -3,6 +3,7 @@
 set(LLRT_SRC
     llrt.cpp
     core_descriptor.cpp
+    firmware_capability.cpp
     rtoptions.cpp
     tlb_config.cpp
     tt_cluster.cpp
@@ -18,6 +19,7 @@ add_library(Metalium::Metal::LLRT ALIAS llrt)
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(llrt)
+target_precompile_headers(llrt REUSE_FROM metal_common_pch)
 
 add_subdirectory(hal)
 add_dependencies(llrt hal_generate_dev_msgs_header)

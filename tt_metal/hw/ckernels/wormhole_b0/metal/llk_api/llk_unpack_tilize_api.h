@@ -89,20 +89,31 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t num_faces = 4,
     const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
-    const std::uint32_t operand_id =
-        get_operand_id(operandA);  // Use operandA to get operand_id tile dims must be the same for both operands
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    // Use operandA to get operand_id tile dims must be the same for both operands
     // const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
+    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
+
+    LLK_ASSERT(
+        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[get_operand_id(operandB)],
+            unpack_dst_format[get_operand_id(operandB)],
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            num_faces,
+            get_operand_num_faces(get_operand_id(operandB)))),
+        "");
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        unpack_src_format[operand_id],
-        unpack_dst_format[operand_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
         narrow_tile,
         ct_dim,
         num_faces,
         unpA_face_r_dim,
-        unpB_face_r_dim
-    );
+        unpB_face_r_dim);
 }
 
 template <bool zero_srcA = false>
@@ -127,6 +138,18 @@ inline void llk_unpack_tilizeA_B(
         get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
     std::uint32_t address_b = base_address_b + offset_address_b;
+
+    LLK_ASSERT(
+        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            face_r_dim,
+            get_operand_face_r_dim(operandB_id),
+            num_faces,
+            get_operand_num_faces(operandB_id))),
+        "");
 
     WAYPOINT("UPTW");
     _llk_unpack_tilizeA_B_<zero_srcA>(
@@ -178,10 +201,11 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t num_units,
     const std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
     _llk_unpack_fast_tilize_block_(
-        base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim);
+        base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim, num_faces);
 }
 
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
