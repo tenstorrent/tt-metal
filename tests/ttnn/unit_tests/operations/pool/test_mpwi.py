@@ -8,7 +8,6 @@ import math
 import pytest
 
 from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
-from models.common.utility_functions import is_llk_assert_enabled
 
 
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
@@ -253,9 +252,6 @@ def test_mpwi_general(device, ttnn_dtype, sharding_scheme, input_spec):
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 def test_mpwi_32_bit_index(device, ttnn_dtype, input_spec):
-    if input_spec == [2, 48, 300, 300, 9, 9, 2, 2, 4, 4, 1, 1, False] and is_llk_assert_enabled():
-        pytest.skip("Known failure for this input spec")
-
     (
         in_n,
         in_c,
