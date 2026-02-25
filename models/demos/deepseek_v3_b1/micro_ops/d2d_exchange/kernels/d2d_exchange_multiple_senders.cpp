@@ -57,6 +57,15 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
         (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
+FORCE_INLINE void write_data_to_local_core_with_ack(
+    SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
+    noc_async_write(l1_read_addr, dst_addr, page_size);
+    socket_push_pages(sender_socket, 1);
+    socket_notify_receiver(sender_socket);
+    // Flush here to ensure that NOC has picked up data before we pop pages in receiver socket.
+    noc_async_writes_flushed();
+}
+
 FORCE_INLINE void send_pages_over_socket(
     SocketSenderInterface& sender_socket,
     tt::tt_fabric::WorkerToFabricEdmSender& downstream_fabric_connection,
@@ -66,42 +75,45 @@ FORCE_INLINE void send_pages_over_socket(
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t l1_read_addr,
     uint64_t dst_addr) {
-    for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
-        DPRINT << "Sending packet " << i << " over fabric link 0\n";
-        write_data_to_remote_core_with_ack(
-            downstream_fabric_connection,
-            downstream_data_packet_header_addr,
-            l1_read_addr,
-            dst_addr,
-            downstream_bytes_sent_noc_addr,
-            whole_packet_size);
-        l1_read_addr += whole_packet_size;
-        dst_addr += whole_packet_size;
-    }
+    if constexpr (use_fabric_on_sender) {
+        for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
+            write_data_to_remote_core_with_ack(
+                downstream_fabric_connection,
+                downstream_data_packet_header_addr,
+                l1_read_addr,
+                dst_addr,
+                downstream_bytes_sent_noc_addr,
+                whole_packet_size);
+            l1_read_addr += whole_packet_size;
+            dst_addr += whole_packet_size;
+        }
 
-    DPRINT << "AFTER SENding on link0\n";
-    for (uint32_t i = 0; i < num_whole_fabric_packets_link_1; ++i) {
-        write_data_to_remote_core_with_ack(
-            downstream_fabric_connection_2,
-            downstream_data_packet_header_addr_2,
-            l1_read_addr,
-            dst_addr,
-            downstream_bytes_sent_noc_addr,
-            whole_packet_size);
-        l1_read_addr += whole_packet_size;
-        dst_addr += whole_packet_size;
-    }
+        for (uint32_t i = 0; i < num_whole_fabric_packets_link_1; ++i) {
+            write_data_to_remote_core_with_ack(
+                downstream_fabric_connection_2,
+                downstream_data_packet_header_addr_2,
+                l1_read_addr,
+                dst_addr,
+                downstream_bytes_sent_noc_addr,
+                whole_packet_size);
+            l1_read_addr += whole_packet_size;
+            dst_addr += whole_packet_size;
+        }
 
-    if constexpr (partial_packet_size > 0) {
-        write_data_to_remote_core_with_ack(
-            downstream_fabric_connection_2,
-            downstream_data_packet_header_addr_2,
-            l1_read_addr,
-            dst_addr,
-            downstream_bytes_sent_noc_addr,
-            partial_packet_size);
+        if constexpr (partial_packet_size > 0) {
+            write_data_to_remote_core_with_ack(
+                downstream_fabric_connection_2,
+                downstream_data_packet_header_addr_2,
+                l1_read_addr,
+                dst_addr,
+                downstream_bytes_sent_noc_addr,
+                partial_packet_size);
+        }
+        socket_push_pages(sender_socket, 1);
+    } else {
+        DPRINT << "Writing " << sender_page_size << " bytes to local core\n";
+        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, sender_page_size);
     }
-    DPRINT << "AFTER SENding on link1\n";
 }
 
 void kernel_main() {
@@ -217,38 +229,35 @@ void kernel_main() {
         }
 
         // Now send the accumulated page once (14,336 bytes total from all 8 workers)
-        if (bytes_accumulated >= sender_page_size) {
-            DPRINT << "sending accumulated data over socket, total bytes: " << bytes_accumulated << "\n";
-            // If using fabric, send the accumulated data via fabric in chunks
-            if constexpr (use_fabric_on_sender) {
-                uint32_t l1_read_addr = downstream_fifo_l1_addr + sender_socket.write_ptr;
-                uint64_t dst_addr = get_noc_addr(
-                    downstream_enc.d2d.downstream_noc_x,
-                    downstream_enc.d2d.downstream_noc_y,
-                    downstream_fifo_l1_addr + sender_socket.write_ptr);
-                DPRINT << "before sending api\n";
+        DPRINT << "sending accumulated data over socket, total bytes: " << bytes_accumulated << "\n";
+        // If using fabric, send the accumulated data via fabric in chunks
+        uint32_t l1_read_addr = downstream_fifo_l1_addr + sender_socket.write_ptr;
+        uint64_t dst_addr = get_noc_addr(
+            downstream_enc.d2d.downstream_noc_x,
+            downstream_enc.d2d.downstream_noc_y,
+            downstream_fifo_l1_addr + sender_socket.write_ptr);
+        DPRINT << "before sending api\n";
 
-                DPRINT << "PAGE size: " << (uint32_t)sender_page_size
-                       << ",receiver page size: " << (uint32_t)upstream_page_size << "\n";
-                DPRINT << "dst noc x: " << (uint32_t)downstream_enc.d2d.downstream_noc_x
-                       << " noc y:" << (uint32_t)downstream_enc.d2d.downstream_noc_y << "\n";
-                send_pages_over_socket(
-                    sender_socket,
-                    downstream_fabric_connection,
-                    downstream_fabric_connection_2,
-                    downstream_data_packet_header_addr,
-                    downstream_data_packet_header_addr_2,
-                    downstream_bytes_sent_noc_addr,
-                    l1_read_addr,
-                    dst_addr);
-            }
-            DPRINT << "after sending api\n";
-            // if not using fabric: Data already accumulated in downstream buffer via noc_async_write
-            // Just push the page to the socket
-            socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
-            DPRINT << "Notified receiver after pushing page\n";
-        }
+        DPRINT << "PAGE size: " << (uint32_t)sender_page_size << ",receiver page size: " << (uint32_t)upstream_page_size
+               << "\n";
+        DPRINT << "dst noc x: " << (uint32_t)downstream_enc.d2d.downstream_noc_x
+               << " noc y:" << (uint32_t)downstream_enc.d2d.downstream_noc_y << "\n";
+        send_pages_over_socket(
+            sender_socket,
+            downstream_fabric_connection,
+            downstream_fabric_connection_2,
+            downstream_data_packet_header_addr,
+            downstream_data_packet_header_addr_2,
+            downstream_bytes_sent_noc_addr,
+            l1_read_addr,
+            dst_addr);
+
+        DPRINT << "after sending api\n";
+        // if not using fabric: Data already accumulated in downstream buffer via noc_async_write
+        // Just push the page to the socket
+        // socket_push_pages(sender_socket, 1);
+        // socket_notify_receiver(sender_socket);
+        DPRINT << "Notified receiver after pushing page\n";
 
         invalidate_l1_cache();
     }
