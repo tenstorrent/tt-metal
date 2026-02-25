@@ -103,7 +103,7 @@ void kernel_main() {
 
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_dst_cb"),
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
@@ -169,8 +169,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_data_size_bytes"),
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),

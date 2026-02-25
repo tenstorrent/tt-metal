@@ -44,7 +44,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
         get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
         get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
-        get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id")),
         get_named_compile_time_arg_val("dkv_gather_src_cb"),
         get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
         get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
@@ -99,8 +99,8 @@ void kernel_main() {
     deepseek_b1_ops::Gather::ReceiverArgs dkv_gather_args{
         get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
         get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("dkv_gather_dst_cb"),
         get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
     };
