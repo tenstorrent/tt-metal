@@ -10,7 +10,7 @@ import ttnn
 from models.demos.vision.segmentation.vanilla_unet.reference.model import UNet
 
 VANILLA_UNET_L1_SMALL_SIZE = 12 * 8192
-VANILLA_UNET_TRACE_SIZE = 258048
+VANILLA_UNET_TRACE_SIZE = 294912
 VANILLA_UNET_PCC_WH = 0.97700
 
 

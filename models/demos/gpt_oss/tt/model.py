@@ -584,7 +584,7 @@ class Model:
         return tokens, current_pos_tt, rope_idxs, page_table
 
     def prepare_prefill_inputs_trace(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None, **kwargs
     ):
         """Prepare inputs on host so we later send them to device"""
         host_inputs = self.prepare_inputs_prefill(
@@ -594,6 +594,7 @@ class Model:
             chunk_page_table=chunk_page_table,
             trace_enabled=True,
             last_token_idx=last_token_idx,
+            **kwargs,
         )
         return host_inputs
 

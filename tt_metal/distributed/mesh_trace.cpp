@@ -30,7 +30,6 @@
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
@@ -157,10 +156,9 @@ void MeshTrace::populate_mesh_buffer(
     DeviceAddr dram_allocation_high_water_mark,
     DeviceAddr dram_deletion_high_water_mark) {
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
-    auto num_banks = mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM);
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
-        unpadded_size, num_banks);
-    size_t padded_size = round_up(unpadded_size, page_size * num_banks);
+        unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
+    size_t padded_size = round_up(unpadded_size, page_size);
 
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);

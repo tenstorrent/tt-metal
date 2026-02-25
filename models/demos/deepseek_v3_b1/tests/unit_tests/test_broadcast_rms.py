@@ -6,7 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
@@ -74,6 +74,12 @@ def test_broadcast_rms_fused(
 
     # Create submesh used by the test
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+
+    if use_socket:
+        if not is_slow_dispatch():
+            pytest.skip("Skipping test in fast dispatch mode")
+
+        ttnn.enable_asynchronous_slow_dispatch(submesh)
 
     # Configure a single worker sub-device covering the full compute grid
     compute_grid_size = submesh.compute_with_storage_grid_size()

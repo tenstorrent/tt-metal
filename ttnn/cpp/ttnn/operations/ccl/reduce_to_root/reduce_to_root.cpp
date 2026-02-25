@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include "ttnn/decorators.hpp"
-
 #include "device/reduce_to_root_op.hpp"
 #include "reduce_to_root.hpp"
 

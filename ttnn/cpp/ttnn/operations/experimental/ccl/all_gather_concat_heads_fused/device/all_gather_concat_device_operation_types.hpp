@@ -7,7 +7,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt_stl/reflection.hpp>
 #include <optional>
 #include <vector>
 
