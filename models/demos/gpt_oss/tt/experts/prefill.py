@@ -18,27 +18,42 @@ from .operations import (
 from .weights import ExpertWeights
 
 
-def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device):
-    """Reshard tensors for sequence parallel processing."""
-    hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
-    routing_weights_torch = ttnn.to_torch(ttnn.get_device_tensors(routing_weights)[0])
-    hidden_states.deallocate(True)
-    routing_weights.deallocate(True)
+def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_config, ccl_manager):
+    """
+    Convert replicated prefill inputs to SP row-sharded tensors using device-side CCL.
 
-    routing_weights = ttnn.from_torch(
-        routing_weights_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+    This avoids host reads (`to_torch/get_device_tensors`) so it is trace-capture safe.
+    The input tensors are replicated across rows, so reduce-scatter sums identical values.
+    We rescale by 1/sp to recover the original values after sharding.
+    """
+    sp = mesh_config.get_config(Mode.PREFILL).sp
+    if sp <= 1:
+        return hidden_states, routing_weights
+
+    cluster_axis = mesh_config.sp_axis
+    scale = 1.0 / sp
+
+    hidden_states_sharded = ttnn.reduce_scatter(
+        hidden_states,
+        dim=2,  # sequence dimension for hidden states: [1, B, S, H]
+        cluster_axis=cluster_axis,
+        memory_config=hidden_states.memory_config(),
+        topology=ccl_manager.topology,
+        num_links=ccl_manager.num_links,
     )
-    hidden_states = ttnn.from_torch(
-        hidden_states_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+    routing_weights_sharded = ttnn.reduce_scatter(
+        routing_weights,
+        dim=0,  # sequence dimension for routing weights: [S, E]
+        cluster_axis=cluster_axis,
+        memory_config=routing_weights.memory_config(),
+        topology=ccl_manager.topology,
+        num_links=ccl_manager.num_links,
     )
 
-    return hidden_states, routing_weights
+    hidden_states_sharded = ttnn.mul(hidden_states_sharded, scale, output_tensor=hidden_states_sharded)
+    routing_weights_sharded = ttnn.mul(routing_weights_sharded, scale, output_tensor=routing_weights_sharded)
+
+    return hidden_states_sharded, routing_weights_sharded
 
 
 def _process_prefill_chunk(
@@ -229,7 +244,9 @@ def prefill_forward(
 
     # Reshard for sequence parallelism if needed
     if sp > 1:
-        hidden_states, routing_weights = _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device)
+        hidden_states, routing_weights = _reshard_for_sequence_parallel(
+            hidden_states, routing_weights, mesh_config, ccl_manager
+        )
 
     # Chunk processing for very long sequences
     chunk_size = program_config.sequence_chunk_size

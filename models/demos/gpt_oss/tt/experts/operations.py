@@ -91,10 +91,6 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, seq_len, c
     Returns:
         Allreduced tensor
     """
-    # Synchronize for prefill
-    if seq_len > 1:
-        ttnn.synchronize_device(mesh_device)  # ✅ Use explicit mesh_device
-
     tensor_allreduced = ttnn.all_reduce(
         tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.tp_axis
     )

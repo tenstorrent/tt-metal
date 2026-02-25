@@ -57,6 +57,8 @@ target_sources(
         builder/router_connection_mapping.cpp
         channel_trimming_export.cpp
         channel_trimming_import.cpp
+        channel_trimming_io.cpp
+        channel_trimming_report.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
