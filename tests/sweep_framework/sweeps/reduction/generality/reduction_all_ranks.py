@@ -26,6 +26,7 @@ DIM_SIZES = [0, 32]
 GENERIC_OPS = ["sum", "mean", "max", "min", "std", "var", "prod", "argmax"]
 ACCUMULATION_OPS = ["cumsum", "cumprod"]
 
+# rank_0 → 0D (scalar), rank_1 → 1D, rank_2+ with DIM_SIZES=[0,32] → 0-volume (e.g. (0,32), (32,0)).
 parameters = {
     f"rank_{rank}": {
         "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
@@ -47,32 +48,36 @@ for rank in range(1, 5):
         "dtype": [torch.bfloat16, torch.float32],
     }
 
+# Include 1D (32,) and 0-volume (0, 32) so the suite covers 0D/1D/0-volume.
 parameters["topk"] = {
-    "tensor_shape": [(1, 64), (1, 128)],
+    "tensor_shape": [(1, 64), (1, 128), (32,), (0, 32)],
     "dim": [-1],
     "keepdim": [False],
     "op": ["topk"],
     "dtype": [torch.bfloat16],
 }
 
+# Include 1D (32,) and 0-volume (1, 2, 0, 128).
 parameters["ema"] = {
-    "tensor_shape": [(1, 2, 64, 128)],
+    "tensor_shape": [(1, 2, 64, 128), (32,), (1, 2, 0, 128)],
     "dim": [None],
     "keepdim": [False],
     "op": ["ema"],
     "dtype": [torch.bfloat16],
 }
 
+# Include 0-volume (1, 1, 0, 64).
 parameters["moe"] = {
-    "tensor_shape": [(1, 1, 32, 64)],
+    "tensor_shape": [(1, 1, 32, 64), (1, 1, 0, 64)],
     "dim": [None],
     "keepdim": [False],
     "op": ["moe"],
     "dtype": [torch.bfloat16],
 }
 
+# Include 0-volume (1, 1, 0, 64).
 parameters["sampling"] = {
-    "tensor_shape": [(1, 1, 32, 64)],
+    "tensor_shape": [(1, 1, 32, 64), (1, 1, 0, 64)],
     "dim": [None],
     "keepdim": [False],
     "op": ["sampling"],
