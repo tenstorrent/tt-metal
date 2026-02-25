@@ -25,29 +25,48 @@ uint32_t g_copy_scratch_l1_addr = 0;
 
 inline void set_copy_tensor_data_scratch(uint32_t l1_addr) { g_copy_scratch_l1_addr = l1_addr; }
 
-// Copies all data from src to dest starting at byte offset in dest. Returns offset + size in bytes of src data.
+// Copies all data from src to dest in portions of amount_to_write bytes. First portion is written at
+// absolute_offset_to_start in dest; each next portion is written at (previous_dest_offset + amount_to_write +
+// amount_to_skip). Uses a single-page L1 scratch buffer; amount_to_write may be less, equal or greater than page size.
 // Requires set_copy_tensor_data_scratch() to be called with a valid L1 buffer (at least one page) before use.
 template <typename DestDSpec, typename SrcDSpec>
-uint32_t copy_tensor_data(
+void copy_tensor_data(
     const TensorAccessor<DestDSpec>& dest,
     const TensorAccessor<SrcDSpec>& src,
-    uint32_t offset,
-    uint32_t /*absolute_offset_to_start*/,
-    uint32_t /*amount_to_write*/,
-    uint32_t /*amount_to_skip*/) {
-    const uint32_t num_pages = src.dspec().tensor_volume();
+    uint32_t absolute_offset_to_start,
+    uint32_t amount_to_write,
+    uint32_t amount_to_skip) {
     const uint32_t src_page_size = src.page_size;
-    const uint32_t total_bytes = num_pages * src_page_size;
-    for (uint32_t page_id = 0; page_id < num_pages; ++page_id) {
-        const uint32_t dest_byte_offset = offset + page_id * src_page_size;
-        const uint32_t dest_page_id = dest_byte_offset / dest.page_size;
-        const uint32_t dest_offset_in_page = dest_byte_offset % dest.page_size;
-        noc_async_read(src.get_noc_addr(page_id, 0), g_copy_scratch_l1_addr, src_page_size);
-        noc_async_read_barrier();
-        noc_async_write(g_copy_scratch_l1_addr, dest.get_noc_addr(dest_page_id, dest_offset_in_page), src_page_size);
-        noc_async_write_barrier();
+    const uint32_t total_src_bytes = src.dspec().tensor_volume() * src_page_size;
+    uint32_t src_byte_offset = 0;
+    uint32_t dest_byte_offset = absolute_offset_to_start;
+
+    while (src_byte_offset < total_src_bytes) {
+        const uint32_t bytes_this_portion = (amount_to_write <= total_src_bytes - src_byte_offset)
+                                                ? amount_to_write
+                                                : (total_src_bytes - src_byte_offset);
+        uint32_t src_off = src_byte_offset;
+        uint32_t dest_off = dest_byte_offset;
+        uint32_t remaining = bytes_this_portion;
+
+        while (remaining > 0) {
+            const uint32_t chunk = (remaining <= src_page_size) ? remaining : src_page_size;
+            const uint32_t src_page_id = src_off / src_page_size;
+            const uint32_t src_offset_in_page = src_off % src_page_size;
+            noc_async_read(src.get_noc_addr(src_page_id, src_offset_in_page), g_copy_scratch_l1_addr, chunk);
+            noc_async_read_barrier();
+            const uint32_t dest_page_id = dest_off / dest.page_size;
+            const uint32_t dest_offset_in_page = dest_off % dest.page_size;
+            noc_async_write(g_copy_scratch_l1_addr, dest.get_noc_addr(dest_page_id, dest_offset_in_page), chunk);
+            noc_async_write_barrier();
+            remaining -= chunk;
+            src_off += chunk;
+            dest_off += chunk;
+        }
+
+        src_byte_offset += bytes_this_portion;
+        dest_byte_offset += amount_to_write + amount_to_skip;
     }
-    return offset + total_bytes;
 }
 
 // Compile-time layout: [0]=num_input_tensors, [1]=output_page_size, [2..17]=input_page_sizes,
@@ -117,39 +136,32 @@ void kernel_main() {
         DPRINT << ENDL();
     }
 
-    // Copy each input to output sequentially; initial offset 0, then use offset returned from previous copy.
-#define CONCAT_ND_DPRINT_INPUT(n)                                                                                  \
-    do {                                                                                                           \
-        const uint32_t initial_offset_##n = offset;                                                                \
-        constexpr uint32_t in_page_size_##n = get_compile_time_arg_val(CT_INPUT_PAGE_SIZE_BASE + (n));             \
-        const auto in##n##_accessor = TensorAccessor(in##n##_args, input_addrs[n], in_page_size_##n);              \
-        DPRINT << "input " << (n) << " source: shards=" << in##n##_accessor.dspec().num_banks()                    \
-               << " pages=" << in##n##_accessor.dspec().tensor_volume() << " page_size=" << in_page_size_##n       \
-               << " tile_size=" << in_page_size_##n << " absolute_offset_to_start=" << absolute_offset_to_start[n] \
-               << " amount_to_write=" << amount_to_write[n] << " amount_to_skip=" << amount_to_skip[n] << ENDL();  \
-        {                                                                                                          \
-            const uint32_t in_rank_##n = in##n##_accessor.dspec().rank();                                          \
-            DPRINT << "input " << (n) << " dimensions: rank=" << in_rank_##n;                                      \
-            for (uint32_t d = 0; d < in_rank_##n; ++d) {                                                           \
-                DPRINT << " dim" << d << "_ts=" << in##n##_accessor.dspec().tensor_shape()[d]                      \
-                       << "_ss=" << in##n##_accessor.dspec().shard_shape()[d]                                      \
-                       << "_sg=" << in##n##_accessor.dspec().shard_grid()[d];                                      \
-            }                                                                                                      \
-            DPRINT << ENDL();                                                                                      \
-        }                                                                                                          \
-        offset = copy_tensor_data(                                                                                 \
-            output_accessor,                                                                                       \
-            in##n##_accessor,                                                                                      \
-            offset,                                                                                                \
-            absolute_offset_to_start[n],                                                                           \
-            amount_to_write[n],                                                                                    \
-            amount_to_skip[n]);                                                                                    \
-        const uint32_t bytes_copied_##n = offset - initial_offset_##n;                                             \
-        DPRINT << "input " << (n) << ": copied " << bytes_copied_##n << " bytes to initial offset "                \
-               << initial_offset_##n << " (input tensor " << (n) << ")" << ENDL();                                 \
+    // Copy each input to output; each input uses its own absolute_offset_to_start and portion strides.
+#define CONCAT_ND_DPRINT_INPUT(n)                                                                                   \
+    do {                                                                                                            \
+        constexpr uint32_t in_page_size_##n = get_compile_time_arg_val(CT_INPUT_PAGE_SIZE_BASE + (n));              \
+        const auto in##n##_accessor = TensorAccessor(in##n##_args, input_addrs[n], in_page_size_##n);               \
+        DPRINT << "input " << (n) << " source: shards=" << in##n##_accessor.dspec().num_banks()                     \
+               << " pages=" << in##n##_accessor.dspec().tensor_volume() << " page_size=" << in_page_size_##n        \
+               << " tile_size=" << in_page_size_##n << " absolute_offset_to_start=" << absolute_offset_to_start[n]  \
+               << " amount_to_write=" << amount_to_write[n] << " amount_to_skip=" << amount_to_skip[n] << ENDL();   \
+        {                                                                                                           \
+            const uint32_t in_rank_##n = in##n##_accessor.dspec().rank();                                           \
+            DPRINT << "input " << (n) << " dimensions: rank=" << in_rank_##n;                                       \
+            for (uint32_t d = 0; d < in_rank_##n; ++d) {                                                            \
+                DPRINT << " dim" << d << "_ts=" << in##n##_accessor.dspec().tensor_shape()[d]                       \
+                       << "_ss=" << in##n##_accessor.dspec().shard_shape()[d]                                       \
+                       << "_sg=" << in##n##_accessor.dspec().shard_grid()[d];                                       \
+            }                                                                                                       \
+            DPRINT << ENDL();                                                                                       \
+        }                                                                                                           \
+        copy_tensor_data(                                                                                           \
+            output_accessor, in##n##_accessor, absolute_offset_to_start[n], amount_to_write[n], amount_to_skip[n]); \
+        const uint32_t bytes_copied_##n = in##n##_accessor.dspec().tensor_volume() * in_page_size_##n;              \
+        DPRINT << "input " << (n) << ": copied " << bytes_copied_##n << " bytes to offset "                         \
+               << absolute_offset_to_start[n] << " (input tensor " << (n) << ")" << ENDL();                         \
     } while (0)
 
-    uint32_t offset = 0;
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
         switch (i) {
             case 0: CONCAT_ND_DPRINT_INPUT(0); break;
