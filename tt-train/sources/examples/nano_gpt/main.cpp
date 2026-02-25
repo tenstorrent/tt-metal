@@ -400,8 +400,7 @@ int main(int argc, char **argv) {
         device_config.enable_cp) {
         fmt::print("Enabling fabric\n");
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
-
-        // Validate that config mesh_shape matches physical mesh shape (must be after device init)
+        // Validate that config mesh_shape matches physical mesh shape
         validate_mesh_shape_against_physical(device_config.mesh_shape);
     }
 
