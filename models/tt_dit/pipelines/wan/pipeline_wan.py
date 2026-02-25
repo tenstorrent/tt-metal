@@ -176,10 +176,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.encoder_parallel_config = encoder_parallel_config
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
-        self.unload_for_t1 = []
-        self.unload_for_t2 = []
-        self.unload_for_text_encoder = []
-        self.unload_for_vae = []
 
         # Load TT text encoder
         umt5_config = UMT5Config(
