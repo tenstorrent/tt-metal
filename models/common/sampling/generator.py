@@ -505,8 +505,7 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
 class SeedManager:
     def __init__(self, generator, max_batch_size=32):
         self.max_batch_size = max_batch_size
-        self.seeds = [secrets.randbits(64) for _ in range(max_batch_size)]
-        self.rngs = [random.Random(seed) for seed in self.seeds]
+        self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.generator = generator
         tt_sampling = generator.tt_sampling
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1
@@ -520,7 +519,6 @@ class SeedManager:
     def reset_seed(self, seeds, user_ids):
         for i, user in enumerate(user_ids):
             self.rngs[user].seed(seeds[i])
-            self.seeds[user] = seeds[i]
 
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         if empty_slots is None:
