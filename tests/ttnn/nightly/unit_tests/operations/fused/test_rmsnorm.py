@@ -157,3 +157,49 @@ def test_llama_4D_rms_norm(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     is_close(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("batch_size, w", [(1, 5120)])
+def test_large_tensor_rms_norm(device, batch_size, w):
+    torch.manual_seed(0)
+
+    epsilon = 9.99999997e-7
+
+    torch_input_tensor = torch.rand((batch_size, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rms_norm)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight, epsilon=epsilon)
+
+    # Multiple iterations to test with program cache
+    for _ in range(3):
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        weight = ttnn.from_torch(
+            torch_weight,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        output_tensor = ttnn.rms_norm(
+            input_tensor,
+            weight=weight,
+            epsilon=epsilon,
+            compute_kernel_config=compute_config,
+        )
+        output_tensor = ttnn.from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

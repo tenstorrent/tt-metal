@@ -219,6 +219,6 @@
   cmd: run_t3000_ttnn_multiprocess_slow_tests
   skus:
     wh_llmbox:
-      timeout: 10
+      timeout: 5
   owner_id: U09BZ5Q33LK # Piotr Stankiewicz
   team: scaleout
