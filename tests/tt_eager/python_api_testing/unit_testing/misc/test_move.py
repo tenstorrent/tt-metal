@@ -42,6 +42,12 @@ def run_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config
     tt_host_rm = output.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = tt_host_rm.to_torch()
 
+    if pyt_got_back_rm.dtype == torch.uint16:
+        pyt_got_back_rm = pyt_got_back_rm.to(torch.int16)
+
+    elif pyt_got_back_rm.dtype == torch.uint32:
+        pyt_got_back_rm = pyt_got_back_rm.to(torch.int32)
+
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm, torch_tensor, 0.99)
     logger.debug(f"Passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")

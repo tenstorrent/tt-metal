@@ -27,7 +27,7 @@ uint32_t get_estimated_size_of_cbs(
     // src1   CB: per_core_N * in0_block_w * 2 (for double buffer)
     // interm CB: per_core_M * per_core_N * interm_single_tile_size
     // out    CB: per_core_M * per_core_N
-    // bias   CB: per_core_M * in0_block_w
+    // bias   CB: per_core_N
     // Ignore optional intermediate CB because not needed when need to create a
     // program config.
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
@@ -50,7 +50,7 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
     uint32_t in2_size = in2_block_tiles * in0_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
-    uint32_t bias_size = in0_block_w * bias_single_tile_size;
+    uint32_t bias_size = per_core_N * bias_single_tile_size;
 
     uint32_t in0_transpose_size = 0;
     if (transpose_a) {

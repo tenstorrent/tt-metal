@@ -4,9 +4,6 @@
 ///
 #include <algorithm>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -113,6 +110,7 @@ strided_all_gather_minimal_matmul_async_program(
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
     // Matmul - wrap single output tensor in vector for unified interface
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
     std::vector<Tensor> matmul_output_tensors = {matmul_output_tensor};
     auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper_common(
         program,
@@ -124,7 +122,11 @@ strided_all_gather_minimal_matmul_async_program(
         matmul_output_tensors,
         compute_kernel_config,
         matmul_fused_op_signaler,
-        1);  // N_chunks = 1 for single output
+        1,  // N_chunks = 1 for single output
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        empty_srs_fused_op_signaler);
 
     // Create the all gather fused op signaler
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> all_gather_fused_op_signaler =

@@ -77,20 +77,19 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
+    Tensor(HostStorage(std::move(buffer)), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    tensor_id(Tensor::next_tensor_id()) {
-    init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
-}
+Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
-void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
-    tensor_attributes =
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology));
-
-    if (auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
-        device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
-        mesh_device_ = device_storage->mesh_buffer->device();
+Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
+        mesh_device_ = buffer->device();
     }
 }
 
@@ -554,8 +553,6 @@ Tensor set_tensor_id(const Tensor& tensor) {
     output.tensor_id = Tensor::next_tensor_id();
     return output;
 };
-
-Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
 
