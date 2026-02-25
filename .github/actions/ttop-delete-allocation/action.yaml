@@ -1,0 +1,15 @@
+name: 'Delete Allocation'
+description: 'A composable action to delete an allocation'
+
+inputs:
+  allocationName:
+    description: 'Allocation name'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Delete Allocation
+      shell: bash
+      run: |
+        kubectl delete allocation/${{ inputs.allocationName }} --ignore-not-found

@@ -14,9 +14,7 @@
 #include <enchantum/enchantum.hpp>
 #include <map>
 #include <string>
-#include <thread>
 #include <tuple>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -31,7 +29,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "mesh_device.hpp"
@@ -76,8 +73,8 @@ size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
 template <typename FIXTURE>
 bool eth_direct_sender_receiver_kernels(
     FIXTURE* fixture,
-    std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
-    std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh_device,
     const size_t& byte_size,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
@@ -168,27 +165,13 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-    std::thread t1;
-    std::thread t2;
-    if (fixture->IsSlowDispatch()) {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
-        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
-    } else {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        fixture->RunProgram(sender_mesh_device, sender_workload, true);
-        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
-    }
+    sender_workload.add_program(device_range, std::move(sender_program));
+    receiver_workload.add_program(device_range, std::move(receiver_program));
+    fixture->RunProgram(sender_mesh_device, sender_workload, true);
+    fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
 
     fixture->FinishCommands(sender_mesh_device);
     fixture->FinishCommands(receiver_mesh_device);
-
-    if (fixture->IsSlowDispatch()) {
-        t1.join();
-        t2.join();
-    }
 
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         receiver_device->id(),
@@ -284,12 +267,10 @@ bool send_over_eth(
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance()
-                                    .get_firmware_build_state(sender_device->build_id(), active_eth_index, 0, 0)
-                                    .get_target_out_path("");
-    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance()
-                                      .get_firmware_build_state(receiver_device->build_id(), active_eth_index, 0, 0)
-                                      .get_target_out_path("");
+    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance().get_firmware_binary_path(
+        sender_device->build_id(), active_eth_index, 0, 0);
+    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance().get_firmware_binary_path(
+        receiver_device->build_id(), active_eth_index, 0, 0);
     const ll_api::memory& binary_mem_send = llrt::get_risc_binary(sender_firmware_path);
     const ll_api::memory& binary_mem_receive = llrt::get_risc_binary(receiver_firmware_path);
 

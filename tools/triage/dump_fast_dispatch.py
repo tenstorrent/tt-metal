@@ -18,7 +18,7 @@ Owner:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, run_script, log_check
+from triage import ScriptConfig, log_warning, triage_field, run_script, log_check
 from ttexalens.memory_access import MemoryAccess, RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
 from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
@@ -309,6 +309,12 @@ def read_wait_globals(
 def run(args, context: Context):
     """Entry point for triage framework."""
     from triage import set_verbose_level
+
+    if context.devices[0].is_blackhole():
+        log_warning(
+            "Currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+        )
+        return
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"]

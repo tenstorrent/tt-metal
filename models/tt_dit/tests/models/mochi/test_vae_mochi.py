@@ -18,6 +18,7 @@ from ....models.vae.vae_mochi import MochiVAEDecoder as TtDecoder
 from ....models.vae.vae_mochi import ResBlock as TtResBlock
 from ....parallel.config import MochiVAEParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils import cache
 from ....utils.check import assert_quality
 
 
@@ -674,7 +675,6 @@ def load_dit(
 
     from ....models.transformers.transformer_mochi import MochiTransformer3DModel
     from ....parallel.config import DiTParallelConfig
-    from ....utils.cache import get_cache_path, load_cache_dict
 
     torch_transformer = TorchMochiTransformer3DModel.from_pretrained(
         model_name, subfolder="transformer", torch_dtype=torch.float32
@@ -705,18 +705,14 @@ def load_dit(
 
     # Load state dict into TT transformer
     if use_cache:
-        cache_path = get_cache_path(
+        cache.load_model(
+            transformer,
             model_name="mochi-1-preview",
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
-        assert os.path.exists(
-            cache_path
-        ), f"Cache path: {cache_path} does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
-        cache_dict = load_cache_dict(cache_path)
-        transformer.from_cached_state_dict(cache_dict)
     else:
         transformer.load_torch_state_dict(torch_transformer.state_dict())
 
