@@ -39,7 +39,7 @@ uint32_t divup(uint32_t x, uint32_t y);
 
 bool isWormholeB0();
 
-torch::jit::Module loadTorchModel();
+torch::jit::Module loadTorchModel(const std::string& model_path = "");
 
 std::shared_ptr<TtMobileNetV2> loadTtnnModel(
     const std::shared_ptr<ttnn::MeshDevice>& device, const torch::jit::Module& torch_model, int batch_size);
