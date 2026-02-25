@@ -143,6 +143,13 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
+    p.add_argument(
+        "--no-sample-on-device",
+        dest="sample_on_device",
+        action="store_false",
+        default=True,
+        help="Disable sampling on device and use host-side sampling instead (default: device sampling is enabled).",
+    )
     return p
 
 
@@ -260,6 +267,7 @@ def run_demo(
     signpost: bool = False,
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
+    sample_on_device: bool = True,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -359,6 +367,7 @@ def run_demo(
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
                 profile_decode=profile_decode,
+                sample_on_device=sample_on_device,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -461,6 +470,7 @@ def main() -> None:
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
+        sample_on_device=args.sample_on_device,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing

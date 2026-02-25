@@ -101,10 +101,12 @@ class DeepseekGenerator(WarmupForwardMixin):
         prefill_max_tokens: int | None = None,
         force_recalculate: bool = False,
         profile_decode: bool = False,
+        sample_on_device: bool = True,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
+        self.sample_on_device = sample_on_device
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -166,6 +168,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.random_weights = random_weights
         self.single_layer = single_layer
 
+        # Log sampling mode
+        logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
+
         # Model runtime state
         self.model_state = None
         self.model_shared_state = None
@@ -189,6 +194,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.force_recalculate = force_recalculate
         self.profile_decode = profile_decode  # Profile decode: skip prefill, run only 1st dense + 1st MoE layer
         logger.info(f"Enable trace: {self.enable_trace}")
+        if self.enable_trace and not self.sample_on_device:
+            raise ValueError("Trace mode requires device sampling. Set sample_on_device=True or disable trace.")
         if self.profile_decode:
             logger.info("profile_decode=True: Prefill skipped, decode runs only 1st dense layer + 1st MoE layer")
 
@@ -638,12 +645,24 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
-        ttnn.deallocate(logits_tt)
 
         return logits_tt  # [1, 1, B, V]
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
-        return torch.argmax(logits, dim=-1)  # [B]
+        """Sample tokens greedily from logits. Handles both [B, V] and [1, 1, B, V] shapes."""
+        sampled = torch.argmax(logits, dim=-1)  # [..., B]
+        # Squeeze out any leading dimensions to get [B]
+        while sampled.dim() > 1:
+            sampled = sampled.squeeze(0)
+        return sampled  # [B]
+
+    def _logits_to_host(self, logits_tt: ttnn.Tensor) -> torch.Tensor:
+        """Convert logits from device to host for sampling. Returns [1, 1, B, V] tensor."""
+        logits = ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        )
+        return logits  # [1, 1, B, V]
 
     def _decode_step_tt(
         self,
@@ -823,11 +842,20 @@ class DeepseekGenerator(WarmupForwardMixin):
                     assert prefill_logits is not None
                     last_logits = self._slice_last_token_logits(prefill_logits, prompt_len)
                     last_logits = self._expand_prefill_logits(last_logits)
-                    tt_pred = self._sample_tokens_device(last_logits)
-                    host_pred = self._tokens_from_device(tt_pred, batch_size=1)
-                    pred_token = host_pred[0]
+
+                    if self.sample_on_device:
+                        # Device sampling (new way)
+                        tt_pred = self._sample_tokens_device(last_logits)
+                        host_pred = self._tokens_from_device(tt_pred, batch_size=1)
+                        pred_token = host_pred[0]
+                        ttnn.deallocate(tt_pred)
+                    else:
+                        # Host sampling (old way)
+                        host_logits = self._logits_to_host(last_logits)
+                        sampled_tokens = self._sample_greedy(host_logits)  # [B]
+                        pred_token = sampled_tokens[0]  # Get first token
+
                     ttnn.deallocate(last_logits)
-                    ttnn.deallocate(tt_pred)
                     ttnn.deallocate(prefill_logits)
                     last_tokens.append(pred_token)
                     self.ccl.reset_sem_counters()
@@ -866,7 +894,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
                 # Non-trace decode path consumes device-resident tokens.
                 tt_next_tokens = None
-                if not self.enable_trace:
+                if not self.enable_trace and self.sample_on_device:
                     tt_next_tokens = self._tt_from_tokens_step(next_tokens)
 
                 # Positions for the first generated token are the prompt lengths
@@ -891,7 +919,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
+
                     if self.enable_trace:
+                        # Trace mode (always uses device sampling)
                         logits = self.decode_forward(
                             next_tokens,
                             positions,
@@ -903,15 +933,23 @@ class DeepseekGenerator(WarmupForwardMixin):
                         tt_next_tokens = self._sample_tokens_device(
                             logits, tt_out_tok=self._trace_tokens, enable_trace=True
                         )
-                    else:
+                    elif self.sample_on_device:
+                        # Device sampling (new way)
                         logits = self.decode_forward_tt(
                             tt_next_tokens,
                             positions,
                             self.batch_size_per_row,
                             enable_trace=False,
                         )
+                    else:
+                        # Host sampling (old way)
+                        logits_tt = self._decode_step(next_tokens, positions, self.batch_size_per_row)
+                        logits = self._logits_to_host(logits_tt)
+                        ttnn.deallocate(logits_tt)
+
                     profiler.end(f"decode_time_{gen_idx}")
                     self.ccl.reset_sem_counters()
+
                     if self.enable_trace:
                         tt_out_toks_cpu.append(tt_next_tokens.cpu(blocking=False, cq_id=0))
                         read_events.append(ttnn.record_event(self.mesh_device, 0))
@@ -927,7 +965,8 @@ class DeepseekGenerator(WarmupForwardMixin):
                                     print(
                                         self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True
                                     )
-                    else:
+                    elif self.sample_on_device:
+                        # Device sampling path
                         self._sample_tokens_device(logits, tt_out_tok=tt_next_tokens)
                         ttnn.deallocate(logits)
                         pred_tokens = self._tokens_from_device(tt_next_tokens, self.batch_size)
@@ -943,6 +982,24 @@ class DeepseekGenerator(WarmupForwardMixin):
                             generations[i].append(token_value)
                             if early_print_first_user and i == 0:
                                 print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+                    else:
+                        # Host sampling path (old way)
+                        pred_tokens = self._sample_greedy(logits)
+                        if teacher_forcing is not None:
+                            forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
+                            pred_tokens[0] = int(forced)
+                        next_tokens = pred_tokens
+                        positions += 1
+                        for i in range(num_of_prompts):
+                            token_value = int(next_tokens[i].item())
+                            generations[i].append(token_value)
+                            if early_print_first_user and i == 0:
+                                if self.tokenizer is not None:
+                                    print(
+                                        self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True
+                                    )
+                                else:
+                                    print(f"{token_value} ", end="", flush=True)
 
                 if self.enable_trace:
                     for trailing_idx in range(max(0, max_new_tokens - trace_exec_offset), max_new_tokens):
