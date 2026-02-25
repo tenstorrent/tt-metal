@@ -1944,6 +1944,7 @@ TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE3HopsW4Hops) {
 }
 
 TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
+    // Code size gets bloated when run with watcher
     SKIP_FOR_WATCHER();
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {

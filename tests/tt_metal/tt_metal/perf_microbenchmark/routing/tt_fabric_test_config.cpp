@@ -985,7 +985,7 @@ bool TestConfigBuilder::should_skip_test_on_platform(const ParsedTestConfig& tes
                 log_info(LogTest, "Skipping test '{}' on architecture or platform '{}'", test_config.name, token);
                 return true;
             }
-            // The test is hanging with watcher enabled, github issue #xxxx
+            // The test is hanging with watcher enabled, github issue #29612
             if (token == "watcher" && watcher_enabled) {
                 log_info(LogTest, "Skipping test '{}' because watcher is enabled", test_config.name);
                 return true;

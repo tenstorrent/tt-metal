@@ -139,7 +139,7 @@ Tests:
       - type: all_to_all
 
   - name: "FlowControlAllToAllLinear"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     sync: true
     enable_flow_control: true
     fabric_setup:
@@ -157,7 +157,7 @@ Tests:
       - type: all_to_all
 
   - name: "SimpleUnicastMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -172,7 +172,7 @@ Tests:
               device: [0, 1]
 
   - name: "TestNocSendTypesMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -189,7 +189,7 @@ Tests:
               device: [0, 1]
 
   - name: "AllToAllUnicastMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -203,7 +203,7 @@ Tests:
       - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -219,7 +219,7 @@ Tests:
       - type: all_to_all
 
   - name: "FullDevicePairingMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -234,7 +234,7 @@ Tests:
         iterations: 5
 
   - name: "FlowControlAllToAllMeshLowLatency"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     sync: true
     enable_flow_control: true
     fabric_setup:
@@ -252,7 +252,7 @@ Tests:
       - type: all_to_all
 
   - name: "TestNocSendTypesMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -270,7 +270,7 @@ Tests:
               device: [0, 1]
 
   - name: TestPacketSizesMesh
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -287,7 +287,7 @@ Tests:
               device: [0, 1]
 
   - name: AllToAllUnicastTestPacketSizesMesh
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -304,7 +304,7 @@ Tests:
       - type: all_to_all
 
   - name: "FlowControlAllToAllMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     sync: true
     enable_flow_control: true
     fabric_setup:
@@ -322,7 +322,7 @@ Tests:
       - type: all_to_all
 
   - name: AllToOneUnicastMesh
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -339,7 +339,7 @@ Tests:
       - type: all_to_one
 
   - name: AllToOneRandomUnicastMesh
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -427,7 +427,7 @@ Tests:
       - type: all_to_all
 
   - name: "CustomMaxPacketSizeMesh7K"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
@@ -465,7 +465,7 @@ Tests:
       - type: all_to_all
 
   - name: "CustomMaxPacketSizeMesh8K"
-    skip: [watcher, wormhole_b0]
+    skip: [watcher, wormhole_b0] # Code size gets bloated when run with watcher
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
@@ -500,7 +500,7 @@ Tests:
       num_packets: 20000
 
   - name: "CustomMaxPacketSizeMesh15K"
-    skip: [watcher, wormhole_b0]
+    skip: [watcher, wormhole_b0] # Code size gets bloated when run with watcher
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
@@ -536,7 +536,7 @@ Tests:
       - type: all_to_all
 
   - name: "BenchmarkKernelsAllToAllMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     sync: true
     skip_packet_validation: true
     fabric_setup:
@@ -596,7 +596,7 @@ Tests:
 
 
   - name: "CoreSweepOneToAll"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -617,7 +617,7 @@ Tests:
               core: all
 
   - name: "CoreSweepAllToOne"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 

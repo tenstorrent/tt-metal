@@ -877,6 +877,7 @@ TEST_F(Fabric1DMuxFixture, TestFabricMuxEightChipVariant) {
 }
 
 TEST_F(Fabric1DMuxFixture, TestFabricMuxStressOpenClose) {
+    // Code size gets bloated when run with watcher
     SKIP_FOR_WATCHER();
     TestConfig test_config = {
         .num_devices = 2,  // running on 2 devices will allow to test on all types of multi-chip systems
@@ -896,6 +897,7 @@ TEST_F(Fabric1DMuxFixture, TestFabricMuxStressOpenClose) {
 }
 
 TEST_F(Fabric1DMuxFixture, TestFabricMuxNumFullSizeChannelIters) {
+    // Code size gets bloated when run with watcher
     SKIP_FOR_WATCHER();
     TestConfig test_config = {
         .num_devices = 2,  // running on 2 devices will allow to test on all types of multi-chip systems
