@@ -4,8 +4,6 @@
 
 #include "sdpa_fw_program_factory.hpp"
 
-#include <fmt/core.h>
-
 #include <bit>
 #include <cmath>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -78,6 +76,7 @@ const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
  */
 std::vector<std::pair<uint32_t, uint32_t>> calculate_balanced_pair_distribution(
     uint32_t total_pairs, uint32_t num_cores) {
+    TT_FATAL(num_cores > 0, "calculate_balanced_pair_distribution: num_cores must be > 0");
     std::vector<std::pair<uint32_t, uint32_t>> distribution;
     distribution.reserve(num_cores);
 
@@ -188,8 +187,7 @@ void assign_per_core_runtime_args_balanced(
     const tt::tt_metal::Buffer* intermediates_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    const std::vector<std::pair<uint32_t, uint32_t>>& pair_distribution,
-    const tt::tt_metal::CoreRangeSet& all_cores) {
+    const std::vector<std::pair<uint32_t, uint32_t>>& pair_distribution) {
     for (uint32_t i = 0; i < num_cores; i++) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
         const auto& [start_pair_idx, num_pairs] = pair_distribution[i];
@@ -324,38 +322,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_rows_per_core_group_1 = std::get<4>(work_split);
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
-
-    // Debug prints for configuration
-    fmt::print("\n=== SDPA Forward Configuration ===\n");
-    fmt::print("Batch (B): {}, Query Heads (qNH): {}, KV Heads (kNH): {}\n", qB, qNH, kNH);
-    fmt::print("Sequence Length (qS): {}, St (tiles): {}\n", qS, St);
-    fmt::print("Query Embed (qEmbd): {}, qWt (tiles): {}\n", qEmbd, qWt);
-    fmt::print("Key Embed (kEmbd): {}, kWt (tiles): {}\n", kEmbd, kWt);
-    fmt::print("Value Embed (vEmbd): {}, vWt (tiles): {}\n", vEmbd, vWt);
-    fmt::print("Heads per group: {}\n", heads_per_group);
-    fmt::print("NC (B * qNH): {}, Total rows: {}\n", NC, total_rows_to_process);
-    fmt::print(
-        "Grid size: {}x{}, Available cores: {}\n",
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        num_available_cores);
-    fmt::print("Mask type: {}\n", static_cast<int>(mask_type));
-    fmt::print("Pairs per seq: {}, Total pairs: {}\n", pairs_per_seq, total_pairs);
-    fmt::print("USE_BALANCED_PARALLELISM: {}\n", use_balanced_parallelism);
-    fmt::print("Num cores used: {}\n", num_cores);
-    if (use_balanced_parallelism) {
-        fmt::print("Pair distribution (first 5 cores):\n");
-        for (uint32_t i = 0; i < std::min(num_cores, 5u); i++) {
-            fmt::print(
-                "  Core {}: start_pair={}, num_pairs={}\n", i, pair_distribution[i].first, pair_distribution[i].second);
-        }
-    } else {
-        fmt::print(
-            "Standard mode: rows_per_core_g1={}, rows_per_core_g2={}\n",
-            num_rows_per_core_group_1,
-            num_rows_per_core_group_2);
-    }
-    fmt::print("==================================\n\n");
 
     const uint32_t block_size = get_block_size(qWt, 4U);
 
@@ -598,8 +564,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             intermediates_buffer,
             num_cores,
             num_cores_y,
-            pair_distribution,
-            all_cores);
+            pair_distribution);
     } else {
         assign_per_core_runtime_args(
             program,

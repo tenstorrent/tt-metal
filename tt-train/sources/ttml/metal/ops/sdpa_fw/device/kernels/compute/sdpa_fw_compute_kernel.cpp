@@ -27,7 +27,6 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
-#include "api/debug/dprint.h"
 #include "sdpa_compute_utils.hpp"
 
 // For standard mode: num_rows_per_core = rows to process
@@ -231,9 +230,6 @@ void kernel_main() {
 
 #ifdef BALANCED_PARALLELISM
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);  // Runtime arg for balanced mode
-    DPRINT << "COMPUTE: start=" << start_idx << " pairs=" << num_pairs << ENDL();
-#else
-    DPRINT << "COMPUTE: start=" << start_idx << " rows=" << num_rows_per_core << ENDL();
 #endif
 
     init_sfpu(cb_query, cb_output);
@@ -276,14 +272,12 @@ void kernel_main() {
         // Process heavy row second (more work)
         process_single_row(heavy_global_row);
     }
-    DPRINT << "COMPUTE DONE (BALANCED)" << ENDL();
 #else
     // Standard mode: process rows sequentially
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         const uint32_t global_row_idx = start_idx + row;
         process_single_row(global_row_idx);
     }
-    DPRINT << "COMPUTE DONE (STANDARD)" << ENDL();
 #endif
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
