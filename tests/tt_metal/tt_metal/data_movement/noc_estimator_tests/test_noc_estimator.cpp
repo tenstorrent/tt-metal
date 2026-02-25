@@ -10,7 +10,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include <algorithm>
 
 namespace tt::tt_metal {
 
@@ -43,7 +45,8 @@ enum class NocMechanism : uint32_t {
 
 enum class MemoryType : uint32_t {
     L1 = 0,
-    DRAM = 1,
+    DRAM_INTERLEAVED = 1,
+    DRAM_SHARDED = 2,
 };
 
 // Writer kernel modes (must match log_helpers.hpp constants)
@@ -599,105 +602,33 @@ static bool run_many_to_many_multicast(
     return true;
 }
 
-// Handles DRAM read+write (reader on RISCV_1, writer on RISCV_0, synchronized by semaphore)
-static bool run_dram(const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    Program program = CreateProgram();
+enum class DramDirection { READ, WRITE };
 
-    const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
-
-    CoreCoord core_coord = {0, 0};
-    CoreRangeSet core_set({CoreRange(core_coord)});
-
-    // DRAM and L1 addresses
-    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size();
-    uint32_t input_dram_addr = dram_info.base_address;
-    uint32_t output_dram_addr = input_dram_addr + (uint32_t)bytes_per_txn;
-
-    L1AddressInfo l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, core_coord);
-    uint32_t l1_addr = l1_info.base_address;
-
-    uint32_t sem_id = CreateSemaphore(program, core_set, 0);
-
-    // DRAM metadata args
-    uint32_t mem_type = (uint32_t)MemoryType::DRAM;
-    uint32_t mech = (uint32_t)NocMechanism::UNICAST;
-
-    uint32_t num_banks = 1;
-
-    // Reader kernel (RISCV_1): reads from DRAM input to L1
-    vector<uint32_t> reader_args = {
-        l1_addr,
-        input_dram_addr,
-        cfg.num_of_transactions,
-        (uint32_t)bytes_per_txn,
-        cfg.test_id,
-        sem_id,
-        num_banks,
-        mem_type,
-        mech,
-        (uint32_t)NocPattern::ONE_FROM_ONE};
-
-    CreateKernel(
-        program,
-        KERNELS_DIR + "dram_reader.cpp",
-        core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
-
-    // Writer kernel (RISCV_0): writes from L1 to DRAM output
-    vector<uint32_t> writer_args = {
-        l1_addr,
-        output_dram_addr,
-        cfg.num_of_transactions,
-        (uint32_t)bytes_per_txn,
-        cfg.test_id,
-        sem_id,
-        num_banks,
-        mem_type,
-        mech,
-        (uint32_t)NocPattern::ONE_TO_ONE};
-
-    CreateKernel(
-        program,
-        KERNELS_DIR + "dram_writer.cpp",
-        core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
-
-    log_info(LogTest, "Running Test ID: {}, Run ID: {}", cfg.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
-
-    auto packed_input = make_test_data(bytes_per_txn);
-    auto packed_golden = packed_input;
-
-    detail::WriteToDeviceDRAMChannel(device, cfg.dram_channel, input_dram_addr, packed_input);
-    MetalContext::instance().get_cluster().dram_barrier(device->id());
-
-    execute_program(mesh_device, std::move(program));
-
-    vector<uint32_t> packed_output;
-    detail::ReadFromDeviceDRAMChannel(
-        device, cfg.dram_channel, output_dram_addr, (uint32_t)bytes_per_txn, packed_output);
-
-    bool is_equal = (packed_output == packed_golden);
-    if (!is_equal) {
-        log_error(LogTest, "DRAM Equality Check failed for test_id {}", cfg.test_id);
-    }
-    return is_equal;
-}
-
-// Handles interleaved DRAM read+write where each core cycles through ALL DRAM banks in round-robin.
-// Used for both one_from_all (1 core) and all_from_all (N cores) DRAM patterns.
-static bool run_dram_interleaved(
+// Unified DRAM run function using TensorAccessor + experimental Noc 2.0 API.
+// Launches reader OR writer kernel in isolation (no dual-kernel L1 contention).
+// For interleaved mode: each core cycles through all banks via sequential page IDs.
+// For sharded mode: each core reads/writes only the page(s) mapping to its dedicated bank.
+static bool run_dram_accessor(
     const shared_ptr<distributed::MeshDevice>& mesh_device,
     const NocEstimatorConfig& cfg,
-    const vector<CoreCoord>& cores) {
+    const vector<CoreCoord>& cores,
+    const vector<uint32_t>& bank_assignments,
+    DramDirection direction) {
     IDevice* device = mesh_device->impl().get_device(0);
     Program program = CreateProgram();
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
     uint32_t num_dram_banks = (uint32_t)device->num_dram_channels();
+    uint32_t num_cores = (uint32_t)cores.size();
+
+    uint32_t num_pages = num_dram_banks;
+
+    InterleavedBufferConfig buf_config{
+        .device = device,
+        .size = (size_t)num_pages * bytes_per_txn,
+        .page_size = (uint32_t)bytes_per_txn,
+        .buffer_type = BufferType::DRAM};
+    auto dram_buffer = CreateBuffer(buf_config);
 
     std::set<CoreRange> core_ranges;
     for (auto& c : cores) {
@@ -705,97 +636,75 @@ static bool run_dram_interleaved(
     }
     CoreRangeSet core_set(core_ranges);
 
-    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size();
-    uint32_t input_dram_addr = dram_info.base_address;
-    uint32_t output_dram_addr = input_dram_addr + (uint32_t)bytes_per_txn;
-
     L1AddressInfo l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, cores[0]);
     uint32_t l1_addr = l1_info.base_address;
 
-    uint32_t sem_id = CreateSemaphore(program, core_set, 0);
+    uint32_t barrier_sem_id = CreateSemaphore(program, core_set, 0);
 
-    uint32_t mem_type = (uint32_t)MemoryType::DRAM;
+    CoreCoord coordinator_phys = device->worker_core_from_logical_core(cores[0]);
+    uint32_t local_scratch_addr = l1_addr + (uint32_t)bytes_per_txn;
+
+    uint32_t mem_type = (uint32_t)cfg.memory_type;
     uint32_t mech = (uint32_t)NocMechanism::UNICAST;
 
-    // Reader pattern matches cfg; writer uses the corresponding write pattern
-    NocPattern writer_pattern =
-        (cfg.pattern == NocPattern::ONE_FROM_ALL) ? NocPattern::ONE_TO_ALL : NocPattern::ALL_TO_ALL;
+    bool is_read = (direction == DramDirection::READ);
+    string kernel_file = is_read ? "dram_reader.cpp" : "dram_writer.cpp";
+    auto processor = is_read ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
 
-    vector<uint32_t> reader_compile_args = {
-        l1_addr,
-        input_dram_addr,
-        cfg.num_of_transactions,
-        (uint32_t)bytes_per_txn,
-        cfg.test_id,
-        sem_id,
-        num_dram_banks,
-        mem_type,
-        mech,
-        (uint32_t)cfg.pattern};
+    vector<uint32_t> compile_args = {
+        cfg.num_of_transactions,  // 0
+        (uint32_t)bytes_per_txn,  // 1
+        cfg.test_id,              // 2
+        0,                        // 3 (sem_id unused)
+        mem_type,                 // 4
+        mech,                     // 5
+        (uint32_t)cfg.pattern,    // 6
+        num_pages,                // 7
+    };
+    TensorAccessorArgs(*dram_buffer).append_to(compile_args);
 
-    CreateKernel(
+    auto kernel = CreateKernel(
         program,
-        KERNELS_DIR + "dram_reader.cpp",
+        KERNELS_DIR + kernel_file,
         core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
+        DataMovementConfig{.processor = processor, .noc = cfg.noc_id, .compile_args = compile_args});
 
-    vector<uint32_t> writer_compile_args = {
-        l1_addr,
-        output_dram_addr,
-        cfg.num_of_transactions,
-        (uint32_t)bytes_per_txn,
-        cfg.test_id,
-        sem_id,
-        num_dram_banks,
-        mem_type,
-        mech,
-        (uint32_t)writer_pattern};
-
-    CreateKernel(
-        program,
-        KERNELS_DIR + "dram_writer.cpp",
-        core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_args});
+    for (size_t i = 0; i < cores.size(); i++) {
+        uint32_t start_page = bank_assignments[i];
+        vector<uint32_t> rt_args = {
+            dram_buffer->address(),
+            l1_addr,
+            start_page,
+            barrier_sem_id,
+            coordinator_phys.x,
+            coordinator_phys.y,
+            num_cores,
+            local_scratch_addr};
+        SetRuntimeArgs(program, kernel, cores[i], rt_args);
+    }
 
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", cfg.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
-    auto packed_input = make_test_data(bytes_per_txn);
-    auto packed_golden = packed_input;
-
-    // Write same input data to all DRAM banks (each bank gets the same content)
-    for (uint32_t bank = 0; bank < num_dram_banks; bank++) {
-        detail::WriteToDeviceDRAMChannel(device, bank, input_dram_addr, packed_input);
+    // For reads: fill DRAM buffer with test data so the kernel has something to read.
+    // For writes: fill L1 source region via DRAM buffer init (data will be overwritten by kernel).
+    auto page_data = make_test_data(bytes_per_txn);
+    vector<uint32_t> full_input;
+    full_input.reserve(num_pages * page_data.size());
+    for (uint32_t p = 0; p < num_pages; p++) {
+        full_input.insert(full_input.end(), page_data.begin(), page_data.end());
     }
+    detail::WriteToBuffer(dram_buffer, full_input);
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
     execute_program(mesh_device, std::move(program));
 
-    // Verify output from banks that were written to (round-robin covers up to num_banks)
-    uint32_t banks_to_verify = cfg.num_of_transactions < num_dram_banks ? cfg.num_of_transactions : num_dram_banks;
-    for (uint32_t bank = 0; bank < banks_to_verify; bank++) {
-        vector<uint32_t> packed_output;
-        detail::ReadFromDeviceDRAMChannel(device, bank, output_dram_addr, (uint32_t)bytes_per_txn, packed_output);
-        if (packed_output != packed_golden) {
-            log_error(LogTest, "DRAM Interleaved Equality Check failed for test_id {}, bank {}", cfg.test_id, bank);
-            return false;
-        }
-    }
     return true;
 }
 
 // ============ DISPATCH ============
 
 static bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
-    if (cfg.memory_type == MemoryType::DRAM) {
-        return run_dram(mesh_device, cfg);
-    }
     switch (cfg.pattern) {
         case NocPattern::ONE_TO_ONE:
         case NocPattern::ONE_FROM_ONE: return run_single_core(mesh_device, cfg);
@@ -1053,111 +962,194 @@ static void sweep_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_d
     }
 }
 
-static void sweep_dram(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+// ============ DRAM ACCESSOR SWEEP FUNCTIONS ============
+
+// Helper: run a DRAM accessor sweep with the given cores, bank assignments, and direction.
+// Sweeps both NOC_0 and NOC_1 for each configuration.
+static void dram_accessor_sweep(
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t test_id,
+    NocPattern pattern,
+    MemoryType memory_type,
+    const vector<CoreCoord>& cores,
+    const vector<uint32_t>& bank_assignments,
+    DramDirection direction) {
     auto [bytes_per_page, max_bytes, max_pages] = unit_tests::dm::compute_physical_constraints(mesh_device);
 
+    log_info(LogTest, "Cores: {}", cores);
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_txn = 256;
 
-    for (uint32_t num_txn = 1; num_txn <= max_transactions; num_txn *= 4) {
-        for (uint32_t pages = 1; pages <= max_pages_per_txn; pages *= 2) {
-            if (num_txn * pages * bytes_per_page >= max_bytes) {
-                continue;
+    for (NOC noc : {NOC::NOC_0, NOC::NOC_1}) {
+        for (uint32_t num_txn = 1; num_txn <= max_transactions; num_txn *= 4) {
+            for (uint32_t pages = 1; pages <= max_pages_per_txn; pages *= 2) {
+                if (num_txn * pages * bytes_per_page >= max_bytes) {
+                    continue;
+                }
+
+                NocEstimatorConfig cfg = {
+                    .test_id = test_id,
+                    .pattern = pattern,
+                    .mechanism = NocMechanism::UNICAST,
+                    .memory_type = memory_type,
+                    .num_of_transactions = num_txn,
+                    .pages_per_transaction = pages,
+                    .bytes_per_page = bytes_per_page,
+                    .noc_id = noc,
+                };
+                EXPECT_TRUE(run_dram_accessor(mesh_device, cfg, cores, bank_assignments, direction));
             }
-
-            NocEstimatorConfig cfg = {
-                .test_id = test_id,
-                .pattern = NocPattern::ONE_TO_ONE,
-                .mechanism = NocMechanism::UNICAST,
-                .memory_type = MemoryType::DRAM,
-                .num_of_transactions = num_txn,
-                .pages_per_transaction = pages,
-                .bytes_per_page = bytes_per_page,
-            };
-            EXPECT_TRUE(run_dm(mesh_device, cfg));
-        }
-    }
-}
-
-// ============ MULTI-BANK DRAM SWEEP FUNCTIONS ============
-
-// Single core reading/writing ALL DRAM banks in round-robin (interleaved access pattern).
-// Measures how well one core can utilize multi-bank parallelism.
-static void sweep_dram_one_from_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    auto [bytes_per_page, max_bytes, max_pages] = unit_tests::dm::compute_physical_constraints(mesh_device);
-
-    vector<CoreCoord> cores = {{0, 0}};
-
-    uint32_t max_transactions = 256;
-    uint32_t max_pages_per_txn = 256;
-
-    for (uint32_t num_txn = 1; num_txn <= max_transactions; num_txn *= 4) {
-        for (uint32_t pages = 1; pages <= max_pages_per_txn; pages *= 2) {
-            if (num_txn * pages * bytes_per_page >= max_bytes) {
-                continue;
-            }
-
-            NocEstimatorConfig cfg = {
-                .test_id = test_id,
-                .pattern = NocPattern::ONE_FROM_ALL,
-                .mechanism = NocMechanism::UNICAST,
-                .memory_type = MemoryType::DRAM,
-                .num_of_transactions = num_txn,
-                .pages_per_transaction = pages,
-                .bytes_per_page = bytes_per_page,
-            };
-            EXPECT_TRUE(run_dram_interleaved(mesh_device, cfg, cores));
         }
     }
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
-// Multiple diagonal cores, each reading/writing ALL DRAM banks in round-robin.
-// Measures aggregate bandwidth when multiple cores contend for the same banks.
-static void sweep_dram_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
-    auto [bytes_per_page, max_bytes, max_pages] = unit_tests::dm::compute_physical_constraints(mesh_device);
+// Helpers to build core/bank lists for sharded multi-core and interleaved all-core patterns
+static void get_sharded_all_cores(
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    vector<CoreCoord>& cores,
+    vector<uint32_t>& bank_assignments) {
     IDevice* device = mesh_device->impl().get_device(0);
     CoreCoord device_grid = device->compute_with_storage_grid_size();
     uint32_t num_dram_banks = (uint32_t)device->num_dram_channels();
-
-    // Place one core per diagonal position, capped at the number of DRAM banks
-    uint32_t num_cores = (uint32_t)device_grid.x;
-    if ((uint32_t)device_grid.y < num_cores) {
-        num_cores = (uint32_t)device_grid.y;
-    }
-    if (num_dram_banks < num_cores) {
-        num_cores = num_dram_banks;
-    }
-
-    vector<CoreCoord> cores;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        cores.push_back(CoreCoord(i, i));
-    }
-
-    uint32_t max_transactions = 256;
-    uint32_t max_pages_per_txn = 256;
-
-    for (uint32_t num_txn = 1; num_txn <= max_transactions; num_txn *= 4) {
-        for (uint32_t pages = 1; pages <= max_pages_per_txn; pages *= 2) {
-            if (num_txn * pages * bytes_per_page >= max_bytes) {
-                continue;
-            }
-
-            NocEstimatorConfig cfg = {
-                .test_id = test_id,
-                .pattern = NocPattern::ALL_FROM_ALL,
-                .mechanism = NocMechanism::UNICAST,
-                .memory_type = MemoryType::DRAM,
-                .num_of_transactions = num_txn,
-                .pages_per_transaction = pages,
-                .bytes_per_page = bytes_per_page,
-            };
-            EXPECT_TRUE(run_dram_interleaved(mesh_device, cfg, cores));
+    for (uint32_t y = 0; y < device_grid.y; y++) {
+        for (uint32_t x = 0; x < device_grid.x; x++) {
+            cores.push_back(CoreCoord(x, y));
+            bank_assignments.push_back((y * device_grid.x + x) % num_dram_banks);
         }
     }
+}
 
-    ReadMeshDeviceProfilerResults(*mesh_device);
+static void get_all_cores(
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    vector<CoreCoord>& cores,
+    vector<uint32_t>& bank_assignments) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    CoreCoord device_grid = device->compute_with_storage_grid_size();
+    uint32_t num_dram_banks = (uint32_t)device->num_dram_channels();
+    for (uint32_t y = 0; y < device_grid.y; y++) {
+        for (uint32_t x = 0; x < device_grid.x; x++) {
+            cores.push_back(CoreCoord(x, y));
+            bank_assignments.push_back((y * device_grid.x + x) % num_dram_banks);
+        }
+    }
+}
+
+// ---- READ sweeps ----
+
+static void sweep_dram_sharded_one_from_one(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores = {{0, 0}};
+    vector<uint32_t> bank_assignments = {0};
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ONE_FROM_ONE,
+        MemoryType::DRAM_SHARDED,
+        cores,
+        bank_assignments,
+        DramDirection::READ);
+}
+
+static void sweep_dram_sharded_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores;
+    vector<uint32_t> bank_assignments;
+    get_sharded_all_cores(mesh_device, cores, bank_assignments);
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ALL_FROM_ALL,
+        MemoryType::DRAM_SHARDED,
+        cores,
+        bank_assignments,
+        DramDirection::READ);
+}
+
+static void sweep_dram_interleaved_one_from_all(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores = {{0, 0}};
+    vector<uint32_t> bank_assignments = {0};
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ONE_FROM_ALL,
+        MemoryType::DRAM_INTERLEAVED,
+        cores,
+        bank_assignments,
+        DramDirection::READ);
+}
+
+static void sweep_dram_interleaved_all_from_all(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores;
+    vector<uint32_t> bank_assignments;
+    get_all_cores(mesh_device, cores, bank_assignments);
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ALL_FROM_ALL,
+        MemoryType::DRAM_INTERLEAVED,
+        cores,
+        bank_assignments,
+        DramDirection::READ);
+}
+
+// ---- WRITE sweeps ----
+
+static void sweep_dram_sharded_one_to_one(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores = {{0, 0}};
+    vector<uint32_t> bank_assignments = {0};
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ONE_TO_ONE,
+        MemoryType::DRAM_SHARDED,
+        cores,
+        bank_assignments,
+        DramDirection::WRITE);
+}
+
+static void sweep_dram_sharded_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores;
+    vector<uint32_t> bank_assignments;
+    get_sharded_all_cores(mesh_device, cores, bank_assignments);
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ALL_TO_ALL,
+        MemoryType::DRAM_SHARDED,
+        cores,
+        bank_assignments,
+        DramDirection::WRITE);
+}
+
+static void sweep_dram_interleaved_one_to_all(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores = {{0, 0}};
+    vector<uint32_t> bank_assignments = {0};
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ONE_TO_ALL,
+        MemoryType::DRAM_INTERLEAVED,
+        cores,
+        bank_assignments,
+        DramDirection::WRITE);
+}
+
+static void sweep_dram_interleaved_all_to_all(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    vector<CoreCoord> cores;
+    vector<uint32_t> bank_assignments;
+    get_all_cores(mesh_device, cores, bank_assignments);
+    dram_accessor_sweep(
+        mesh_device,
+        test_id,
+        NocPattern::ALL_TO_ALL,
+        MemoryType::DRAM_INTERLEAVED,
+        cores,
+        bank_assignments,
+        DramDirection::WRITE);
 }
 
 // ============ ROW / COLUMN SWEEP FUNCTIONS ============
@@ -1388,6 +1380,7 @@ static void sweep_column_to_column(const shared_ptr<distributed::MeshDevice>& me
 
 // ============ TEST CASES ============
 
+// ---- L1 tests (800-809) ----
 TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorL1OneToOne) {
     unit_tests::dm::noc_estimator::sweep_one_to_one(get_mesh_device(), 800);
 }
@@ -1412,34 +1405,54 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorL1AllFromAll) {
     unit_tests::dm::noc_estimator::sweep_all_from_all(get_mesh_device(), 805);
 }
 
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAM) {
-    unit_tests::dm::noc_estimator::sweep_dram(get_mesh_device(), 806);
-}
-
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMOneFromAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_one_from_all(get_mesh_device(), 811);
-}
-
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMAllFromAll) {
-    unit_tests::dm::noc_estimator::sweep_dram_all_from_all(get_mesh_device(), 812);
-}
-
-// ============ ROW / COLUMN TESTS ============
-
 TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorL1OneToRow) {
-    unit_tests::dm::noc_estimator::sweep_one_to_row(get_mesh_device(), 807);
+    unit_tests::dm::noc_estimator::sweep_one_to_row(get_mesh_device(), 806);
 }
 
 TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorL1RowToRow) {
-    unit_tests::dm::noc_estimator::sweep_row_to_row(get_mesh_device(), 808);
+    unit_tests::dm::noc_estimator::sweep_row_to_row(get_mesh_device(), 807);
 }
 
 TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorL1OneToColumn) {
-    unit_tests::dm::noc_estimator::sweep_one_to_column(get_mesh_device(), 809);
+    unit_tests::dm::noc_estimator::sweep_one_to_column(get_mesh_device(), 808);
 }
 
 TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorL1ColumnToColumn) {
-    unit_tests::dm::noc_estimator::sweep_column_to_column(get_mesh_device(), 810);
+    unit_tests::dm::noc_estimator::sweep_column_to_column(get_mesh_device(), 809);
+}
+
+// ---- DRAM Read tests (810-813) ----
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMShardedOneFromOne) {
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_one_from_one(get_mesh_device(), 810);
+}
+
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMShardedAllFromAll) {
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_all_from_all(get_mesh_device(), 811);
+}
+
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMInterleavedOneFromAll) {
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_from_all(get_mesh_device(), 812);
+}
+
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMInterleavedAllFromAll) {
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_from_all(get_mesh_device(), 813);
+}
+
+// ---- DRAM Write tests (814-817) ----
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMShardedOneToOne) {
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_one_to_one(get_mesh_device(), 814);
+}
+
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMShardedAllToAll) {
+    unit_tests::dm::noc_estimator::sweep_dram_sharded_all_to_all(get_mesh_device(), 815);
+}
+
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMInterleavedOneToAll) {
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_to_all(get_mesh_device(), 816);
+}
+
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_NocEstimatorDRAMInterleavedAllToAll) {
+    unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_to_all(get_mesh_device(), 817);
 }
 
 }  // namespace tt::tt_metal

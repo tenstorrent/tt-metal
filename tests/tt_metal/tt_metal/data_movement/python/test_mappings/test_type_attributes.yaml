@@ -28,7 +28,8 @@ noc_estimator:
   value_mappings:
     "Memory type":
       0: "L1"
-      1: "DRAM"
+      1: "DRAM Sharded"
+      2: "DRAM Interleaved"
     "Mechanism":
       0: "unicast"
       1: "multicast"

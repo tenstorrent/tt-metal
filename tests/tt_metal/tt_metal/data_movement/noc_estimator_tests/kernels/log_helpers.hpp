@@ -6,7 +6,8 @@
 
 // Memory type
 constexpr uint32_t MEMORY_TYPE_L1 = 0;
-constexpr uint32_t MEMORY_TYPE_DRAM = 1;
+constexpr uint32_t MEMORY_TYPE_DRAM_INTERLEAVED = 1;
+constexpr uint32_t MEMORY_TYPE_DRAM_SHARDED = 2;
 
 // Mechanism
 constexpr uint32_t MECHANISM_UNICAST = 0;

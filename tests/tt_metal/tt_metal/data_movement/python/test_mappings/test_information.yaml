@@ -739,23 +739,41 @@ tests:
     name: "Noc Estimator - L1 All from All"
 
   806:
-    name: "Noc Estimator - DRAM"
-
-  807:
     name: "Noc Estimator - L1 One to Row"
 
-  808:
+  807:
     name: "Noc Estimator - L1 Row to Row"
 
-  809:
+  808:
     name: "Noc Estimator - L1 One to Column"
 
-  810:
+  809:
     name: "Noc Estimator - L1 Column to Column"
 
+  810:
+    name: "Noc Estimator - DRAM Sharded One from One"
+
   811:
-    name: "Noc Estimator - DRAM One from All"
+    name: "Noc Estimator - DRAM Sharded All from All"
+    bandwidth_mode: "combined"
 
   812:
-    name: "Noc Estimator - DRAM All from All"
+    name: "Noc Estimator - DRAM Interleaved One from All"
+
+  813:
+    name: "Noc Estimator - DRAM Interleaved All from All"
+    bandwidth_mode: "combined"
+
+  814:
+    name: "Noc Estimator - DRAM Sharded One to One"
+
+  815:
+    name: "Noc Estimator - DRAM Sharded All to All"
+    bandwidth_mode: "combined"
+
+  816:
+    name: "Noc Estimator - DRAM Interleaved One to All"
+
+  817:
+    name: "Noc Estimator - DRAM Interleaved All to All"
     bandwidth_mode: "combined"
