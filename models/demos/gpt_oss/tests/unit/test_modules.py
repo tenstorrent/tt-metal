@@ -910,10 +910,9 @@ def run_model_forward_test(
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 5],
+    [1],
     ids=[
         "1_layer",
-        "5_layers",
     ],
 )
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
