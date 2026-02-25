@@ -15,6 +15,7 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
 
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -277,6 +278,12 @@ public:
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
+    // Set when MetalContext is tearing down; allows ControlPlane to return safe fallbacks
+    // instead of throwing when router maps are incomplete (e.g. custom mesh descriptors).
+    void set_teardown_in_progress(bool in_progress) {
+        teardown_in_progress_.store(in_progress, std::memory_order_release);
+    }
+
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
     FabricReliabilityMode get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
@@ -498,6 +505,12 @@ private:
     // This method performs validation through assertions and exceptions.
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
     std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
+
+    // Logs all FabricNodeIds present in router_port_directions_to_physical_eth_chan_map_
+    // for triage when a lookup fails.
+    void log_available_fabric_node_ids() const;
+
+    mutable std::atomic<bool> teardown_in_progress_{false};
 };
 
 }  // namespace tt::tt_fabric

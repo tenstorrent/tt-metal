@@ -827,6 +827,20 @@ void ControlPlane::validate_mesh_connections() const {
     }
 }
 
+void ControlPlane::log_available_fabric_node_ids() const {
+    std::string ids;
+    for (const auto& [fabric_node_id, _] : this->router_port_directions_to_physical_eth_chan_map_) {
+        if (!ids.empty()) {
+            ids += ", ";
+        }
+        ids += fmt::format("M{}D{}", *fabric_node_id.mesh_id, fabric_node_id.chip_id);
+    }
+    log_error(
+        tt::LogFabric,
+        "FabricNodeIds currently in router_port_directions_to_physical_eth_chan_map_: [{}]",
+        ids.empty() ? "(none)" : ids);
+}
+
 routing_plane_id_t ControlPlane::get_routing_plane_id(
     chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const {
     auto it = std::find(eth_chans_in_direction.begin(), eth_chans_in_direction.end(), eth_chan_id);
@@ -834,19 +848,35 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(FabricNodeId fabric_node_id, chan_id_t eth_chan_id) const {
-    TT_FATAL(
-        this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id),
-        "Mesh {} Chip {} out of bounds",
-        fabric_node_id.mesh_id,
-        fabric_node_id.chip_id);
+    auto it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+    if (it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+        log_error(
+            tt::LogFabric,
+            "FabricNodeId M{}D{} not found in router_port_directions_to_physical_eth_chan_map_ during "
+            "get_routing_plane_id",
+            *fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+        this->log_available_fabric_node_ids();
+        if (this->teardown_in_progress_.load(std::memory_order_acquire)) [[unlikely]] {
+            return 0;
+        }
+        TT_FATAL(
+            "Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+            fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+    }
 
+    const auto& chip_eth_chans_map = it->second;
     std::optional<std::vector<chan_id_t>> eth_chans_in_direction;
-    const auto& chip_eth_chans_map = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
     for (const auto& [_, eth_chans] : chip_eth_chans_map) {
         if (std::find(eth_chans.begin(), eth_chans.end(), eth_chan_id) != eth_chans.end()) {
             eth_chans_in_direction = eth_chans;
             break;
         }
+    }
+    if (!eth_chans_in_direction.has_value() && this->teardown_in_progress_.load(std::memory_order_acquire))
+        [[unlikely]] {
+        return 0;
     }
     TT_FATAL(
         eth_chans_in_direction.has_value(),
@@ -913,6 +943,19 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
         const auto& global_mesh_chip_id_container = this->mesh_graph_->get_chip_ids(mesh_id);
         for (const auto& [_, src_fabric_chip_id] : global_mesh_chip_id_container) {
             const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
+            auto src_router_it = this->router_port_directions_to_physical_eth_chan_map_.find(src_fabric_node_id);
+            if (src_router_it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+                log_error(
+                    tt::LogFabric,
+                    "convert_fabric_routing_table_to_chip_routing_table: FabricNodeId M{}D{} not in router map",
+                    *src_fabric_node_id.mesh_id,
+                    src_fabric_node_id.chip_id);
+                this->log_available_fabric_node_ids();
+                TT_FATAL(
+                    "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+                    src_fabric_node_id.mesh_id,
+                    src_fabric_node_id.chip_id);
+            }
             this->intra_mesh_routing_tables_[src_fabric_node_id].resize(
                 num_ports_per_chip);  // contains more entries than needed, this size is for all eth channels on chip
             for (int i = 0; i < num_ports_per_chip; i++) {
@@ -930,8 +973,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination chip as the ethernet channel on the same plane
-                for (const auto& [direction, eth_chans_on_side] :
-                     this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+                for (const auto& [direction, eth_chans_on_side] : src_router_it->second) {
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_fabric_chip_id == dst_fabric_chip_id) {
                             TT_ASSERT(
@@ -945,9 +987,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                             this->intra_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_fabric_chip_id] =
                                 src_chan_id;
                         } else {
-                            const auto& eth_chans_in_target_direction =
-                                this->router_port_directions_to_physical_eth_chan_map_.at(
-                                    src_fabric_node_id)[target_direction];
+                            const auto& eth_chans_in_target_direction = src_router_it->second[target_direction];
                             const auto src_routing_plane_id =
                                 this->get_routing_plane_id(src_chan_id, eth_chans_on_side);
                             this->intra_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_fabric_chip_id] =
@@ -965,6 +1005,19 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
         const auto& global_mesh_chip_id_container = this->mesh_graph_->get_chip_ids(src_mesh_id);
         for (const auto& [_, src_fabric_chip_id] : global_mesh_chip_id_container) {
             const auto src_fabric_node_id = FabricNodeId(src_mesh_id, src_fabric_chip_id);
+            auto src_inter_router_it = this->router_port_directions_to_physical_eth_chan_map_.find(src_fabric_node_id);
+            if (src_inter_router_it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+                log_error(
+                    tt::LogFabric,
+                    "convert_fabric_routing_table_to_chip_routing_table (inter): FabricNodeId M{}D{} not in router map",
+                    *src_fabric_node_id.mesh_id,
+                    src_fabric_node_id.chip_id);
+                this->log_available_fabric_node_ids();
+                TT_FATAL(
+                    "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+                    src_fabric_node_id.mesh_id,
+                    src_fabric_node_id.chip_id);
+            }
             this->inter_mesh_routing_tables_[src_fabric_node_id].resize(
                 num_ports_per_chip);  // contains more entries than needed
             for (int i = 0; i < num_ports_per_chip; i++) {
@@ -982,8 +1035,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination mesh as the ethernet channel on the same plane
-                for (const auto& [direction, eth_chans_on_side] :
-                     this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+                for (const auto& [direction, eth_chans_on_side] : src_inter_router_it->second) {
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_mesh_id_val == dst_mesh_id_val) {
                             TT_ASSERT(
@@ -1002,9 +1054,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id_val] =
                                 src_chan_id;
                         } else {
-                            const auto& eth_chans_in_target_direction =
-                                this->router_port_directions_to_physical_eth_chan_map_.at(
-                                    src_fabric_node_id)[target_direction];
+                            const auto& eth_chans_in_target_direction = src_inter_router_it->second[target_direction];
                             const auto src_routing_plane_id =
                                 this->get_routing_plane_id(src_chan_id, eth_chans_on_side);
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id_val] =
@@ -1313,13 +1363,27 @@ ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId
 
 std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
     FabricNodeId fabric_node_id, chan_id_t chan_id) const {
+    auto src_it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+    if (src_it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+        log_error(
+            tt::LogFabric,
+            "get_connected_mesh_chip_chan_ids: FabricNodeId M{}D{} not found in router map",
+            *fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+        this->log_available_fabric_node_ids();
+        TT_FATAL(
+            "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+            fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+    }
+    const auto& src_chip_eth_chans = src_it->second;
+
     // TODO: simplify this and use Global Physical Desc in ControlPlane soon
     const auto& intra_mesh_connectivity = this->mesh_graph_->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->mesh_graph_->get_inter_mesh_connectivity();
     RoutingDirection port_direction = RoutingDirection::NONE;
     routing_plane_id_t routing_plane_id = 0;
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
+    for (const auto& [direction, eth_chans] : src_chip_eth_chans) {
         for (const auto& eth_chan : eth_chans) {
             if (eth_chan == chan_id) {
                 port_direction = direction;
@@ -1345,8 +1409,20 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .port_direction;
             // Find the eth chan on connected dst_fabric_chip_id based on routing_plane_id
             const auto& dst_fabric_node = FabricNodeId(fabric_node_id.mesh_id, dst_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
+            auto dst_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+                log_error(
+                    tt::LogFabric,
+                    "get_connected_mesh_chip_chan_ids: dst FabricNodeId M{}D{} not found in router map",
+                    *dst_fabric_node.mesh_id,
+                    dst_fabric_node.chip_id);
+                this->log_available_fabric_node_ids();
+                TT_FATAL(
+                    "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+                    dst_fabric_node.mesh_id,
+                    dst_fabric_node.chip_id);
+            }
+            const auto& dst_fabric_chip_eth_chans = dst_it->second;
             for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
                 if (direction == reverse_port_direction) {
                     return std::make_pair(dst_fabric_node, eth_chans[routing_plane_id]);
@@ -1373,8 +1449,20 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .port_direction;
             // Find the eth chan on connected dst_fabric_mesh_id based on routing_plane_id
             const auto& dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
+            auto dst_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+                log_error(
+                    tt::LogFabric,
+                    "get_connected_mesh_chip_chan_ids: dst FabricNodeId M{}D{} not found in router map",
+                    *dst_fabric_node.mesh_id,
+                    dst_fabric_node.chip_id);
+                this->log_available_fabric_node_ids();
+                TT_FATAL(
+                    "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+                    dst_fabric_node.mesh_id,
+                    dst_fabric_node.chip_id);
+            }
+            const auto& dst_fabric_chip_eth_chans = dst_it->second;
             for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
                 if (direction == reverse_port_direction) {
                     if (routing_plane_id >= eth_chans.size()) {
@@ -1443,8 +1531,20 @@ std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fab
 }
 
 eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_node_id, int chan) const {
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
+    auto it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+    if (it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+        log_error(
+            tt::LogFabric,
+            "get_eth_chan_direction: FabricNodeId M{}D{} not found in router map",
+            *fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+        this->log_available_fabric_node_ids();
+        TT_FATAL(
+            "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+            fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+    }
+    for (const auto& [direction, eth_chans] : it->second) {
         for (const auto& eth_chan : eth_chans) {
             if (chan == eth_chan) {
                 return this->routing_direction_to_eth_direction(direction);
@@ -2232,7 +2332,17 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chi
         const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
         for (const auto& eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-            const auto& routing_info = eth_routing_info.at(eth_core);
+            auto routing_it = eth_routing_info.find(eth_core);
+            if (routing_it == eth_routing_info.end()) [[unlikely]] {
+                log_debug(
+                    tt::LogFabric,
+                    "get_active_ethernet_cores: skipping eth_core ({}, {}) for chip {} (not in eth_routing_info)",
+                    eth_core.x,
+                    eth_core.y,
+                    chip_id);
+                continue;
+            }
+            const auto& routing_info = routing_it->second;
             if (routing_info == EthRouterMode::FABRIC_ROUTER && skip_reserved_cores) {
                 continue;
             }
@@ -2286,7 +2396,20 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
 
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
-        this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
+        auto it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+        if (it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
+            log_error(
+                tt::LogFabric,
+                "assign_direction_to_fabric_eth_chan: FabricNodeId M{}D{} not found in router map",
+                *fabric_node_id.mesh_id,
+                fabric_node_id.chip_id);
+            this->log_available_fabric_node_ids();
+            TT_FATAL(
+                "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
+                fabric_node_id.mesh_id,
+                fabric_node_id.chip_id);
+        }
+        it->second[direction].push_back(chan_id);
     } else {
         log_debug(
             tt::LogFabric,
