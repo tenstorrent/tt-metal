@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "socket_benchmark_defs.h"
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
@@ -15,7 +16,6 @@ void kernel_main() {
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
 
-    constexpr uint32_t WARMUP_ITERS = 5;
     for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
         socket_wait_for_pages(receiver_socket, 1);
         socket_pop_pages(receiver_socket, 1);

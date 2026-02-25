@@ -4,9 +4,9 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "socket_benchmark_defs.h"
 
 void kernel_main() {
-    // Get this value from MeshSocket struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
@@ -25,8 +25,7 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
         while (outstanding_data_size) {
             socket_wait_for_pages(receiver_socket, 1);
-            noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                NOC_INDEX,
+            noc_read_page_chunked(
                 pcie_xy_enc,
                 pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
                 receiver_socket.read_ptr,

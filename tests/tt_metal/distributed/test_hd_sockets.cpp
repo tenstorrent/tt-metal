@@ -27,6 +27,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -39,6 +40,8 @@ constexpr uint32_t kTargetTrayId = 1;
 constexpr uint32_t kTargetAsicLocation = 6;
 constexpr std::size_t kPagesPerIteration = 1;
 constexpr std::size_t kL1DataBudgetBytes = 1400000;
+constexpr double kCyclesPerUs = 1350.0;
+constexpr uint32_t kWarmupIters = 5;
 
 const std::vector<std::size_t> kTotalDataSizes = {
     16 * 1024,            // 16KB
@@ -88,17 +91,81 @@ std::size_t compute_iteration_data_size_bytes(std::size_t page_size) {
 
 const char* h2d_mode_name(H2DMode mode) { return (mode == H2DMode::HOST_PUSH) ? "HOST_PUSH" : "DEVICE_PULL"; }
 
-std::optional<MeshCoordinate> find_target_mmio_coord(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    uint32_t target_tray_id,
-    uint32_t target_asic_location) {
-    auto physical_system_descriptor = PhysicalSystemDescriptor(
+PhysicalSystemDescriptor make_physical_system_descriptor() {
+    return PhysicalSystemDescriptor(
         MetalContext::instance().get_cluster().get_driver(),
         MetalContext::instance().get_distributed_context_ptr(),
         &MetalContext::instance().hal(),
         MetalContext::instance().rtoptions(),
         true);
+}
 
+// Create an L1 mesh buffer sharded to a single logical core.
+std::shared_ptr<MeshBuffer> make_l1_mesh_buffer(MeshDevice* mesh_device, const CoreCoord& core, uint32_t size) {
+    auto shard_params = ShardSpecBuffer(CoreRangeSet(core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig local_config{
+        .page_size = size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    return MeshBuffer::create(ReplicatedBufferConfig{.size = size}, local_config, mesh_device);
+}
+
+// Enqueue a single-core program on the device (non-blocking).
+void enqueue_on_core(MeshDevice& device, const MeshCoreCoord& core, Program program) {
+    auto workload = MeshWorkload();
+    workload.add_program(MeshCoordinateRange(core.device_coord), std::move(program));
+    EnqueueMeshWorkload(device.mesh_command_queue(), workload, false);
+}
+
+// Read a single uint64 from device L1.
+uint64_t read_l1_uint64(const MeshDevice& device, const MeshCoreCoord& core, uint64_t addr) {
+    uint64_t val = 0;
+    MetalContext::instance().get_cluster().read_core(
+        &val,
+        sizeof(uint64_t),
+        tt_cxy_pair(device.get_device(core.device_coord)->id(), device.worker_core_from_logical_core(core.core_coord)),
+        addr);
+    return val;
+}
+
+// Read an array of uint64 from device L1 into a pre-sized vector.
+void read_l1_uint64s(const MeshDevice& device, const MeshCoreCoord& core, uint64_t addr, std::vector<uint64_t>& out) {
+    MetalContext::instance().get_cluster().read_core(
+        out.data(),
+        out.size() * sizeof(uint64_t),
+        tt_cxy_pair(device.get_device(core.device_coord)->id(), device.worker_core_from_logical_core(core.core_coord)),
+        addr);
+}
+
+struct ChipInfo {
+    MeshCoordinate coord;
+    uint32_t tray_id;
+    uint32_t asic_location;
+};
+
+// Collect every MMIO-mapped chip with its tray/ASIC metadata.
+std::vector<ChipInfo> enumerate_mmio_chips(const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto phys_desc = make_physical_system_descriptor();
+    const auto& cp = MetalContext::instance().get_control_plane();
+    std::vector<ChipInfo> chips;
+    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
+        if (!is_device_coord_mmio_mapped(mesh_device, coord)) {
+            continue;
+        }
+        auto asic_id = cp.get_asic_id_from_fabric_node_id(mesh_device->get_fabric_node_id(coord));
+        auto desc = phys_desc.get_asic_descriptors()[asic_id];
+        chips.push_back({coord, *desc.tray_id, *desc.asic_location});
+    }
+    return chips;
+}
+
+std::optional<MeshCoordinate> find_target_mmio_coord(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    uint32_t target_tray_id,
+    uint32_t target_asic_location) {
+    auto physical_system_descriptor = make_physical_system_descriptor();
     const auto& control_plane = MetalContext::instance().get_control_plane();
     for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
         if (!is_device_coord_mmio_mapped(mesh_device, coord)) {
@@ -135,7 +202,6 @@ struct LatencySummary {
 
 LatencySummary summarize_latency_cycles(const std::vector<uint64_t>& cycles) {
     TT_FATAL(!cycles.empty(), "Expected non-empty cycle measurements");
-    constexpr double kCyclesPerUs = 1350.0;
 
     auto sorted_cycles = cycles;
     std::sort(sorted_cycles.begin(), sorted_cycles.end());
@@ -238,19 +304,7 @@ void test_h2d_socket(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
-    // Create receive data buffer.
-    const ReplicatedBufferConfig buffer_config{.size = data_size};
-    auto recv_data_shard_params =
-        ShardSpecBuffer(CoreRangeSet(recv_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    const DeviceLocalBufferConfig recv_device_local_config{
-        .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device.get());
-    // Build and enqueue receive workload.
+    auto recv_data_buffer = make_l1_mesh_buffer(mesh_device.get(), recv_core.core_coord, data_size);
     auto recv_program = CreateProgram();
     CreateKernel(
         recv_program,
@@ -268,10 +322,7 @@ void test_h2d_socket(
                 static_cast<uint32_t>(num_iterations),
             }});
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
-    mesh_workload.add_program(devices, std::move(recv_program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, recv_core, std::move(recv_program));
 
     uint32_t num_writes = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
@@ -285,7 +336,7 @@ void test_h2d_socket(
         }
         input_socket.barrier();
         std::vector<uint32_t> recv_data_readback(data_size / sizeof(uint32_t));
-        cluster.read_core(
+        MetalContext::instance().get_cluster().read_core(
             recv_data_readback.data(),
             data_size,
             tt_cxy_pair(mesh_device->get_device(recv_core.device_coord)->id(), recv_core_virtual),
@@ -304,37 +355,18 @@ void test_d2h_socket(
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
+    uint32_t num_iterations,
     const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
     auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
     output_socket.set_page_size(page_size);
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
-    const ReplicatedBufferConfig buffer_config{.size = data_size};
-    auto sender_data_shard_params =
-        ShardSpecBuffer(CoreRangeSet(sender_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    const DeviceLocalBufferConfig sender_device_local_config{
-        .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-
     uint32_t num_txns = data_size / page_size;
-    uint32_t measurement_buffer_size = sizeof(uint64_t) * num_iterations;
 
-    const ReplicatedBufferConfig measurement_buffer_config{.size = measurement_buffer_size};
-    const DeviceLocalBufferConfig measurement_device_local_config{
-        .page_size = measurement_buffer_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-
-    auto measurement_buffer =
-        MeshBuffer::create(measurement_buffer_config, measurement_device_local_config, mesh_device.get());
-    auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
+    auto sender_data_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, data_size);
+    // The kernel is invoked with num_iterations=1 and writes a single uint64_t timestamp.
+    auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, sizeof(uint64_t));
 
     auto send_program = CreateProgram();
     CreateKernel(
@@ -349,52 +381,34 @@ void test_d2h_socket(
                 static_cast<uint32_t>(sender_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(measurement_buffer->address()),
+                static_cast<uint32_t>(1),  // 1 kernel iteration: host reads exactly num_txns pages
             }});
 
-    uint32_t num_reads = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
     WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord);
-
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
-    mesh_workload.add_program(devices, std::move(send_program));
-
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, sender_core, std::move(send_program));
 
     uint32_t page_size_words = page_size / sizeof(uint32_t);
-    for (uint32_t i = 0; i < num_reads; i++) {
+    for (uint32_t i = 0; i < num_txns; i++) {
         output_socket.read(dst_vec.data() + (i * page_size_words), 1);
     }
     output_socket.barrier();
     EXPECT_EQ(src_vec, dst_vec);
 
-    const auto& cluster = MetalContext::instance().get_cluster();
-    std::vector<uint64_t> latency_data(1);
-    cluster.read_core(
-        latency_data.data(),
-        sizeof(uint64_t),
-        tt_cxy_pair(
-            mesh_device->get_device(sender_core.device_coord)->id(),
-            mesh_device->worker_core_from_logical_core(sender_core.core_coord)),
-        measurement_buffer->address());
+    // Ensure the device kernel has flushed the measurement write to L1 before reading it.
+    Finish(mesh_device->mesh_command_queue());
 
-    auto physical_system_descriptor = PhysicalSystemDescriptor(
-        MetalContext::instance().get_cluster().get_driver(),
-        MetalContext::instance().get_distributed_context_ptr(),
-        &MetalContext::instance().hal(),
-        MetalContext::instance().rtoptions(),
-        true);
+    auto physical_system_descriptor = make_physical_system_descriptor();
     auto fabric_node_id = mesh_device->get_fabric_node_id(sender_core.device_coord);
     auto asic_id = MetalContext::instance().get_control_plane().get_asic_id_from_fabric_node_id(fabric_node_id);
     auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
 
-    // Convert cycles to microseconds: Latency [us] = cycles / (1.35 * 10^3)
-    uint64_t total_cycles = latency_data[0];
-    uint64_t total_transactions = num_txns * num_iterations;
-    double avg_cycles_per_transaction = static_cast<double>(total_cycles) / total_transactions;
-    double avg_latency_us = avg_cycles_per_transaction / 1350.0;
+    uint64_t total_cycles = read_l1_uint64(*mesh_device, sender_core, measurement_buffer->address());
+    double avg_cycles_per_transaction = static_cast<double>(total_cycles) / num_txns;
+    double avg_latency_us = avg_cycles_per_transaction / kCyclesPerUs;
 
     std::cout << "Average D2H Round-Trip Latency: " << avg_latency_us << " us"
               << " (cycles: " << avg_cycles_per_transaction << ")"
@@ -448,11 +462,7 @@ void test_hd_socket_loopback(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(socket_core.device_coord);
-    mesh_workload.add_program(devices, std::move(send_program));
-
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, socket_core, std::move(send_program));
 
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     for (uint32_t i = 0; i < num_iterations; i++) {
@@ -502,21 +512,14 @@ void test_hd_socket_multithreaded_loopback(
     std::vector<uint32_t> dst_vec(data_size * num_iterations / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(socket_core.device_coord);
-    mesh_workload.add_program(devices, std::move(send_program));
+    enqueue_on_core(*mesh_device, socket_core, std::move(send_program));
 
-    // Launch Loopback Kernel on device (copies data from H2D to D2H socket).
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
-
-    // Set Required Page Size for Socket.
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
 
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     uint32_t data_size_words = data_size / sizeof(uint32_t);
 
-    // Socket Read/Write done over different threads.
     std::thread write_thread([&]() {
         for (uint32_t i = 0; i < num_iterations; i++) {
             for (uint32_t j = 0; j < num_txns; j++) {
@@ -551,7 +554,6 @@ bool is_device_coord_mmio_mapped(
 
 using HDSocketFixture = MeshDevice1x2Fixture;
 TEST_F(HDSocketFixture, H2DSocket) {
-    // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
@@ -567,7 +569,6 @@ TEST_F(HDSocketFixture, H2DSocket) {
 }
 
 TEST_F(HDSocketFixture, D2HSocket) {
-    // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
@@ -581,7 +582,6 @@ TEST_F(HDSocketFixture, D2HSocket) {
 }
 
 TEST_F(HDSocketFixture, D2HSocketThroughputBenchmark) {
-    // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
@@ -648,30 +648,7 @@ TEST_F(HDSocketFixture, D2HSocketMultiChipMaxThroughputBenchmark) {
         256UL * 1024 * 1024,  // 256MB
     };
 
-    // Collect all MMIO-mapped chips with their tray/ASIC metadata.
-    auto physical_system_descriptor = PhysicalSystemDescriptor(
-        MetalContext::instance().get_cluster().get_driver(),
-        MetalContext::instance().get_distributed_context_ptr(),
-        &MetalContext::instance().hal(),
-        MetalContext::instance().rtoptions(),
-        true);
-    const auto& control_plane = MetalContext::instance().get_control_plane();
-
-    struct ChipInfo {
-        MeshCoordinate coord;
-        uint32_t tray_id;
-        uint32_t asic_location;
-    };
-    std::vector<ChipInfo> mmio_chips;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (!is_device_coord_mmio_mapped(mesh_device_, coord)) {
-            continue;
-        }
-        auto fabric_node_id = mesh_device_->get_fabric_node_id(coord);
-        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
-        auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
-        mmio_chips.push_back({coord, *asic_desc.tray_id, *asic_desc.asic_location});
-    }
+    auto mmio_chips = enumerate_mmio_chips(mesh_device_);
 
     std::size_t data_size = compute_iteration_data_size_bytes(kBenchPageSize);
     std::size_t pages_per_iter = data_size / kBenchPageSize;
@@ -705,7 +682,6 @@ TEST_F(HDSocketFixture, D2HSocketMultiChipMaxThroughputBenchmark) {
     }
 }
 
-// Forward declaration.
 std::pair<double, double> benchmark_h2d_socket(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -714,6 +690,56 @@ std::pair<double, double> benchmark_h2d_socket(
     uint32_t num_iterations,
     H2DMode h2d_mode,
     const MeshCoreCoord& recv_core);
+
+TEST_F(HDSocketFixture, H2DSocketMultiChipMaxThroughputBenchmark) {
+    // Iterates over every MMIO-mapped chip and measures H2D throughput using DEVICE_PULL
+    // at 256KB page size (max-throughput configuration for DEVICE_PULL) across a range
+    // of FIFO sizes: 256KB → 512KB → 768KB → 1MB.
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    constexpr std::size_t kBenchPageSize = 262144;                 // 256KB – max throughput for DEVICE_PULL
+    constexpr std::size_t kBenchTotalData = 1024UL * 1024 * 1024;  // 1GB
+    const std::vector<std::size_t> kBenchFifoSizes = {
+        256 * 1024,   // 256KB (depth 1)
+        512 * 1024,   // 512KB (depth 2)
+        768 * 1024,   // 768KB (depth 3)
+        1024 * 1024,  //   1MB (depth 4)
+    };
+
+    auto mmio_chips = enumerate_mmio_chips(mesh_device_);
+
+    std::size_t data_size = compute_iteration_data_size_bytes(kBenchPageSize);
+    std::size_t pages_per_iter = data_size / kBenchPageSize;
+    uint32_t num_iterations = kBenchTotalData / data_size;
+    uint64_t total_pages = static_cast<uint64_t>(pages_per_iter) * num_iterations;
+
+    std::cout << "# H2DSocketMultiChipMaxThroughputBenchmark" << std::endl;
+    std::cout << "# page_size=256KB  mode=DEVICE_PULL  total_data=1GB  chips=" << mmio_chips.size() << std::endl;
+    std::cout << std::endl;
+    std::cout << "tray_id,asic_location,mesh_coord,socket_fifo_size,total_data,data_size,"
+              << "pages_per_iter,num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
+              << "throughput_gbps" << std::endl;
+
+    for (const auto& chip : mmio_chips) {
+        std::cout << "# chip: tray_id=" << chip.tray_id << " asic_location=" << chip.asic_location
+                  << " mesh_coord=" << chip.coord << std::endl;
+
+        MeshCoreCoord recv_core{chip.coord, CoreCoord(0, 0)};
+
+        for (auto fifo_size : kBenchFifoSizes) {
+            auto [us, cycles] = benchmark_h2d_socket(
+                mesh_device_, fifo_size, kBenchPageSize, data_size, num_iterations, H2DMode::DEVICE_PULL, recv_core);
+
+            const double throughput_gbps = static_cast<double>(kBenchPageSize) / (us * 1e3);
+            std::cout << chip.tray_id << "," << chip.asic_location << "," << chip.coord << "," << fifo_size << ","
+                      << kBenchTotalData << "," << data_size << "," << pages_per_iter << "," << num_iterations << ","
+                      << total_pages << "," << us << "," << cycles << "," << throughput_gbps << std::endl;
+            std::cout.flush();
+        }
+    }
+}
 
 // Returns per-page latency in microseconds and cycles.
 std::pair<double, double> benchmark_d2h_socket(
@@ -726,31 +752,10 @@ std::pair<double, double> benchmark_d2h_socket(
     auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
     output_socket.set_page_size(page_size);
 
-    const ReplicatedBufferConfig buffer_config{.size = data_size};
-    auto sender_data_shard_params =
-        ShardSpecBuffer(CoreRangeSet(sender_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    const DeviceLocalBufferConfig sender_device_local_config{
-        .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-
     uint32_t num_txns = data_size / page_size;
-    uint32_t measurement_buffer_size = sizeof(uint64_t);
 
-    const ReplicatedBufferConfig measurement_buffer_config{.size = measurement_buffer_size};
-    const DeviceLocalBufferConfig measurement_device_local_config{
-        .page_size = measurement_buffer_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-
-    auto measurement_buffer =
-        MeshBuffer::create(measurement_buffer_config, measurement_device_local_config, mesh_device.get());
-    auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
+    auto sender_data_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, data_size);
+    auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, sizeof(uint64_t));
 
     auto send_program = CreateProgram();
     CreateKernel(
@@ -773,14 +778,9 @@ std::pair<double, double> benchmark_d2h_socket(
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
     WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord, true);
+    enqueue_on_core(*mesh_device, sender_core, std::move(send_program));
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
-    mesh_workload.add_program(devices, std::move(send_program));
-
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
     uint32_t page_size_words = page_size / sizeof(uint32_t);
-
     for (uint32_t i = 0; i < num_iterations; i++) {
         for (uint32_t j = 0; j < num_txns; j++) {
             output_socket.read(dst_vec.data() + (j * page_size_words), 1);
@@ -791,20 +791,10 @@ std::pair<double, double> benchmark_d2h_socket(
     // before reading measurement_buffer from host.
     Finish(mesh_device->mesh_command_queue());
 
-    const auto& cluster = MetalContext::instance().get_cluster();
-    std::vector<uint64_t> latency_data(1);
-    cluster.read_core(
-        latency_data.data(),
-        sizeof(uint64_t),
-        tt_cxy_pair(
-            mesh_device->get_device(sender_core.device_coord)->id(),
-            mesh_device->worker_core_from_logical_core(sender_core.core_coord)),
-        measurement_buffer->address());
-
-    uint64_t total_cycles = latency_data[0];
+    uint64_t total_cycles = read_l1_uint64(*mesh_device, sender_core, measurement_buffer->address());
     uint64_t total_transactions = num_txns * num_iterations;
     double avg_cycles_per_transaction = static_cast<double>(total_cycles) / total_transactions;
-    double avg_latency_us = avg_cycles_per_transaction / 1350.0;
+    double avg_latency_us = avg_cycles_per_transaction / kCyclesPerUs;
 
     return {avg_latency_us, avg_cycles_per_transaction};
 }
@@ -821,27 +811,11 @@ std::vector<uint64_t> benchmark_d2h_latency(
     output_socket.set_page_size(page_size);
 
     // Data buffer: single page in L1 (kernel always sends from same address)
-    const ReplicatedBufferConfig buffer_config{.size = page_size};
-    auto shard_params =
-        ShardSpecBuffer(CoreRangeSet(sender_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    const DeviceLocalBufferConfig data_local_config{
-        .page_size = page_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto sender_data_buffer = MeshBuffer::create(buffer_config, data_local_config, mesh_device.get());
+    auto sender_data_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, page_size);
 
     // Measurement buffer: one uint64_t per iteration
     uint32_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
-    const ReplicatedBufferConfig meas_buf_config{.size = measurement_buffer_size};
-    const DeviceLocalBufferConfig meas_local_config{
-        .page_size = measurement_buffer_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto measurement_buffer = MeshBuffer::create(meas_buf_config, meas_local_config, mesh_device.get());
+    auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, measurement_buffer_size);
 
     auto send_program = CreateProgram();
     CreateKernel(
@@ -860,33 +834,23 @@ std::vector<uint64_t> benchmark_d2h_latency(
                 static_cast<uint32_t>(num_iterations),
             }});
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
-    mesh_workload.add_program(devices, std::move(send_program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, sender_core, std::move(send_program));
 
-    // Host side: read warmup + timed pages (must match kernel's WARMUP_ITERS=5)
-    constexpr uint32_t WARMUP_ITERS = 5;
+    // Host side: read warmup + timed pages (must match kernel's WARMUP_ITERS)
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     std::vector<uint32_t> dst_vec(page_size_words);
-    for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
+    for (uint32_t w = 0; w < kWarmupIters; w++) {
         output_socket.read(dst_vec.data(), 1);
     }
     for (uint32_t i = 0; i < num_iterations; i++) {
         output_socket.read(dst_vec.data(), 1);
     }
     output_socket.barrier();
+    // Ensure the device kernel has flushed all per-iteration timestamps to L1.
+    Finish(mesh_device->mesh_command_queue());
 
-    // Read back per-iteration cycle counts
-    const auto& cluster = MetalContext::instance().get_cluster();
     std::vector<uint64_t> cycles(num_iterations);
-    cluster.read_core(
-        cycles.data(),
-        measurement_buffer_size,
-        tt_cxy_pair(
-            mesh_device->get_device(sender_core.device_coord)->id(),
-            mesh_device->worker_core_from_logical_core(sender_core.core_coord)),
-        measurement_buffer->address());
+    read_l1_uint64s(*mesh_device, sender_core, measurement_buffer->address(), cycles);
 
     return cycles;
 }
@@ -901,7 +865,6 @@ TEST_F(HDSocketFixture, D2HSocketLatencyBenchmark) {
     MeshCoreCoord sender_core = get_target_benchmark_worker_core(mesh_device_);
     const auto& sender_coord = sender_core.device_coord;
 
-    // CSV header
     std::cout << "page_size,socket_fifo_size,num_iterations,"
               << "avg_us,min_us,max_us,p50_us,p99_us,"
               << "avg_cycles,min_cycles,max_cycles,device_coord" << std::endl;
@@ -981,26 +944,9 @@ std::vector<uint64_t> benchmark_d2h_ping(
     auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
     output_socket.set_page_size(page_size);
 
-    const ReplicatedBufferConfig buffer_config{.size = page_size};
-    auto shard_params =
-        ShardSpecBuffer(CoreRangeSet(sender_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    const DeviceLocalBufferConfig data_local_config{
-        .page_size = page_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto sender_data_buffer = MeshBuffer::create(buffer_config, data_local_config, mesh_device.get());
-
+    auto sender_data_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, page_size);
     uint32_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
-    const ReplicatedBufferConfig meas_buf_config{.size = measurement_buffer_size};
-    const DeviceLocalBufferConfig meas_local_config{
-        .page_size = measurement_buffer_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto measurement_buffer = MeshBuffer::create(meas_buf_config, meas_local_config, mesh_device.get());
+    auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, measurement_buffer_size);
 
     auto send_program = CreateProgram();
     CreateKernel(
@@ -1019,31 +965,22 @@ std::vector<uint64_t> benchmark_d2h_ping(
                 static_cast<uint32_t>(num_iterations),
             }});
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
-    mesh_workload.add_program(devices, std::move(send_program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, sender_core, std::move(send_program));
 
-    constexpr uint32_t WARMUP_ITERS = 5;
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     std::vector<uint32_t> dst_vec(page_size_words);
-    for (uint32_t i = 0; i < WARMUP_ITERS; i++) {
+    for (uint32_t i = 0; i < kWarmupIters; i++) {
         output_socket.read(dst_vec.data(), 1);
     }
     for (uint32_t i = 0; i < num_iterations; i++) {
         output_socket.read(dst_vec.data(), 1);
     }
     output_socket.barrier();
+    // Ensure the device kernel has flushed all per-iteration timestamps to L1.
+    Finish(mesh_device->mesh_command_queue());
 
-    const auto& cluster = MetalContext::instance().get_cluster();
     std::vector<uint64_t> cycles(num_iterations);
-    cluster.read_core(
-        cycles.data(),
-        measurement_buffer_size,
-        tt_cxy_pair(
-            mesh_device->get_device(sender_core.device_coord)->id(),
-            mesh_device->worker_core_from_logical_core(sender_core.core_coord)),
-        measurement_buffer->address());
+    read_l1_uint64s(*mesh_device, sender_core, measurement_buffer->address(), cycles);
 
     return cycles;
 }
@@ -1075,10 +1012,10 @@ TEST_F(HDSocketFixture, D2HSocketPingBenchmark) {
 
             // Dump per-iteration data for the first config
             if (!dumped_iterations) {
-                std::ofstream iter_file("tests/tt_metal/distributed/ping_iterations.csv");
+                std::ofstream iter_file("d2h_ping_iterations.csv");
                 iter_file << "iteration,latency_us,cycles" << std::endl;
                 for (uint32_t i = 0; i < num_iterations; i++) {
-                    double lat_us = static_cast<double>(cycles[i]) / 1350.0;
+                    double lat_us = static_cast<double>(cycles[i]) / kCyclesPerUs;
                     iter_file << i << "," << lat_us << "," << cycles[i] << std::endl;
                 }
                 iter_file.close();
@@ -1102,18 +1039,8 @@ std::vector<uint64_t> benchmark_h2d_ping(
     auto input_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
     input_socket.set_page_size(page_size);
 
-    auto shard_params =
-        ShardSpecBuffer(CoreRangeSet(recv_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
     uint32_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
-    const ReplicatedBufferConfig meas_buf_config{.size = measurement_buffer_size};
-    const DeviceLocalBufferConfig meas_local_config{
-        .page_size = measurement_buffer_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto measurement_buffer = MeshBuffer::create(meas_buf_config, meas_local_config, mesh_device.get());
+    auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), recv_core.core_coord, measurement_buffer_size);
 
     auto recv_program = CreateProgram();
     CreateKernel(
@@ -1130,15 +1057,11 @@ std::vector<uint64_t> benchmark_h2d_ping(
                 static_cast<uint32_t>(num_iterations),
             }});
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
-    mesh_workload.add_program(devices, std::move(recv_program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, recv_core, std::move(recv_program));
 
-    constexpr uint32_t WARMUP_ITERS = 5;
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     std::vector<uint32_t> src_vec(page_size_words);
-    for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
+    for (uint32_t w = 0; w < kWarmupIters; w++) {
         input_socket.write(src_vec.data(), 1);
         input_socket.barrier();
     }
@@ -1146,16 +1069,11 @@ std::vector<uint64_t> benchmark_h2d_ping(
         input_socket.write(src_vec.data(), 1);
         input_socket.barrier();
     }
+    // Ensure the device kernel has flushed all per-iteration timestamps to L1.
+    Finish(mesh_device->mesh_command_queue());
 
-    const auto& cluster = MetalContext::instance().get_cluster();
     std::vector<uint64_t> cycles(num_iterations);
-    cluster.read_core(
-        cycles.data(),
-        measurement_buffer_size,
-        tt_cxy_pair(
-            mesh_device->get_device(recv_core.device_coord)->id(),
-            mesh_device->worker_core_from_logical_core(recv_core.core_coord)),
-        measurement_buffer->address());
+    read_l1_uint64s(*mesh_device, recv_core, measurement_buffer->address(), cycles);
 
     return cycles;
 }
@@ -1182,12 +1100,11 @@ TEST_F(HDSocketFixture, H2DSocketPingBenchmark) {
         auto cycles = benchmark_h2d_ping(mesh_device_, fifo_size, page_size, num_iterations, h2d_mode, recv_core);
 
         // Dump per-iteration data
-        std::string iter_filename =
-            "tests/tt_metal/distributed/h2d_ping_iterations_" + std::string(h2d_mode_name(h2d_mode)) + ".csv";
+        std::string iter_filename = std::string("h2d_ping_iterations_") + h2d_mode_name(h2d_mode) + ".csv";
         std::ofstream iter_file(iter_filename);
         iter_file << "iteration,latency_us,cycles" << std::endl;
         for (uint32_t i = 0; i < num_iterations; i++) {
-            double lat_us = static_cast<double>(cycles[i]) / 1350.0;
+            double lat_us = static_cast<double>(cycles[i]) / kCyclesPerUs;
             iter_file << i << "," << lat_us << "," << cycles[i] << std::endl;
         }
         iter_file.close();
@@ -1210,31 +1127,10 @@ std::pair<double, double> benchmark_h2d_socket(
     auto input_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
     input_socket.set_page_size(page_size);
 
-    const ReplicatedBufferConfig buffer_config{.size = data_size};
-    auto recv_data_shard_params =
-        ShardSpecBuffer(CoreRangeSet(recv_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    const DeviceLocalBufferConfig recv_device_local_config{
-        .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-
     uint32_t num_txns = data_size / page_size;
-    uint32_t measurement_buffer_size = sizeof(uint64_t);
 
-    const ReplicatedBufferConfig measurement_buffer_config{.size = measurement_buffer_size};
-    const DeviceLocalBufferConfig measurement_device_local_config{
-        .page_size = measurement_buffer_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-
-    auto measurement_buffer =
-        MeshBuffer::create(measurement_buffer_config, measurement_device_local_config, mesh_device.get());
-    auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device.get());
+    auto recv_data_buffer = make_l1_mesh_buffer(mesh_device.get(), recv_core.core_coord, data_size);
+    auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), recv_core.core_coord, sizeof(uint64_t));
 
     const char* kernel_path = (h2d_mode == H2DMode::DEVICE_PULL)
                                   ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_throughput_device_pull.cpp"
@@ -1260,11 +1156,7 @@ std::pair<double, double> benchmark_h2d_socket(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
-    mesh_workload.add_program(devices, std::move(recv_program));
-
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, recv_core, std::move(recv_program));
     uint32_t page_size_words = page_size / sizeof(uint32_t);
 
     for (uint32_t i = 0; i < num_iterations; i++) {
@@ -1273,21 +1165,14 @@ std::pair<double, double> benchmark_h2d_socket(
         }
     }
     input_socket.barrier();
+    // Ensure the device kernel has fully completed and flushed the measurement
+    // write before reading measurement_buffer from host.
+    Finish(mesh_device->mesh_command_queue());
 
-    const auto& cluster = MetalContext::instance().get_cluster();
-    std::vector<uint64_t> latency_data(1);
-    cluster.read_core(
-        latency_data.data(),
-        measurement_buffer_size,
-        tt_cxy_pair(
-            mesh_device->get_device(recv_core.device_coord)->id(),
-            mesh_device->worker_core_from_logical_core(recv_core.core_coord)),
-        measurement_buffer->address());
-
-    uint64_t total_cycles = latency_data[0];
+    uint64_t total_cycles = read_l1_uint64(*mesh_device, recv_core, measurement_buffer->address());
     uint64_t total_pages = static_cast<uint64_t>(num_txns) * num_iterations;
     double avg_per_page_cycles = static_cast<double>(total_cycles) / total_pages;
-    double avg_per_page_us = avg_per_page_cycles / 1350.0;
+    double avg_per_page_us = avg_per_page_cycles / kCyclesPerUs;
 
     return {avg_per_page_us, avg_per_page_cycles};
 }
@@ -1303,27 +1188,11 @@ std::vector<uint64_t> benchmark_h2d_latency(
     input_socket.set_page_size(page_size);
 
     // Recv data buffer: single page in L1 (kernel overwrites each iteration)
-    const ReplicatedBufferConfig buffer_config{.size = page_size};
-    auto shard_params =
-        ShardSpecBuffer(CoreRangeSet(recv_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    const DeviceLocalBufferConfig recv_local_config{
-        .page_size = page_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_local_config, mesh_device.get());
+    auto recv_data_buffer = make_l1_mesh_buffer(mesh_device.get(), recv_core.core_coord, page_size);
 
     // Measurement buffer: one uint64_t per iteration
     uint32_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
-    const ReplicatedBufferConfig meas_buf_config{.size = measurement_buffer_size};
-    const DeviceLocalBufferConfig meas_local_config{
-        .page_size = measurement_buffer_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto measurement_buffer = MeshBuffer::create(meas_buf_config, meas_local_config, mesh_device.get());
+    auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), recv_core.core_coord, measurement_buffer_size);
 
     const char* kernel_path =
         (h2d_mode == H2DMode::DEVICE_PULL)
@@ -1345,16 +1214,12 @@ std::vector<uint64_t> benchmark_h2d_latency(
                 static_cast<uint32_t>(num_iterations),
             }});
 
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
-    mesh_workload.add_program(devices, std::move(recv_program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    enqueue_on_core(*mesh_device, recv_core, std::move(recv_program));
 
     // Host side: write + barrier per page, matching kernel's warmup + timed iterations
-    constexpr uint32_t WARMUP_ITERS = 5;
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     std::vector<uint32_t> src_vec(page_size_words);
-    for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
+    for (uint32_t w = 0; w < kWarmupIters; w++) {
         input_socket.write(src_vec.data(), 1);
         input_socket.barrier();
     }
@@ -1362,17 +1227,11 @@ std::vector<uint64_t> benchmark_h2d_latency(
         input_socket.write(src_vec.data(), 1);
         input_socket.barrier();
     }
+    // Ensure the device kernel has flushed all per-iteration timestamps to L1.
+    Finish(mesh_device->mesh_command_queue());
 
-    // Read back per-iteration cycle counts from device L1
-    const auto& cluster = MetalContext::instance().get_cluster();
     std::vector<uint64_t> cycles(num_iterations);
-    cluster.read_core(
-        cycles.data(),
-        measurement_buffer_size,
-        tt_cxy_pair(
-            mesh_device->get_device(recv_core.device_coord)->id(),
-            mesh_device->worker_core_from_logical_core(recv_core.core_coord)),
-        measurement_buffer->address());
+    read_l1_uint64s(*mesh_device, recv_core, measurement_buffer->address(), cycles);
 
     return cycles;
 }
@@ -1411,7 +1270,6 @@ TEST_F(HDSocketFixture, H2DSocketLatencyBenchmark) {
 }
 
 TEST_F(HDSocketFixture, H2DSocketLoopback) {
-    // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
@@ -1439,7 +1297,6 @@ TEST_F(HDSocketFixture, H2DSocketLoopback) {
 }
 
 TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
-    // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }

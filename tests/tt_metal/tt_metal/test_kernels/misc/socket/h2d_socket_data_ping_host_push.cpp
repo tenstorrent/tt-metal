@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "socket_benchmark_defs.h"
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
@@ -19,7 +20,6 @@ void kernel_main() {
     uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
 
     // Warmup
-    constexpr uint32_t WARMUP_ITERS = 5;
     for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
         socket_wait_for_pages(receiver_socket, 1);
         noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
