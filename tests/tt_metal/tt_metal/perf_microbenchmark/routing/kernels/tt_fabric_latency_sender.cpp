@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "internal/dataflow/dataflow_cmd_bufs.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h"
+#include "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -96,14 +99,156 @@ void kernel_main() {
             (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
     };
 
-    auto send_payload_packet = [&fabric_connection, payload_packet_header, send_buffer_address, payload_size_bytes]() {
-        fabric_connection.wait_for_empty_write_slot();
-        if (payload_size_bytes > 0) {
-            fabric_connection.send_payload_without_header_non_blocking_from_address(
-                send_buffer_address, payload_size_bytes);
+    const uint8_t noc_cmd_field_vc = NOC_UNICAST_WRITE_VC;
+    uint32_t noc_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(noc_cmd_field_vc) | NOC_CMD_RESP_MARKED;
+
+    auto send_payload_packet = [&noc_cmd_field,
+                                &fabric_connection,
+                                payload_packet_header,
+                                send_buffer_address,
+                                payload_size_bytes]() {
+        // fabric_connection.wait_for_empty_write_slot();
+        while (true) {
+            invalidate_l1_cache();
+            auto used_slots = fabric_connection.buffer_slot_write_counter.counter -
+                              *fabric_connection.edm_buffer_local_free_slots_read_ptr;
+            if (used_slots < fabric_connection.num_buffers_per_channel) {
+                break;
+            }
         }
-        fabric_connection.send_payload_flush_non_blocking_from_address(
-            (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+        uint64_t buffer_address = get_noc_addr(
+            fabric_connection.edm_noc_x,
+            fabric_connection.edm_noc_y,
+            fabric_connection.edm_buffer_addr,
+            get_fabric_worker_noc());
+
+        // fabric_connection.send_payload_without_header_non_blocking_from_address(
+        //     send_buffer_address, payload_size_bytes);
+        if (payload_size_bytes > 0) {
+            uint32_t src_addr = send_buffer_address;
+            uint64_t dest_addr = buffer_address + sizeof(PACKET_HEADER_TYPE);
+            uint32_t len_bytes = payload_size_bytes;
+            const uint8_t noc = get_fabric_worker_noc();
+            auto cmd_buf = write_cmd_buf;
+
+            while (len_bytes > NOC_MAX_BURST_SIZE) {
+                while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+                NOC_CMD_BUF_WRITE_REG(
+                    noc,
+                    cmd_buf,
+                    NOC_RET_ADDR_COORDINATE,
+                    (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+                src_addr += NOC_MAX_BURST_SIZE;
+                dest_addr += NOC_MAX_BURST_SIZE;
+                len_bytes -= NOC_MAX_BURST_SIZE;
+            }
+            while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+            NOC_CMD_BUF_WRITE_REG(
+                noc,
+                cmd_buf,
+                NOC_RET_ADDR_COORDINATE,
+                (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        }
+
+        // fabric_connection.send_payload_flush_non_blocking_from_address(
+        //     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        uint32_t src_addr = (uint32_t)payload_packet_header;
+        uint64_t dest_addr = buffer_address;
+        uint32_t len_bytes = sizeof(PACKET_HEADER_TYPE);
+
+        const uint8_t noc = get_fabric_worker_noc();
+        auto cmd_buf = write_cmd_buf;
+
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+            NOC_CMD_BUF_WRITE_REG(
+                noc,
+                cmd_buf,
+                NOC_RET_ADDR_COORDINATE,
+                (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+            src_addr += NOC_MAX_BURST_SIZE;
+            dest_addr += NOC_MAX_BURST_SIZE;
+            len_bytes -= NOC_MAX_BURST_SIZE;
+        }
+        while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+        // edm update
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+        const uint64_t noc_sem_addr = get_noc_addr(
+            fabric_connection.edm_noc_x,
+            fabric_connection.edm_noc_y,
+            fabric_connection.edm_buffer_remote_free_slots_update_addr,
+            noc);
+
+        const int vc = NOC_UNICAST_WRITE_VC;
+
+        uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_CPY | NOC_CMD_WR |
+                                 NOC_CMD_WR_INLINE | NOC_CMD_RESP_MARKED;
+
+        uint32_t be32 = 0xf;
+        // If we're given a misaligned address, don't write to the bytes in the word below the address
+        uint32_t be_shift = (noc_sem_addr & (NOC_WORD_BYTES - 1));
+        be32 = (be32 << be_shift);
+
+        cmd_buf = write_at_cmd_buf;
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, packed_val);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(noc_sem_addr));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(noc_sem_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc,
+            cmd_buf,
+            NOC_TARG_ADDR_COORDINATE,
+            (uint32_t)(noc_sem_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+        // Advance buffer slot write index
+        fabric_connection.buffer_slot_write_counter.counter++;
+        fabric_connection.buffer_slot_index = BufferIndex{
+            wrap_increment(fabric_connection.buffer_slot_index.get(), fabric_connection.num_buffers_per_channel)};
+        fabric_connection.edm_buffer_addr =
+            fabric_connection.edm_buffer_base_addr +
+            (fabric_connection.buffer_slot_index.get() * fabric_connection.buffer_size_bytes);
+
+        auto iterations_payload = (payload_size_bytes + NOC_MAX_BURST_SIZE - 1) >> 14;
+        auto iterations_header = (sizeof(PACKET_HEADER_TYPE) + NOC_MAX_BURST_SIZE - 1) >> 14;
+        auto iterations_total = iterations_payload + iterations_header + 1;
+        noc_nonposted_writes_num_issued[noc] += iterations_total;
+        noc_nonposted_writes_acked[noc] += iterations_total;
     };
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
