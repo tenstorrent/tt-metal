@@ -9,6 +9,7 @@ target_sources(
         BASE_DIRS api
         FILES
             api/hostdevcommon/common_values.hpp
+            api/hostdevcommon/device_print_common.h
             api/hostdevcommon/dprint_common.h
             api/hostdevcommon/kernel_structs.h
             api/hostdevcommon/profiler_common.h
@@ -20,6 +21,7 @@ target_sources(
         BASE_DIRS api
         FILES
             api/hostdevcommon/common_values.hpp
+            api/hostdevcommon/device_print_common.h
             api/hostdevcommon/dprint_common.h
             api/hostdevcommon/kernel_structs.h
             api/hostdevcommon/profiler_common.h
