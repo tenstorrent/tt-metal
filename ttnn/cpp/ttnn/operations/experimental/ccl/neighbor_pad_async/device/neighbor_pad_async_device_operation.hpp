@@ -39,12 +39,18 @@ Tensor neighbor_pad_async(
     uint32_t padding_right,
     const std::string& padding_mode,
     uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
+    const GlobalSemaphore& h_neighbor_semaphore,
+    const GlobalSemaphore& w_neighbor_semaphore,
     const GlobalSemaphore& barrier_semaphore,
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape);
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
+    std::optional<uint32_t> pad_dim2 = std::nullopt,
+    uint32_t pad2_left = 0,
+    uint32_t pad2_right = 0,
+    std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
+    std::optional<size_t> pad2_num_links = std::nullopt);
 
 }  // namespace ttnn::prim
