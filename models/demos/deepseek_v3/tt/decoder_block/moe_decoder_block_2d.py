@@ -114,8 +114,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 x, **ccl_shared.populate_all_gather_runtime_args(cfg["shared_expert"]["all_gather"])
             )
         else:
-            # Already full hidden size
-            x_gathered = x
+            # Should always be TP-sharded at this point
+            assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
         # Run both MoE and SharedExpert with the same gathered input
         mlp_out = moe_forward_fn(x_gathered, cfg["moe"])
@@ -140,8 +140,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             if x_gathered is not x:
                 ttnn.deallocate(x_gathered)
         else:
-            # If not TP-sharded, combined output is the final output
-            output = combined_out
+            # Should always be TP-sharded at this point
+            assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
         return output
 
