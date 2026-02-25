@@ -21,6 +21,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::RECIP: return "SFPU_OP_RECIP_INCLUDE";
         case UnaryOpType::SQRT: return "SFPU_OP_SQRT_INCLUDE";
         case UnaryOpType::RSQRT: return "SFPU_OP_RSQRT_INCLUDE";
+        case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         case UnaryOpType::ERFINV: return "SFPU_OP_ERFINV_INCLUDE";
         case UnaryOpType::ERFC:
         case UnaryOpType::ERF: return "SFPU_OP_ERF_ERFC_INCLUDE";
@@ -708,6 +709,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
 
         case UnaryOpType::SQRT: return {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)};
         case UnaryOpType::RSQRT: return {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)};
+        case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         case UnaryOpType::EXP2: return {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)};
         case UnaryOpType::EXPM1: return {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)};
         case UnaryOpType::ASIN: return {"asin_tile_init();", fmt::format("asin_tile({});", idst)};
@@ -754,7 +756,6 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
         case UnaryOpType::TANHSHRINK:
         case UnaryOpType::HARDSWISH:
-        case UnaryOpType::CBRT:
         case UnaryOpType::LOGSIGMOID: return {};
         case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
@@ -982,7 +983,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             } else {
                 return "hardswish_kernel.cpp";
             }
-        case UnaryOpType::CBRT: return "cbrt_kernel.cpp";
         case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }

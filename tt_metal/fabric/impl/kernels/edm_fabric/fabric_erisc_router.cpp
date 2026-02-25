@@ -592,10 +592,11 @@ FORCE_INLINE void send_next_data(
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
 
-    channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
-    channel_trimming_usage_recorder.update_sender_channel_packet_size(
-        sender_channel_index,
-        static_cast<uint16_t>(pkt_header->payload_size_bytes));
+    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
+        channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
+        channel_trimming_usage_recorder.update_sender_channel_packet_size(
+            sender_channel_index, static_cast<uint16_t>(payload_size_bytes));
+    }
 
     auto const dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
@@ -1367,8 +1368,10 @@ FORCE_INLINE
         default: __builtin_unreachable();
     }
 
-    channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(
-        rx_channel_id, hop_cmd_to_sender_channel_mask(hop_cmd));
+    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
+        channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(
+            rx_channel_id, hop_cmd_to_sender_channel_mask(hop_cmd));
+    }
 }
 #endif
 
@@ -1767,43 +1770,6 @@ FORCE_INLINE
 
 template <
     uint8_t receiver_channel,
-    bool forwarding_disabled,
-    size_t DOWNSTREAM_EDM_SIZE,
-    typename WriteTridTracker,
-    typename DownstreamSenderT,
-    typename LocalRelayInterfaceT>
-FORCE_INLINE void receiver_channel_forward_if_enabled(
-    WriteTridTracker& receiver_channel_trid_tracker,
-    tt::tt_fabric::BufferIndex receiver_buffer_index,
-    tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    ROUTING_FIELDS_TYPE cached_routing_fields,
-    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
-    LocalRelayInterfaceT& local_relay_interface,
-    uint32_t hop_cmd) {
-    if constexpr (!forwarding_disabled) {
-        uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
-            receiver_buffer_index);
-        if constexpr (is_2d_fabric) {
-#if defined(FABRIC_2D)
-            receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
-                packet_header,
-                cached_routing_fields,
-                downstream_edm_interfaces,
-                local_relay_interface,
-                trid,
-                hop_cmd);
-#endif
-        } else {
-#ifndef FABRIC_2D
-            receiver_forward_packet<receiver_channel>(
-                packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
-#endif
-        }
-    }
-}
-
-template <
-    uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
     bool enable_first_level_ack,
     size_t DOWNSTREAM_EDM_SIZE,
@@ -1923,17 +1889,26 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 update_bw_counters(packet_header, local_fabric_telemetry);
             }
             channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
-            receiver_channel_forward_if_enabled<
-                receiver_channel,
-                is_receiver_channel_forwarding_disabled[receiver_channel],
-                DOWNSTREAM_EDM_SIZE>(
-                receiver_channel_trid_tracker,
-                receiver_buffer_index,
-                packet_header,
-                cached_routing_fields,
-                downstream_edm_interfaces,
-                local_relay_interface,
-                hop_cmd);
+            if constexpr (!is_receiver_channel_forwarding_disabled[receiver_channel]) {
+                uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
+                    receiver_buffer_index);
+                if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D)
+                    receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
+                        packet_header,
+                        cached_routing_fields,
+                        downstream_edm_interfaces,
+                        local_relay_interface,
+                        trid,
+                        hop_cmd);
+#endif
+                } else {
+#ifndef FABRIC_2D
+                    receiver_forward_packet<receiver_channel>(
+                        packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
+#endif
+                }
+            }
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (!enable_first_level_ack) {

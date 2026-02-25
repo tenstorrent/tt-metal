@@ -737,6 +737,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         // Second pass: Build chains for heads spanning multiple cores
         uint32_t chains_built = 0;
         uint32_t chains_skipped = 0;
+        // Track injector physical X columns for DRAM channel spreading
+        std::vector<uint32_t> injector_phys_x;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             auto& segments = head_segments[head_id];
@@ -744,17 +746,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 continue;  // No chain needed for single core
             }
 
-            // Find chain start (injector), rotating preferred position per head to
-            // spread injectors across different physical columns for DRAM BW.
-            const std::size_t preferred_start = head_id % segments.size();
+            // Find first non-conflicting single-segment core as chain start.
+            // Exclude the last segment: it must remain as a chain tail since the
+            // wrap-around build below needs at least one segment after start.
             std::optional<std::size_t> chain_start_idx;
-
-            // First pass: prefer cores handling only one head segment
-            for (std::size_t offset = 0; offset < segments.size(); ++offset) {
-                std::size_t idx = (preferred_start + offset) % segments.size();
+            for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
                 const auto& seg = segments[idx];
                 const auto& work = core_work[seg.core_idx];
-
                 if (seg.head_work_index >= work.head_work.size()) {
                     continue;
                 }
@@ -766,11 +764,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                     break;
                 }
             }
-
-            // If no single-segment core found, try any core not in a chain
             if (!chain_start_idx.has_value()) {
-                for (std::size_t offset = 0; offset < segments.size(); ++offset) {
-                    std::size_t idx = (preferred_start + offset) % segments.size();
+                for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
                     const auto& seg = segments[idx];
                     if (!core_chain_info[seg.core_idx].participates) {
                         chain_start_idx = idx;
@@ -781,63 +776,99 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
             if (!chain_start_idx.has_value()) {
                 chains_skipped++;
-                log_debug(
-                    tt::LogOp,
-                    "Head {} spans {} cores but no valid chain start found (conflicts)",
-                    head_id,
-                    segments.size());
-                continue;  // Can't build chain for this head
+                continue;
             }
 
-            // Build the chain from start to end
             const std::size_t start = chain_start_idx.value();
-            uint32_t batch = segments[start].core_idx < core_work.size()
-                                 ? core_work[segments[start].core_idx].head_work[segments[start].head_work_index].batch
-                                 : 0;
-            uint32_t head = head_id % NQH;
 
-            log_debug(
-                tt::LogOp,
-                "Building chain for head {} (batch={}, head={}): {} segments starting at idx {}",
-                head_id,
-                batch,
-                head,
-                segments.size(),
-                start);
-
-            // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1
-            // Exclude segments with different q_chunk_count than the injector (uneven tail).
+            // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
+            // Break on conflict (core already in a different chain).
             std::vector<std::size_t> chain_order;
-            const auto& start_seg = segments[start];
-            const uint32_t ref_q_count =
-                core_work[start_seg.core_idx].head_work[start_seg.head_work_index].q_chunk_count;
             for (std::size_t step = 0; step < segments.size(); ++step) {
                 std::size_t idx = (start + step) % segments.size();
                 const auto& seg = segments[idx];
                 const uint32_t core_idx = seg.core_idx;
-
                 if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
                     continue;
                 }
-
                 if (core_chain_info[core_idx].participates) {
-                    log_debug(
-                        tt::LogOp,
-                        "WARNING: Core {} already participates in chain (batch={}, head={}), skipping rest",
-                        core_idx,
-                        core_chain_info[core_idx].batch,
-                        core_chain_info[core_idx].head);
                     break;
                 }
-
-                // Skip cores with different q_chunk_count (e.g. uneven tail)
-                const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
-                if (hw.q_chunk_count != ref_q_count) {
-                    continue;
-                }
-
                 chain_order.push_back(idx);
             }
+
+            if (chain_order.size() < 2) {
+                chains_skipped++;
+                continue;
+            }
+
+            // Check if all chain cores have the same q_chunk_count.
+            // Mixed q_chunk_count chains are safe in unicast mode when sorted in
+            // descending q_chunk_count order: the kernel's should_forward condition
+            // guards on (q_iter < next_core_q_chunks), so a heavier sender only
+            // forwards for the lighter receiver's iteration count, and the receiver
+            // receives for all of its own iterations.  Mcast mode requires uniform
+            // q_chunk_count (checked separately in the mcast eligibility pass).
+            const uint32_t ref_q = core_work[segments[chain_order[0]].core_idx]
+                                       .head_work[segments[chain_order[0]].head_work_index]
+                                       .q_chunk_count;
+            bool uniform_q = true;
+            for (std::size_t i = 1; i < chain_order.size(); ++i) {
+                const auto& seg = segments[chain_order[i]];
+                if (core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count != ref_q) {
+                    uniform_q = false;
+                    break;
+                }
+            }
+
+            if (uniform_q) {
+                // All cores have equal q_chunk_count — safe to pick any injector.
+                // Choose the core whose physical X is furthest from existing
+                // injectors to spread DRAM reads across channels.
+                std::size_t best_pos = 0;
+                uint32_t best_dist = 0;
+                for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
+                    const uint32_t phys_x = core_work[segments[chain_order[pos]].core_idx].physical_core.x;
+                    uint32_t min_dist = UINT32_MAX;
+                    for (uint32_t ix : injector_phys_x) {
+                        uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
+                        min_dist = std::min(min_dist, d);
+                    }
+                    if (min_dist > best_dist) {
+                        best_dist = min_dist;
+                        best_pos = pos;
+                    }
+                }
+                if (best_pos != 0) {
+                    std::swap(chain_order[0], chain_order[best_pos]);
+                }
+            } else {
+                // Mixed q_chunk_counts — sort descending so heavier cores come first.
+                // Each sender forwards only for min(own_q_iters, next_core_q_chunks)
+                // iterations, so a heavier sender safely serves a lighter receiver.
+                // Stable sort preserves physical topology where q_counts are equal.
+                std::stable_sort(chain_order.begin(), chain_order.end(), [&](std::size_t a, std::size_t b) {
+                    const auto& seg_a = segments[a];
+                    const auto& seg_b = segments[b];
+                    return core_work[seg_a.core_idx].head_work[seg_a.head_work_index].q_chunk_count >
+                           core_work[seg_b.core_idx].head_work[seg_b.head_work_index].q_chunk_count;
+                });
+            }
+
+            const auto& inj_seg = segments[chain_order[0]];
+            injector_phys_x.push_back(core_work[inj_seg.core_idx].physical_core.x);
+            uint32_t batch = core_work[inj_seg.core_idx].head_work[inj_seg.head_work_index].batch;
+            uint32_t head = head_id % NQH;
+
+            log_debug(
+                tt::LogOp,
+                "Building chain for head {} (batch={}, head={}): {} cores, uniform_q={}, injector phys_x={}",
+                head_id,
+                batch,
+                head,
+                chain_order.size(),
+                uniform_q,
+                core_work[inj_seg.core_idx].physical_core.x);
 
             for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
                 const std::size_t idx = chain_order[pos];
@@ -948,12 +979,77 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 break;
             }
 
-            // Note: Physical X contiguity is NOT required. Harvested (non-worker) cores
-            // in the multicast rectangle safely discard the data.
+            // Eligibility condition 2: no non-chain worker cores inside the mcast rectangle.
+            // The mcast rectangle spans [min_x, max_x] on the same row. Any active worker
+            // core in that range receives the multicast — if it's not part of the chain,
+            // its K/V CB and semaphores get corrupted. This can happen when the q_chunk_count
+            // filter creates "gaps" by excluding mid-chain segments with uneven tail work.
+            uint32_t min_x = core_work[chain_core_indices[0]].physical_core.x;
+            uint32_t max_x = min_x;
+            for (const auto& ci : chain_core_indices) {
+                uint32_t x = core_work[ci].physical_core.x;
+                min_x = std::min(min_x, x);
+                max_x = std::max(max_x, x);
+            }
 
-            // equal q_chunk_count is already guaranteed by the second pass chain construction
-            // filter (cores with mismatched q_chunk_count are excluded from chain_order).
+            bool has_gap = false;
+            for (const auto& seg : segments) {
+                if (seg.core_idx >= core_work.size()) {
+                    continue;
+                }
+                const auto& phys = core_work[seg.core_idx].physical_core;
+                if (phys.y == ref_y && phys.x >= min_x && phys.x <= max_x) {
+                    bool in_chain = false;
+                    for (const auto& ci : chain_core_indices) {
+                        if (ci == seg.core_idx) {
+                            in_chain = true;
+                            break;
+                        }
+                    }
+                    if (!in_chain) {
+                        has_gap = true;
+                        break;
+                    }
+                }
+            }
+
+            if (has_gap) {
+                all_eligible = false;
+                log_debug(
+                    tt::LogOp, "Head {}: mcast ineligible - non-chain worker core inside mcast rectangle", head_id);
+                break;
+            }
+
+            // Eligibility condition 3: All chain cores must have the same q_chunk_count.
+            // Mcast uses a single sender_wait count — receivers that finish their Q loop
+            // early won't signal back, causing the injector to deadlock waiting for
+            // missing semaphores.  (Unicast chains handle mixed q via descending sort,
+            // but mcast requires strict uniformity.)
             const uint32_t ref_q_chunks = core_chain_info[chain_core_indices[0]].q_chunk_count;
+            bool uniform_q_mcast = true;
+            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
+                if (core_chain_info[chain_core_indices[ci]].q_chunk_count != ref_q_chunks) {
+                    uniform_q_mcast = false;
+                    break;
+                }
+            }
+
+            if (!uniform_q_mcast) {
+                all_eligible = false;
+                log_debug(tt::LogOp, "Head {}: mcast ineligible - mixed q_chunk_counts", head_id);
+                break;
+            }
+
+            // Defensive: crash in all builds if a non-uniform chain slips past the check above.
+            for (const auto& ci : chain_core_indices) {
+                TT_FATAL(
+                    core_chain_info[ci].q_chunk_count == ref_q_chunks,
+                    "Mcast chain for head {} has non-uniform q_chunk_count: core {} has {} vs ref {}",
+                    head_id,
+                    ci,
+                    core_chain_info[ci].q_chunk_count,
+                    ref_q_chunks);
+            }
 
             candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
         }

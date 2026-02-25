@@ -71,7 +71,7 @@ public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
     // Gets the appropriate mesh shape based on device configuration
-    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().shape(); }
+    MeshShape GetDeterminedMeshShape() const { return MetalContext::instance().get_system_mesh().shape(); }
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
