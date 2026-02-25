@@ -14,4 +14,10 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3);
 
+autograd::TensorPtr swiglu_optimized(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& w1,
+    const autograd::TensorPtr& w2,
+    const autograd::TensorPtr& w3);
+
 }  // namespace ttml::ops

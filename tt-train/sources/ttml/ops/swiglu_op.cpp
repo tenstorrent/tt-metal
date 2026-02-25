@@ -15,6 +15,15 @@
 
 namespace ttml::ops {
 
+namespace {
+// Zero-copy flatten of all dims except the last into a single leading dim: [B,N,S,D] -> [B*N*S, D]
+ttnn::Tensor flatten_leading(const ttnn::Tensor& t) {
+    auto vol = t.logical_volume() / static_cast<uint64_t>(t.logical_shape()[-1]);
+    return t.reshape(ttnn::Shape({static_cast<uint32_t>(vol), t.logical_shape()[-1]}));
+}
+
+}  // namespace
+
 autograd::TensorPtr swiglu(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& w1,
@@ -75,6 +84,80 @@ autograd::TensorPtr swiglu(
         // W3 grad: x^T @ dL_dgate
         auto dL_dW3 = ttnn_fixed::matmul(tensor->get_value(), dL_dgate, true, false);
         w3->add_grad(ttnn::sum(dL_dW3, 0, true));
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
+autograd::TensorPtr swiglu_optimized(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& w1,
+    const autograd::TensorPtr& w2,
+    const autograd::TensorPtr& w3) {
+    auto a_shape = tensor->get_value().logical_shape();
+    if (a_shape.rank() != 4) {
+        throw std::runtime_error("swiglu only supports rank-4 input tensors.");
+    }
+
+    ttnn::Tensor swiglu_fw_result =
+        ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
+    auto out = autograd::create_tensor(swiglu_fw_result);
+
+    autograd::GradFunction grad = [tensor, w1, w2, w3, out]() {
+        auto dL_dout = out->get_grad();
+
+        // Recompute forward intermediates
+        auto linear1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value());
+        auto gate = ttnn_fixed::matmul(tensor->get_value(), w3->get_value());
+        auto swished = ttnn::silu(linear1);
+
+        // W2 grad first — free gated early
+        {
+            auto gated = ttnn::multiply(swished, gate);
+            auto dL_dW2 = ttnn_fixed::matmul(flatten_leading(gated), flatten_leading(dL_dout), true, false);
+            w2->add_grad(dL_dW2.reshape(w2->get_value().logical_shape()));
+        }
+
+        auto dL_dgated = ttnn_fixed::matmul(dL_dout, w2->get_value(), false, true);
+        dL_dout.deallocate();
+
+        auto dL_dswished = ttnn::multiply(dL_dgated, gate);
+        gate.deallocate();
+
+        auto dL_dgate = ttnn::multiply(dL_dgated, swished);
+        swished.deallocate();
+        dL_dgated.deallocate();
+
+        // Fused SiLU backward — single kernel replaces sigmoid + 4 eltwise + temporaries
+        auto dL_dlinear1 = ttml::metal::silu_bw(linear1, dL_dswished);
+        linear1.deallocate();
+        dL_dswished.deallocate();
+
+        // Input grads: two matmuls + add
+        auto dL_dtensor = ttnn_fixed::matmul(dL_dlinear1, w1->get_value(), false, true);
+        auto dL_dtensor_from_w3 = ttnn_fixed::matmul(dL_dgate, w3->get_value(), false, true);
+        dL_dtensor = ttnn::add(dL_dtensor, dL_dtensor_from_w3);
+        dL_dtensor_from_w3.deallocate();
+        tensor->add_grad(dL_dtensor);
+        dL_dtensor.deallocate();
+
+        // W1 & W3 grads via flatten — sum absorbed into matmul
+        auto flat_x = flatten_leading(tensor->get_value());
+
+        {
+            auto dL_dW1 = ttnn_fixed::matmul(flat_x, flatten_leading(dL_dlinear1), true, false);
+            w1->add_grad(dL_dW1.reshape(w1->get_value().logical_shape()));
+        }
+        dL_dlinear1.deallocate();
+
+        {
+            auto dL_dW3 = ttnn_fixed::matmul(flat_x, flatten_leading(dL_dgate), true, false);
+            w3->add_grad(dL_dW3.reshape(w3->get_value().logical_shape()));
+        }
+        dL_dgate.deallocate();
     };
 
     auto links = autograd::get_links(tensor);
