@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from .fused_math import ComputeNode
 
 from .chip_architecture import ChipArchitecture
-from .fused_fpu import ReduceFpu
 from .golden_generators import BroadcastGolden, TransposeGolden, get_golden_generator
 from .llk_params import BroadcastType, Transpose
 from .tilize_untilize import tilize_block, untilize_block
@@ -320,7 +319,6 @@ class UnpackerAB(Unpacker):
         compute_unit: "ComputeNode",
     ) -> str:
         face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
 
         if (
@@ -332,33 +330,21 @@ class UnpackerAB(Unpacker):
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
         transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
 
-        if isinstance(compute_unit.fpu, ReduceFpu):
-            if compute_unit.broadcast_type != BroadcastType.None_:
-                raise ValueError("ReduceFpu does not support broadcasted inputs.")
-
-            reduce_dim = compute_unit.fpu.reduce_dim()
-            pool_type = compute_unit.fpu.pool_type()
-
-            return (
-                f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}>(\n"
-                f"{face_r_dim}, {num_faces});\n"
+        if transpose_within_face != transpose_faces:
+            raise ValueError(
+                "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
             )
-        else:
-            if transpose_within_face != transpose_faces:
-                raise ValueError(
-                    "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
-                )
 
-            face_c_dim = operation.face_c_dim
-            num_faces_r_dim = operation.in0_tile_r_dim // face_r_dim
-            num_faces_c_dim = operation.in0_tile_c_dim // face_c_dim
-            transpose_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
-            shape_var = f"tensor_shape_stage_{operation.stage_id}"
-            return (
-                f"const ckernel::TensorShape {shape_var} = "
-                f"{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}};\n"
-                f"_llk_unpack_AB_init_<{broadcast_type}>({shape_var}, {transpose_value});\n"
-            )
+        face_c_dim = operation.face_c_dim
+        num_faces_r_dim = operation.in0_tile_r_dim // face_r_dim
+        num_faces_c_dim = operation.in0_tile_c_dim // face_c_dim
+        transpose_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
+        shape_var = f"tensor_shape_stage_{operation.stage_id}"
+        return (
+            f"const ckernel::TensorShape {shape_var} = "
+            f"{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}};\n"
+            f"_llk_unpack_AB_init_<{broadcast_type}>({shape_var}, {transpose_value});\n"
+        )
 
     def unpack(
         self,
@@ -637,6 +623,79 @@ class UnpackerTilizeA(Unpacker):
             raise ValueError("Architecture is not supported")
 
         return code
+
+
+class ReduceUnpacker(Unpacker):
+    def get_headers(self) -> List[str]:
+        return [
+            "llk_unpack_AB.h",
+            "llk_unpack_AB_reduce.h",
+            "llk_unpack_common.h",
+            "llk_unpack_tilize.h",
+        ]
+
+    def golden(
+        self,
+        tensor_a: torch.Tensor,
+        tensor_b: torch.Tensor,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return tensor_a, tensor_b
+
+    def perf_set_valid(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+    ) -> str:
+        num_faces = operation.num_faces
+        face_r_dim = operation.face_r_dim
+        return (
+            f"_perf_unpack_loop_set_valid<false, true>(1);\n"
+            f"_perf_unpack_loop_set_valid<true, false>({face_r_dim * num_faces});\n"
+        )
+
+    def perf_clear_valid(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+    ) -> str:
+        num_faces = operation.num_faces
+        face_r_dim = operation.face_r_dim
+        return (
+            f"_perf_math_loop_clear_valid<false, true>(1);\n"
+            f"_perf_math_loop_clear_valid<true, false>({face_r_dim * num_faces});\n"
+        )
+
+    def init(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+    ) -> str:
+        face_r_dim = operation.face_r_dim
+        num_faces = operation.num_faces
+
+        reduce_dim = compute_unit.fpu.reduce_dim()
+        pool_type = compute_unit.fpu.pool_type()
+
+        return f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}, false>({face_r_dim}, {num_faces});\n"
+
+    def unpack(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+        tile_idx_expr: str,
+    ) -> str:
+        stage = operation.stage_id
+
+        reduce_dim = compute_unit.fpu.reduce_dim()
+        pool_type = compute_unit.fpu.pool_type()
+        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS(buffer_A{stage}[{tile_idx_expr}]), L1_ADDRESS(buffer_B{stage}[{tile_idx_expr}]));\n"
 
 
 class ReduceBlockMaxUnpacker(Unpacker):

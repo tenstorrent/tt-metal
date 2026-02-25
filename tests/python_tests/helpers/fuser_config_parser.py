@@ -25,6 +25,7 @@ from helpers.fused_sfpu import BinarySfpu, UnarySfpu
 from helpers.fused_unpacker import (
     MatmulUnpacker,
     ReduceBlockMaxUnpacker,
+    ReduceUnpacker,
     UnpackerA,
     UnpackerAB,
     UnpackerTilizeA,
@@ -82,6 +83,7 @@ class UnpackerEnum(Enum):
     UnpackerAB = UnpackerAB
     UnpackerTilizeA = UnpackerTilizeA
     MatmulUnpacker = MatmulUnpacker
+    ReduceUnpacker = ReduceUnpacker
     ReduceBlockMaxUnpacker = ReduceBlockMaxUnpacker
 
     def to_runtime(self) -> Type:
@@ -215,9 +217,9 @@ class FpuMathSchema(BaseModel):
                         f"Matmul: unpacker must be MatmulUnpacker, got '{self.unpacker.value}'"
                     )
             elif self.operation.is_reduce():
-                if self.unpacker != UnpackerEnum.UnpackerAB:
+                if self.unpacker != UnpackerEnum.ReduceUnpacker:
                     raise ValueError(
-                        f"Reduce: unpacker must be UnpackerAB, got '{self.unpacker.value}'"
+                        f"Reduce: unpacker must be ReduceUnpacker, got '{self.unpacker.value}'"
                     )
             elif self.operation.is_eltwise():
                 if (

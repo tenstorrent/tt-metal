@@ -1,0 +1,18 @@
+operations:
+  - src_a: "tilized_output"
+    src_b: "X"
+    output: "reduced_output"
+    src_a_dims: [64, 64]
+    src_b_dims: [64, 64]
+    output_dims: [64, 64]
+    src_b_const_value: 1.0
+    input_format: "Float16_b"
+    output_format: "Float16_b"
+    math:
+      - type: "Fpu"
+        operation: "ReduceColumn"
+        reduce_pool: "MAX"
+        unpacker: "ReduceUnpacker"
+    packer: "Packer"
+    math_fidelity: "HiFi2"
+    batch_size: 1
