@@ -77,6 +77,12 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
+[[maybe_unused]] void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
+    if (dir_path.compare(git_hash_path) != 0) {
+        std::filesystem::remove_all(dir_path);
+    }
+}
+
 }  // namespace
 
 std::string get_default_root_path() {

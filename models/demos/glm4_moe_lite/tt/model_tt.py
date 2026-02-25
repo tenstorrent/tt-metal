@@ -439,6 +439,8 @@ class Glm4MoeLiteDenseOnlyTT:
             mtp_decoder_w=mtp_decoder_w,
         )
 
+
+
     def _ensure_layer_weights(self, layer_idx: int) -> Any:
         layer_idx = int(layer_idx)
         w = self.layer_weights.get(layer_idx)
@@ -454,6 +456,7 @@ class Glm4MoeLiteDenseOnlyTT:
             force_shared_expert_dense=False,
             enable_moe=self.enable_moe,
         )
+
         self.layer_weights[layer_idx] = w
         return w
 

@@ -66,9 +66,14 @@
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 
+#include "ttnn/operations/experimental/fused_persistent_moe_decode/fused_persistent_moe_decode_nanobind.hpp"
+#include "ttnn/operations/experimental/fused_paged_update_and_mla/fused_paged_update_and_mla_nanobind.hpp"
+
 namespace ttnn::operations::experimental {
 
 void py_module(nb::module_& mod) {
+    fused_persistent_moe_decode::bind_fused_persistent_moe_decode(mod);
+    fused_paged_update_and_mla::bind_fused_paged_update_and_mla(mod);
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
 
