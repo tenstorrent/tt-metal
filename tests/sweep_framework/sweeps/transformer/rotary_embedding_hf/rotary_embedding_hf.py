@@ -138,37 +138,52 @@ def run(
         head_dim = input_shape[3]
 
         # Each core handles one batch element
-        shard_height = num_heads * 32  # 32 is TILE_HEIGHT
-        shard_width = head_dim
+        # Input tensor: [1, batch, num_heads, head_dim] -> shard_height = num_heads * TILE_HEIGHT
+        input_shard_height = num_heads * 32  # 32 is TILE_HEIGHT
+        input_shard_width = head_dim
+
+        # Cos/sin tensors: [1, batch, 1, head_dim] -> shard_height = 1 * TILE_HEIGHT
+        cos_sin_shard_height = 32  # 32 is TILE_HEIGHT
+        cos_sin_shard_width = head_dim
 
         num_cores = min(batch, device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y)
         core_grid = ttnn.CoreGrid(x=num_cores, y=1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
 
-        shard_spec = ttnn.ShardSpec(shard_grid, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR, False)
+        input_shard_spec = ttnn.ShardSpec(
+            shard_grid, [input_shard_height, input_shard_width], ttnn.ShardOrientation.ROW_MAJOR, False
+        )
+        input_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+        )
 
-        sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        cos_sin_shard_spec = ttnn.ShardSpec(
+            shard_grid, [cos_sin_shard_height, cos_sin_shard_width], ttnn.ShardOrientation.ROW_MAJOR, False
+        )
+        cos_sin_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
+        )
 
         input_tensor = ttnn.from_torch(
             torch_input_tensor,
             dtype=input_dtype,
             layout=input_layout,
             device=device,
-            memory_config=sharded_mem_config,
+            memory_config=input_sharded_mem_config,
         )
         cos_cache_tensor = ttnn.from_torch(
             torch_cos_cache_tensor,
             dtype=input_dtype,
             layout=input_layout,
             device=device,
-            memory_config=sharded_mem_config,
+            memory_config=cos_sin_sharded_mem_config,
         )
         sin_cache_tensor = ttnn.from_torch(
             torch_sin_cache_tensor,
             dtype=input_dtype,
             layout=input_layout,
             device=device,
-            memory_config=sharded_mem_config,
+            memory_config=cos_sin_sharded_mem_config,
         )
     else:
         input_tensor = ttnn.from_torch(

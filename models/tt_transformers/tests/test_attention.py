@@ -15,7 +15,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+from models.tt_transformers.tt.rope import HfRotarySetupNew, RotarySetup
 
 
 @torch.no_grad()
@@ -85,6 +85,7 @@ def test_attention_inference(
         cache_hf=True,
         prefetcher=prefetcher,
         use_hf_rope=use_hf_rope,
+        use_hf_rope_new=use_hf_rope,
     )
     if model_args.model_name == "Llama-3.2-90B-Instruct" and use_hf_rope:
         pcc = llama90b_hf_rope_pcc
@@ -100,7 +101,7 @@ def test_attention_inference(
     generation_length = 10
     all_tests_pass = True
 
-    DefaultRopeSetup = HfRotarySetup if model_args.use_hf_rope else RotarySetup
+    DefaultRopeSetup = HfRotarySetupNew if model_args.use_hf_rope else RotarySetup
 
     # Setup RoPE transformation matrices
     rope_setup = DefaultRopeSetup(

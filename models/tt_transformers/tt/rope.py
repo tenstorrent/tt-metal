@@ -896,9 +896,9 @@ class HfRotarySetupNew(LightweightModule):
         assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
         assert torch.min(position_idxs) >= 0, "Position idxs must be non-negative"
 
-        # Add padding if needed
-        pad_size = nearest_32(batch) - batch
-        position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
+        # # Add padding if needed
+        # pad_size = nearest_32(batch) - batch
+        # position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
 
         if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
             rot_idxs = ttnn.as_tensor(
@@ -966,9 +966,10 @@ class HfRotarySetupNew(LightweightModule):
         )  # [1, batch, head_dim]
 
         # Reshape to [1, batch, 1, head_dim] for rotary_embedding_hf decode mode
-        cos = ttnn.unsqueeze_to_4D(cos)  # [1, batch, 1, head_dim]
-        sin = ttnn.unsqueeze_to_4D(sin)  # [1, batch, 1, head_dim]
-
+        # cos = ttnn.unsqueeze_to_4D(cos)  # [1, batch, 1, head_dim]
+        # sin = ttnn.unsqueeze_to_4D(sin)  # [1, batch, 1, head_dim]
+        cos = ttnn.unsqueeze(cos, 2)  # [1, batch, 1, head_dim]
+        sin = ttnn.unsqueeze(sin, 2)  # [1, batch, 1, head_dim]
         # For decode mode, we need HEIGHT_SHARDED memory config
         # Each core handles one batch element
         # Note: batch here is the padded batch size (nearest_32)
