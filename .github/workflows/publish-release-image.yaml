@@ -145,13 +145,23 @@ jobs:
         timeout-minutes: 1
         run: |
             python -c "import ttnn"
+      - name: Check venv structure
+        run: |
+            ls -la /opt/
+            if [ -d /opt/venv ]; then
+              ls -la /opt/venv/
+              ls -la /opt/venv/bin/ || true
+            fi
+            echo "PATH: $PATH"
+            echo "VIRTUAL_ENV: $VIRTUAL_ENV"
+            which python
+            python --version
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            uv venv /tmp/test-venv
-            source /tmp/test-venv/bin/activate
-            uv pip install --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
-            uv pip install 'numpy>=1.24.4,<2' pytest
+            source /opt/venv/bin/activate
+            uv pip install --system --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
+            uv pip install --system 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
