@@ -38,6 +38,18 @@ skus:
       - topology-6u
       - in-service
 
+  wh_n150:
+    runs_on:
+      - N150
+      - in-service
+      - cloud-virtual-machine
+
+  wh_n300:
+    runs_on:
+      - N300
+      - in-service
+      - cloud-virtual-machine
+
   wh_n150_civ2:
     runs_on:
       - tt-ubuntu-2204-N150-viommu-stable

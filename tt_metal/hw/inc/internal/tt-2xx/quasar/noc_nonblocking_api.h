@@ -436,7 +436,7 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     return src_addr;
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_vc = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -444,7 +444,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t dest_addr,
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
-    if constexpr (use_vc) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
@@ -805,7 +805,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_vc = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -815,13 +815,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint32_t read_req_vc = 1) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_read<noc_mode, use_vc>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
+        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
         src_addr += NOC_MAX_BURST_SIZE;
         dest_addr += NOC_MAX_BURST_SIZE;
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_read<noc_modem use_vc>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
+    ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
@@ -1018,7 +1018,8 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, num_dests);
@@ -1029,7 +1030,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, 0);
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));

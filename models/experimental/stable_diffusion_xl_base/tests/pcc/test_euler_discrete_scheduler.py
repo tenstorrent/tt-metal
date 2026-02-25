@@ -15,7 +15,10 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape",
     [
+        # 1024x1024 image resolution
         (1, 1, 128 * 128, 4),
+        # 512x512 image resolution
+        (1, 1, 64 * 64, 4),
     ],
 )
 @pytest.mark.parametrize("num_inference_steps", [5])
@@ -108,7 +111,10 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_c
 @pytest.mark.parametrize(
     "input_shape",
     [
+        # 1024x1024 image resolution
         (1, 4, 128, 128),
+        # 512x512 image resolution
+        (1, 4, 64, 64),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
