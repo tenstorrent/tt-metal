@@ -179,7 +179,7 @@ class KVCacheUpdate:
                     other_value=0,
                 ),
             ],
-            #  noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+            noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         )
         kernel_result = kernel_desc.get_kernel_descriptors()
         program_descriptor = ttnn.ProgramDescriptor(
