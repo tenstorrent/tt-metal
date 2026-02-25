@@ -8,7 +8,6 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
-#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -69,7 +68,6 @@ public:
     static void set_dispatch_core_info(
         const tt_cxy_pair& virtual_core,
         const tt::tt_metal::DispatchWorkerType& type,
-        tt::CoreType core_type,
         uint8_t cq_id,
         ChipId device_id,
         ChipId servicing_device_id);
@@ -78,7 +76,6 @@ public:
     static void set_dispatch_s_core_info(
         const tt_cxy_pair& virtual_core,
         const tt::tt_metal::DispatchWorkerType& type,
-        tt::CoreType core_type,
         uint8_t cq_id,
         ChipId device_id,
         ChipId servicing_device_id);
@@ -87,7 +84,6 @@ public:
     static void set_prefetcher_core_info(
         const tt_cxy_pair& virtual_core,
         const tt::tt_metal::DispatchWorkerType& type,
-        tt::CoreType core_type,
         uint8_t cq_id,
         ChipId device_id,
         ChipId servicing_device_id);

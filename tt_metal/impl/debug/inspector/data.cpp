@@ -375,7 +375,6 @@ void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info,
     out.setWorkType(worker_type_str);
     out.setEventID(event_id);
     out.setCqId(info.cq_id);
-    out.setBlockType(std::string(tt::tt_metal::get_core_type_name(info.core_type)));
 }
 
 // Helper function to get the event id for a core

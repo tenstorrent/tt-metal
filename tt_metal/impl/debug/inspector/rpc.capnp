@@ -96,7 +96,6 @@ struct CoreInfo {
     servicingMetalDeviceId @2: Int32;
     eventID @3: UInt32;
     cqId @4: UInt8;
-    blockType @5: Text;
 }
 
 # Virtual core coordinates are used as a unique key to fetch dispatch/prefetch core information
@@ -144,10 +143,10 @@ struct LogicalCoord {
 
 # Per-chip: block type -> list of logical coordinates
 struct CoresByBlockTypePerChip {
-    tensixCores @0 :List(LogicalCoord);
-    activeEthCores @1 :List(LogicalCoord);
-    idleEthCores @2 :List(LogicalCoord);
-    ethCores @3 :List(LogicalCoord);
+    tensix @0 :List(LogicalCoord);
+    activeEth @1 :List(LogicalCoord);
+    idleEth @2 :List(LogicalCoord);
+    eth @3 :List(LogicalCoord);
 }
 
 # One entry per chip: chipId -> cores by block type

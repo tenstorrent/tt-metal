@@ -64,7 +64,6 @@ struct MeshWorkloadData {
 
 struct CoreInfo {
     tt::tt_metal::DispatchWorkerType worker_type;
-    tt::CoreType core_type;
     ChipId device_id;
     ChipId servicing_device_id;
     uint8_t cq_id;
