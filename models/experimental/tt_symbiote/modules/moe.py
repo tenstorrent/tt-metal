@@ -1363,3 +1363,159 @@ class TTNNMoE(TTNNModule):
         output = ttnn.add(routed_output, shared_output.to_ttnn)
         output = ttnn.squeeze(output, 1)  # Remove experts dimension
         return output
+
+
+class TTNNBailingMoE(TTNNMoE):
+    """TTNN MoE for BailingMoeV2 architecture (Ling-mini-2.0 model)."""
+
+    @classmethod
+    def from_torch(cls, torch_moe):
+        """
+        Create TTNNBailingMoE from PyTorch BailingMoeV2SparseMoeBlock module.
+
+        Args:
+            torch_moe: PyTorch BailingMoeV2SparseMoeBlock module
+
+        Returns:
+            TTNNBailingMoE module with consolidated expert weights
+        """
+        # 1. Adapt config to match Glm4MoeConfig structure
+        adapted_config = cls._adapt_config(torch_moe.config)
+
+        # 2. Consolidate ModuleList experts into 3D tensors
+        consolidated_experts = cls._consolidate_experts(torch_moe.experts, adapted_config)
+
+        # 3. Adapt gate to match expected structure
+        adapted_gate = cls._adapt_gate(torch_moe.gate)
+
+        # 4. Create module instance
+        module = cls(adapted_config)
+        module._fallback_torch_layer = torch_moe
+
+        # 5. Initialize submodules using parent's pattern
+        module.gate = TTNNGlm4MoeTopkRouter.from_parameters(adapted_gate.weight, adapted_gate.e_score_correction_bias)
+
+        # Create routing module
+        module.route_tokens_to_experts = TTNNMoERouterDecode.from_torch(
+            Glm4MoeRouteTokenToExperts(
+                adapted_gate.e_score_correction_bias,
+                adapted_config.n_routed_experts,
+                adapted_config.n_group,
+                adapted_config.topk_group,
+                adapted_config.num_experts_per_tok,
+                True,  # norm_topk_prob (BailingMoeV2 uses normalized probabilities)
+                adapted_config.routed_scaling_factor,
+            )
+        )
+
+        # Initialize experts with consolidated weights
+        module.experts = TTNNExperts.from_torch(consolidated_experts)
+
+        # Initialize shared experts
+        module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_moe.shared_experts)
+        module._gate_weight_torch = adapted_gate.weight.float()  # Store replicated gate weight for preprocessing
+        return module
+
+    @staticmethod
+    def _adapt_config(bailing_config):
+        """
+        Adapt BailingMoeV2Config to match Glm4MoeConfig structure.
+
+        Args:
+            bailing_config: BailingMoeV2Config instance
+
+        Returns:
+            Adapted config with Glm4-compatible attributes
+        """
+
+        # Create a simple namespace object to hold adapted attributes
+        class AdaptedConfig:
+            pass
+
+        config = AdaptedConfig()
+
+        # Map BailingMoeV2 attributes to Glm4MoeConfig naming
+        config.hidden_size = bailing_config.hidden_size
+        config.moe_intermediate_size = bailing_config.moe_intermediate_size
+        config.num_experts_per_tok = bailing_config.num_experts_per_tok
+
+        # Key difference: num_experts → n_routed_experts
+        config.n_routed_experts = bailing_config.num_experts
+        config.n_shared_experts = bailing_config.num_shared_experts
+        config.n_group = bailing_config.n_group
+        config.topk_group = bailing_config.topk_group
+        config.routed_scaling_factor = bailing_config.routed_scaling_factor
+
+        # Additional attributes needed by TTNNMoE
+        config.hidden_act = bailing_config.hidden_act
+
+        return config
+
+    @staticmethod
+    def _consolidate_experts(experts_list, config):
+        """
+        Consolidate ModuleList of experts into 3D tensors matching Glm4MoeNaiveMoe structure.
+
+        Args:
+            experts_list: nn.ModuleList of BailingMoeV2MLP modules
+            config: BailingMoeV2Config
+
+        Returns:
+            Object with gate_up_proj and down_proj as 3D tensors
+        """
+        num_experts = len(experts_list)
+        hidden_dim = config.hidden_size
+        intermediate_dim = config.moe_intermediate_size
+
+        # Allocate 3D tensors for consolidated weights
+        # gate_up_proj: [num_experts, 2*intermediate_dim, hidden_dim]
+        # down_proj: [num_experts, hidden_dim, intermediate_dim]
+        gate_up_proj = torch.empty(
+            num_experts, 2 * intermediate_dim, hidden_dim, dtype=experts_list[0].gate_proj.weight.dtype
+        )
+        down_proj = torch.empty(num_experts, hidden_dim, intermediate_dim, dtype=experts_list[0].down_proj.weight.dtype)
+
+        # Stack weights from ModuleList
+        for i, expert in enumerate(experts_list):
+            # Concatenate gate_proj and up_proj along intermediate dimension
+            gate_up_proj[i, :intermediate_dim, :] = expert.gate_proj.weight.data
+            gate_up_proj[i, intermediate_dim:, :] = expert.up_proj.weight.data
+            down_proj[i, :, :] = expert.down_proj.weight.data
+
+        # Create object with expected attributes for TTNNExperts.from_torch()
+        class ConsolidatedExperts:
+            pass
+
+        consolidated = ConsolidatedExperts()
+        consolidated.gate_up_proj = gate_up_proj
+        consolidated.down_proj = down_proj
+        consolidated.config = config
+
+        return consolidated
+
+    @staticmethod
+    def _adapt_gate(bailing_gate):
+        """
+        Adapt BailingMoeV2Gate to match expected structure with e_score_correction_bias.
+
+        Args:
+            bailing_gate: BailingMoeV2Gate module
+
+        Returns:
+            Object with weight and e_score_correction_bias attributes
+        """
+
+        class AdaptedGate:
+            pass
+
+        adapted = AdaptedGate()
+        adapted.weight = bailing_gate.weight
+
+        # Key difference: expert_bias → e_score_correction_bias
+        if hasattr(bailing_gate, "expert_bias"):
+            adapted.e_score_correction_bias = bailing_gate.expert_bias
+        else:
+            # Fallback if expert_bias doesn't exist
+            adapted.e_score_correction_bias = torch.zeros(bailing_gate.weight.shape[0])
+
+        return adapted
