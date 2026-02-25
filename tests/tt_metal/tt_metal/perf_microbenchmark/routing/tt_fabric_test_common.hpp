@@ -11,6 +11,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <filesystem>
 #include <cstdlib>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -147,7 +148,29 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
-    bool open_devices(const TestFabricSetup& fabric_setup) {
+    void setup_channel_trimming_rtoptions(ChannelTrimmingMode channel_trimming_mode) {
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        switch (channel_trimming_mode) {
+            case ChannelTrimmingMode::CAPTURE:
+                rtoptions.set_enable_channel_trimming_capture(true);
+                rtoptions.set_fabric_trimming_profile_path("");
+                break;
+            case ChannelTrimmingMode::REPLAY: {
+                rtoptions.set_enable_channel_trimming_capture(false);
+                auto path = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" /
+                            "channel_trimming_capture.yaml";
+                rtoptions.set_fabric_trimming_profile_path(path.string());
+                break;
+            }
+            case ChannelTrimmingMode::NONE:
+                rtoptions.set_enable_channel_trimming_capture(false);
+                rtoptions.set_fabric_trimming_profile_path("");
+                break;
+        }
+    }
+
+    bool open_devices(const TestFabricSetup& fabric_setup,
+                      ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
         const auto& topology = fabric_setup.topology;
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 
@@ -195,15 +218,20 @@ public:
 
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_ ||
-            fabric_setup.max_packet_size != current_max_packet_size_) {
+            fabric_setup.max_packet_size != current_max_packet_size_ ||
+            channel_trimming_mode != current_channel_trimming_mode_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
+
+            setup_channel_trimming_rtoptions(channel_trimming_mode);
+
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
 
             topology_ = topology;
+            current_channel_trimming_mode_ = channel_trimming_mode;
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
@@ -248,6 +276,7 @@ public:
         current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
         current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         current_max_packet_size_ = std::nullopt;
+        current_channel_trimming_mode_ = ChannelTrimmingMode::NONE;
         are_devices_open_ = false;
     }
 
@@ -1749,6 +1778,7 @@ private:
     tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
     std::optional<uint32_t> current_max_packet_size_{std::nullopt};
+    ChannelTrimmingMode current_channel_trimming_mode_{ChannelTrimmingMode::NONE};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;

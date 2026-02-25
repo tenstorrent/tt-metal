@@ -6,7 +6,6 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <cstring>
 #include <exception>
 #include <optional>

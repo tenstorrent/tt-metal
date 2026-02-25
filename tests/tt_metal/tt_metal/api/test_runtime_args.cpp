@@ -921,7 +921,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
         mesh_device, core_range_set, common_rtas.size(), true, /*num_kernels*/ 1, num_dm);
     auto& program = workload.get_programs().at(device_range);
     SetCommonRuntimeArgs(program, handles[0], common_rtas);
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify all DMs share the same CRTA L1 address
     unit_tests::runtime_args::verify_quasar_crtas(mesh_device, core, all_crtas, /*expect_shared_address*/ true);
 }
@@ -956,7 +956,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         all_crtas[i] = kernel_crtas;
         SetCommonRuntimeArgs(program, handles[i], kernel_crtas);
     }
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify each kernel has a unique CRTA L1 address
     unit_tests::runtime_args::verify_quasar_crtas(mesh_device, core, all_crtas, /*expect_shared_address*/ false);
 }
