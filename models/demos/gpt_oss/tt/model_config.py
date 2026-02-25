@@ -256,9 +256,9 @@ class ModelArgs:
             cache_dir = Path(cache_dir)  # If we specify a TT_CACHE_PATH, use that for the cache
         else:
             cache_dir = Path(self.model_path)  # Use same directory as model
-        logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
         cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
+        logger.info(f"Cache directory: {cache_dir}, path = {cache_path}")
 
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path

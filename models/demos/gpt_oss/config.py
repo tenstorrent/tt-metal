@@ -24,12 +24,13 @@ class ModeConfig:
     """Per-mode parallelization configuration"""
 
     tp: int  # Tensor parallel size
+    mp: int = 1  # Model parallel size
     ep: int = 1  # Expert parallel size
     sp: int = 1  # Sequence parallel size
 
     def __post_init__(self):
-        if self.tp < 1 or self.ep < 1 or self.sp < 1:
-            raise ValueError(f"Parallelism values must be >= 1: tp={self.tp}, ep={self.ep}, sp={self.sp}")
+        if self.tp < 1 or self.ep < 1 or self.sp < 1 or self.mp < 1:
+            raise ValueError(f"Parallelism values must be >= 1: tp={self.tp}, ep={self.ep}, sp={self.sp}, mp={self.mp}")
 
 
 class MeshConfig:
@@ -41,6 +42,7 @@ class MeshConfig:
         decode: ModeConfig,
         prefill: ModeConfig = None,
         tp_axis: int = 1,
+        mp_enabled: bool = False,
     ):
         """
         Args:
@@ -63,7 +65,14 @@ class MeshConfig:
         # Store mode configs
         self.decode = decode
         # Default prefill: Same TP, use rows for SP (sequence parallel), EP=1
-        self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
+        if mp_enabled:
+            self.prefill = prefill or ModeConfig(mp=mesh_shape[self.tp_axis], sp=mesh_shape[self.sp_axis], tp=1, ep=1)
+        else:
+            self.prefill = prefill or ModeConfig(
+                tp=decode.tp,
+                sp=mesh_shape[0],
+                ep=1,
+            )
 
         # Validate both configs
         self._validate_config(self.decode, Mode.DECODE)

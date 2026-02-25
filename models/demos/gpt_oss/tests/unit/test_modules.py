@@ -451,10 +451,12 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
 @pytest.mark.parametrize(
     "mesh_shape",
     [
+        (1, 1),
         (1, 8),
         (4, 8),
     ],
     ids=[
+        "mesh_1x1",
         "mesh_1x8",
         "mesh_4x8",
     ],
