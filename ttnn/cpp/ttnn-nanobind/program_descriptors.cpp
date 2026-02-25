@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -432,6 +433,18 @@ void py_module_types(nb::module_& mod) {
                     global_circular_buffer: The GlobalCircularBuffer to associate with this CB.
             )pbdoc")
         .def(
+            "set_buffer_from_cb",
+            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
+                self.buffer = other.buffer;
+            },
+            nb::arg("other"),
+            R"pbdoc(
+                Copy buffer pointer from another CBDescriptor.
+
+                Used by the build cache to update sharded CB buffer pointers
+                on cache hit without rebuilding the entire descriptor.
+            )pbdoc")
+        .def(
             "buffer_address",
             [](const tt::tt_metal::CBDescriptor& self) -> std::optional<uint32_t> {
                 if (self.buffer != nullptr) {
@@ -738,7 +751,84 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
-        .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel");
+        .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
+        .def(
+            "clear_runtime_args",
+            [](tt::tt_metal::KernelDescriptor& self) { self.runtime_args.clear(); },
+            "Clear all per-core runtime arguments")
+        .def(
+            "append_runtime_args_from",
+            [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                // Find max args length across all cores in other
+                size_t max_args = 0;
+                for (const auto& [coord, args] : other.runtime_args) {
+                    max_args = std::max(max_args, args.size());
+                }
+                if (max_args == 0) {
+                    return;
+                }
+
+                // Build coord -> index lookup for other
+                std::unordered_map<CoreCoord, size_t> lookup;
+                lookup.reserve(other.runtime_args.size());
+                for (size_t i = 0; i < other.runtime_args.size(); i++) {
+                    lookup.emplace(other.runtime_args[i].first, i);
+                }
+
+                if (self.runtime_args.empty()) {
+                    // Initialize core list from self.core_ranges
+                    for (const auto& cr : self.core_ranges.ranges()) {
+                        for (size_t y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                            for (size_t x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+                                CoreCoord coord(x, y);
+                                auto it = lookup.find(coord);
+                                if (it != lookup.end()) {
+                                    auto args = other.runtime_args[it->second].second;
+                                    args.resize(max_args, 0);
+                                    self.runtime_args.push_back({coord, std::move(args)});
+                                } else {
+                                    self.runtime_args.push_back(
+                                        {coord, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(max_args, 0)});
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (auto& [coord, args] : self.runtime_args) {
+                        auto it = lookup.find(coord);
+                        if (it != lookup.end()) {
+                            const auto& other_args = other.runtime_args[it->second].second;
+                            args.insert(args.end(), other_args.begin(), other_args.end());
+                            size_t pad = max_args - other_args.size();
+                            if (pad > 0) {
+                                args.resize(args.size() + pad, 0);
+                            }
+                        } else {
+                            args.resize(args.size() + max_args, 0);
+                        }
+                    }
+                }
+            },
+            nb::arg("other"),
+            R"pbdoc(
+                Append another kernel's per-core runtime args with uniform padding.
+
+                For each core in self, finds the matching core in other and extends
+                self's args with other's args (padded to max_args for uniform offsets).
+                If self.runtime_args is empty, initializes the core list from self.core_ranges.
+            )pbdoc")
+        .def(
+            "extend_runtime_args_uniform",
+            [](tt::tt_metal::KernelDescriptor& self, const std::vector<uint32_t>& values) {
+                if (values.empty()) {
+                    return;
+                }
+                for (auto& [coord, args] : self.runtime_args) {
+                    args.insert(args.end(), values.begin(), values.end());
+                }
+            },
+            nb::arg("values"),
+            "Extend all cores' runtime args with the same values");
 
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(

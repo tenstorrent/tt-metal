@@ -173,17 +173,22 @@ _INIT_BODY = {
         "    phase::compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
         "        get_arg_val<uint32_t>(rt_offset));\n"
         "    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
-        "        get_arg_val<uint32_t>(rt_offset + 1));"
+        "        get_arg_val<uint32_t>(rt_offset + 1));\n"
+        "    // Reset L1 semaphores for re-execution (stale values cause premature barrier pass)\n"
+        "    *phase::compute_done = 0;\n"
+        "    *phase::writer_done = 0;"
     ),
     "riscv_1": (
         "    phase::done = 0;\n"
         "    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
-        "        get_arg_val<uint32_t>(rt_offset));"
+        "        get_arg_val<uint32_t>(rt_offset));\n"
+        "    *phase::writer_done = 0;"
     ),
     "compute": (
         "    phase::done = 0;\n"
         "    phase::compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
-        "        get_arg_val<uint32_t>(rt_offset));"
+        "        get_arg_val<uint32_t>(rt_offset));\n"
+        "    *phase::compute_done = 0;"
     ),
 }
 
@@ -211,6 +216,9 @@ namespace segment_{seg_idx} {{
             get_arg_val<uint32_t>(rt_offset + {arrive_offset}));
         release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_arg_val<uint32_t>(rt_offset + {release_offset}));
+        // Reset L1 semaphores for re-execution
+        *arrive = 0;
+        *release = 0;
     }}
 
     FORCE_INLINE void sync() {{
@@ -245,6 +253,8 @@ namespace segment_{seg_idx} {{
         call_count = 0;
         release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_arg_val<uint32_t>(rt_offset + {release_offset}));
+        // Reset L1 semaphore for re-execution
+        *release = 0;
     }}
 
     FORCE_INLINE void sync() {{

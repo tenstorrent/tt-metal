@@ -156,6 +156,10 @@ def _build_fused_descriptor(
 
     Discovers kernel roles dynamically via ``(risc_type, core_ranges)`` keys.
     """
+    import time as _time
+
+    _t0 = _time.perf_counter()
+
     # Validate fp32 consistency
     _validate_fp32_consistency([p.op_descriptor for p in phases])
 
@@ -169,14 +173,20 @@ def _build_fused_descriptor(
             role_keys_set.add(rk)
 
     # Build phase_kernels as List[Dict[role_key, KernelDescriptor]]
+    # and phase_kernel_indices as List[Dict[role_key, kernel_index]]
     phase_kernels: List[Dict[Any, Any]] = []
+    phase_kernel_indices: List[Dict[Any, int]] = []
     for phase_idx, phase in enumerate(phases):
         role_map: Dict[Any, Any] = {}
-        for kernel_desc in phase.op_descriptor.descriptor.kernels:
+        idx_map: Dict[Any, int] = {}
+        for k_idx, kernel_desc in enumerate(phase.op_descriptor.descriptor.kernels):
             rk = _get_role_key(kernel_desc, target_core_range)
             role_map[rk] = kernel_desc
+            idx_map[rk] = k_idx
         phase_kernels.append(role_map)
+        phase_kernel_indices.append(idx_map)
 
+    _t1 = _time.perf_counter()
     # Pool-allocate CB slots based on compatibility keys.
     # Pre-reserve remote CB indices from GlobalCBs — prevents collisions
     # without adding to remaps, so they are excluded from inter-phase CB reset.
@@ -219,8 +229,13 @@ def _build_fused_descriptor(
                 seen_sem_ids_for_reset.add(sem.id)
     op_semaphore_info.sort(key=lambda x: x[0])
 
+    _t2 = _time.perf_counter()
+
     fused_kernels = []
     kernel_labels = []
+    _source_gen_total = 0.0
+    _rt_args_total = 0.0
+    _ct_args_total = 0.0
 
     for role_key in role_keys:
         risc_type, core_key = role_key
@@ -240,17 +255,26 @@ def _build_fused_descriptor(
             continue
 
         # Merge compile-time args, compute RT offsets + concatenate RT args
+        _ct_start = _time.perf_counter()
         ct_args, ct_offsets = _merge_compile_time_args(phase_kernels, role_key)
+        _ct_end = _time.perf_counter()
+        _ct_args_total += _ct_end - _ct_start
+
+        _rt_start = _time.perf_counter()
         rt_offsets, rt_args = _compute_and_concatenate_runtime_args(
             phase_kernels,
             role_key,
             target_core_range=target_core_range,
         )
+        _rt_end = _time.perf_counter()
+        _rt_args_total += _rt_end - _rt_start
 
-        # Generate fused source
+        # Generate fused source (or reuse from cache)
         role_label = {"riscv_0": "reader", "riscv_1": "writer", "compute": "compute"}.get(risc_type)
         if role_label is None:
             continue
+
+        _sg_start = _time.perf_counter()
         fused_source = _generate_fused_source(
             phase_kernels,
             role_key,
@@ -264,6 +288,8 @@ def _build_fused_descriptor(
             multi_barrier=multi_barrier,
             rt_arg_offsets=rt_offsets,
         )
+        _sg_end = _time.perf_counter()
+        _source_gen_total += _sg_end - _sg_start
 
         # Determine barrier RT addresses per RISC type
         barrier_addrs: List[int] = []
@@ -386,12 +412,31 @@ def _build_fused_descriptor(
     # Collect semaphore references to prevent GC of GlobalSemaphores
     sem_refs = tuple(multi_barrier._sem_refs) if multi_barrier is not None else ()
 
+    _t3 = _time.perf_counter()
+    print(
+        f"  [build] setup={1000*(_t1-_t0):.2f}ms  cb_alloc={1000*(_t2-_t1):.2f}ms  "
+        f"source_gen={1000*_source_gen_total:.2f}ms  rt_args={1000*_rt_args_total:.2f}ms  "
+        f"ct_args={1000*_ct_args_total:.2f}ms  assembly={1000*(_t3-_t2-_source_gen_total-_rt_args_total-_ct_args_total):.2f}ms  "
+        f"total={1000*(_t3-_t0):.2f}ms"
+    )
+
+    # Build kernel_phase_map: per fused kernel, list of (OpDescriptor, kernel_index)
+    # identifying which source phase kernels' RT args were concatenated in.
+    kernel_phase_map = []
+    for role_key in role_keys:
+        sources = []
+        for phase_idx, pk in enumerate(phase_kernels):
+            if role_key in pk:
+                sources.append((phases[phase_idx].op_descriptor, phase_kernel_indices[phase_idx][role_key]))
+        kernel_phase_map.append(sources)
+
     return _BuildResult(
         descriptor=merged_descriptor,
         input_tensors=all_input_tensors,
         output_tensors=[output_tensor] if output_tensor else [],
         semaphores=sem_refs,
         kernel_labels=tuple(kernel_labels),
+        kernel_phase_map=tuple(kernel_phase_map),
     )
 
 
