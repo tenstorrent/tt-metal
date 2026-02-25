@@ -233,9 +233,16 @@ void MeshGraph::initialize_from_mgd(
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
     };
 
-    // TODO: need to fix
+    auto arch_it = proto_arch_to_arch.find(mgd.get_arch());
+    if (arch_it == proto_arch_to_arch.end()) {
+        TT_THROW(
+            "MeshGraph: unsupported architecture enum {} in mesh graph descriptor. "
+            "Expected one of: WORMHOLE_B0, BLACKHOLE.",
+            static_cast<int>(mgd.get_arch()));
+    }
+
     chip_spec_ = ChipSpec{
-        .arch = proto_arch_to_arch.at(mgd.get_arch()),
+        .arch = arch_it->second,
         .num_eth_ports_per_direction = mgd.get_num_eth_ports_per_direction(),
         .num_z_ports = mgd.get_num_eth_ports_per_direction()};
 
