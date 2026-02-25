@@ -8,7 +8,7 @@
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
-#include "device/firmware/firmware_initializer.hpp"
+#include "impl/device/firmware/firmware_initializer.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
