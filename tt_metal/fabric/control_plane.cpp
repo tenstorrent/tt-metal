@@ -1539,7 +1539,7 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
             *fabric_node_id.mesh_id,
             fabric_node_id.chip_id);
         this->log_available_fabric_node_ids();
-        TT_FATAL(
+        TT_THROW(
             "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
             fabric_node_id.mesh_id,
             fabric_node_id.chip_id);
