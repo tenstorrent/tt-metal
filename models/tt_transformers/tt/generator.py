@@ -169,15 +169,6 @@ class Generator(WarmupForwardMixin):
         )
         logger.info("Done Compiling Model")
 
-        # Force-skip TP all-gather for the trace capture run below.
-        # all_gather_async writes to device, which is forbidden during trace
-        # capture.  The compile run above already ran the all-gather normally
-        # (outside trace), so all kernels are compiled.  Setting the flag here
-        # ensures _forward_layers_and_head skips the all-gather only inside the
-        # trace; it will be reset to False by _forward_layers_and_head itself.
-        if hasattr(self.model[model_id], "_prefill_sampling_active"):
-            self.model[model_id]._prefill_sampling_active = True
-
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -433,13 +424,6 @@ class Generator(WarmupForwardMixin):
                     # We need to do this here, because we can't do this part in forward() if we have trace enabled
                     # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
                     logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
-
-                    # The prefill trace is captured without TP all-gather (writes
-                    # are forbidden during trace capture).  When sampling is NOT
-                    # active, we must all-gather here so that downstream
-                    # process_output_prefill receives full-vocab logits.
-                    if not sampling_enabled and hasattr(self.model[model_id], "allgather_prefill_logits"):
-                        logits = self.model[model_id].allgather_prefill_logits(logits)
             else:
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
