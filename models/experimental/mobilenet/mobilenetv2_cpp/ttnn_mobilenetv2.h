@@ -40,7 +40,7 @@ public:
     ttnn::Tensor operator()(const ttnn::Tensor& x, int& h, int& w);
 
 private:
-    ttnn::operations::conv::conv2d::Conv2dConfig initialize_conv_config();
+    ttnn::Conv2dConfig initialize_conv_config();
     ttnn::DeviceComputeKernelConfig initialize_compute_config();
 
 private:
@@ -60,7 +60,7 @@ private:
     bool reshard_if_not_optimal;
     int batch_size;
     ttnn::TensorMemoryLayout shard_layout;
-    ttnn::operations::conv::conv2d::Conv2dConfig conv_config;
+    ttnn::Conv2dConfig conv_config;
     ttnn::DeviceComputeKernelConfig compute_config;
     std::optional<ttnn::operations::unary::UnaryWithParam> activation;
 };
