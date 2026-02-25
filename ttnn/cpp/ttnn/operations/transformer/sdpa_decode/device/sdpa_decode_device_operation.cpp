@@ -151,7 +151,9 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         // Paged attention verification
         TT_FATAL(
             !operation_attributes.share_cache.value_or(false), "Share cache feature not supported for paged attention");
-        const auto B = q_shape[1];
+        TT_FATAL(tensor_args.page_table_tensor.has_value(), "Must have page_table tensor for paged attention");
+        const auto& page_table_tensor = tensor_args.page_table_tensor.value();
+        const auto B = page_table_tensor.padded_shape()[0];
 
         if (operation_attributes.is_causal) {
             // Check cur pos tensor for causal mode
@@ -176,9 +178,6 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                     B);
             }
         }
-
-        TT_FATAL(tensor_args.page_table_tensor.has_value(), "Must have page_table tensor for paged attention");
-        const auto& page_table_tensor = tensor_args.page_table_tensor.value();
 
         if (page_table_tensor.is_sharded()) {
             TT_FATAL(
@@ -351,11 +350,46 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.q;
+    const auto q_shape = input.padded_shape();
+    const auto q_shape_unpadded = input.logical_shape();
+
+    const bool q_locally_available =
+        operation_attributes.program_config.has_value() && operation_attributes.program_config->q_locally_available;
+
+    uint32_t B;
+    if (operation_attributes.paged_attention && tensor_args.page_table_tensor.has_value()) {
+        const auto& page_table = tensor_args.page_table_tensor.value();
+        if (page_table.is_sharded()) {
+            uint32_t num_cores = page_table.memory_config().shard_spec()->grid.num_cores();
+            B = page_table.padded_shape()[0] / num_cores;
+        } else {
+            B = page_table.padded_shape()[0];
+        }
+    } else {
+        // Non-paged: K tensor has shape [B, num_kv_heads, S, D] or similar
+        B = tensor_args.k.padded_shape()[0];
+    }
+    uint32_t num_q_heads;
+    if (q_locally_available && input.is_sharded()) {
+        const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
+        const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
+        const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
+        const uint32_t num_groups = num_q_shards / max_cores;
+        const uint32_t q_heads_parallel_factor = num_groups / B;
+        num_q_heads = q_heads_parallel_factor * q_shard_height;
+    } else {
+        num_q_heads = q_shape_unpadded[2];
+    }
+
     Layout output_layout = Layout::TILE;
     ttnn::Shape output_shape = input.logical_shape();
     if (input.layout() == Layout::ROW_MAJOR) {
-        output_shape[2] = round_up_to_tile(output_shape[2], tt::constants::TILE_HEIGHT);
+        output_shape[2] = tt::round_up(num_q_heads, tt::constants::TILE_HEIGHT);
         output_layout = Layout::ROW_MAJOR;
+    } else {
+        output_shape[1] = B;
+        output_shape[2] = tt::round_up(num_q_heads, tt::constants::TILE_HEIGHT);
+        output_layout = Layout::TILE;
     }
     bool use_mla = operation_attributes.use_mla.value_or(false);
     if (use_mla) {

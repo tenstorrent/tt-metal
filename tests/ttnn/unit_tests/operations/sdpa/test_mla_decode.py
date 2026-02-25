@@ -31,7 +31,7 @@ from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import run_flash_mla_d
 @pytest.mark.parametrize(
     "block_size",
     [
-        64,
+        32,
     ],
 )
 @pytest.mark.parametrize(
@@ -67,6 +67,7 @@ def test_flash_mla_decode(
         d_rope,
         q_num_cores,
         q_dtype,
+        None,
         dtype,
         use_paged_attention,
         block_size,
