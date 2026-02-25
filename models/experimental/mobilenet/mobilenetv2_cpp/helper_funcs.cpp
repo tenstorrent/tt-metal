@@ -438,16 +438,9 @@ bool isWormholeB0() {
 }
 
 // Load Torch model
-torch::jit::Module loadTorchModel() {
-    std::string model_file;
-    if (auto path = getenv("MOBILENET_FILE_PATH"); path != nullptr) {
-        model_file.assign(path);
-    } else {
-        const char* metal_path = getenv("TT_METAL_HOME");
-        TT_FATAL(metal_path != nullptr, "TT_METAL_HOME must be set!!!");
-        model_file = fmt::format("{}/models/mobilenetv2_cpp/mobilenet_v2-b0353104-script.pt", metal_path);
-    }
-    auto torch_model = torch::jit::load(model_file);
+torch::jit::Module loadTorchModel(const std::string& model_path) {
+    TT_FATAL(!model_path.empty(), "model_path cannot be empty!");
+    auto torch_model = torch::jit::load(model_path);
     torch_model.eval();
     return torch_model;
 }
