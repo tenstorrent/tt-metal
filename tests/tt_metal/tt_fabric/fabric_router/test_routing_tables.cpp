@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <stdexcept>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -506,6 +507,23 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneTests,
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
+
+TEST_F(ControlPlaneFixture, TestT3k1x8CustomMeshInitDoesNotSurfaceStdMapAt) {
+    const std::filesystem::path t3k_1x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto";
+
+    try {
+        auto control_plane = make_control_plane(t3k_1x8_mesh_graph_desc_path);
+        (void)control_plane;
+    } catch (const std::out_of_range& e) {
+        FAIL() << "Unexpected std::out_of_range from control-plane setup: " << e.what();
+    } catch (const std::exception& e) {
+        std::string what = e.what();
+        EXPECT_THAT(what, ::testing::Not(::testing::HasSubstr("unordered_map::at")));
+        EXPECT_THAT(what, ::testing::HasSubstr("descriptor"));
+    }
+}
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =

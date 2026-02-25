@@ -19,7 +19,9 @@
 #include <ostream>
 #include <queue>
 #include <set>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -153,6 +155,98 @@ bool check_connection_requested(
     }
     return requested_intermesh_connections.contains(*my_mesh_id) &&
            requested_intermesh_connections.at(*my_mesh_id).contains(*neighbor_mesh_id);
+}
+
+template <typename KeyedContainer>
+std::string map_keys_to_csv(const KeyedContainer& keyed_container) {
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto& [key, _] : keyed_container) {
+        if (!first) {
+            oss << ",";
+        }
+        first = false;
+        oss << key;
+    }
+    return oss.str();
+}
+
+std::string mesh_ids_to_csv(const std::vector<MeshId>& mesh_ids) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < mesh_ids.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        oss << *mesh_ids[i];
+    }
+    return oss.str();
+}
+
+struct IntermeshLookupFailureContext {
+    const std::string& descriptor_path;
+    bool using_port_requests;
+    const std::vector<MeshId>& local_mesh_bindings;
+    const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& mesh_edge_ports_to_chip_id;
+    const RequestedIntermeshConnections& requested_intermesh_connections;
+    const RequestedIntermeshPorts& requested_intermesh_ports;
+};
+
+void fail_intermesh_lookup(
+    const IntermeshLookupFailureContext& ctx,
+    std::string_view reason,
+    MeshId local_mesh_id,
+    std::optional<MeshId> neighbor_mesh_id,
+    std::optional<uint64_t> asic_id = std::nullopt,
+    std::optional<ChipId> physical_chip_id = std::nullopt,
+    std::optional<FabricNodeId> neighbor_node = std::nullopt) {
+    const auto local_mesh_id_value = *local_mesh_id;
+    const auto neighbor_mesh_id_value =
+        neighbor_mesh_id.has_value() ? std::to_string(*neighbor_mesh_id.value()) : std::string("n/a");
+    const auto asic_id_value = asic_id.has_value() ? std::to_string(*asic_id) : std::string("n/a");
+    const auto physical_chip_id_value =
+        physical_chip_id.has_value() ? std::to_string(*physical_chip_id) : std::string("n/a");
+    const auto neighbor_node_value = neighbor_node.has_value()
+                                         ? fmt::format("M{}D{}", *neighbor_node->mesh_id, neighbor_node->chip_id)
+                                         : std::string("n/a");
+
+    std::string requested_local_neighbors = "n/a";
+    if (ctx.using_port_requests) {
+        if (auto outer_it = ctx.requested_intermesh_ports.find(local_mesh_id_value);
+            outer_it != ctx.requested_intermesh_ports.end()) {
+            requested_local_neighbors = map_keys_to_csv(outer_it->second);
+        }
+    } else if (auto outer_it = ctx.requested_intermesh_connections.find(local_mesh_id_value);
+               outer_it != ctx.requested_intermesh_connections.end()) {
+        requested_local_neighbors = map_keys_to_csv(outer_it->second);
+    }
+
+    log_error(
+        tt::LogFabric,
+        "IntermeshGenerationFailure reason={} descriptor={} request_mode={} local_mesh={} neighbor_mesh={} "
+        "neighbor_node={} asic_id={} physical_chip_id={} local_mesh_bindings=[{}] mesh_edge_vec_size={} "
+        "requested_outer_keys=[{}] requested_local_neighbor_keys=[{}]",
+        reason,
+        ctx.descriptor_path,
+        ctx.using_port_requests ? "ports" : "counts",
+        local_mesh_id_value,
+        neighbor_mesh_id_value,
+        neighbor_node_value,
+        asic_id_value,
+        physical_chip_id_value,
+        mesh_ids_to_csv(ctx.local_mesh_bindings),
+        ctx.mesh_edge_ports_to_chip_id.size(),
+        ctx.using_port_requests ? map_keys_to_csv(ctx.requested_intermesh_ports)
+                                : map_keys_to_csv(ctx.requested_intermesh_connections),
+        requested_local_neighbors);
+
+    TT_THROW(
+        "ControlPlane intermesh generation failed: reason='{}' descriptor='{}' request_mode='{}' "
+        "local_mesh={} neighbor_mesh={}",
+        reason,
+        ctx.descriptor_path,
+        ctx.using_port_requests ? "ports" : "counts",
+        local_mesh_id_value,
+        neighbor_mesh_id_value);
 }
 
 [[maybe_unused]] std::string create_port_tag(port_id_t port_id) {
@@ -3182,6 +3276,8 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_desciptors_to_intermesh
 AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_local_host() {
     const auto& mesh_graph = *this->mesh_graph_;
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
+    const auto& mesh_edge_ports_to_chip_id = mesh_graph.get_mesh_edge_ports_to_chip_id();
+    const auto& cluster_unique_chip_ids = this->cluster_.get().get_unique_chip_ids();
 
     std::unordered_map<uint32_t, std::set<port_id_t>> assigned_ports_per_mesh;
     std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
@@ -3200,6 +3296,62 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
 
     bool strict_binding = !requested_intermesh_ports.empty();
+    const bool using_port_requests = !requested_intermesh_ports.empty();
+    const auto descriptor_path = mesh_graph.get_mesh_graph_descriptor_path().has_value()
+                                     ? mesh_graph.get_mesh_graph_descriptor_path().value().string()
+                                     : std::string("<auto-discovered>");
+    const IntermeshLookupFailureContext failure_context{
+        .descriptor_path = descriptor_path,
+        .using_port_requests = using_port_requests,
+        .local_mesh_bindings = local_mesh_binding_.mesh_ids,
+        .mesh_edge_ports_to_chip_id = mesh_edge_ports_to_chip_id,
+        .requested_intermesh_connections = requested_intermesh_connections,
+        .requested_intermesh_ports = requested_intermesh_ports,
+    };
+
+    for (const auto& local_mesh_id : local_mesh_binding_.mesh_ids) {
+        if (static_cast<size_t>(*local_mesh_id) >= mesh_edge_ports_to_chip_id.size()) {
+            fail_intermesh_lookup(
+                failure_context, "local_mesh_not_present_in_mesh_edge_port_table", local_mesh_id, std::nullopt);
+        }
+    }
+
+    if (using_port_requests) {
+        for (const auto& [src_mesh_id, dst_meshes] : requested_intermesh_ports) {
+            if (src_mesh_id >= mesh_edge_ports_to_chip_id.size()) {
+                fail_intermesh_lookup(
+                    failure_context, "requested_port_map_src_mesh_out_of_bounds", MeshId{src_mesh_id}, std::nullopt);
+            }
+            for (const auto& [dst_mesh_id, _] : dst_meshes) {
+                if (dst_mesh_id >= mesh_edge_ports_to_chip_id.size()) {
+                    fail_intermesh_lookup(
+                        failure_context,
+                        "requested_port_map_dst_mesh_out_of_bounds",
+                        MeshId{src_mesh_id},
+                        MeshId{dst_mesh_id});
+                }
+            }
+        }
+    } else {
+        for (const auto& [src_mesh_id, dst_meshes] : requested_intermesh_connections) {
+            if (src_mesh_id >= mesh_edge_ports_to_chip_id.size()) {
+                fail_intermesh_lookup(
+                    failure_context,
+                    "requested_connection_map_src_mesh_out_of_bounds",
+                    MeshId{src_mesh_id},
+                    std::nullopt);
+            }
+            for (const auto& [dst_mesh_id, _] : dst_meshes) {
+                if (dst_mesh_id >= mesh_edge_ports_to_chip_id.size()) {
+                    fail_intermesh_lookup(
+                        failure_context,
+                        "requested_connection_map_dst_mesh_out_of_bounds",
+                        MeshId{src_mesh_id},
+                        MeshId{dst_mesh_id});
+                }
+            }
+        }
+    }
 
     auto should_process_direction_for_chip = [&](const FabricNodeId& edge_node,
                                                  ChipId candidate_chip_id,
@@ -3214,7 +3366,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     };
 
     for (const auto& local_mesh_id : local_mesh_binding_.mesh_ids) {
-        const auto& mesh_edges = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*local_mesh_id);
+        if (static_cast<size_t>(*local_mesh_id) >= mesh_edge_ports_to_chip_id.size()) {
+            fail_intermesh_lookup(failure_context, "local_mesh_out_of_mesh_edge_bounds", local_mesh_id, std::nullopt);
+        }
+        const auto& mesh_edges = mesh_edge_ports_to_chip_id[*local_mesh_id];
 
         std::unordered_set<FabricNodeId> exit_nodes;
         for (const auto& [port_id, edge_chip] : mesh_edges) {
@@ -3224,7 +3379,18 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         // Pair the exit nodes from the current mesh with the exit nodes from the neighboring meshes
         for (const auto& node : exit_nodes) {
             auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(node);
-            auto asic_id = this->cluster_.get().get_unique_chip_ids().at(physical_chip_id);
+            auto asic_it = cluster_unique_chip_ids.find(physical_chip_id);
+            if (asic_it == cluster_unique_chip_ids.end()) {
+                fail_intermesh_lookup(
+                    failure_context,
+                    "physical_chip_not_found_in_unique_chip_ids",
+                    local_mesh_id,
+                    std::nullopt,
+                    std::nullopt,
+                    physical_chip_id,
+                    node);
+            }
+            auto asic_id = asic_it->second;
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 
             for (const auto& asic_neighbor : asic_neighbors) {
@@ -3253,12 +3419,56 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                 // map that is in use for this descriptor.
                 uint32_t requested_count = 0;
                 if (!requested_intermesh_ports.empty()) {
-                    const auto& ports = requested_intermesh_ports.at(*local_mesh_id).at(*neighbor_node.mesh_id);
+                    auto local_it = requested_intermesh_ports.find(*local_mesh_id);
+                    if (local_it == requested_intermesh_ports.end()) {
+                        fail_intermesh_lookup(
+                            failure_context,
+                            "missing_local_mesh_in_requested_port_map",
+                            local_mesh_id,
+                            neighbor_node.mesh_id,
+                            asic_id,
+                            physical_chip_id,
+                            neighbor_node);
+                    }
+                    auto neighbor_it = local_it->second.find(*neighbor_node.mesh_id);
+                    if (neighbor_it == local_it->second.end()) {
+                        fail_intermesh_lookup(
+                            failure_context,
+                            "missing_neighbor_mesh_in_requested_port_map",
+                            local_mesh_id,
+                            neighbor_node.mesh_id,
+                            asic_id,
+                            physical_chip_id,
+                            neighbor_node);
+                    }
+                    const auto& ports = neighbor_it->second;
                     for (const auto& port : ports) {
                         requested_count += std::get<2>(port);
                     }
                 } else {
-                    requested_count = requested_intermesh_connections.at(*local_mesh_id).at(*neighbor_node.mesh_id);
+                    auto local_it = requested_intermesh_connections.find(*local_mesh_id);
+                    if (local_it == requested_intermesh_connections.end()) {
+                        fail_intermesh_lookup(
+                            failure_context,
+                            "missing_local_mesh_in_requested_connection_map",
+                            local_mesh_id,
+                            neighbor_node.mesh_id,
+                            asic_id,
+                            physical_chip_id,
+                            neighbor_node);
+                    }
+                    auto neighbor_it = local_it->second.find(*neighbor_node.mesh_id);
+                    if (neighbor_it == local_it->second.end()) {
+                        fail_intermesh_lookup(
+                            failure_context,
+                            "missing_neighbor_mesh_in_requested_connection_map",
+                            local_mesh_id,
+                            neighbor_node.mesh_id,
+                            asic_id,
+                            physical_chip_id,
+                            neighbor_node);
+                    }
+                    requested_count = neighbor_it->second;
                 }
                 if (!strict_binding and
                     num_connections[compute_mesh_connectivity_hash(local_mesh_id, neighbor_node.mesh_id)] >=
@@ -3273,13 +3483,46 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                 std::unordered_map<FabricNodeId, uint32_t> num_ports_assigned_at_exit_node;
 
                 if (strict_binding && !requested_intermesh_ports.empty()) {
-                    for (const auto& port : requested_intermesh_ports.at(*local_mesh_id).at(*neighbor_node.mesh_id)) {
+                    auto local_it = requested_intermesh_ports.find(*local_mesh_id);
+                    if (local_it == requested_intermesh_ports.end()) {
+                        fail_intermesh_lookup(
+                            failure_context,
+                            "missing_local_mesh_in_strict_requested_port_map",
+                            local_mesh_id,
+                            neighbor_node.mesh_id,
+                            asic_id,
+                            physical_chip_id,
+                            neighbor_node);
+                    }
+                    auto neighbor_it = local_it->second.find(*neighbor_node.mesh_id);
+                    if (neighbor_it == local_it->second.end()) {
+                        fail_intermesh_lookup(
+                            failure_context,
+                            "missing_neighbor_mesh_in_strict_requested_port_map",
+                            local_mesh_id,
+                            neighbor_node.mesh_id,
+                            asic_id,
+                            physical_chip_id,
+                            neighbor_node);
+                    }
+                    for (const auto& port : neighbor_it->second) {
                         num_ports_requested_at_exit_node[node] += std::get<2>(port);
                         num_ports_assigned_at_exit_node[node] = 0;
                     }
                 }
                 std::optional<RoutingDirection> local_dir = std::nullopt;
                 std::optional<RoutingDirection> neighbor_dir = std::nullopt;
+                if (static_cast<size_t>(*neighbor_node.mesh_id) >= mesh_edge_ports_to_chip_id.size()) {
+                    fail_intermesh_lookup(
+                        failure_context,
+                        "neighbor_mesh_out_of_mesh_edge_bounds",
+                        local_mesh_id,
+                        neighbor_node.mesh_id,
+                        asic_id,
+                        physical_chip_id,
+                        neighbor_node);
+                }
+                const auto& neighbor_mesh_edges = mesh_edge_ports_to_chip_id[*neighbor_node.mesh_id];
                 for (const auto& [local_port_id, local_chip_id] : mesh_edges) {
                     if (strict_binding &&
                         num_ports_assigned_at_exit_node[node] >= num_ports_requested_at_exit_node[node]) {
@@ -3303,8 +3546,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
 
                     // Find matching neighbor port
                     bool found_neighbor = false;
-                    for (const auto& [neighbor_port_id, neighbor_chip_id] :
-                         mesh_graph.get_mesh_edge_ports_to_chip_id().at(*neighbor_node.mesh_id)) {
+                    for (const auto& [neighbor_port_id, neighbor_chip_id] : neighbor_mesh_edges) {
                         if (!should_process_direction_for_chip(
                                 neighbor_node, neighbor_chip_id, neighbor_dir, neighbor_port_id.first)) {
                             continue;
