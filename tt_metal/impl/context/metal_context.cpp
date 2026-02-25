@@ -365,7 +365,7 @@ void MetalContext::teardown() {
                         while (erisc_app_still_running(device_id, virtual_core)) {
                         }
                     }
-                } catch (const std::exception& e) [[unlikely]] {
+                } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
                         "Skipping ethernet core cleanup for chip {} during teardown: {}",
