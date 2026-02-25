@@ -49,54 +49,59 @@ class MoeCB:
     To reorder CB IDs, change values here only.
     """
 
-    # ── 1x32 tiles (IDs 0-16) ──
+    # ── 1x32, bfloat16 (IDs 0-12) ──
     GATE_MM_INPUT = 0  # also mcast dst for gate_proj/up_proj input
     GATE_MM_OUTPUT = 1  # routing-only
-    GATE_PROJ_IN1 = 2  # DRAM matmul in1, shared with up_proj
-    GATE_PROJ_OUT = 3
-    UP_PROJ_IN1 = 2  # alias: same as GATE_PROJ_IN1
-    UP_PROJ_OUT = 4
-    DOWN_PROJ_GATHER_DST = 5
-    DOWN_PROJ_MCAST_DST = 6
-    DOWN_PROJ_IN1 = 7  # DRAM matmul in1, aliases GATE_PROJ_IN1 address
-    DOWN_PROJ_OUT = 8
-    RESIDUAL_MCAST_SRC = 9  # tensor-backed, sender core
-    RESIDUAL_MCAST_DST = 10
-    RMSNORM_GAMMA = 11  # tensor-backed, sender core
-    SHARED_GU_OUT = 12
-    SHARED_DOWN_MCAST_DST = 13
-    SHARED_DOWN_OUT = 14
-    SHARED_RESIDUAL_ADD_OUT = 15
-    SHARED_OUTPUT_GATHER_DST = 16
+    GATE_PROJ_OUT = 2
+    UP_PROJ_OUT = 3
+    DOWN_PROJ_GATHER_DST = 4
+    DOWN_PROJ_MCAST_DST = 5
+    DOWN_PROJ_OUT = 6
+    RESIDUAL_MCAST_DST = 7
+    SHARED_GU_OUT = 8
+    SHARED_DOWN_MCAST_DST = 9
+    SHARED_DOWN_OUT = 10
+    SHARED_RESIDUAL_ADD_OUT = 11
+    SHARED_OUTPUT_GATHER_DST = 12
 
-    # ── 1x16 tiles (IDs 17-20, routing-only) ──
-    GATE_PROJ_INDEX = 17
-    MUL_SCALAR_SRC = 18
-    GATE_OUTPUT = 19
-    GATE_OUTPUT_INDICES = 20
+    # ── 1x16, bfloat16 (routing-only) ──
+    GATE_PROJ_INDEX = 13
+    MUL_SCALAR_SRC = 14
+    GATE_OUTPUT = 15
+    # ── 1x16, uint16 (routing-only) ──
+    GATE_OUTPUT_INDICES = 16
 
-    # ── 16x16 tiles (IDs 21-31) ──
-    MUL_IN0 = 21  # aliases UP_PROJ_OUT address
-    MUL_IN1 = 22  # aliases GATE_PROJ_OUT address
-    MUL_OUT = 23
-    SHARED_GROUP1 = 24  # gate gather dst on sender
-    SHARED_GROUP2 = 25  # up gather dst on sender
-    SHARED_INTERMED = 26  # gated reduce intermediate on sender
-    SHARED_MCAST_SRC = 27  # gated reduce output on sender
-    GATE_INPUT = 28  # routing-only
-    MUL_SCALAR = 29  # routing-only
-    GATE_BIAS = 30  # routing-only, tensor-backed
-    GATE_INDICES = 31  # routing-only, tensor-backed
+    # ── 16x16, bfloat16 ──
+    MUL_IN0 = 17  # aliases UP_PROJ_OUT address
+    MUL_IN1 = 18  # aliases GATE_PROJ_OUT address
+    MUL_OUT = 19
+    SHARED_GROUP1 = 20  # gate gather dst on sender
+    SHARED_GROUP2 = 21  # up gather dst on sender
+    SHARED_INTERMED = 22  # gated reduce intermediate on sender
+    SHARED_MCAST_SRC = 23  # gated reduce output on sender
+    GATE_INPUT = 24  # routing-only
+    MUL_SCALAR = 25  # routing-only
+    GATE_BIAS = 26  # routing-only, tensor-backed
+    # ── 16x16, uint16 (routing-only) ──
+    GATE_INDICES = 27  # routing-only, tensor-backed
 
-    # ── 32x32 tiles (IDs 32-45) ──
-    RMSNORM_OUTPUT = 32
-    ADD_IN0 = 33  # aliases DOWN_PROJ_OUT address
-    ADD_IN1 = 34
-    ADD_OUT = 35
-    GATE_MM_WEIGHTS = 36  # routing-only, tensor-backed
-    SHARED_GU_WEIGHTS = 37  # tensor-backed, compute cores
-    SHARED_DOWN_IN1 = 38  # tensor-backed, matmul cores
-    # Reduce CBs (32x32)
+    # ── 32x32, bfloat16 ──
+    RMSNORM_OUTPUT = 28
+    ADD_IN0 = 29  # aliases DOWN_PROJ_OUT address
+    ADD_IN1 = 30
+    ADD_OUT = 31
+
+    # ── Runtime-dependent tile/format (tensor-backed, from weight/activation tensors) ──
+    GATE_PROJ_IN1 = 32  # DRAM matmul in1 (bfloat4_b 32x32 in prod)
+    UP_PROJ_IN1 = 32  # alias: same as GATE_PROJ_IN1
+    DOWN_PROJ_IN1 = 33  # DRAM matmul in1, aliases GATE_PROJ_IN1 address
+    RESIDUAL_MCAST_SRC = 34  # reinterpreted tile (32x32 or 16x32)
+    RMSNORM_GAMMA = 35  # reinterpreted tile (32x32 or 16x32)
+    GATE_MM_WEIGHTS = 36  # routing-only
+    SHARED_GU_WEIGHTS = 37  # compute cores
+    SHARED_DOWN_IN1 = 38  # matmul cores
+
+    # ── 32x32, bfloat16 — Reduce CBs ──
     REDUCE_LOCAL = ADD_OUT  # aliases add output
     REDUCE_R1 = 39
     REDUCE_R2 = 40
@@ -312,7 +317,8 @@ class _MoeRoutedExpertContext:
     reduce_packet_cb: int = 0
     reduce_packet_header_cb: int = 0
     reduce_params: dict = None
-    # Pre-built CB descriptors for reduce scratch/packet/header (set by _overlap_cbs_with_sdpa_buffer)
+    # Pre-built CB descriptors for reduce (set by _overlap_cbs_with_sdpa_buffer)
+    reduce_received_cb_descriptors: list = None  # CBs 39-42 (r1, r2, r3, output)
     reduce_scratch_cb_descriptor: Any = None
     reduce_packet_cb_descriptor: Any = None
     reduce_packet_header_cb_descriptor: Any = None
@@ -1810,6 +1816,13 @@ class MoeRoutedExpertOp:
             ctx.residual_mcast_params["dst_cb_descriptor"],
             ctx.rmsnorm_gamma_cb_descriptor,
         ]
+
+        # Reduce CBs (39-45)
+        if ctx.enable_reduce_to_one and ctx.reduce_received_cb_descriptors:
+            descriptors += ctx.reduce_received_cb_descriptors
+            descriptors.append(ctx.reduce_scratch_cb_descriptor)
+            descriptors.append(ctx.reduce_packet_cb_descriptor)
+            descriptors.append(ctx.reduce_packet_header_cb_descriptor)
 
         return descriptors
 
@@ -3732,6 +3745,25 @@ class MoeOp:
             ]
             routed_ctx.reduce_packet_header_cb_descriptor = reduce_cb_header_desc
 
+            # CB 39-42: reduce received/output CBs (tensor-backed, same L1 address on all devices)
+            reduce_payload = routed_ctx.reduce_params["payload_size_bytes"]
+            routed_ctx.reduce_received_cb_descriptors = []
+            for cb_id, tensor in [
+                (routed_ctx.reduce_received_cb_r1, routed_ctx.reduce_params["intermediate_r1_per_device"][0]),
+                (routed_ctx.reduce_received_cb_r2, routed_ctx.reduce_params["intermediate_r2_per_device"][0]),
+                (routed_ctx.reduce_received_cb_r3, routed_ctx.reduce_params["intermediate_r3_per_device"][0]),
+                (routed_ctx.reduce_output_cb, routed_ctx.reduce_params["output_per_device"][0]),
+            ]:
+                desc = ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor)
+                desc.core_ranges = reduce_all_cores_set
+                desc.total_size = reduce_payload
+                desc.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_id, data_format=ttnn.bfloat16, page_size=reduce_payload, tile=reduce_tile_desc
+                    )
+                ]
+                routed_ctx.reduce_received_cb_descriptors.append(desc)
+
     def _build_reduce_per_device(self, reduce_root_coord, coord, row, col, chip_id):
         """Apply reduce-to-one modifications to per-device state (self.device_*). No-op when reduce disabled."""
         ctx = self.ctx
@@ -3753,41 +3785,11 @@ class MoeOp:
 
         dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
 
-        # Per-device tensors
+        # Per-device tensors (L1 address is same on all devices, used for dst_l1_addr below)
         r1_tensor = reduce_params["intermediate_r1_per_device"][chip_id]
         r2_tensor = reduce_params["intermediate_r2_per_device"][chip_id]
         r3_tensor = reduce_params["intermediate_r3_per_device"][chip_id]
         out_tensor = reduce_params["output_per_device"][chip_id]
-
-        # CB descriptors for reduce receive buffers (39-42)
-        reduce_all_cores_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(c, c) for c in reduce_params["worker_cores_list"]]
-            + [ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]]
-        )
-        reduce_tile_desc = ttnn.TileDescriptor(32, 32)
-        reduce_payload = reduce_params["payload_size_bytes"]
-        reduce_dtype = ttnn.bfloat16
-
-        for cb_id, tensor in [
-            (routed_ctx.reduce_received_cb_r1, r1_tensor),
-            (routed_ctx.reduce_received_cb_r2, r2_tensor),
-            (routed_ctx.reduce_received_cb_r3, r3_tensor),
-            (routed_ctx.reduce_output_cb, out_tensor),
-        ]:
-            desc = ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor)
-            desc.core_ranges = reduce_all_cores_set
-            desc.total_size = reduce_payload
-            desc.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=cb_id, data_format=reduce_dtype, page_size=reduce_payload, tile=reduce_tile_desc
-                )
-            ]
-            self.device_cb_descs.append(desc)
-
-        # Scratch/packet/header CBs (43-45): pre-built by _overlap_cbs_with_sdpa_buffer
-        self.device_cb_descs.append(routed_ctx.reduce_scratch_cb_descriptor)
-        self.device_cb_descs.append(routed_ctx.reduce_packet_cb_descriptor)
-        self.device_cb_descs.append(routed_ctx.reduce_packet_header_cb_descriptor)
 
         # Destination L1 address depends on role
         if device_role == MESH_LEAF:
@@ -4092,13 +4094,30 @@ class MoeOp:
         self.ncrisc_common_rt_args = []
 
     def _build_cb_descriptors(self):
-        """Build combined CB descriptors for routed + shared expert."""
+        """Build combined CB descriptors for routed + shared expert + reduce."""
         cb_descriptors = []
         cb_descriptors += MoeRoutedExpertOp._build_cb_descriptors(self.ctx.routed_ctx)
         cb_descriptors += MoeSharedExpertOp._build_cb_descriptors(self.ctx.shared_ctx)
         if self.ctx.reconfig_moe_cbs:
             self.cb_metadata = record_cb_metadata(cb_descriptors)
         return cb_descriptors
+
+    def _build_dummy_cb_descs(self):
+        """Build dummy CB descriptors — only preserve format_descriptors.
+
+        Everything else is dummied out. No buffer pointer, no address offset,
+        minimal total_size, full device grid for core_ranges.
+        The reconfig tensor provides the real config at kernel start.
+        """
+        full_grid = self.ctx.full_device_grid
+        dummy_descs = []
+        for desc in self.cb_descriptors:
+            dummy_desc = ttnn.CBDescriptor()
+            dummy_desc.total_size = desc.format_descriptors[0].page_size
+            dummy_desc.core_ranges = full_grid
+            dummy_desc.format_descriptors = desc.format_descriptors
+            dummy_descs.append(dummy_desc)
+        return dummy_descs
 
     def _build_cb_reconfig_tensor(self):
         """Build L1-sharded CB reconfig tensor using shared utility."""
@@ -4223,6 +4242,7 @@ class MoeOp:
         self.cb_descriptors = self._build_cb_descriptors()
         if self.ctx.reconfig_moe_cbs:
             self._build_cb_reconfig_tensor()
+            self.dummy_cb_descs = self._build_dummy_cb_descs()
         self.unified_core_descs, self.per_core_descs = self._build_core_descriptors()
         self.semaphore_descriptors = self._build_semaphore_descriptors()
         self.io_tensors = self._build_io_tensors()
@@ -4391,7 +4411,8 @@ class MoeOp:
 
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
-                    cbs=moe.device_cb_descs,
+                    # Note: for final fusion with MLA, cbs should kept as empty and let MLA create the CBs. (unless MLA is not covering all CBs creation that's used by MOE)
+                    cbs=moe.dummy_cb_descs if ctx.reconfig_moe_cbs else moe.device_cb_descs,
                     semaphores=moe.device_sem_descs,
                 )
 
