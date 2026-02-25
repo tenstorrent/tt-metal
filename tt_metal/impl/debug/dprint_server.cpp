@@ -340,30 +340,12 @@ private:
         }
     };
 
-    struct KernelIdKey {
-        ChipId device_id;
-        umd::CoreDescriptor logical_core;
-        uint32_t risc_id;
-
-        bool operator<(const KernelIdKey& other) const {
-            if (device_id != other.device_id) {
-                return device_id < other.device_id;
-            }
-            tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
-            if (core_desc_cmp(logical_core, other.logical_core)) {
-                return true;
-            }
-            if (core_desc_cmp(other.logical_core, logical_core)) {
-                return false;
-            }
-            return risc_id < other.risc_id;
-        }
-    };
-
     std::map<std::string, ElfFileCacheEntry> elf_cache_;
-    std::map<KernelIdKey, std::string> firmware_elf_cache_;
+    std::map<RiscKey, std::string, RiscKeyComparator> firmware_elf_cache_;
     std::map<std::tuple<int, uint32_t>, std::string> kernel_elf_cache_;
-    std::map<KernelIdKey, int> risc_to_last_loaded_kernel_id_;
+    std::map<RiscKey, int, RiscKeyComparator> risc_to_last_loaded_kernel_id_;
+    std::map<RiscKey, std::string, RiscKeyComparator> risc_message_buffer_;
+    std::map<RiscKey, std::string, RiscKeyComparator> risc_line_prefix_;
 };
 
 void DPrintImpl::init_print_buffers_for_core(
@@ -663,7 +645,7 @@ void DevicePrintImpl::print_buffer_data(
 
         // Check if we are loading new kernel
         if (header->is_kernel && header->message_payload == DevicePrintHeader::max_message_payload_size) {
-            KernelIdKey kernel_id_key = {device_id, logical_core, header->risc_id};
+            RiscKey kernel_id_key = {device_id, logical_core, header->risc_id};
             auto last_loaded_kernel_id_it = risc_to_last_loaded_kernel_id_.find(kernel_id_key);
             if (last_loaded_kernel_id_it != risc_to_last_loaded_kernel_id_.end()) {
                 if (last_loaded_kernel_id_it->second == header->info_id) {
@@ -743,7 +725,7 @@ void DevicePrintImpl::print_buffer_data(
             ElfFileCacheEntry* elf_entry_ptr = nullptr;
 
             if (header->is_kernel) {
-                KernelIdKey kernel_id_key = {device_id, logical_core, header->risc_id};
+                RiscKey kernel_id_key = {device_id, logical_core, header->risc_id};
                 auto loaded_kernel_id_it = risc_to_last_loaded_kernel_id_.find(kernel_id_key);
                 if (loaded_kernel_id_it != risc_to_last_loaded_kernel_id_.end()) {
                     auto kernel_elf_cache_it =
@@ -781,15 +763,73 @@ void DevicePrintImpl::print_buffer_data(
                             file_str = std::string_view(file_string);
                         }
 
-                        // Print formatted message
+                        // Format message
                         std::span<const std::byte> payload_bytes(
                             reinterpret_cast<const std::byte*>(data.data() + word_index), header->message_payload);
-
                         auto formatted_message = format_message(format_str, payload_bytes);
 
                         // TODO: Remove debug print
                         std::cout << "Formatted message: " << formatted_message << " at " << file_str << ":"
                                   << info.line << std::endl;
+
+                        // Find if we have something buffered from before
+                        auto risc_key = RiscKey{device_id, logical_core, header->risc_id};
+                        auto risc_message_buffer_it = risc_message_buffer_.find(risc_key);
+                        if (risc_message_buffer_it != risc_message_buffer_.end()) {
+                            // We have something in the buffer, prepend it to the current message and clear the buffer.
+                            formatted_message = risc_message_buffer_it->second + formatted_message;
+                            risc_message_buffer_.erase(risc_message_buffer_it);
+                        }
+
+                        // Check if we hit new line
+                        auto newline_pos = formatted_message.find('\n');
+
+                        if (newline_pos != std::string::npos) {
+                            // We will do message printing. Check if we have generated line prefix for this risc before,
+                            // if not generate one.
+                            auto risc_line_prefix_it = risc_line_prefix_.find(risc_key);
+                            std::string line_prefix;
+                            if (risc_line_prefix_it == risc_line_prefix_.end()) {
+                                // Compute line prefix based on RTOptions
+                                const bool prepend_device_core_risc =
+                                    tt::tt_metal::MetalContext::instance()
+                                        .rtoptions()
+                                        .get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
+                                if (prepend_device_core_risc) {
+                                    const string& device_id_str = to_string(device_id);
+                                    const string& core_coord_str = logical_core.coord.str();
+                                    const string& risc_name =
+                                        GetRiscName(device_id, logical_core, header->risc_id, true);
+                                    line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
+                                }
+                                risc_line_prefix_[risc_key] = line_prefix;
+                            } else {
+                                line_prefix = risc_line_prefix_it->second;
+                            }
+
+                            // Are we printing the whole string, or we need to split it into multiple lines because of
+                            // multiple new lines in the message or because we want to prepend line prefix to each line?
+                            ostream* output_stream = get_output_stream(risc_key);
+                            if (newline_pos == formatted_message.size() - 1) {
+                                *output_stream << line_prefix << formatted_message << flush;
+                            } else {
+                                std::size_t newline_start = 0;
+                                std::string_view full_message_view = formatted_message;
+                                while (newline_pos != std::string::npos) {
+                                    std::string_view line =
+                                        full_message_view.substr(newline_start, newline_pos - newline_start);
+                                    *output_stream << line_prefix << line << std::endl;
+                                    newline_start = newline_pos + 1;
+                                    newline_pos = full_message_view.find('\n', newline_start);
+                                }
+                                if (newline_start < full_message_view.size()) {
+                                    risc_message_buffer_[risc_key] = formatted_message.substr(newline_start);
+                                }
+                            }
+                        } else {
+                            // We don't have a complete line yet, buffer the message for next time.
+                            risc_message_buffer_[risc_key] = formatted_message;
+                        }
                     }
                 }
             }

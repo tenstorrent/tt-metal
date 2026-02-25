@@ -10,5 +10,5 @@
 
 void kernel_main() {
     uint32_t x = get_arg_val<uint32_t>(0);
-    DEVICE_PRINT("Printing uint32_t from arg: {}", x);
+    DEVICE_PRINT("Printing uint32_t from arg: {}\n", x);
 }
