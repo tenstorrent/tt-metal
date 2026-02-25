@@ -586,8 +586,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
     // ===== PHASE 1: Build flattened adjacency graphs for all mesh group infos =====
-    // Each possibility from build_flattened_adjacency_mesh gets a uniquified key (name_0, name_1, ...)
-    std::unordered_map<std::string, GroupingInfo> mesh_flat_groupings;  // Lookup map for flattened GroupingInfo by key
+    std::unordered_map<std::string, GroupingInfo> mesh_flat_groupings;  // Lookup map for flattened GroupingInfo by name
     // Find MESH type groupings across all names
     bool found_mesh = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
@@ -597,8 +596,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             for (const auto& mesh_group_info : mesh_it->second) {
                 auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
                 for (size_t i = 0; i < meshes.size(); ++i) {
-                    std::string uniquified_key = mesh_group_info.name + "_" + std::to_string(i);
-                    mesh_flat_groupings[uniquified_key] = std::move(meshes[i]);
+                    mesh_flat_groupings[mesh_group_info.name] = std::move(meshes[i]);
                 }
             }
         }
