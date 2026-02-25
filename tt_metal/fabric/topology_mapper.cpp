@@ -274,16 +274,28 @@ TopologyMapper::TopologyMapper(
         info->physical_chip_id = physical_chip_id;
         info->mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
 
-        // Get host rank from mesh graph
-        auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-        TT_FATAL(host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
-        info->mesh_host_rank = host_rank.value();
-
         // Get hostname and MPI rank from physical system descriptor
         info->hostname = physical_system_descriptor_.get_host_name_for_asic(info->asic_id);
         info->mpi_rank = (!info->hostname.empty())
                              ? static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(info->hostname))
                              : -1;
+
+        // Assign mesh host rank: if local_mesh_binding.host_rank is set (not UNSET),
+        // use it for all fabric nodes on the current physical host to ensure get_local_host_rank() works correctly.
+        // The coordinate ranges will be rebuilt using the mesh graph's original assignments.
+        const auto& my_host = physical_system_descriptor_.my_host_name();
+        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        TT_FATAL(mesh_graph_host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
+
+        if (!info->hostname.empty() && info->hostname == my_host &&
+            local_mesh_binding_.host_rank != MESH_HOST_RANK_UNSET) {
+            // For local host: use the environment variable's host rank for all nodes
+            // This ensures get_local_host_rank() returns a consistent value
+            info->mesh_host_rank = local_mesh_binding_.host_rank;
+        } else {
+            // For remote hosts: use the mesh graph's host rank
+            info->mesh_host_rank = mesh_graph_host_rank.value();
+        }
 
         info->is_mapped = true;
     }
@@ -970,15 +982,24 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
 
     // Fill in physical_chip_id for ASICs that belong to this host
     // (The controller may have set it to 0 for ASICs on other hosts)
+    // Also update mesh_host_rank for local ASICs if local_mesh_binding.host_rank is set
     const auto& my_host = physical_system_descriptor_.my_host_name();
     for (auto& info : chip_topology_mapping_) {
-        if (info.physical_chip_id == 0 && !info.hostname.empty() && info.hostname == my_host) {
-            // This ASIC belongs to this host, look up its physical chip ID
-            for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
-                if (unique_id == *info.asic_id) {
-                    info.physical_chip_id = physical_chip_id;
-                    break;
+        if (!info.hostname.empty() && info.hostname == my_host) {
+            if (info.physical_chip_id == 0) {
+                // This ASIC belongs to this host, look up its physical chip ID
+                for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
+                    if (unique_id == *info.asic_id) {
+                        info.physical_chip_id = physical_chip_id;
+                        break;
+                    }
                 }
+            }
+            // If local_mesh_binding.host_rank is set, use it for all local ASICs
+            // This ensures get_local_host_rank() returns a consistent value
+            // The coordinate ranges will be rebuilt using the mesh graph's original assignments
+            if (local_mesh_binding_.host_rank != MESH_HOST_RANK_UNSET && info.is_mapped) {
+                info.mesh_host_rank = local_mesh_binding_.host_rank;
             }
         }
     }
@@ -1146,12 +1167,15 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
             "MappedChipInfo entry for ASIC {} in fabric_node_id_to_mapping_ is not mapped",
             info.asic_id);
         const auto mesh_id_val = info.fabric_node_id.mesh_id;
-        const auto host_rank = info.mesh_host_rank;
         const auto coord = info.mesh_coord;
-        // All mapped entries should have valid host ranks (assigned from fabric node ranks)
-        // No need to check for UNSET here since mapping assigns valid ranks from fabric nodes
-        mesh_to_hosts[mesh_id_val].insert(host_rank);
-        mesh_host_to_coords[mesh_id_val][host_rank].push_back(coord);
+        // Use the mesh graph's original host rank assignment for coordinate range calculation
+        // This preserves the correct coordinate ranges even when mesh_host_rank is overridden for get_local_host_rank()
+        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id_val, fabric_node_id.chip_id);
+        if (mesh_graph_host_rank.has_value()) {
+            const auto host_rank = mesh_graph_host_rank.value();
+            mesh_to_hosts[mesh_id_val].insert(host_rank);
+            mesh_host_to_coords[mesh_id_val][host_rank].push_back(coord);
+        }
     }
 
     // Build minimal wraparound-aware ranges per host
