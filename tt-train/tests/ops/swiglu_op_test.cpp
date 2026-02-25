@@ -168,6 +168,83 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input
     CompareKernelVsReference(input_data, w1_data, w2_data, w3_data);
 }
 
+float relative_l2(const xt::xarray<float>& a, const xt::xarray<float>& b) {
+    auto diff = a - b;
+    float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
+    float ref_l2 = std::sqrt(xt::sum(xt::square(b))());
+    return diff_l2 / (ref_l2 + 1e-12f);
+}
+
+void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const uint32_t hidden_dim) {
+    using namespace ttml;
+
+    auto& rng = autograd::ctx().get_generator();
+    auto* device = &autograd::ctx().get_device();
+
+    const float bound = 1.0f;
+    const uint32_t input_dim = input_shape.back();
+    std::vector<uint32_t> w13_shape = {1, 1, input_dim, hidden_dim};
+    std::vector<uint32_t> w2_shape = {1, 1, hidden_dim, input_dim};
+
+    xt::xarray<float> input_data = xt::empty<float>(input_shape);
+    core::parallel_generate<float>(
+        input_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+    xt::xarray<float> w1_data = xt::empty<float>(w13_shape);
+    core::parallel_generate<float>(
+        w1_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
+    core::parallel_generate<float>(
+        w2_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+    xt::xarray<float> w3_data = xt::empty<float>(w13_shape);
+    core::parallel_generate<float>(
+        w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+
+    auto run_variant = [&](bool optimized) {
+        auto x = autograd::create_tensor(core::from_xtensor(input_data, device));
+        auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, device));
+        auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, device));
+        auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, device));
+
+        auto out = optimized ? ops::swiglu_optimized(x, w1, w2, w3) : ops::swiglu(x, w1, w2, w3);
+
+        out->set_grad(core::ones_like(out->get_value()));
+        out->backward();
+
+        auto fwd = core::to_xtensor(out->get_value());
+        auto dx = core::to_xtensor(x->get_grad());
+        auto dw1 = core::to_xtensor(w1->get_grad());
+        auto dw2 = core::to_xtensor(w2->get_grad());
+        auto dw3 = core::to_xtensor(w3->get_grad());
+
+        autograd::ctx().reset_graph();
+        return std::make_tuple(fwd, dx, dw1, dw2, dw3);
+    };
+
+    auto [fwd_base, dx_base, dw1_base, dw2_base, dw3_base] = run_variant(false);
+    auto [fwd_opt, dx_opt, dw1_opt, dw2_opt, dw3_opt] = run_variant(true);
+
+    // Forward outputs must match exactly (same kernel)
+    EXPECT_EQ(fwd_base.shape(), fwd_opt.shape());
+    float fwd_err = relative_l2(fwd_opt, fwd_base);
+    EXPECT_LT(fwd_err, 1e-6f) << "Forward mismatch: rel L2 = " << fwd_err;
+
+    // Backward gradients: both run in BF16 but take different code paths,
+    // so we allow BF16-level tolerance (1e-2)
+    const float grad_tol = 1e-2f;
+
+    float dx_err = relative_l2(dx_opt, dx_base);
+    EXPECT_LT(dx_err, grad_tol) << "dL/dx mismatch: rel L2 = " << dx_err;
+
+    float dw1_err = relative_l2(dw1_opt, dw1_base);
+    EXPECT_LT(dw1_err, grad_tol) << "dL/dW1 mismatch: rel L2 = " << dw1_err;
+
+    float dw2_err = relative_l2(dw2_opt, dw2_base);
+    EXPECT_LT(dw2_err, grad_tol) << "dL/dW2 mismatch: rel L2 = " << dw2_err;
+
+    float dw3_err = relative_l2(dw3_opt, dw3_base);
+    EXPECT_LT(dw3_err, grad_tol) << "dL/dW3 mismatch: rel L2 = " << dw3_err;
+}
+
 }  // namespace
 
 // ============================================================================
@@ -385,4 +462,44 @@ TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W2WrongDimensions) {
     testing::internal::CaptureStdout();
     EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
     testing::internal::GetCapturedStdout();  // Discard captured output
+}
+
+// ============================================================================
+// Section 3: swiglu_optimized vs swiglu accuracy comparison
+// ============================================================================
+// Compare forward outputs and all backward gradients (dx, dW1, dW2, dW3)
+// between the baseline and optimized implementations to verify they produce
+// numerically equivalent results.
+// ============================================================================
+
+TEST_F(SwiGLUOpTest, OptimizedAccuracy_1x1x32x32) {
+    CompareOptimizedVsBaseline({1, 1, 32, 32}, 32);
+}
+
+TEST_F(SwiGLUOpTest, OptimizedAccuracy_1x1x32x64) {
+    CompareOptimizedVsBaseline({1, 1, 32, 64}, 64);
+}
+
+TEST_F(SwiGLUOpTest, OptimizedAccuracy_8x1x32x32) {
+    CompareOptimizedVsBaseline({8, 1, 32, 32}, 32);
+}
+
+TEST_F(SwiGLUOpTest, OptimizedAccuracy_2x1x32x128) {
+    CompareOptimizedVsBaseline({2, 1, 32, 128}, 128);
+}
+
+TEST_F(SwiGLUOpTest, OptimizedAccuracy_4x1x64x256) {
+    CompareOptimizedVsBaseline({4, 1, 64, 256}, 256);
+}
+
+TEST_F(SwiGLUOpTest, OptimizedAccuracy_2x1x128x512) {
+    CompareOptimizedVsBaseline({2, 1, 128, 512}, 512);
+}
+
+TEST_F(SwiGLUOpTest, NIGHTLY_OptimizedAccuracy_1x1x1024x1024) {
+    CompareOptimizedVsBaseline({1, 1, 1024, 1024}, 1024);
+}
+
+TEST_F(SwiGLUOpTest, NIGHTLY_OptimizedAccuracy_32x1x256x384) {
+    CompareOptimizedVsBaseline({32, 1, 256, 384}, 1024);
 }
