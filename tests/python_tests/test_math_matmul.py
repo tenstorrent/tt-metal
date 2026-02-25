@@ -22,7 +22,7 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
 from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_face_matmul_data
+from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -100,72 +100,87 @@ def test_math_matmul(
     math_fidelity, matmul_config, throttle, workers_tensix_coordinates
 ):
     formats = matmul_config.formats
-    input_A_dimensions = matmul_config.tile_dimensions.input_A_dimensions
-    input_B_dimensions = matmul_config.tile_dimensions.input_B_dimensions
+    in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
+    in1_dimensions = matmul_config.tile_dimensions.in1_dimensions
+    in0_tile_r_dim = matmul_config.tile_dimensions.in0_tile_r_dim
+    in0_tile_c_dim = matmul_config.tile_dimensions.in0_tile_c_dim
+    in1_tile_r_dim = matmul_config.tile_dimensions.in1_tile_r_dim
+    in1_tile_c_dim = matmul_config.tile_dimensions.in1_tile_c_dim
     transpose = matmul_config.face_layout_config.unpack_transpose_faces
-    tile_cnt_B = matmul_config.tile_dimensions.tile_cnt_B
-    num_faces_A = matmul_config.face_layout_config.num_faces_A
-    num_faces_B = matmul_config.face_layout_config.num_faces_B
+    tile_cnt_in1 = matmul_config.tile_dimensions.tile_cnt_in1
+    num_faces_in0 = matmul_config.face_layout_config.num_faces_in0
+    num_faces_in1 = matmul_config.face_layout_config.num_faces_in1
     num_faces = matmul_config.face_layout_config.num_faces
 
     torch_format = format_dict[formats.output_format]
 
-    src_A = generate_face_matmul_data(
-        num_faces=num_faces_A,
+    in0 = generate_face_matmul_data(
+        num_faces=num_faces_in0,
         stimuli_format=formats.input_format,
-        input_dimensions=input_A_dimensions,  # This will generate the right number of tiles
-        is_matrix_A=True,  # Matrix A (SrcB) uses f0,f2 for 2-face mode
+        input_dimensions=in0_dimensions,  # This will generate the right number of tiles
+        is_matrix_A=True,  # matrix A (In0/SrcB) uses f0,f1 for 2-face mode
+        face_r_dim=(
+            matmul_config.tile_dimensions.in0_tile_r_dim
+            if matmul_config.tile_dimensions.in0_tile_r_dim < 16
+            else 16
+        ),
     )
 
-    src_B = generate_face_matmul_data(
-        num_faces=num_faces_B,
+    in1 = generate_face_matmul_data(
+        num_faces=num_faces_in1,
         stimuli_format=formats.input_format,
-        input_dimensions=input_B_dimensions,  # This will generate the right number of tiles
-        is_matrix_A=False,  # Matrix B (SrcA) uses f0,f1 for 2-face mode
+        input_dimensions=in1_dimensions,  # This will generate the right number of tiles
+        is_matrix_A=False,  # matrix B (In1/SrcA) uses f0,f2 for 2-face mode
     )
 
-    src_B_golden = src_B
+    in1_golden = in1
     if transpose == Transpose.Yes:
         t_matrix = get_golden_generator(TransposeGolden)
 
-        src_B_golden = t_matrix.transpose_faces_multi_tile(
-            src_B,
+        in1_golden = t_matrix.transpose_faces_multi_tile(
+            in1,
             formats.input_format,
-            num_tiles=tile_cnt_B,
+            num_tiles=tile_cnt_in1,
             tilize=True,
-            input_dimensions=input_B_dimensions,
+            input_dimensions=in1_dimensions,
         )
-        src_B_golden = t_matrix.transpose_within_faces_multi_tile(
-            src_B_golden,
+        in1_golden = t_matrix.transpose_within_faces_multi_tile(
+            in1_golden,
             formats.input_format,
-            num_tiles=tile_cnt_B,
+            num_tiles=tile_cnt_in1,
             untilize=True,
-            input_dimensions=input_B_dimensions,
+            input_dimensions=in1_dimensions,
         )
 
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
-        src_A,
-        src_B_golden,
+        in0,
+        in1_golden,
         formats.output_format,
         math_fidelity,
-        input_A_dimensions=input_A_dimensions,
-        input_B_dimensions=input_B_dimensions,
+        input_A_dimensions=in0_dimensions,
+        input_B_dimensions=in1_dimensions,
         tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
     )
 
-    tilized_A = tilize_block(
-        src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
+    tilized_in0 = tilize_block(
+        in0, dimensions=in0_dimensions, stimuli_format=formats.input_format
     )
-    tilized_B = tilize_block(
-        src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
+    tilized_in1 = tilize_block(
+        in1, dimensions=in1_dimensions, stimuli_format=formats.input_format
+    )
+    tilized_in0_l1_view = convert_to_l1_view(
+        tilized_in0, in0_dimensions, tile_dimensions=[in0_tile_r_dim, in0_tile_c_dim]
+    )
+    tilized_in1_l1_view = convert_to_l1_view(
+        tilized_in1, in1_dimensions, tile_dimensions=[in1_tile_r_dim, in1_tile_c_dim]
     )
 
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_A_dimensions, input_B_dimensions),
+            generate_input_dim(in0_dimensions, in1_dimensions),
             STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
             MATH_FIDELITY(math_fidelity),
             THROTTLE_LEVEL(throttle),
@@ -173,14 +188,14 @@ def test_math_matmul(
         ],
         runtimes=[
             TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
-            NUM_FACES(num_faces, num_faces_A, num_faces_B),
+            NUM_FACES(num_faces, num_faces_in0, num_faces_in1),
             UNPACK_TRANS_FACES(transpose),
             UNPACK_TRANS_WITHIN_FACE(transpose),
             PARTIAL_FACE(
-                partial_a=matmul_config.face_layout_config.partial_face_A,
-                partial_face_pack=matmul_config.face_layout_config.partial_face_A,
-                partial_b=matmul_config.face_layout_config.partial_face_B,
-                partial_face_math=matmul_config.face_layout_config.partial_face_B,
+                partial_a=matmul_config.face_layout_config.partial_face_in0,
+                partial_face_pack=matmul_config.face_layout_config.partial_face_pack,
+                partial_b=matmul_config.face_layout_config.partial_face_in1,
+                partial_face_math=matmul_config.face_layout_config.partial_face_math,
             ),
             CRK_TILE_DIMM(
                 matmul_config.tile_dimensions.ct_dim,
@@ -196,13 +211,13 @@ def test_math_matmul(
             DEST_INDEX(matmul_config.dst_index),
         ],
         variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
+            tilized_in0_l1_view.flatten(),
             formats.input_format,
-            tilized_B.flatten(),
+            tilized_in1_l1_view.flatten(),
             formats.input_format,
             formats.output_format,
-            tile_count_A=matmul_config.tile_dimensions.tile_cnt_A,
-            tile_count_B=matmul_config.tile_dimensions.tile_cnt_B,
+            tile_count_A=matmul_config.tile_dimensions.tile_cnt_in0,
+            tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
             tile_count_res=matmul_config.tile_dimensions.tile_cnt,
         ),
         dest_acc=matmul_config.dest_acc,
@@ -214,14 +229,21 @@ def test_math_matmul(
     ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    # Convert golden tensor to L1 memory view for comparison
+    golden_tensor = convert_to_l1_view(
+        golden_tensor,
+        (in0_dimensions[0], in1_dimensions[1]),
+        tile_dimensions=[in0_tile_r_dim, in1_tile_c_dim],
+    )
+
     if num_faces < 4:
-        # Only compare the active faces in each tile since that's what the hardware processes
-        num_elements_per_tile = num_faces * 256  # Each face is 16x16 = 256 elements
+        num_elements_per_tile = in0_tile_r_dim * in1_tile_c_dim
         tile_cnt = matmul_config.tile_dimensions.output_tile_cnt
 
         # Compare each tile separately
         for i in range(tile_cnt):
-            start = i * 1024  # Each tile is 1024 elements
+            start = i * num_elements_per_tile
             assert passed_test(
                 golden_tensor[
                     start : start + num_elements_per_tile

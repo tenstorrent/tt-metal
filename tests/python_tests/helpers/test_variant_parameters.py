@@ -518,21 +518,15 @@ class PARTIAL_FACE(RuntimeParameter):
     def covert_to_cpp(self) -> str:
         lines: list[str] = []
 
-        if self.partial_a:
-            lines.append(
-                f"constexpr bool PARTIAL_FACE_A = {str(self.partial_a).lower()};"
-            )
-            lines.append(
-                f"constexpr bool PARTIAL_FACE_PACK = {str(self.partial_a).lower()};"
-            )
+        lines.append(f"constexpr bool PARTIAL_FACE_A = {str(self.partial_a).lower()};")
+        lines.append(
+            f"constexpr bool PARTIAL_FACE_PACK = {str(self.partial_face_pack).lower()};"
+        )
 
-        if self.partial_b:
-            lines.append(
-                f"constexpr bool PARTIAL_FACE_B = {str(self.partial_b).lower()};"
-            )
-            lines.append(
-                f"constexpr bool PARTIAL_FACE_MATH = {str(self.partial_b).lower()};"
-            )
+        lines.append(f"constexpr bool PARTIAL_FACE_B = {str(self.partial_b).lower()};")
+        lines.append(
+            f"constexpr bool PARTIAL_FACE_MATH = {str(self.partial_face_math).lower()};"
+        )
 
         return "\n".join(lines)
 

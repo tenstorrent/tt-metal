@@ -23,15 +23,15 @@ from helpers.param_config import get_max_dst_index
 # =========================
 @dataclass
 class TileDimensions:
-    input_A_dimensions: Tuple[int, int]
-    input_B_dimensions: Tuple[int, int]
+    in0_dimensions: Tuple[int, int]
+    in1_dimensions: Tuple[int, int]
     output_dimensions: Tuple[int, int]
     rt_dim: int
     ct_dim: int
     kt_dim: int
     tile_cnt: int
-    tile_cnt_A: int
-    tile_cnt_B: int
+    tile_cnt_in0: int
+    tile_cnt_in1: int
     output_tile_cnt: int
     in0_tile_r_dim: int
     in0_tile_c_dim: int
@@ -43,11 +43,13 @@ class TileDimensions:
 class FaceLayoutConfig:
     unpack_transpose_faces: Transpose
     unpack_transpose_within_face: Transpose
-    num_faces_A: int
-    num_faces_B: int
+    num_faces_in0: int
+    num_faces_in1: int
     num_faces: int
-    partial_face_A: bool
-    partial_face_B: bool
+    partial_face_in0: bool
+    partial_face_in1: bool
+    partial_face_math: bool
+    partial_face_pack: bool
 
 
 class FaceLayoutParameters(NamedTuple):
@@ -74,6 +76,80 @@ class MatmulConfig:
 # ======================================================================
 
 
+def get_face_dimensions(num_faces: int, is_horizontal: bool = True) -> Tuple[int, int]:
+    """
+    Get the (rows, cols) dimensions for a given face configuration.
+
+    Face layouts in a 32×32 tile:
+    - f0: rows 0-15, cols 0-15  (top-left)
+    - f1: rows 0-15, cols 16-31 (top-right)
+    - f2: rows 16-31, cols 0-15 (bottom-left)
+    - f3: rows 16-31, cols 16-31 (bottom-right)
+
+    Args:
+        num_faces: Number of faces (1, 2, or 4)
+        is_horizontal: For 2-face mode, True = f0,f1 (horizontal), False = f0,f2 (vertical)
+
+    Returns:
+        Tuple of (rows, cols)
+    """
+    if num_faces == 1:
+        # f0 only: 16×16
+        return (16, 16)
+    elif num_faces == 2:
+        if is_horizontal:
+            # f0,f1: 16 rows × 32 cols
+            return (16, 32)
+        else:
+            # f0,f2: 32 rows × 16 cols
+            return (32, 16)
+    elif num_faces == 4:
+        # Full tile: 32×32
+        return (32, 32)
+    else:
+        raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
+
+
+def calculate_matmul_output_faces(
+    num_faces_in0: int,
+    num_faces_in1: int,
+    is_in0_horizontal: bool = True,
+) -> int:
+    """
+    Calculate the number of output faces for matmul based on input face configurations.
+
+    For matmul in0(M×K) × in1(K×N) = output(M×N):
+    - Output rows (M) = in0's rows
+    - Output cols (N) = in1's cols
+    - Output elements = M × N
+    - Output faces = min(output_elements / 256, 4)
+
+    In 2-face mode, in0 and in1 use opposite layouts:
+    - If in0 uses horizontal (f0,f1), in1 uses vertical (f0,f2)
+    - If in0 uses vertical (f0,f2), in1 uses horizontal (f0,f1)
+
+    Args:
+        num_faces_in0: Number of faces for in0 (SrcB)
+        num_faces_in1: Number of faces for in1 (SrcA)
+        is_in0_horizontal: For 2-face mode, whether in0 uses horizontal layout (f0,f1)
+
+    Returns:
+        Number of output faces (1, 2, or 4)
+    """
+    # Get dimensions for in0
+    a_rows, _ = get_face_dimensions(num_faces_in0, is_horizontal=is_in0_horizontal)
+
+    # For 2-face mode, in1 uses opposite layout of in0
+    is_in1_horizontal = not is_in0_horizontal if num_faces_in1 == 2 else True
+    _, b_cols = get_face_dimensions(num_faces_in1, is_horizontal=is_in1_horizontal)
+
+    # Calculate output dimensions
+    output_elements = a_rows * b_cols
+    output_faces = output_elements // 256  # Each face is 16×16 = 256 elements
+
+    return output_faces
+
+
 def validate_tile_dimensions(dimension: int, row_col_dim: int):
     """Validate that dimension is divisible by row/col."""
     if dimension < 0:
@@ -92,12 +168,15 @@ def generate_matmul_dimension_combinations(
     """
     Generate valid matmul dimension pairs where result matrix size <= max_tiles.
 
+    Produces in0(M×K) and in1(K×N) dimension pairs in elements (TILE_DIM multiples),
+    constrained so the output M×N tile count does not exceed max_tiles.
+
     Args:
         max_tiles: Maximum size of result matrix in tiles (M×N tiles)
         kt_dims: K dimension sizes to test (in tiles)
 
     Returns:
-        List[(A_dims, B_dims)] where A_dims=[M, K], B_dims=[K, N]
+        List[(in0_dims, in1_dims)] where in0_dims=[M, K], in1_dims=[K, N]
 
     Example:
         max_tiles=4
@@ -114,16 +193,28 @@ def generate_matmul_dimension_combinations(
 
 
 def generate_matmul_tiny_tiles_combinations(max_tiles: int) -> List[tuple]:
+    """
+    Generate matmul dimension combinations for tiny (sub-32) tile configurations.
+
+    Uses non-standard tile sizes where in0 has variable row heights (1, 2, 4, 8, 16)
+    and in1 has variable column widths, for testing matmul with partial tiles.
+
+    Args:
+        max_tiles: Maximum number of tiles; determines in1 column range (32 to max_tiles*32)
+
+    Returns:
+        List[((in0_rows, in0_cols), (in1_rows, in1_cols))] of valid tiny-tile dimension pairs
+    """
     valid_combinations = []
-    tile_A_rows = [1, 2, 4, 8, 16]
-    tile_A_columns = 32
-    tile_B_rows = 32
-    tile_B_columns = list(range(32, (max_tiles + 1) * 32, 32))
+    tile_in0_rows = [1, 2, 4, 8, 16]
+    tile_in0_columns = 32
+    tile_in1_rows = 32
+    tile_in1_columns = list(range(32, (max_tiles + 1) * 32, 32))
 
     return [
-        ((tile_A_row, tile_A_columns), (tile_B_rows, tile_B_column))
-        for tile_A_row in tile_A_rows
-        for tile_B_column in tile_B_columns
+        ((tile_in0_row, tile_in0_columns), (tile_in1_rows, tile_in1_column))
+        for tile_in0_row in tile_in0_rows
+        for tile_in1_column in tile_in1_columns
     ]
 
 
@@ -146,13 +237,16 @@ def skip_matmul_combination(
 
 
 def generate_tile_dims(
-    dimension: Tuple[list, list], tiny_tiles: bool = False, in0_tile_r_dim: int = 32
+    dimension: Tuple[list, list],
+    tiny_tiles: bool = False,
+    in0_tile_r_dim: int = 32,
+    in1_tile_c_dim: int = 32,  # TODO: generate tile dimensions based on input dimensions
 ) -> TileDimensions:
     num_rows = 32
     num_cols = 32
-    inputA_dims, inputB_dims = dimension
-    M, K1 = inputA_dims[0], inputA_dims[1]
-    K2, N = inputB_dims[0], inputB_dims[1]
+    input0_dims, input1_dims = dimension
+    M, K1 = input0_dims[0], input0_dims[1]
+    K2, N = input1_dims[0], input1_dims[1]
 
     # Verify K dimensions match for valid matmul
     assert (
@@ -170,28 +264,28 @@ def generate_tile_dims(
     ct_dim = N // num_cols  # Column tiles in result
     kt_dim = (
         K1 // num_cols
-    )  # Inner dimension tiles rt_dim (matrix A) = kt_dim = ct_dim (matrix B) = 1
+    )  # Inner dimension tiles rt_dim (input 0) = kt_dim = ct_dim (input 1) = 1
 
     # Calculate tile counts
     output_tile_cnt = rt_dim * ct_dim
 
     return TileDimensions(
-        input_A_dimensions=inputA_dims,
-        input_B_dimensions=inputB_dims,
+        in0_dimensions=input0_dims,
+        in1_dimensions=input1_dims,
         output_dimensions=output_dimensions,
         rt_dim=rt_dim,
         ct_dim=ct_dim,
         kt_dim=kt_dim,
         tile_cnt=output_tile_cnt,
-        tile_cnt_A=(inputA_dims[0] * inputA_dims[1]) // (32 * 32),
-        tile_cnt_B=(inputB_dims[0] * inputB_dims[1]) // (32 * 32),
+        tile_cnt_in0=(input0_dims[0] * input0_dims[1]) // (32 * 32),
+        tile_cnt_in1=(input1_dims[0] * input1_dims[1]) // (32 * 32),
         output_tile_cnt=(
             output_tile_cnt if not tiny_tiles else 1
-        ),  # matmul with matrix A tiny tile does not work on multiple tiles for matrix B https://github.com/tenstorrent/tt-llk/issues/697
+        ),  # matmul with input 0 tiny tile does not work on multiple tiles for input 1 https://github.com/tenstorrent/tt-llk/issues/697
         in0_tile_r_dim=in0_tile_r_dim,
         in0_tile_c_dim=32,
         in1_tile_r_dim=32,
-        in1_tile_c_dim=32,
+        in1_tile_c_dim=in1_tile_c_dim,
     )
 
 
@@ -206,30 +300,30 @@ def generate_face_layout_config(num_faces: int) -> List[FaceLayoutConfig]:
         raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
     # Configuration parameters for each num_faces
-    config_params = {
+    config_params = {  # TODO: These can be removed when tiny tiles are supported for both in0 and in1
         1: [
-            FaceLayoutParameters(
-                transpose_faces=Transpose.No,
-                transpose_within=Transpose.No,
-                partial_face=True,
-            ),
-            FaceLayoutParameters(
-                transpose_faces=Transpose.Yes,
-                transpose_within=Transpose.Yes,
-                partial_face=True,
-            ),
+            # FaceLayoutParameters(
+            #     transpose_faces=Transpose.No,
+            #     transpose_within=Transpose.No,
+            #     partial_face=True,
+            # ),
+            # FaceLayoutParameters(
+            #     transpose_faces=Transpose.Yes,
+            #     transpose_within=Transpose.Yes,
+            #     partial_face=True,
+            # ),
         ],
-        2: [
-            FaceLayoutParameters(
-                transpose_faces=Transpose.No,
-                transpose_within=Transpose.No,
-                partial_face=True,
-            ),
-            FaceLayoutParameters(
-                transpose_faces=Transpose.No,
-                transpose_within=Transpose.No,
-                partial_face=False,
-            ),
+        2: [  # TODO: Re-enable once 32x16 in1 tiles are supported - might be redundant after tiny tiles support
+            # FaceLayoutParameters(
+            #     transpose_faces=Transpose.No,
+            #     transpose_within=Transpose.No,
+            #     partial_face=False,
+            # ),
+            # FaceLayoutParameters(
+            #     transpose_faces=Transpose.No,
+            #     transpose_within=Transpose.No,
+            #     partial_face=True,
+            # ),
         ],
         4: [
             FaceLayoutParameters(
@@ -245,15 +339,25 @@ def generate_face_layout_config(num_faces: int) -> List[FaceLayoutConfig]:
         ],
     }
 
+    # Calculate output faces based on input layouts
+    # In _mask_tile: matrix A (is_matrix_B=False) uses f0,f1 (horizontal layout)
+    output_num_faces = calculate_matmul_output_faces(
+        num_faces_in0=num_faces,
+        num_faces_in1=num_faces,
+        is_in0_horizontal=True,
+    )
+
     return [
         FaceLayoutConfig(
-            num_faces_A=num_faces,
-            num_faces_B=num_faces,
-            num_faces=num_faces,
+            num_faces_in0=num_faces,
+            num_faces_in1=num_faces,
+            num_faces=output_num_faces,
             unpack_transpose_faces=params.transpose_faces,
             unpack_transpose_within_face=params.transpose_within,
-            partial_face_A=params.partial_face,
-            partial_face_B=params.partial_face,
+            partial_face_in0=params.partial_face,
+            partial_face_in1=params.partial_face,
+            partial_face_math=params.partial_face,
+            partial_face_pack=params.partial_face,
         )
         for params in config_params[num_faces]
     ]
@@ -297,6 +401,9 @@ def sweep_matmul(
         )
 
         for dest_acc in dest_acc_modes:
+            if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
+                continue
+
             max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
 
             # Use cached or newly generated dimensions
@@ -323,7 +430,6 @@ def sweep_matmul(
                             math_matmul
                         )
                         for face_layout_config in face_layout_config_sweep:
-
                             base_matmul_dims = MatmulConfig(
                                 tile_dimensions=tile_dims,
                                 face_layout_config=face_layout_config,
@@ -366,6 +472,9 @@ def sweep_tiny_tiles_matmul(
         base_max_tiles = 8 if dest_sync == DestSync.Half else 16
         for fmt in formats_list:
             for dest_acc in dest_acc_modes:
+                if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
+                    continue
+
                 for stochastic_mode in all_stochastic_modes:
                     max_tiles = (
                         base_max_tiles // 2
@@ -388,20 +497,28 @@ def sweep_tiny_tiles_matmul(
         )
         for dims in dimensions_list:
             # Generate tile dimensions for the tiny tiles
-            inputA_dims, inputB_dims = dims
+            input0_dims, input1_dims = dims
             tile_dims = generate_tile_dims(
-                ([32, 32], inputB_dims), tiny_tiles=True, in0_tile_r_dim=inputA_dims[0]
+                ([32, 32], input1_dims), tiny_tiles=True, in0_tile_r_dim=input0_dims[0]
             )
 
             # generate face layout for tiny tiles
+            # Calculate output faces: in0 is 2-face horizontal, in1 is 4-face
+            output_num_faces = calculate_matmul_output_faces(
+                num_faces_in0=2,
+                num_faces_in1=4,
+                is_in0_horizontal=True,
+            )
             face = FaceLayoutConfig(
-                num_faces_A=2,
-                num_faces_B=4,
-                num_faces=2,
+                num_faces_in0=2,
+                num_faces_in1=4,
+                num_faces=output_num_faces,  # 2
                 unpack_transpose_faces=Transpose.No,
                 unpack_transpose_within_face=Transpose.No,
-                partial_face_A=True,  # same for pack
-                partial_face_B=False,  # same for math
+                partial_face_in0=True,  # SrcB
+                partial_face_in1=False,  # SrcA
+                partial_face_math=input0_dims[0] < 16,
+                partial_face_pack=True,
             )
 
             max_dst_index = get_max_dst_index(
@@ -422,7 +539,7 @@ def sweep_tiny_tiles_matmul(
                         stochastic_rnd=config["stochastic_mode"],
                         dst_index=(
                             min(max_dst_idx, 3) if math_matmul else max_dst_idx
-                        ),  # multi-matmul with matrix A tiny tile does not work when dst_index > 3 https://github.com/tenstorrent/tt-llk/issues/697
+                        ),  # multi-matmul with input 0 tiny tile does not work when dst_index > 3 https://github.com/tenstorrent/tt-llk/issues/697
                         dest_sync=config["dest_sync"],
                         dest_acc=config["dest_acc"],
                     )
