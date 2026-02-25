@@ -16,19 +16,16 @@ MeshKernelHandle CreateMeshKernel(
     MeshProgram& program,
     const std::string& file_name,
     const std::vector<GlobalCore>& gcores,
-    const std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig, tt::tt_metal::EthernetConfig>&
-        config) {
+    const std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig>& config) {
     // Get mesh compile-time defines and append to config
     auto mesh_defines = builder.get_compile_time_defines();
 
     // Create a modified config with mesh defines appended
     auto config_with_defines = std::visit(
-        [&mesh_defines](auto cfg)
-            -> std::
-                variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig, tt::tt_metal::EthernetConfig> {
-                    cfg.defines.insert(mesh_defines.begin(), mesh_defines.end());
-                    return cfg;
-                },
+        [&mesh_defines](auto cfg) -> std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig> {
+            cfg.defines.insert(mesh_defines.begin(), mesh_defines.end());
+            return cfg;
+        },
         config);
 
     // Get grid IDs and local CoreRangeSets from gcores

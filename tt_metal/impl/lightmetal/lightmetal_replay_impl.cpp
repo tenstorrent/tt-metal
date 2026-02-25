@@ -543,7 +543,11 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
 
     auto core_spec = core_spec_from_flatbuffer(cmd);
     auto kernel_config = kernel_config_from_flatbuffer(cmd);
-    auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
+    KernelHandle kernel_id = std::visit(
+        [&](const auto& cfg) -> KernelHandle {
+            return CreateKernel(*program, cmd->file_name()->c_str(), core_spec, cfg);
+        },
+        kernel_config);
     add_kernel_handle_to_map(cmd->global_id(), kernel_id);
     // Some APIs use Kernel, so convert to and store Kernel.
     std::shared_ptr<Kernel> kernel = program->impl().get_kernel(kernel_id);

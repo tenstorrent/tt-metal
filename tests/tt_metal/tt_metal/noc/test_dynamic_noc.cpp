@@ -27,7 +27,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "mesh_dispatch_fixture.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 

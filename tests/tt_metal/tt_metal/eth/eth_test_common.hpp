@@ -6,7 +6,7 @@
 
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "kernel_types.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::eth_test_common {
 
