@@ -71,6 +71,7 @@ class Penalties1DConfig:
     vocab_size: int  # Required. Caller pre-pads to be divisible by num_devices.
     mesh_device: Optional[ttnn.MeshDevice] = None  # None → GetDefaultDevice()
     max_batch_size: int = 32
+    # todo)) sharding should be configurable! --> the defaults currently do not work in existing code
     sub_core_grids: Any = None  # From args.sub_core_grids
 
     # --- Persistent buffer specs (LazyBuffer | ttnn.Tensor | None) ---
@@ -184,6 +185,7 @@ class Penalties1D(LightweightModule):
 
     # -- Forward methods ------------------------------------------------------
 
+    # todo)) this does not look right
     def prefill_forward(
         self,
         logits: ttnn.Tensor,
@@ -195,6 +197,7 @@ class Penalties1D(LightweightModule):
 
         Port of TTPenalties.reset_prompt_tokens (tt_penalties.py:194-212).
         """
+        # todo)) can we get rid of the torch import here?
         import torch
 
         self.load_device_buffers()
@@ -293,6 +296,7 @@ class Penalties1D(LightweightModule):
             new_tokens = ttnn.reshape(new_tokens, [self.config.max_batch_size, 1], **self._op_kwargs)
             src = self._decode_src
         else:
+            # todo)) can we get rid of the torch import here?
             import torch
 
             src = ttnn.from_torch(
@@ -324,6 +328,7 @@ class Penalties1D(LightweightModule):
         )
 
         if tokens is not None:
+            # todo)) can we get rid of the torch import here?
             import torch
 
             tokens_2d = tokens.reshape(-1, tokens.shape[-1])
@@ -391,6 +396,7 @@ class Penalties1D(LightweightModule):
 
     def _pad_batch_to_max(self, tokens_2d: "torch.Tensor", pad_value: int) -> "torch.Tensor":
         """Pad/truncate first dim to max_batch_size."""
+        # todo)) can we get rid of the torch import here?
         import torch
 
         if tokens_2d.dim() != 2:
@@ -444,6 +450,7 @@ def _resolve_penalties1d_config(config: Penalties1DConfig) -> Penalties1DConfig:
     Power users who set fields explicitly will NOT have them overwritten.
     Mirrors the ``_resolve_mlp1d_config()`` pattern.
     """
+    # todo)) can we get rid of the torch import here?
     import torch  # lazy import — only needed for source tensor construction
 
     to_set: dict = {}
