@@ -36,12 +36,3 @@ class DummyNoOpModel(GenerativeTestModelBase):
         tokens = kwargs.get("tokens")
         assert tokens.shape[0] == self.max_batch_size, "Batch size mismatch"
         return self.decode_out
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return None
-
-    def warmup_model_prefill(self, *args, **kwargs):
-        pass
-
-    def warmup_model_decode(self, *args, **kwargs):
-        pass
